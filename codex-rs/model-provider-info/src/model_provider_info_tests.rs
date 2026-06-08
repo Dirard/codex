@@ -14,6 +14,7 @@ base_url = "http://localhost:11434/v1"
     let expected_provider = ModelProviderInfo {
         name: "Ollama".into(),
         base_url: Some("http://localhost:11434/v1".into()),
+        models: Vec::new(),
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,
@@ -46,6 +47,7 @@ query_params = { api-version = "2025-04-01-preview" }
     let expected_provider = ModelProviderInfo {
         name: "Azure".into(),
         base_url: Some("https://xxxxx.openai.azure.com/openai".into()),
+        models: Vec::new(),
         env_key: Some("AZURE_OPENAI_API_KEY".into()),
         env_key_instructions: None,
         experimental_bearer_token: None,
@@ -70,6 +72,57 @@ query_params = { api-version = "2025-04-01-preview" }
 }
 
 #[test]
+fn test_deserialize_model_provider_key_toml() {
+    let provider_toml = r#"
+name = "GLM"
+base_url = "https://api.z.ai/api/coding/paas/v4"
+key = "test-key"
+        "#;
+    let expected_provider = ModelProviderInfo {
+        name: "GLM".into(),
+        base_url: Some("https://api.z.ai/api/coding/paas/v4".into()),
+        models: Vec::new(),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: Some("test-key".into()),
+        auth: None,
+        aws: None,
+        wire_api: WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    };
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+    assert_eq!(expected_provider, provider);
+    let serialized = toml::to_string(&provider).expect("serialize provider");
+    assert!(serialized.contains("key = \"test-key\""));
+    assert!(!serialized.contains("experimental_bearer_token"));
+}
+
+#[test]
+fn test_deserialize_model_provider_legacy_experimental_bearer_token_toml() {
+    let provider_toml = r#"
+name = "Legacy"
+base_url = "https://legacy.example.test/v1"
+experimental_bearer_token = "legacy-token"
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+
+    assert_eq!(
+        provider.experimental_bearer_token,
+        Some("legacy-token".to_string())
+    );
+}
+
+#[test]
 fn test_deserialize_example_model_provider_toml() {
     let azure_provider_toml = r#"
 name = "Example"
@@ -81,6 +134,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
     let expected_provider = ModelProviderInfo {
         name: "Example".into(),
         base_url: Some("https://example.com".into()),
+        models: Vec::new(),
         env_key: Some("API_KEY".into()),
         env_key_instructions: None,
         experimental_bearer_token: None,
@@ -107,7 +161,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
 }
 
 #[test]
-fn test_deserialize_chat_wire_api_shows_helpful_error() {
+fn test_deserialize_chat_wire_api_toml() {
     let provider_toml = r#"
 name = "OpenAI using Chat Completions"
 base_url = "https://api.openai.com/v1"
@@ -115,8 +169,25 @@ env_key = "OPENAI_API_KEY"
 wire_api = "chat"
         "#;
 
-    let err = toml::from_str::<ModelProviderInfo>(provider_toml).unwrap_err();
-    assert!(err.to_string().contains(CHAT_WIRE_API_REMOVED_ERROR));
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+    assert_eq!(provider.wire_api, WireApi::Chat);
+}
+
+#[test]
+fn test_deserialize_model_provider_models_toml() {
+    let provider_toml = r#"
+name = "GLM"
+base_url = "https://api.z.ai/api/coding/paas/v4"
+models = ["glm-4.6", "glm-4.5"]
+wire_api = "chat"
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+
+    assert_eq!(
+        provider.models,
+        vec!["glm-4.6".to_string(), "glm-4.5".to_string()]
+    );
 }
 
 #[test]
@@ -149,10 +220,19 @@ fn test_personal_access_token_uses_chatgpt_codex_base_url() {
 }
 
 #[test]
+fn test_supports_remote_compaction_rejects_chat_wire_api() {
+    let mut provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    provider.wire_api = WireApi::Chat;
+
+    assert!(!provider.supports_remote_compaction());
+}
+
+#[test]
 fn test_supports_remote_compaction_for_azure_name() {
     let provider = ModelProviderInfo {
         name: "Azure".into(),
         base_url: Some("https://example.com/openai".into()),
+        models: Vec::new(),
         env_key: Some("AZURE_OPENAI_API_KEY".into()),
         env_key_instructions: None,
         experimental_bearer_token: None,
@@ -178,6 +258,7 @@ fn test_supports_remote_compaction_for_non_openai_non_azure_provider() {
     let provider = ModelProviderInfo {
         name: "Example".into(),
         base_url: Some("https://example.com/v1".into()),
+        models: Vec::new(),
         env_key: Some("API_KEY".into()),
         env_key_instructions: None,
         experimental_bearer_token: None,
@@ -255,6 +336,7 @@ fn test_create_amazon_bedrock_provider() {
         ModelProviderInfo {
             name: "Amazon Bedrock".to_string(),
             base_url: Some("https://bedrock-mantle.us-east-1.api.aws/openai/v1".to_string()),
+            models: Vec::new(),
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
@@ -424,6 +506,20 @@ fn test_validate_provider_aws_rejects_conflicting_auth() {
     assert_eq!(
         provider.validate(),
         Err("provider aws cannot be combined with env_key, requires_openai_auth".to_string())
+    );
+}
+
+#[test]
+fn test_validate_provider_rejects_env_key_with_key() {
+    let provider = ModelProviderInfo {
+        env_key: Some("GLM_API_KEY".to_string()),
+        experimental_bearer_token: Some("test-key".to_string()),
+        ..ModelProviderInfo::default()
+    };
+
+    assert_eq!(
+        provider.validate(),
+        Err("provider env_key cannot be combined with key".to_string())
     );
 }
 

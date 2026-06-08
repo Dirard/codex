@@ -8,7 +8,38 @@ use codex_app_server_protocol::HooksListResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::PluginAvailability;
 use codex_features::Stage;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use pretty_assertions::assert_eq;
+
+fn custom_provider_model_preset(
+    provider_id: &str,
+    provider_name: &str,
+    model: &str,
+) -> ModelPreset {
+    ModelPreset {
+        id: format!("{provider_id}/{model}"),
+        model: model.to_string(),
+        model_provider: Some(provider_id.to_string()),
+        display_name: model.to_string(),
+        description: format!("Custom provider: {provider_name}"),
+        default_reasoning_effort: ReasoningEffortConfig::None,
+        supported_reasoning_efforts: vec![ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::None,
+            description: "No reasoning".to_string(),
+        }],
+        supports_personality: false,
+        additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
+        default_service_tier: None,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        availability_nux: None,
+        supported_in_api: true,
+        input_modalities: vec![InputModality::Text],
+    }
+}
 
 #[tokio::test]
 async fn experimental_mode_plan_is_ignored_on_startup() {
@@ -2592,6 +2623,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
     let preset = |slug: &str, show_in_picker: bool| ModelPreset {
         id: slug.to_string(),
         model: slug.to_string(),
+        model_provider: None,
         display_name: slug.to_string(),
         description: format!("{slug} description"),
         default_reasoning_effort: ReasoningEffortConfig::Medium,
@@ -2625,6 +2657,101 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         !popup.contains("test-hidden-model"),
         "expected hidden model to be excluded from picker:\n{popup}"
     );
+}
+
+#[tokio::test]
+async fn model_picker_includes_configured_provider_models() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.model_providers.insert(
+        "zai".to_string(),
+        ModelProviderInfo {
+            name: "Z.ai".to_string(),
+            base_url: Some("https://api.z.ai/api/coding/paas/v4".to_string()),
+            models: vec!["glm-4.6".to_string()],
+            wire_api: WireApi::Chat,
+            ..ModelProviderInfo::default()
+        },
+    );
+    while rx.try_recv().is_ok() {}
+
+    chat.open_model_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let custom_model = match rx.try_recv().expect("open reasoning popup event") {
+        AppEvent::OpenReasoningPopup { model } => model,
+        event => panic!("expected OpenReasoningPopup event, got {event:?}"),
+    };
+    assert_eq!(
+        custom_model,
+        custom_provider_model_preset("zai", "Z.ai", "glm-4.6")
+    );
+
+    chat.open_reasoning_popup(custom_model);
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::UpdateModel(_))),
+        "provider-changing selection must not update active thread model; events: {events:?}"
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AppEvent::PersistModelSelection {
+            model,
+            model_provider: Some(provider),
+            effort: Some(ReasoningEffortConfig::None)
+        } if model == "glm-4.6" && provider == "zai"
+    )));
+}
+
+#[tokio::test]
+async fn model_picker_orders_configured_provider_models_by_provider_id() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.model_providers.insert(
+        "zai".to_string(),
+        ModelProviderInfo {
+            name: "Z.ai".to_string(),
+            base_url: Some("https://api.z.ai/api/coding/paas/v4".to_string()),
+            models: vec!["zai-first".to_string()],
+            wire_api: WireApi::Chat,
+            ..ModelProviderInfo::default()
+        },
+    );
+    chat.config.model_providers.insert(
+        "alpha".to_string(),
+        ModelProviderInfo {
+            name: "Alpha".to_string(),
+            base_url: Some("https://alpha.example/v1".to_string()),
+            models: vec!["alpha-first".to_string()],
+            wire_api: WireApi::Responses,
+            ..ModelProviderInfo::default()
+        },
+    );
+
+    chat.open_model_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let model = match rx.try_recv().expect("open reasoning popup event") {
+        AppEvent::OpenReasoningPopup { model } => model,
+        event => panic!("expected OpenReasoningPopup event, got {event:?}"),
+    };
+    assert_eq!(model.model_provider.as_deref(), Some("zai"));
+    assert_eq!(model.model, "zai-first");
+}
+
+#[tokio::test]
+async fn custom_provider_model_picker_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+
+    chat.open_all_models_popup(vec![custom_provider_model_preset("zai", "Z.ai", "glm-4.6")]);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("custom_provider_model_picker", popup);
 }
 
 #[tokio::test]
@@ -2702,7 +2829,7 @@ async fn model_reasoning_selection_popup_applies_custom_effort() {
     let selected_effort_events = std::iter::from_fn(|| rx.try_recv().ok())
         .filter_map(|event| match event {
             AppEvent::UpdateReasoningEffort(effort) => Some((None, effort)),
-            AppEvent::PersistModelSelection { model, effort } => Some((Some(model), effort)),
+            AppEvent::PersistModelSelection { model, effort, .. } => Some((Some(model), effort)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -2868,6 +2995,7 @@ async fn single_reasoning_option_skips_selection() {
     let preset = ModelPreset {
         id: "model-with-single-reasoning".to_string(),
         model: "model-with-single-reasoning".to_string(),
+        model_provider: None,
         display_name: "model-with-single-reasoning".to_string(),
         description: "".to_string(),
         default_reasoning_effort: ReasoningEffortConfig::High,

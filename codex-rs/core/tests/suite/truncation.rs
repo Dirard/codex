@@ -5,6 +5,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core::config::OutputTruncationConfig;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -664,6 +665,116 @@ async fn byte_policy_marker_reports_bytes() -> Result<()> {
 
     let pattern = r"(?s)^Exit code: 0\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nTotal output lines: 150\nOutput:\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19.*chars truncated.*129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n$";
 
+    assert_regex_match(pattern, &output);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_command_output_uses_configured_byte_limit() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.output_truncation = OutputTruncationConfig {
+            max_bytes: Some(30),
+            max_lines: None,
+            mcp_max_lines: None,
+        };
+    });
+    let fixture = builder.build(&server).await?;
+
+    let call_id = "shell-config-byte-truncation";
+    let args = json!({
+        "command": "printf 'abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789\\n'",
+        "timeout_ms": 5_000,
+    });
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let done_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    fixture
+        .submit_turn_with_permission_profile("run the shell tool", PermissionProfile::Disabled)
+        .await?;
+
+    let output = done_mock
+        .single_request()
+        .function_call_output_text(call_id)
+        .context("shell output present")?;
+
+    let pattern = r"(?s)^Exit code: 0\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nTotal output lines: 1\nOutput:\n.*chars truncated.*$";
+    assert_regex_match(pattern, &output);
+    assert!(
+        !output.contains("tokens truncated"),
+        "configured byte cap should produce byte truncation marker: {output}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_command_output_uses_configured_line_limit() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.output_truncation = OutputTruncationConfig {
+            max_bytes: None,
+            max_lines: Some(4),
+            mcp_max_lines: None,
+        };
+    });
+    let fixture = builder.build(&server).await?;
+
+    let call_id = "shell-config-line-truncation";
+    let args = json!({
+        "command": "seq 1 12",
+        "timeout_ms": 5_000,
+    });
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let done_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    fixture
+        .submit_turn_with_permission_profile("run the shell tool", PermissionProfile::Disabled)
+        .await?;
+
+    let output = done_mock
+        .single_request()
+        .function_call_output_text(call_id)
+        .context("shell output present")?;
+
+    let pattern = r"(?s)^Exit code: 0\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nTotal output lines: 12\nOutput:\n1\n2\n…8 lines truncated…\n11\n12\n$";
     assert_regex_match(pattern, &output);
 
     Ok(())

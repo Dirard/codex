@@ -92,6 +92,11 @@ async fn handle_spawn_agent(
     )
     .await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
+    let configured_model = config
+        .model
+        .clone()
+        .or_else(|| config.model_provider.models.first().cloned());
+    let configured_model_provider_id = config.model_provider_id.clone();
 
     let spawn_source = thread_spawn_source(
         session.thread_id,
@@ -169,6 +174,16 @@ async fn handle_spawn_agent(
         &[("role", role_tag), ("version", "v2")],
     );
     let task_name = String::from(new_agent_path);
+    let model = agent_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.model.clone())
+        .or(configured_model);
+    let model_provider_id = Some(
+        agent_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.model_provider_id.clone())
+            .unwrap_or(configured_model_provider_id),
+    );
 
     let hide_agent_metadata = turn.config.multi_agent_v2.hide_spawn_agent_metadata;
     if hide_agent_metadata {
@@ -177,6 +192,8 @@ async fn handle_spawn_agent(
         Ok(SpawnAgentResult::WithNickname {
             task_name,
             nickname,
+            model,
+            model_provider_id,
         })
     }
 }
@@ -243,6 +260,8 @@ pub(crate) enum SpawnAgentResult {
     WithNickname {
         task_name: String,
         nickname: Option<String>,
+        model: Option<String>,
+        model_provider_id: Option<String>,
     },
     HiddenMetadata {
         task_name: String,

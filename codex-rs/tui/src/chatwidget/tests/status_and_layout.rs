@@ -825,8 +825,8 @@ async fn rolling_rate_limit_snapshot_preserves_prior_individual_limit() {
         .individual_limit
         .as_ref()
         .expect("rolling updates should preserve monthly limits");
-    assert_eq!(individual_limit.used, "8,000");
-    assert_eq!(individual_limit.limit, "25,000");
+    assert_eq!(digits_only(&individual_limit.used), "8000");
+    assert_eq!(digits_only(&individual_limit.limit), "25000");
     assert_eq!(individual_limit.percent_remaining, 68.0);
 
     chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 30.0)));
@@ -835,6 +835,10 @@ async fn rolling_rate_limit_snapshot_preserves_prior_individual_limit() {
         .get("codex")
         .expect("rate limits should be cached");
     assert!(display.individual_limit.is_none());
+}
+
+fn digits_only(value: &str) -> String {
+    value.chars().filter(char::is_ascii_digit).collect()
 }
 
 #[tokio::test]

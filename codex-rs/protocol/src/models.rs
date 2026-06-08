@@ -1952,10 +1952,8 @@ impl CallToolResult {
             }
         };
 
-        let content_items = convert_mcp_content_to_items(&self.content);
-
-        let body = match content_items {
-            Some(content_items) => FunctionCallOutputBody::ContentItems(content_items),
+        let body = match convert_mcp_content_to_items(&self.content) {
+            Some(items) => FunctionCallOutputBody::ContentItems(items),
             None => FunctionCallOutputBody::Text(serialized_content),
         };
 
@@ -2004,14 +2002,14 @@ fn convert_mcp_content_to_items(
                 meta,
             }) => {
                 saw_image = true;
-                let image_url = if data.starts_with("data:") {
-                    data
-                } else {
-                    let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".into());
-                    format!("data:{mime_type};base64,{data}")
-                };
                 FunctionCallOutputContentItem::InputImage {
-                    image_url,
+                    image_url: if data.starts_with("data:") {
+                        data
+                    } else {
+                        let mime_type =
+                            mime_type.unwrap_or_else(|| "application/octet-stream".into());
+                        format!("data:{mime_type};base64,{data}")
+                    },
                     detail: meta
                         .as_ref()
                         .and_then(serde_json::Value::as_object)
@@ -2034,7 +2032,15 @@ fn convert_mcp_content_to_items(
         items.push(item);
     }
 
-    if saw_image { Some(items) } else { None }
+    if items.is_empty() {
+        return None;
+    }
+
+    if saw_image {
+        return Some(items);
+    }
+
+    None
 }
 
 // Implement Display so callers can treat the payload like a plain string when logging or doing
@@ -2254,6 +2260,36 @@ mod tests {
                 image_url: "data:image/png;base64,Zm9v".to_string(),
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             }]
+        );
+    }
+
+    #[test]
+    fn convert_mcp_content_to_items_preserves_images_with_unknown_items() {
+        let unknown = serde_json::json!({
+            "type": "resource",
+            "uri": "file:///tmp/report.txt",
+        });
+        let contents = vec![
+            serde_json::json!({
+                "type": "image",
+                "data": "Zm9v",
+                "mimeType": "image/png",
+            }),
+            unknown.clone(),
+        ];
+
+        let items = convert_mcp_content_to_items(&contents).expect("expected mixed image items");
+        assert_eq!(
+            items,
+            vec![
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,Zm9v".to_string(),
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
+                },
+                FunctionCallOutputContentItem::InputText {
+                    text: serde_json::to_string(&unknown).expect("unknown content serializes"),
+                },
+            ]
         );
     }
 

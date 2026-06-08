@@ -170,6 +170,31 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
         .collect()
 }
 
+fn sanitize_current_version(line: String) -> String {
+    let current_version = format!("v{}", env!("CARGO_PKG_VERSION"));
+    sanitize_version_token(line, &current_version, "v0.0.0")
+}
+
+fn sanitize_version_token(mut line: String, current: &str, replacement: &str) -> String {
+    if !line.contains(current) {
+        return line;
+    }
+
+    let target_width = UnicodeWidthStr::width(line.as_str());
+    line = line.replace(current, replacement);
+    let sanitized_width = UnicodeWidthStr::width(line.as_str());
+    if sanitized_width < target_width
+        && let Some(pipe_idx) = line.rfind('│')
+    {
+        line.insert_str(pipe_idx, &" ".repeat(target_width - sanitized_width));
+    }
+    line
+}
+
+fn sanitize_number_grouping(line: String) -> String {
+    line.replace(['\u{00a0}', '\u{202f}'], ",")
+}
+
 fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
     let frame_width = lines
         .iter()
@@ -178,7 +203,7 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
     lines
         .into_iter()
         .map(|line| {
-            if let (Some(frame_width), Some(dir_pos), Some(pipe_idx)) =
+            let line = if let (Some(frame_width), Some(dir_pos), Some(pipe_idx)) =
                 (frame_width, line.find("Directory: "), line.rfind('│'))
             {
                 let prefix = &line[..dir_pos + "Directory: ".len()];
@@ -197,7 +222,8 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
                 rebuilt
             } else {
                 line
-            }
+            };
+            sanitize_number_grouping(sanitize_current_version(line))
         })
         .collect()
 }

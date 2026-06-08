@@ -895,9 +895,13 @@ impl App {
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }
-            AppEvent::OpenPlanReasoningScopePrompt { model, effort } => {
+            AppEvent::OpenPlanReasoningScopePrompt {
+                model,
+                model_provider,
+                effort,
+            } => {
                 self.chat_widget
-                    .open_plan_reasoning_scope_prompt(model, effort);
+                    .open_plan_reasoning_scope_prompt(model, model_provider, effort);
             }
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
@@ -1407,11 +1411,21 @@ impl App {
                     let _ = (preset, mode, profile_selection);
                 }
             }
-            AppEvent::PersistModelSelection { model, effort } => {
+            AppEvent::PersistModelSelection {
+                model,
+                model_provider,
+                effort,
+            } => {
+                let active_provider_id = self.chat_widget.config_ref().model_provider_id.clone();
+                let selected_provider_id = model_provider.as_deref();
+                let provider_differs_from_active_thread = selected_provider_id
+                    .is_some_and(|provider| provider != active_provider_id.as_str());
+                let provider_to_persist = model_provider.clone().unwrap_or(active_provider_id);
                 match crate::config_update::write_config_batch(
                     app_server.request_handle(),
                     crate::config_update::build_model_selection_edits(
                         model.as_str(),
+                        Some(provider_to_persist.as_str()),
                         effort.as_ref(),
                     ),
                 )
@@ -1422,8 +1436,24 @@ impl App {
                             .as_ref()
                             .map(std::string::ToString::to_string)
                             .unwrap_or_else(|| "default".to_string());
-                        tracing::info!("Selected model: {model}, Selected effort: {effort_label}");
-                        let mut message = format!("Model changed to {model}");
+                        let provider_label = model_provider
+                            .as_ref()
+                            .map(|provider| format!(", Selected provider: {provider}"))
+                            .unwrap_or_default();
+                        tracing::info!(
+                            "Selected model: {model}{provider_label}, Selected effort: {effort_label}"
+                        );
+                        let mut message = if let Some(provider) = selected_provider_id {
+                            if provider_differs_from_active_thread {
+                                format!(
+                                    "Default model changed to {model} via {provider}. Start a new thread to use this provider."
+                                )
+                            } else {
+                                format!("Model changed to {model} via {provider}")
+                            }
+                        } else {
+                            format!("Model changed to {model}")
+                        };
                         if let Some(label) = Self::reasoning_label_for(&model, effort.as_ref()) {
                             message.push(' ');
                             message.push_str(&label);

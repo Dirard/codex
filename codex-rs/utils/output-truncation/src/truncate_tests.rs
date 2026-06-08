@@ -1,10 +1,14 @@
+use crate::OutputTruncation;
 use crate::TruncationPolicy;
 use crate::approx_token_count;
 use crate::approx_tokens_from_byte_count_i64;
 use crate::formatted_truncate_text;
 use crate::formatted_truncate_text_content_items_with_policy;
+use crate::formatted_truncate_text_with_config;
+use crate::truncate_function_output_items_with_config;
 use crate::truncate_function_output_items_with_policy;
 use crate::truncate_text;
+use crate::truncate_text_with_config;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use pretty_assertions::assert_eq;
@@ -96,6 +100,116 @@ fn truncate_middle_bytes_handles_utf8_content() {
     let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
     let out = truncate_text(s, TruncationPolicy::Bytes(20));
     assert_eq!(out, "😀😀…21 chars truncated…with text\n");
+}
+
+#[test]
+fn truncate_lines_under_limit_returns_original() {
+    let content = "line 1\nline 2\nline 3";
+    let config = OutputTruncation::new(TruncationPolicy::Bytes(1024), Some(3));
+
+    assert_eq!(content, truncate_text_with_config(content, config));
+}
+
+#[test]
+fn truncate_lines_over_limit_keeps_head_and_tail() {
+    let content = "line 1\nline 2\nline 3\nline 4\nline 5\nline 6";
+    let config = OutputTruncation::new(TruncationPolicy::Bytes(1024), Some(4));
+
+    assert_eq!(
+        "line 1\nline 2\n…2 lines truncated…\nline 5\nline 6",
+        truncate_text_with_config(content, config),
+    );
+}
+
+#[test]
+fn truncate_lines_zero_returns_marker() {
+    let content = "line 1\nline 2\nline 3";
+    let config = OutputTruncation::new(TruncationPolicy::Bytes(1024), Some(0));
+
+    assert_eq!(
+        "…3 lines truncated…",
+        truncate_text_with_config(content, config)
+    );
+}
+
+#[test]
+fn truncate_lines_then_bytes_applies_both_limits() {
+    let content = "line 1 abcdefghij\nline 2 abcdefghij\nline 3 abcdefghij\nline 4 abcdefghij";
+    let config = OutputTruncation::new(TruncationPolicy::Bytes(30), Some(3));
+    let out = truncate_text_with_config(content, config);
+
+    assert!(
+        out.contains("chars truncated"),
+        "expected byte marker: {out}"
+    );
+    assert!(
+        out.len() < content.len(),
+        "expected output to shrink: {out}"
+    );
+}
+
+#[test]
+fn formatted_truncate_text_with_config_reports_original_line_count() {
+    let content = "line 1\nline 2\nline 3\nline 4";
+    let config = OutputTruncation::new(TruncationPolicy::Bytes(1024), Some(2));
+
+    assert_eq!(
+        "Total output lines: 4\n\nline 1\n…2 lines truncated…\nline 4",
+        formatted_truncate_text_with_config(content, config),
+    );
+}
+
+#[test]
+fn mcp_output_uses_mcp_line_limit_without_falling_back_to_general_lines() {
+    let config =
+        OutputTruncation::new_with_mcp_max_lines(TruncationPolicy::Bytes(1024), Some(4), None);
+
+    assert_eq!(
+        OutputTruncation::new_with_mcp_max_lines(TruncationPolicy::Bytes(1024), None, None),
+        config.for_mcp_output(),
+    );
+
+    let config =
+        OutputTruncation::new_with_mcp_max_lines(TruncationPolicy::Bytes(1024), Some(4), Some(8));
+
+    assert_eq!(
+        OutputTruncation::new_with_mcp_max_lines(TruncationPolicy::Bytes(1024), Some(8), Some(8)),
+        config.for_mcp_output(),
+    );
+}
+
+#[test]
+fn truncate_function_output_items_with_config_applies_line_limit_to_text_items() {
+    let items = vec![
+        FunctionCallOutputContentItem::InputText {
+            text: (1..=6)
+                .map(|line| format!("line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        },
+        FunctionCallOutputContentItem::InputImage {
+            image_url: "img:after".to_string(),
+            detail: Some(DEFAULT_IMAGE_DETAIL),
+        },
+    ];
+
+    let output = truncate_function_output_items_with_config(
+        &items,
+        OutputTruncation::new(TruncationPolicy::Bytes(1024), Some(4)),
+    );
+
+    assert_eq!(
+        output,
+        vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "line 1\nline 2\n…2 lines truncated…\nline 5\nline 6".to_string(),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "img:after".to_string(),
+                detail: Some(DEFAULT_IMAGE_DETAIL),
+            },
+        ]
+    );
 }
 
 #[test]

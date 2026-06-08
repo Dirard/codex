@@ -1,3 +1,4 @@
+use crate::config::OutputTruncationConfig;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
@@ -13,6 +14,7 @@ use codex_config::config_toml::AgentsToml;
 use codex_config::config_toml::AutoReviewToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ExperimentalRequestUserInput;
+use codex_config::config_toml::OutputTruncationToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeArchitecture;
 use codex_config::config_toml::RealtimeConfig;
@@ -203,6 +205,34 @@ async fn load_config_normalizes_relative_cwd_override() -> std::io::Result<()> {
     .await?;
 
     assert_eq!(config.cwd, expected_cwd);
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_resolves_output_truncation() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            output_truncation: Some(OutputTruncationToml {
+                max_bytes: Some(12_345),
+                max_lines: Some(67),
+                mcp_max_lines: Some(890),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.output_truncation,
+        OutputTruncationConfig {
+            max_bytes: Some(12_345),
+            max_lines: Some(67),
+            mcp_max_lines: Some(890),
+        }
+    );
     Ok(())
 }
 

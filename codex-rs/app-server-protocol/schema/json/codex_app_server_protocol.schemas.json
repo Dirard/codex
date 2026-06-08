@@ -12388,6 +12388,14 @@
           "model": {
             "type": "string"
           },
+          "modelProvider": {
+            "default": null,
+            "description": "Provider id associated with this model preset, when the preset should switch providers as part of model selection.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "serviceTiers": {
             "default": [],
             "items": {

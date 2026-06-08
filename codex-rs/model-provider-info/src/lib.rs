@@ -43,7 +43,6 @@ pub const AMAZON_BEDROCK_DEFAULT_BASE_URL: &str =
     "https://bedrock-mantle.us-east-1.api.aws/openai/v1";
 const AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER: &str = "x-amzn-mantle-client-agent";
 const AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_VALUE: &str = "codex";
-const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782";
 pub const LEGACY_OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
 pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782";
 
@@ -54,12 +53,15 @@ pub enum WireApi {
     /// The Responses API exposed by OpenAI at `/v1/responses`.
     #[default]
     Responses,
+    /// The Chat Completions API exposed by OpenAI-compatible providers at `/v1/chat/completions`.
+    Chat,
 }
 
 impl fmt::Display for WireApi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
             Self::Responses => "responses",
+            Self::Chat => "chat",
         };
         f.write_str(value)
     }
@@ -73,8 +75,11 @@ impl<'de> Deserialize<'de> for WireApi {
         let value = String::deserialize(deserializer)?;
         match value.as_str() {
             "responses" => Ok(Self::Responses),
-            "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
-            _ => Err(serde::de::Error::unknown_variant(&value, &["responses"])),
+            "chat" => Ok(Self::Chat),
+            _ => Err(serde::de::Error::unknown_variant(
+                &value,
+                &["responses", "chat"],
+            )),
         }
     }
 }
@@ -88,15 +93,20 @@ pub struct ModelProviderInfo {
     pub name: String,
     /// Base URL for the provider's OpenAI-compatible API.
     pub base_url: Option<String>,
+    /// Model slugs that should be offered in model picker surfaces for this
+    /// provider.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
     /// Environment variable that stores the user's API key for this provider.
     pub env_key: Option<String>,
 
     /// Optional instructions to help the user get a valid value for the
     /// variable and set it.
     pub env_key_instructions: Option<String>,
-    /// Value to use with `Authorization: Bearer <token>` header. Use of this
-    /// config is discouraged in favor of `env_key` for security reasons, but
-    /// this may be necessary when using this programmatically.
+    /// Value to use with `Authorization: Bearer <token>` header. In config
+    /// files, this is written as `key`.
+    #[serde(rename = "key", alias = "experimental_bearer_token")]
+    #[schemars(rename = "key")]
     pub experimental_bearer_token: Option<String>,
     /// Command-backed bearer-token configuration for this provider.
     pub auth: Option<ModelProviderAuthInfo>,
@@ -148,6 +158,10 @@ pub struct ModelProviderAwsAuthInfo {
 
 impl ModelProviderInfo {
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.env_key.is_some() && self.experimental_bearer_token.is_some() {
+            return Err("provider env_key cannot be combined with key".to_string());
+        }
+
         if self.aws.is_some() {
             if self.supports_websockets {
                 // TODO(celia-oai): Support AWS SigV4 signing for WebSocket
@@ -161,7 +175,7 @@ impl ModelProviderInfo {
                 conflicts.push("env_key");
             }
             if self.experimental_bearer_token.is_some() {
-                conflicts.push("experimental_bearer_token");
+                conflicts.push("key");
             }
             if self.auth.is_some() {
                 conflicts.push("auth");
@@ -191,7 +205,7 @@ impl ModelProviderInfo {
             conflicts.push("env_key");
         }
         if self.experimental_bearer_token.is_some() {
-            conflicts.push("experimental_bearer_token");
+            conflicts.push("key");
         }
         if self.requires_openai_auth {
             conflicts.push("requires_openai_auth");
@@ -325,6 +339,7 @@ impl ModelProviderInfo {
         ModelProviderInfo {
             name: OPENAI_PROVIDER_NAME.into(),
             base_url,
+            models: Vec::new(),
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
@@ -364,6 +379,7 @@ impl ModelProviderInfo {
         ModelProviderInfo {
             name: AMAZON_BEDROCK_PROVIDER_NAME.into(),
             base_url: Some(AMAZON_BEDROCK_DEFAULT_BASE_URL.into()),
+            models: Vec::new(),
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
@@ -397,7 +413,9 @@ impl ModelProviderInfo {
     }
 
     pub fn supports_remote_compaction(&self) -> bool {
-        self.is_openai() || is_azure_responses_provider(&self.name, self.base_url.as_deref())
+        self.wire_api == WireApi::Responses
+            && (self.is_openai()
+                || is_azure_responses_provider(&self.name, self.base_url.as_deref()))
     }
 
     pub fn has_command_auth(&self) -> bool {
@@ -501,6 +519,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
     ModelProviderInfo {
         name: "gpt-oss".into(),
         base_url: Some(base_url.into()),
+        models: Vec::new(),
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,

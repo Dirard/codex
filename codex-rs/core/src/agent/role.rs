@@ -262,6 +262,9 @@ pub(crate) mod spawn_tool_spec {
                     let model = role_toml
                         .get("model")
                         .and_then(TomlValue::as_str);
+                    let model_provider = role_toml
+                        .get("model_provider")
+                        .and_then(TomlValue::as_str);
                     let reasoning_effort = role_toml
                         .get("model_reasoning_effort")
                         .and_then(TomlValue::as_str);
@@ -285,6 +288,13 @@ pub(crate) mod spawn_tool_spec {
                         }
                         (None, None) => String::new(),
                     };
+                    let model_provider_note = model_provider
+                        .map(|model_provider| {
+                            format!(
+                                "\n- This role's model provider is set to `{model_provider}` and cannot be changed."
+                            )
+                        })
+                        .unwrap_or_default();
                     let service_tier_note = service_tier
                         .map(|service_tier| {
                             format!(
@@ -292,7 +302,7 @@ pub(crate) mod spawn_tool_spec {
                             )
                         })
                         .unwrap_or_default();
-                    format!("{model_and_reasoning_note}{service_tier_note}")
+                    format!("{model_and_reasoning_note}{model_provider_note}{service_tier_note}")
                 })
                 .unwrap_or_default();
             format!("{name}: {{\n{description}{locked_settings_note}\n}}")

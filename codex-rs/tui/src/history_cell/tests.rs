@@ -23,6 +23,7 @@ use ratatui::layout::Rect;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use unicode_width::UnicodeWidthStr;
 
 use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
 use codex_protocol::mcp::CallToolResult;
@@ -155,6 +156,30 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
                 .collect::<String>()
         })
         .collect()
+}
+
+fn sanitize_current_version(rendered: String) -> String {
+    rendered
+        .lines()
+        .map(|line| sanitize_version_token(line.to_string(), env!("CARGO_PKG_VERSION"), "0.0.0"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn sanitize_version_token(mut line: String, current: &str, replacement: &str) -> String {
+    if !line.contains(current) {
+        return line;
+    }
+
+    let target_width = UnicodeWidthStr::width(line.as_str());
+    line = line.replace(current, replacement);
+    let sanitized_width = UnicodeWidthStr::width(line.as_str());
+    if sanitized_width < target_width
+        && let Some(pipe_idx) = line.rfind('│')
+    {
+        line.insert_str(pipe_idx, &" ".repeat(target_width - sanitized_width));
+    }
+    line
 }
 
 fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
@@ -1089,7 +1114,8 @@ fn web_search_history_cell_snapshot() {
 fn standalone_unix_update_available_history_cell_snapshot() {
     let cell =
         UpdateAvailableHistoryCell::new("9.9.9".to_string(), Some(UpdateAction::StandaloneUnix));
-    let rendered = render_lines(&cell.display_lines(/*width*/ 110)).join("\n");
+    let rendered =
+        sanitize_current_version(render_lines(&cell.display_lines(/*width*/ 110)).join("\n"));
 
     insta::assert_snapshot!(rendered);
 }
@@ -1098,7 +1124,8 @@ fn standalone_unix_update_available_history_cell_snapshot() {
 fn standalone_windows_update_available_history_cell_snapshot() {
     let cell =
         UpdateAvailableHistoryCell::new("9.9.9".to_string(), Some(UpdateAction::StandaloneWindows));
-    let rendered = render_lines(&cell.display_lines(/*width*/ 110)).join("\n");
+    let rendered =
+        sanitize_current_version(render_lines(&cell.display_lines(/*width*/ 110)).join("\n"));
 
     insta::assert_snapshot!(rendered);
 }

@@ -518,9 +518,13 @@ impl TurnRequestProcessor {
         match (cwd, environment_selections) {
             (None, None) => None,
             (Some(cwd), None) => {
-                let environment_selections =
-                    self.thread_manager.default_environment_selections(&cwd);
-                Some(TurnEnvironmentSelections::new(cwd, environment_selections))
+                let mut environments = thread.config_snapshot().await.environments;
+                let cwd_uri = PathUri::from_abs_path(&cwd);
+                for environment in &mut environments.environments {
+                    environment.cwd = cwd_uri.clone();
+                }
+                environments.legacy_fallback_cwd = cwd;
+                Some(environments)
             }
             (cwd, Some(environment_selections)) => {
                 let legacy_fallback_cwd = match cwd {

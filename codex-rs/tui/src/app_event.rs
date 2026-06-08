@@ -697,6 +697,7 @@ pub(crate) enum AppEvent {
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {
         model: String,
+        model_provider: Option<String>,
         effort: Option<ReasoningEffort>,
     },
 
@@ -718,6 +719,7 @@ pub(crate) enum AppEvent {
     /// Open the Plan-mode reasoning scope prompt for the selected model/effort.
     OpenPlanReasoningScopePrompt {
         model: String,
+        model_provider: Option<String>,
         effort: Option<ReasoningEffort>,
     },
 

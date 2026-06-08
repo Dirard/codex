@@ -1,6 +1,7 @@
 use codex_git_utils::collect_git_info;
 use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::CODEX_API_KEY_ENV_VAR;
+use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use codex_protocol::protocol::GitInfo;
 use core_test_support::fs_wait;
 use core_test_support::responses;
@@ -76,6 +77,10 @@ fn personal_access_token_exec_command(server: &MockServer, home: &TempDir) -> Co
         .arg(format!("openai_base_url=\"{}/api/codex\"", server.uri()))
         .arg("-c")
         .arg(format!("chatgpt_base_url=\"{}/backend-api\"", server.uri()))
+        .arg("-c")
+        .arg("cli_auth_credentials_store=\"file\"")
+        .arg("-c")
+        .arg("forced_login_method=\"chatgpt\"")
         .arg("-C")
         .arg(repo_root())
         .arg("hello?");
@@ -83,7 +88,8 @@ fn personal_access_token_exec_command(server: &MockServer, home: &TempDir) -> Co
         .env(CODEX_ACCESS_TOKEN_ENV_VAR, PERSONAL_ACCESS_TOKEN)
         .env("CODEX_AUTHAPI_BASE_URL", server.uri())
         .env_remove(CODEX_API_KEY_ENV_VAR)
-        .env_remove("OPENAI_API_KEY");
+        .env_remove("OPENAI_API_KEY")
+        .env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
     cmd
 }
 

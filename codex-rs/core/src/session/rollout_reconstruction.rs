@@ -263,23 +263,23 @@ impl Session {
         if let Some(base_replacement_history) = base_replacement_history {
             history.replace(base_replacement_history.to_vec());
         }
+        // Replay must not depend on the current user's output_truncation config, or resume/fork
+        // can silently rewrite model-visible history after a config change.
+        let replay_output_truncation = codex_utils_output_truncation::OutputTruncation::new(
+            turn_context.truncation_policy,
+            None,
+        );
         // Materialize exact history semantics from the replay-derived suffix. The eventual lazy
         // design should keep this same replay shape, but drive it from a resumable reverse source
         // instead of an eagerly loaded `&[RolloutItem]`.
         for item in rollout_suffix {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
-                    history.record_items(
-                        std::iter::once(response_item),
-                        turn_context.model_info.truncation_policy.into(),
-                    );
+                    history.record_items(std::iter::once(response_item), replay_output_truncation);
                 }
                 RolloutItem::InterAgentCommunication(communication) => {
                     let response_item = communication.to_model_input_item();
-                    history.record_items(
-                        std::iter::once(&response_item),
-                        turn_context.model_info.truncation_policy.into(),
-                    );
+                    history.record_items(std::iter::once(&response_item), replay_output_truncation);
                 }
                 RolloutItem::Compacted(compacted) => {
                     if let Some(replacement_history) = &compacted.replacement_history {

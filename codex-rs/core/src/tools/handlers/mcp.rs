@@ -156,7 +156,7 @@ impl McpHandler {
             tool_input: result.tool_input,
             wall_time: started.elapsed(),
             original_image_detail_supported: can_request_original_image_detail(&turn.model_info),
-            truncation_policy: turn.model_info.truncation_policy.into(),
+            truncation: turn.output_truncation(),
         }))
     }
 }
@@ -445,7 +445,10 @@ mod tests {
             }),
             wall_time: Duration::from_millis(42),
             original_image_detail_supported: true,
-            truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(1024),
+            truncation: codex_utils_output_truncation::OutputTruncation::new(
+                codex_utils_output_truncation::TruncationPolicy::Bytes(1024),
+                None,
+            ),
         };
         let (session, turn) = make_session_and_context().await;
         let handler = McpHandler::new(tool_info("filesystem", "filesystem", "read_file"))
