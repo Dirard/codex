@@ -60,9 +60,9 @@ impl ModelSelectionRequest {
     }
 }
 
-pub(crate) async fn validate_loaded_config_model_selection(
+pub(crate) async fn apply_loaded_config_model_selection(
     thread_manager: &ThreadManager,
-    config: &Config,
+    config: &mut Config,
     selection: &ModelSelectionRequest,
     method: &str,
 ) -> Result<(), JSONRPCErrorError> {
@@ -70,21 +70,115 @@ pub(crate) async fn validate_loaded_config_model_selection(
         return Ok(());
     }
 
-    let Some(model) = config.model.as_deref() else {
+    let Some(model) = config.model.clone() else {
         return Err(invalid_request(format!(
             "invalid {method} model selection: model is required"
         )));
     };
 
+    if selection.explicit_model_provider.is_none()
+        && let Some(provider_id) = inferred_provider_for_model_only_selection(
+            thread_manager,
+            config,
+            model.as_str(),
+            method,
+        )
+        .await?
+    {
+        apply_model_provider(config, provider_id.as_str(), method)?;
+    }
+
     validate_model_for_provider(
         thread_manager,
         config,
         config.model_provider_id.as_str(),
-        model,
+        model.as_str(),
         method,
         selection.requires_custom_allowlist(),
     )
     .await
+}
+
+async fn inferred_provider_for_model_only_selection(
+    thread_manager: &ThreadManager,
+    config: &Config,
+    model: &str,
+    method: &str,
+) -> Result<Option<String>, JSONRPCErrorError> {
+    let provider_ids = configured_provider_ids_for_model(config, model);
+    if provider_ids.is_empty()
+        || provider_ids
+            .iter()
+            .any(|provider_id| provider_id == &config.model_provider_id)
+    {
+        return Ok(None);
+    }
+
+    if config.model_provider_id == OPENAI_PROVIDER_ID
+        && validate_openai_model(thread_manager, model, method)
+            .await
+            .is_ok()
+    {
+        return Ok(None);
+    }
+
+    match provider_ids.as_slice() {
+        [provider_id] => Ok(Some(provider_id.clone())),
+        provider_ids => {
+            let provider_list = provider_ids
+                .iter()
+                .map(|provider_id| format!("'{provider_id}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(invalid_request(format!(
+                "invalid {method} model selection: model '{model}' is configured for multiple modelProviders ({provider_list}); pass modelProvider explicitly"
+            )))
+        }
+    }
+}
+
+fn configured_provider_ids_for_model(config: &Config, model: &str) -> Vec<String> {
+    let mut provider_ids = config
+        .model_providers
+        .iter()
+        .filter(|(provider_id, provider)| {
+            provider_id.as_str() != OPENAI_PROVIDER_ID && provider_lists_model(provider, model)
+        })
+        .map(|(provider_id, _)| provider_id.clone())
+        .collect::<Vec<_>>();
+
+    if config.model_provider_id != OPENAI_PROVIDER_ID
+        && !config
+            .model_providers
+            .contains_key(&config.model_provider_id)
+        && provider_lists_model(&config.model_provider, model)
+    {
+        provider_ids.push(config.model_provider_id.clone());
+    }
+
+    provider_ids.sort();
+    provider_ids.dedup();
+    provider_ids
+}
+
+fn apply_model_provider(
+    config: &mut Config,
+    provider_id: &str,
+    method: &str,
+) -> Result<(), JSONRPCErrorError> {
+    if provider_id == config.model_provider_id {
+        return Ok(());
+    }
+
+    let Some(provider) = config.model_providers.get(provider_id).cloned() else {
+        return Err(invalid_request(format!(
+            "invalid {method} model selection: unknown modelProvider '{provider_id}'"
+        )));
+    };
+
+    config.model_provider_id = provider_id.to_string();
+    config.model_provider = provider;
+    Ok(())
 }
 
 pub(crate) async fn validate_model_for_provider(
@@ -162,18 +256,21 @@ fn validate_configured_provider_model(
         return Ok(());
     }
 
-    if provider
-        .models
-        .iter()
-        .map(|configured| configured.trim())
-        .any(|configured| configured == model)
-    {
+    if provider_lists_model(provider, model) {
         Ok(())
     } else {
         Err(invalid_request(format!(
             "invalid {method} model selection: model '{model}' is not configured for modelProvider '{provider_id}'"
         )))
     }
+}
+
+fn provider_lists_model(provider: &ModelProviderInfo, model: &str) -> bool {
+    provider
+        .models
+        .iter()
+        .map(|configured| configured.trim())
+        .any(|configured| !configured.is_empty() && configured == model)
 }
 
 fn raw_string_override(

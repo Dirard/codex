@@ -309,6 +309,44 @@ async fn thread_start_with_custom_provider_model_surfaces_in_thread_views() -> R
 }
 
 #[tokio::test]
+async fn thread_start_infers_custom_provider_from_model_only_selection() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_openai_default_and_provider_models(
+        codex_home.path(),
+        &server.uri(),
+        &["custom-a"],
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("custom-a".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        thread,
+        model,
+        model_provider,
+        ..
+    } = to_response::<ThreadStartResponse>(resp)?;
+    assert_eq!(model, "custom-a");
+    assert_eq!(model_provider, "mock_provider");
+    assert_eq!(thread.model_provider, "mock_provider");
+    assert_eq!(thread.model.as_deref(), Some("custom-a"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_rejects_invalid_custom_provider_model_selection() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -1417,6 +1455,38 @@ approval_policy = "never"
 sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+models = [{model_entries}]
+"#
+        ),
+    )
+}
+
+fn create_config_toml_with_openai_default_and_provider_models(
+    codex_home: &Path,
+    server_uri: &str,
+    models: &[&str],
+) -> std::io::Result<()> {
+    let model_entries = models
+        .iter()
+        .map(|model| format!("\"{model}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"
+model = "gpt-5"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "openai"
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

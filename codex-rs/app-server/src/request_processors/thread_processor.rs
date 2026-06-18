@@ -1144,9 +1144,9 @@ impl ThreadRequestProcessor {
                 .map_err(|err| config_load_error(&err))?;
         }
 
-        model_selection::validate_loaded_config_model_selection(
+        model_selection::apply_loaded_config_model_selection(
             listener_task_context.thread_manager.as_ref(),
-            &config,
+            &mut config,
             &model_selection,
             "thread/start",
         )
@@ -2696,7 +2696,7 @@ impl ThreadRequestProcessor {
         .await;
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = match self
+        let mut config = match self
             .config_manager
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
             .await
@@ -2708,9 +2708,9 @@ impl ThreadRequestProcessor {
                 return Ok(());
             }
         };
-        if let Err(error) = model_selection::validate_loaded_config_model_selection(
+        if let Err(error) = model_selection::apply_loaded_config_model_selection(
             self.thread_manager.as_ref(),
-            &config,
+            &mut config,
             &model_selection,
             "thread/resume",
         )
@@ -3445,14 +3445,14 @@ impl ThreadRequestProcessor {
             source_thread.reasoning_effort.clone(),
         );
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = self
+        let mut config = self
             .config_manager
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
             .await
             .map_err(|err| config_load_error(&err))?;
-        model_selection::validate_loaded_config_model_selection(
+        model_selection::apply_loaded_config_model_selection(
             self.thread_manager.as_ref(),
-            &config,
+            &mut config,
             &model_selection,
             "thread/fork",
         )
