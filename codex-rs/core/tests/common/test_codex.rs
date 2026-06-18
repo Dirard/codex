@@ -695,6 +695,9 @@ impl TestCodexBuilder {
         for mutator in mutators {
             mutator(&mut config);
         }
+        if config.experimental_realtime_ws_base_url.is_some() {
+            config.model_provider.supports_websockets = true;
+        }
         ensure_test_model_catalog(&mut config)?;
 
         Ok((config, cwd))

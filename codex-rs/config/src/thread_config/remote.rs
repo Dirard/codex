@@ -18,6 +18,8 @@ use super::ThreadConfigSource;
 use super::UserThreadConfig;
 use proto::thread_config_loader_client::ThreadConfigLoaderClient;
 
+use crate::config_toml::validate_model_providers;
+
 #[path = "proto/codex.thread_config.v1.rs"]
 mod proto;
 
@@ -140,6 +142,7 @@ fn session_thread_config_from_proto(
         .into_iter()
         .map(model_provider_from_proto)
         .collect::<Result<HashMap<_, _>, _>>()?;
+    validate_model_providers(&model_providers).map_err(parse_error)?;
 
     Ok(SessionThreadConfig {
         model_provider: config.model_provider,
@@ -430,6 +433,28 @@ mod tests {
 
         assert_eq!(id, "local");
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn session_thread_config_proto_rejects_openai_auth_custom_provider() {
+        let err = session_thread_config_from_proto(proto::SessionThreadConfig {
+            model_provider: Some("local".to_string()),
+            model_providers: vec![proto::ModelProvider {
+                id: "local".to_string(),
+                name: "Local".to_string(),
+                base_url: Some("http://127.0.0.1:8061/api/codex".to_string()),
+                requires_openai_auth: true,
+                wire_api: proto::WireApi::Responses.into(),
+                ..Default::default()
+            }],
+            features: HashMap::new(),
+        })
+        .expect_err("remote custom provider must not enable OpenAI auth");
+
+        assert_eq!(err.code(), ThreadConfigLoadErrorCode::Parse);
+        assert!(err.to_string().contains(
+            "model_providers.local: requires_openai_auth is only supported for built-in OpenAI providers"
+        ));
     }
 
     fn proto_sources() -> Vec<proto::ThreadConfigSource> {

@@ -34,6 +34,7 @@ const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
+pub const OPENAI_API_BASE_URL: &str = "https://api.openai.com/v1";
 pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
@@ -141,7 +142,9 @@ pub struct ModelProviderInfo {
     /// and API key (if needed) comes from the "env_key" environment variable.
     #[serde(default)]
     pub requires_openai_auth: bool,
-    /// Whether this provider supports the Responses API WebSocket transport.
+    /// Whether this provider supports websocket-backed features. Responses-over-WebSocket
+    /// turn transport also requires `wire_api = "responses"`; realtime websocket
+    /// conversations can use a separate realtime base URL.
     #[serde(default)]
     pub supports_websockets: bool,
 }
@@ -260,12 +263,18 @@ impl ModelProviderInfo {
         ) {
             CHATGPT_CODEX_BASE_URL
         } else {
-            "https://api.openai.com/v1"
+            OPENAI_API_BASE_URL
         };
-        let base_url = self
-            .base_url
-            .clone()
-            .unwrap_or_else(|| default_base_url.to_string());
+        let base_url = match self.base_url.clone() {
+            Some(base_url) => base_url,
+            None if self.uses_openai_auth() => default_base_url.to_string(),
+            None => {
+                return Err(CodexErr::UnsupportedOperation(format!(
+                    "model provider `{}` must define `base_url` unless it is the built-in OpenAI provider",
+                    self.name
+                )));
+            }
+        };
 
         let headers = self.build_header_map()?;
         let retry = ApiRetryConfig {
@@ -406,6 +415,10 @@ impl ModelProviderInfo {
 
     pub fn is_openai(&self) -> bool {
         self.name == OPENAI_PROVIDER_NAME
+    }
+
+    pub fn uses_openai_auth(&self) -> bool {
+        self.requires_openai_auth
     }
 
     pub fn is_amazon_bedrock(&self) -> bool {

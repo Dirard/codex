@@ -246,6 +246,31 @@ pub(crate) fn reject_full_fork_spawn_overrides(
     Ok(())
 }
 
+pub(crate) fn ensure_spawn_agent_provider_auth(
+    config: &Config,
+    turn: &TurnContext,
+    agent_type: Option<&str>,
+) -> Result<(), FunctionCallError> {
+    if !config.model_provider.requires_openai_auth {
+        return Ok(());
+    }
+
+    let has_openai_auth = turn
+        .auth_manager
+        .as_ref()
+        .and_then(|auth_manager| auth_manager.auth_mode())
+        .is_some();
+    if has_openai_auth {
+        return Ok(());
+    }
+
+    let agent_type = agent_type.unwrap_or("default");
+    Err(FunctionCallError::RespondToModel(format!(
+        "agent_type '{agent_type}' selects modelProvider '{}' which requires OpenAI auth, but no OpenAI auth is configured",
+        config.model_provider_id
+    )))
+}
+
 /// Copies runtime-only turn state onto a child config before it is handed to `AgentControl`.
 ///
 /// These values are chosen by the live turn rather than persisted config, so leaving them stale

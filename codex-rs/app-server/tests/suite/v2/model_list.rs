@@ -23,7 +23,6 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
-use core_test_support::responses::mount_models_once;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -259,6 +258,132 @@ models = ["glm-5.1"]
 }
 
 #[tokio::test]
+async fn list_models_uses_only_explicit_custom_provider_models_without_discovery() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let provider_server = MockServer::start().await;
+    let auth_marker = codex_home.path().join("custom-provider-auth-command-ran");
+    let auth_marker_arg = auth_marker.to_string_lossy().to_string();
+    let (auth_command, auth_args) = if cfg!(windows) {
+        (
+            "cmd".to_string(),
+            vec![
+                "/C".to_string(),
+                format!("echo ran>\"{}\"", auth_marker.display()),
+            ],
+        )
+    } else {
+        (
+            "sh".to_string(),
+            vec![
+                "-c".to_string(),
+                "printf ran > \"$1\"".to_string(),
+                "codex-auth-marker".to_string(),
+                auth_marker_arg,
+            ],
+        )
+    };
+    let auth_args_toml = format!(
+        "[{}]",
+        auth_args
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .join(", ")
+    );
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"
+model_provider = "zai"
+model = "zai-runtime-only"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+[model_providers.no_picker_models]
+name = "No Picker Models"
+base_url = "https://no-picker.example/v1"
+wire_api = "chat"
+
+[model_providers.zai]
+name = "Z.ai"
+base_url = {}
+wire_api = "chat"
+models = ["glm-4.6", " ", "glm-4.6", "", "glm-4.7"]
+auth = {{ command = {}, args = {auth_args_toml}, timeout_ms = 1 }}
+"#,
+            serde_json::to_string(&provider_server.uri())?,
+            serde_json::to_string(&auth_command)?,
+        ),
+    )?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_list_models_request(ModelListParams {
+            limit: Some(200),
+            cursor: None,
+            include_hidden: None,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let ModelListResponse {
+        data: items,
+        next_cursor,
+    } = to_response::<ModelListResponse>(response)?;
+    let custom_models = items
+        .iter()
+        .filter(|item| item.model_provider.as_deref() != Some(OPENAI_PROVIDER_ID))
+        .map(|item| {
+            (
+                item.model_provider.clone().unwrap_or_default(),
+                item.model.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        custom_models,
+        vec![
+            ("zai".to_string(), "glm-4.6".to_string()),
+            ("zai".to_string(), "glm-4.7".to_string()),
+        ]
+    );
+    assert!(next_cursor.is_none());
+    assert!(
+        !items.iter().any(|item| item.model == "zai-runtime-only"),
+        "active config.model must not be synthesized into model/list"
+    );
+    assert!(
+        !items
+            .iter()
+            .any(|item| item.model_provider.as_deref() == Some("no_picker_models")),
+        "provider without models must not contribute picker entries"
+    );
+    let requests = provider_server
+        .received_requests()
+        .await
+        .unwrap_or_default();
+    assert_eq!(
+        requests.len(),
+        0,
+        "custom provider /models must not be called"
+    );
+    assert!(
+        !auth_marker.exists(),
+        "custom provider auth.command must not run for model/list"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_models_cache(codex_home.path())?;
@@ -325,8 +450,7 @@ async fn list_models_includes_hidden_models() -> Result<()> {
 }
 
 #[tokio::test]
-async fn list_models_uses_chatgpt_remote_catalog_as_source_of_truth() -> Result<()> {
-    let server = MockServer::start().await;
+async fn list_models_uses_configured_catalog_as_source_of_truth() -> Result<()> {
     let remote_model: ModelInfo = serde_json::from_value(json!({
         "slug": "chatgpt-remote-only",
         "display_name": "ChatGPT Remote Only",
@@ -355,16 +479,15 @@ async fn list_models_uses_chatgpt_remote_catalog_as_source_of_truth() -> Result<
         "max_context_window": 272_000,
         "experimental_supported_tools": [],
     }))?;
-    let models_mock = mount_models_once(
-        &server,
-        ModelsResponse {
-            models: vec![remote_model.clone()],
-        },
-    )
-    .await;
 
     let codex_home = TempDir::new()?;
-    let server_uri = server.uri();
+    let catalog_path = codex_home.path().join("catalog.json");
+    std::fs::write(
+        &catalog_path,
+        serde_json::to_string(&ModelsResponse {
+            models: vec![remote_model.clone()],
+        })?,
+    )?;
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
@@ -372,8 +495,9 @@ async fn list_models_uses_chatgpt_remote_catalog_as_source_of_truth() -> Result<
 model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
-openai_base_url = "{server_uri}/v1"
-"#
+model_catalog_json = '{}'
+"#,
+            catalog_path.display()
         ),
     )?;
     write_chatgpt_auth(
@@ -427,11 +551,6 @@ openai_base_url = "{server_uri}/v1"
 
     assert_eq!(items, expected_items);
     assert!(next_cursor.is_none());
-    assert_eq!(
-        models_mock.requests().len(),
-        1,
-        "expected a single /models request"
-    );
     Ok(())
 }
 

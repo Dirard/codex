@@ -36,6 +36,16 @@ use tokio::task;
 use toml::Value as TomlValue;
 use toml_edit::Item as TomlItem;
 
+const REDACTED_CONFIG_VALUE: &str = "[redacted]";
+const MODEL_PROVIDER_SECRET_FIELDS: &[&str] = &[
+    "key",
+    "experimental_bearer_token",
+    "env_key",
+    "env_key_instructions",
+];
+const MODEL_PROVIDER_SECRET_STRUCTURES: &[&str] =
+    &["http_headers", "env_http_headers", "auth", "aws"];
+
 #[derive(Debug, Error)]
 pub(crate) enum ConfigManagerError {
     #[error("{message}")]
@@ -129,8 +139,9 @@ impl ConfigManager {
             .try_into()
             .map_err(|err| ConfigManagerError::toml("invalid configuration", err))?;
 
-        let json_value = serde_json::to_value(&effective_config_toml)
+        let mut json_value = serde_json::to_value(&effective_config_toml)
             .map_err(|err| ConfigManagerError::json("failed to serialize configuration", err))?;
+        redact_config_secrets(&mut json_value);
         let config: ApiConfig = serde_json::from_value(json_value)
             .map_err(|err| ConfigManagerError::json("failed to deserialize configuration", err))?;
 
@@ -144,7 +155,11 @@ impl ConfigManager {
                         /*include_disabled*/ true,
                     )
                     .iter()
-                    .map(|layer| layer.as_layer())
+                    .map(|layer| {
+                        let mut layer = layer.as_layer();
+                        redact_config_secrets(&mut layer.config);
+                        layer
+                    })
                     .collect()
             }),
         })
@@ -357,6 +372,54 @@ impl ConfigManager {
     /// associated with this query.
     async fn load_thread_agnostic_config(&self) -> std::io::Result<ConfigLayerStack> {
         self.load_config_layers(/*cwd*/ None).await
+    }
+}
+
+fn redact_config_secrets(config: &mut JsonValue) {
+    let Some(model_providers) = config
+        .get_mut("model_providers")
+        .and_then(JsonValue::as_object_mut)
+    else {
+        return;
+    };
+
+    for provider in model_providers.values_mut() {
+        let Some(provider) = provider.as_object_mut() else {
+            continue;
+        };
+
+        for field in MODEL_PROVIDER_SECRET_FIELDS {
+            if provider.contains_key(*field) {
+                provider.insert(
+                    (*field).to_string(),
+                    JsonValue::String(REDACTED_CONFIG_VALUE.to_string()),
+                );
+            }
+        }
+
+        for field in MODEL_PROVIDER_SECRET_STRUCTURES {
+            if let Some(value) = provider.get_mut(*field) {
+                redact_json_value(value);
+            }
+        }
+    }
+}
+
+fn redact_json_value(value: &mut JsonValue) {
+    match value {
+        JsonValue::Array(values) => {
+            for value in values {
+                redact_json_value(value);
+            }
+        }
+        JsonValue::Object(values) => {
+            for value in values.values_mut() {
+                redact_json_value(value);
+            }
+        }
+        JsonValue::Null | JsonValue::Bool(_) | JsonValue::Number(_) | JsonValue::String(_) => {
+            *value = JsonValue::String(REDACTED_CONFIG_VALUE.to_string());
+        }
     }
 }
 

@@ -399,6 +399,137 @@ async fn spawn_agent_role_can_use_configured_external_model_provider() {
 }
 
 #[tokio::test]
+async fn spawn_agent_openai_role_without_auth_does_not_break_parent_custom_provider() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        agent_id: String,
+        model: Option<String>,
+        model_provider_id: Option<String>,
+    }
+
+    let home = tempfile::TempDir::new().expect("create temp dir");
+    tokio::fs::write(
+        home.path().join("openai-reviewer.toml"),
+        r#"model_provider = "openai"
+model = "gpt-5.4"
+"#,
+    )
+    .await
+    .expect("OpenAI role config should be written");
+    tokio::fs::write(
+        home.path().join("local-worker.toml"),
+        r#"model = "local-child"
+"#,
+    )
+    .await
+    .expect("local role config should be written");
+    tokio::fs::write(
+        home.path().join("config.toml"),
+        r#"model_provider = "local"
+model = "local-parent"
+
+[model_providers.local]
+name = "Local"
+base_url = "http://localhost:1234/v1"
+wire_api = "chat"
+
+[agents.openai-reviewer]
+description = "OpenAI reviewer."
+config_file = "openai-reviewer.toml"
+
+[agents.local-worker]
+description = "Local worker."
+config_file = "local-worker.toml"
+"#,
+    )
+    .await
+    .expect("config should be written");
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("test config should load");
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+    assert!(auth_manager.auth_cached().is_none());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager,
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
+        "22222222-2222-4222-8222-222222222222".to_string(),
+        /*attestation_provider*/ None,
+    );
+    let parent = manager
+        .start_thread(config.clone())
+        .await
+        .expect("parent custom-provider thread should start without OpenAI auth");
+    let parent_thread_id = parent.thread_id;
+    let parent_session = parent.thread.codex.session.clone();
+
+    let err = SpawnAgentHandler::default()
+        .handle(invocation(
+            parent_session.clone(),
+            parent_session.new_default_turn().await,
+            "spawn_agent",
+            function_payload(json!({
+                "message": "review this",
+                "agent_type": "openai-reviewer"
+            })),
+        ))
+        .await
+        .err()
+        .expect("OpenAI role should fail before spawning without auth");
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "agent_type 'openai-reviewer' selects modelProvider 'openai' which requires OpenAI auth, but no OpenAI auth is configured".to_string(),
+        )
+    );
+    let parent_snapshot = manager
+        .get_thread(parent_thread_id)
+        .await
+        .expect("parent thread should still exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(parent_snapshot.model, "local-parent");
+    assert_eq!(parent_snapshot.model_provider_id, "local");
+
+    let output = SpawnAgentHandler::default()
+        .handle(invocation(
+            parent_session.clone(),
+            parent_session.new_default_turn().await,
+            "spawn_agent",
+            function_payload(json!({
+                "message": "continue with local provider",
+                "agent_type": "local-worker"
+            })),
+        ))
+        .await
+        .expect("parent custom-provider thread should still spawn local roles");
+    let (content, success) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    assert_eq!(success, Some(true));
+    assert_eq!(result.model.as_deref(), Some("local-child"));
+    assert_eq!(result.model_provider_id.as_deref(), Some("local"));
+    let local_snapshot = manager
+        .get_thread(parse_agent_id(&result.agent_id))
+        .await
+        .expect("spawned local agent thread should exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(local_snapshot.model, "local-child");
+    assert_eq!(local_snapshot.model_provider_id, "local");
+}
+
+#[tokio::test]
 async fn spawn_agent_fork_context_rejects_agent_type_override() {
     let (mut session, mut turn) = make_session_and_context().await;
     let role_name = install_role_with_model_override(&mut turn).await;

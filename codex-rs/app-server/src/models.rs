@@ -22,9 +22,12 @@ pub async fn supported_models(
     config: &Config,
     include_hidden: bool,
 ) -> Vec<Model> {
-    let mut presets = thread_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
-        .await;
+    let refresh_strategy = if config.model_provider_id == OPENAI_PROVIDER_ID {
+        RefreshStrategy::OnlineIfUncached
+    } else {
+        RefreshStrategy::Offline
+    };
+    let mut presets = thread_manager.list_models(refresh_strategy).await;
     add_configured_provider_model_presets(&mut presets, config);
 
     presets
@@ -66,21 +69,6 @@ fn add_configured_provider_model_presets(presets: &mut Vec<ModelPreset>, config:
                 ));
             }
         }
-    }
-
-    if let Some(model) = config
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-        && config.model_provider_id != OPENAI_PROVIDER_ID
-        && seen.insert((config.model_provider_id.clone(), model.to_string()))
-    {
-        presets.push(configured_provider_model_preset(
-            &config.model_provider_id,
-            &config.model_provider,
-            model,
-        ));
     }
 }
 

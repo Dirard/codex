@@ -833,14 +833,19 @@ impl AccountRequestProcessor {
         &self,
         params: GetAccountParams,
     ) -> Result<GetAccountResponse, JSONRPCErrorError> {
-        let do_refresh = params.refresh_token;
+        let GetAccountParams {
+            refresh_token,
+            model_provider,
+        } = params;
+        let provider_info = self
+            .account_model_provider(model_provider.as_deref())
+            .await?;
 
-        self.refresh_token_if_requested(do_refresh).await;
+        if provider_info.requires_openai_auth {
+            self.refresh_token_if_requested(refresh_token).await;
+        }
 
-        let provider = create_model_provider(
-            self.config.model_provider.clone(),
-            Some(self.auth_manager.clone()),
-        );
+        let provider = create_model_provider(provider_info, Some(self.auth_manager.clone()));
         let account_state = match provider.account_state() {
             Ok(account_state) => account_state,
             Err(err) => return Err(invalid_request(err.to_string())),
@@ -851,6 +856,29 @@ impl AccountRequestProcessor {
             account,
             requires_openai_auth: account_state.requires_openai_auth,
         })
+    }
+
+    async fn account_model_provider(
+        &self,
+        model_provider: Option<&str>,
+    ) -> Result<ModelProviderInfo, JSONRPCErrorError> {
+        match model_provider {
+            Some(model_provider) => {
+                let config = self
+                    .config_manager
+                    .load_latest_config(/*fallback_cwd*/ None)
+                    .await
+                    .map_err(|err| invalid_request(format!("failed to reload config: {err}")))?;
+                config
+                    .model_providers
+                    .get(model_provider)
+                    .cloned()
+                    .ok_or_else(|| {
+                        invalid_request(format!("unknown modelProvider: {model_provider}"))
+                    })
+            }
+            None => Ok(self.config.model_provider.clone()),
+        }
     }
 
     async fn get_account_rate_limits_response(

@@ -1,0 +1,211 @@
+use super::*;
+use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_models_manager::manager::RefreshStrategy;
+
+const RAW_MODEL_KEY: &str = "model";
+const RAW_MODEL_PROVIDER_KEY: &str = "model_provider";
+
+#[derive(Debug, Default)]
+pub(crate) struct ModelSelectionRequest {
+    explicit_model: Option<String>,
+    explicit_model_provider: Option<String>,
+}
+
+impl ModelSelectionRequest {
+    pub(crate) fn from_overrides(
+        request_overrides: Option<&HashMap<String, serde_json::Value>>,
+        typesafe_overrides: &ConfigOverrides,
+        method: &str,
+    ) -> Result<Self, JSONRPCErrorError> {
+        let raw_model = raw_string_override(request_overrides, RAW_MODEL_KEY, method)?;
+        let raw_model_provider =
+            raw_string_override(request_overrides, RAW_MODEL_PROVIDER_KEY, method)?;
+
+        Ok(Self {
+            explicit_model: combined_override(
+                method,
+                "model",
+                RAW_MODEL_KEY,
+                typesafe_overrides.model.as_deref(),
+                raw_model,
+            )?,
+            explicit_model_provider: combined_override(
+                method,
+                "modelProvider",
+                RAW_MODEL_PROVIDER_KEY,
+                typesafe_overrides.model_provider.as_deref(),
+                raw_model_provider,
+            )?,
+        })
+    }
+
+    pub(crate) fn reject_provider_without_model(
+        &self,
+        method: &str,
+    ) -> Result<(), JSONRPCErrorError> {
+        if self.explicit_model_provider.is_some() && self.explicit_model.is_none() {
+            return Err(invalid_request(format!(
+                "invalid {method} model selection: modelProvider requires model"
+            )));
+        }
+        Ok(())
+    }
+
+    fn is_explicit(&self) -> bool {
+        self.explicit_model.is_some() || self.explicit_model_provider.is_some()
+    }
+
+    fn requires_custom_allowlist(&self) -> bool {
+        self.explicit_model_provider.is_some()
+    }
+}
+
+pub(crate) async fn validate_loaded_config_model_selection(
+    thread_manager: &ThreadManager,
+    config: &Config,
+    selection: &ModelSelectionRequest,
+    method: &str,
+) -> Result<(), JSONRPCErrorError> {
+    if !selection.is_explicit() {
+        return Ok(());
+    }
+
+    let Some(model) = config.model.as_deref() else {
+        return Err(invalid_request(format!(
+            "invalid {method} model selection: model is required"
+        )));
+    };
+
+    validate_model_for_provider(
+        thread_manager,
+        config,
+        config.model_provider_id.as_str(),
+        model,
+        method,
+        selection.requires_custom_allowlist(),
+    )
+    .await
+}
+
+pub(crate) async fn validate_model_for_provider(
+    thread_manager: &ThreadManager,
+    config: &Config,
+    provider_id: &str,
+    model: &str,
+    method: &str,
+    require_custom_allowlist: bool,
+) -> Result<(), JSONRPCErrorError> {
+    if provider_id == OPENAI_PROVIDER_ID {
+        validate_openai_model(thread_manager, model, method).await
+    } else {
+        let Some(provider) = config.model_providers.get(provider_id).or_else(|| {
+            (provider_id == config.model_provider_id).then_some(&config.model_provider)
+        }) else {
+            return Err(invalid_request(format!(
+                "invalid {method} model selection: unknown modelProvider '{provider_id}'"
+            )));
+        };
+        validate_configured_provider_model(
+            provider_id,
+            provider,
+            model,
+            method,
+            require_custom_allowlist,
+        )
+    }
+}
+
+async fn validate_openai_model(
+    thread_manager: &ThreadManager,
+    model: &str,
+    method: &str,
+) -> Result<(), JSONRPCErrorError> {
+    let model_exists = thread_manager
+        .list_models(RefreshStrategy::Offline)
+        .await
+        .into_iter()
+        .any(|preset| {
+            preset.model == model
+                && preset
+                    .model_provider
+                    .as_deref()
+                    .unwrap_or(OPENAI_PROVIDER_ID)
+                    == OPENAI_PROVIDER_ID
+        });
+
+    if model_exists {
+        Ok(())
+    } else {
+        Err(invalid_request(format!(
+            "invalid {method} model selection: model '{model}' is not available for modelProvider '{OPENAI_PROVIDER_ID}'"
+        )))
+    }
+}
+
+fn validate_configured_provider_model(
+    provider_id: &str,
+    provider: &ModelProviderInfo,
+    model: &str,
+    method: &str,
+    require_custom_allowlist: bool,
+) -> Result<(), JSONRPCErrorError> {
+    let has_model_allowlist = provider
+        .models
+        .iter()
+        .any(|configured| !configured.trim().is_empty());
+    if !has_model_allowlist {
+        if require_custom_allowlist {
+            return Err(invalid_request(format!(
+                "invalid {method} model selection: modelProvider '{provider_id}' does not define any models"
+            )));
+        }
+        return Ok(());
+    }
+
+    if provider
+        .models
+        .iter()
+        .map(|configured| configured.trim())
+        .any(|configured| configured == model)
+    {
+        Ok(())
+    } else {
+        Err(invalid_request(format!(
+            "invalid {method} model selection: model '{model}' is not configured for modelProvider '{provider_id}'"
+        )))
+    }
+}
+
+fn raw_string_override(
+    request_overrides: Option<&HashMap<String, serde_json::Value>>,
+    key: &str,
+    method: &str,
+) -> Result<Option<String>, JSONRPCErrorError> {
+    let Some(value) = request_overrides.and_then(|overrides| overrides.get(key)) else {
+        return Ok(None);
+    };
+    let Some(value) = value.as_str() else {
+        return Err(invalid_request(format!(
+            "invalid {method} model selection: config.{key} must be a string"
+        )));
+    };
+    Ok(Some(value.to_string()))
+}
+
+fn combined_override(
+    method: &str,
+    top_level_name: &str,
+    raw_key: &str,
+    top_level_value: Option<&str>,
+    raw_value: Option<String>,
+) -> Result<Option<String>, JSONRPCErrorError> {
+    if let (Some(top_level_value), Some(raw_value)) = (top_level_value, raw_value.as_deref())
+        && top_level_value != raw_value
+    {
+        return Err(invalid_request(format!(
+            "invalid {method} model selection: conflicting {top_level_name} and config.{raw_key} values"
+        )));
+    }
+
+    Ok(top_level_value.map(str::to_string).or(raw_value))
+}

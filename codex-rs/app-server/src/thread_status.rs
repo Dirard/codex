@@ -895,6 +895,7 @@ mod tests {
             preview: String::new(),
             ephemeral: false,
             model_provider: "mock-provider".to_string(),
+            model: Some("mock-model".to_string()),
             created_at: 0,
             updated_at: 0,
             recency_at: Some(0),

@@ -657,7 +657,7 @@ impl TurnRequestProcessor {
         let effort = effort.map(Some);
 
         if has_any_overrides {
-            thread
+            let preview = thread
                 .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
                     environments: environments.clone(),
                     workspace_roots: runtime_workspace_roots.clone(),
@@ -679,6 +679,18 @@ impl TurnRequestProcessor {
                 .map_err(|err| {
                     invalid_request(format!("invalid thread settings override: {err}"))
                 })?;
+            if model.is_some() || collaboration_mode.is_some() {
+                let config = thread.config().await;
+                model_selection::validate_model_for_provider(
+                    self.thread_manager.as_ref(),
+                    &config,
+                    preview.model_provider_id.as_str(),
+                    preview.model.as_str(),
+                    method,
+                    /*require_custom_allowlist*/ false,
+                )
+                .await?;
+            }
         }
 
         Ok(codex_protocol::protocol::ThreadSettingsOverrides {
@@ -941,6 +953,35 @@ impl TurnRequestProcessor {
         else {
             return Ok(None);
         };
+        let config = thread.config().await;
+        if let Some(model) = params.model.as_deref() {
+            let snapshot = thread.config_snapshot().await;
+            model_selection::validate_model_for_provider(
+                self.thread_manager.as_ref(),
+                &config,
+                snapshot.model_provider_id.as_str(),
+                model,
+                "thread/realtime/start",
+                /*require_custom_allowlist*/ false,
+            )
+            .await?;
+        }
+        let realtime_transport_requires_websocket_support = match params.transport.as_ref() {
+            None | Some(ThreadRealtimeStartTransport::Websocket) => true,
+            Some(ThreadRealtimeStartTransport::Webrtc { .. }) => false,
+        };
+        if realtime_transport_requires_websocket_support
+            && !config.model_provider.supports_websockets
+        {
+            let provider_name = if config.model_provider.name.trim().is_empty() {
+                "selected model provider"
+            } else {
+                config.model_provider.name.as_str()
+            };
+            return Err(invalid_request(format!(
+                "model provider '{provider_name}' does not support realtime websocket conversations"
+            )));
+        }
         self.submit_core_op(
             request_id,
             thread.as_ref(),

@@ -146,6 +146,8 @@ pub struct Thread {
     pub ephemeral: bool,
     /// Model provider used for this thread (for example, 'openai').
     pub model_provider: String,
+    /// Model used for this thread, when known from thread metadata.
+    pub model: Option<String>,
     /// Unix timestamp (in seconds) when the thread was created.
     #[ts(type = "number")]
     pub created_at: i64,

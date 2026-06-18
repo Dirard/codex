@@ -80,6 +80,7 @@ use codex_memories_read::memory_root;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
+use codex_model_provider_info::OPENAI_API_BASE_URL;
 use codex_model_provider_info::built_in_model_providers;
 use codex_model_provider_info::merge_configured_model_providers;
 use codex_models_manager::ModelsManagerConfig;
@@ -1776,6 +1777,7 @@ pub async fn load_config_toml_with_layer_stack(
         tracing::error!("Failed to deserialize overridden config: {e}");
         e
     })?;
+    validate_openai_base_url_override(cfg.openai_base_url.as_deref())?;
 
     Ok(ConfigTomlLoadResult {
         config_toml: cfg,
@@ -1793,6 +1795,27 @@ pub fn deserialize_config_toml_with_base(
     root_value
         .try_into()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+fn validate_openai_base_url_override(openai_base_url: Option<&str>) -> std::io::Result<()> {
+    let Some(value) = openai_base_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    if value.trim_end_matches('/') != OPENAI_API_BASE_URL {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "`openai_base_url` can only use the built-in OpenAI API URL \
+                 ({OPENAI_API_BASE_URL}); configure custom endpoints under \
+                 `model_providers.<id>.base_url` instead"
+            ),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Validate user-visible feature settings against managed feature requirements.
@@ -3291,10 +3314,8 @@ impl Config {
             agent_roles::load_agent_roles(fs, &cfg, &config_layer_stack, &mut startup_warnings)
                 .await?;
 
-        let openai_base_url = cfg
-            .openai_base_url
-            .clone()
-            .filter(|value| !value.is_empty());
+        validate_openai_base_url_override(cfg.openai_base_url.as_deref())?;
+        let openai_base_url = None;
 
         let model_providers =
             merge_configured_model_providers(built_in_model_providers(openai_base_url), cfg.model_providers)

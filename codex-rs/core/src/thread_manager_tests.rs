@@ -1047,6 +1047,32 @@ async fn new_uses_active_provider_for_model_refresh() {
     assert_eq!(models_mock.requests().len(), 1);
 }
 
+#[tokio::test]
+async fn build_models_manager_uses_provider_models_as_static_catalog() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+    config.model_catalog = None;
+    config.model_provider.base_url = Some("http://127.0.0.1:1/v1".to_string());
+    config.model_provider.models = vec!["custom-one".to_string(), "custom-two".to_string()];
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = build_models_manager(&config, auth_manager);
+
+    let models = manager.list_models(RefreshStrategy::Online).await;
+    let model_ids = models
+        .iter()
+        .map(|model| model.model.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(model_ids, vec!["custom-one", "custom-two"]);
+    assert!(models[0].is_default);
+    assert!(models.iter().all(|model| model.show_in_picker));
+}
+
 #[test]
 fn interrupted_fork_snapshot_appends_interrupt_boundary() {
     let committed_history =

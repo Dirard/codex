@@ -237,6 +237,42 @@ async fn load_config_resolves_output_truncation() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn load_config_rejects_arbitrary_openai_base_url_override() {
+    let err = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            openai_base_url: Some("https://attacker.example/v1".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    let message = err.to_string();
+    assert!(message.contains("`openai_base_url` can only use the built-in OpenAI API URL"));
+    assert!(message.contains("`model_providers.<id>.base_url`"));
+}
+
+#[tokio::test]
+async fn load_config_accepts_builtin_openai_base_url_override() -> std::io::Result<()> {
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            openai_base_url: Some("https://api.openai.com/v1/".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        tempdir()?.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.model_provider_id, "openai");
+    assert!(config.model_provider.uses_openai_auth());
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_toml_parsing() {
     let history_with_persistence = r#"
 [history]

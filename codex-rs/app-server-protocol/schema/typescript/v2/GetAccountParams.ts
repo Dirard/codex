@@ -10,4 +10,11 @@ export type GetAccountParams = {
  * external auth mode this flag is ignored. Clients should refresh tokens
  * themselves and call `account/login/start` with `chatgptAuthTokens`.
  */
-refreshToken?: boolean, };
+refreshToken?: boolean,
+/**
+ * Optional model provider id whose account/auth state should be reported.
+ *
+ * When omitted or `null`, the response reports the active configured
+ * provider, matching the historical `account/read` behavior.
+ */
+modelProvider?: string | null, };

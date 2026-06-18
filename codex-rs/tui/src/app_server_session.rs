@@ -357,6 +357,7 @@ impl AppServerSession {
                 request_id: account_request_id,
                 params: GetAccountParams {
                     refresh_token: false,
+                    model_provider: None,
                 },
             })
             .await

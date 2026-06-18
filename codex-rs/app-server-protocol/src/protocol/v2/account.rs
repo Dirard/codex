@@ -374,6 +374,12 @@ pub struct GetAccountParams {
     /// themselves and call `account/login/start` with `chatgptAuthTokens`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub refresh_token: bool,
+    /// Optional model provider id whose account/auth state should be reported.
+    ///
+    /// When omitted or `null`, the response reports the active configured
+    /// provider, matching the historical `account/read` behavior.
+    #[ts(optional = nullable)]
+    pub model_provider: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

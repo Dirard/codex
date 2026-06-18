@@ -15,6 +15,10 @@ use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadListParams;
+use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -36,6 +40,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -195,6 +200,174 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
     assert_eq!(started.thread, thread);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_with_custom_provider_model_surfaces_in_thread_views() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_provider_models(
+        codex_home.path(),
+        &server.uri(),
+        &["custom-a", "custom-b"],
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("custom-a".to_string()),
+            model_provider: Some("mock_provider".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        thread,
+        model,
+        model_provider,
+        ..
+    } = to_response::<ThreadStartResponse>(resp)?;
+    assert_eq!(model, "custom-a");
+    assert_eq!(model_provider, "mock_provider");
+    assert_eq!(thread.model_provider, "mock_provider");
+    assert_eq!(thread.model.as_deref(), Some("custom-a"));
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread.id.clone(),
+            include_turns: false,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let read_response = to_response::<ThreadReadResponse>(read_resp)?;
+    assert_eq!(read_response.thread.model_provider, "mock_provider");
+    assert_eq!(read_response.thread.model.as_deref(), Some("custom-a"));
+
+    let turn_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "materialize thread".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let list_id = mcp
+        .send_thread_list_request(ThreadListParams {
+            cursor: None,
+            limit: Some(50),
+            sort_key: None,
+            sort_direction: None,
+            model_providers: Some(vec!["mock_provider".to_string()]),
+            source_kinds: None,
+            archived: None,
+            cwd: None,
+            use_state_db_only: false,
+            search_term: None,
+            parent_thread_id: None,
+        })
+        .await?;
+    let list_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    let list_response = to_response::<ThreadListResponse>(list_resp)?;
+    let listed_thread = list_response
+        .data
+        .iter()
+        .find(|listed_thread| listed_thread.id == thread.id)
+        .expect("started custom provider thread should appear in thread/list");
+    assert_eq!(listed_thread.model_provider, "mock_provider");
+    assert_eq!(listed_thread.model.as_deref(), Some("custom-a"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_rejects_invalid_custom_provider_model_selection() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_provider_models(codex_home.path(), &server.uri(), &["custom-a"])?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let provider_without_model_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model_provider: Some("mock_provider".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(provider_without_model_id)),
+    )
+    .await??;
+    assert_eq!(err.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert!(err.error.message.contains("modelProvider requires model"));
+
+    let unavailable_model_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("custom-b".to_string()),
+            model_provider: Some("mock_provider".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(unavailable_model_id)),
+    )
+    .await??;
+    assert_eq!(err.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert!(
+        err.error
+            .message
+            .contains("model 'custom-b' is not configured for modelProvider 'mock_provider'")
+    );
+
+    let conflicting_raw_config_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("custom-a".to_string()),
+            config: Some(HashMap::from([("model".to_string(), json!("custom-b"))])),
+            ..Default::default()
+        })
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(conflicting_raw_config_id)),
+    )
+    .await??;
+    assert_eq!(err.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert!(
+        err.error
+            .message
+            .contains("conflicting model and config.model values")
+    );
 
     Ok(())
 }
@@ -1220,6 +1393,38 @@ base_url = "{server_uri}/v1"
 wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
+"#
+        ),
+    )
+}
+
+fn create_config_toml_with_provider_models(
+    codex_home: &Path,
+    server_uri: &str,
+    models: &[&str],
+) -> std::io::Result<()> {
+    let model_entries = models
+        .iter()
+        .map(|model| format!("\"{model}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"
+model = "custom-a"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+models = [{model_entries}]
 "#
         ),
     )

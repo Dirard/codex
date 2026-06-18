@@ -84,6 +84,7 @@ async fn handle_spawn_agent(
             .await
             .map_err(FunctionCallError::RespondToModel)?;
     }
+    ensure_spawn_agent_provider_auth(&config, turn.as_ref(), role_name)?;
     apply_spawn_agent_service_tier(
         &session,
         &mut config,

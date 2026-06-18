@@ -151,7 +151,11 @@ async fn wait_for_responses_request_count(
 async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    create_config_toml_with_provider_models(
+        codex_home.path(),
+        &server.uri(),
+        &["gpt-5.4", "mock-model"],
+    )?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -195,10 +199,54 @@ async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_resume_model_only_validates_against_stored_provider() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_provider_models(codex_home.path(), &server.uri(), &["stored-model"])?;
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id,
+            model: Some("missing-model".to_string()),
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    assert_eq!(err.error.code, -32600);
+    assert!(
+        err.error
+            .message
+            .contains("model 'missing-model' is not configured for modelProvider 'mock_provider'")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_resume_with_empty_path_uses_running_thread_id() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    create_config_toml_with_provider_models(
+        codex_home.path(),
+        &server.uri(),
+        &["gpt-5.4", "mock-model"],
+    )?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -3580,7 +3628,11 @@ async fn thread_resume_can_load_source_by_external_path() -> Result<()> {
 async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    create_config_toml_with_provider_models(
+        codex_home.path(),
+        &server.uri(),
+        &["gpt-5.4", "mock-model"],
+    )?;
 
     let RestartedThreadFixture {
         mut mcp, thread_id, ..
@@ -3848,6 +3900,41 @@ base_url = "{server_uri}/v1"
 wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
+"#
+        ),
+    )
+}
+
+fn create_config_toml_with_provider_models(
+    codex_home: &std::path::Path,
+    server_uri: &str,
+    models: &[&str],
+) -> std::io::Result<()> {
+    let model_entries = models
+        .iter()
+        .map(|model| format!("\"{model}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"
+model = "stored-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[features]
+personality = true
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+models = [{model_entries}]
 "#
         ),
     )

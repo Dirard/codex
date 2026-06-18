@@ -375,7 +375,8 @@ pub struct ConfigToml {
     /// Optional product SKU forwarded on host-owned Codex Apps MCP requests.
     pub apps_mcp_product_sku: Option<String>,
 
-    /// Base URL override for the built-in `openai` model provider.
+    /// Legacy base URL override for the built-in `openai` model provider.
+    /// Custom endpoints must be configured under `model_providers.<id>.base_url`.
     pub openai_base_url: Option<String>,
 
     /// Machine-local realtime audio device preferences used by realtime voice.
@@ -928,6 +929,11 @@ pub fn validate_model_providers(
                 "model_providers.{key}: provider aws is only supported for `{AMAZON_BEDROCK_PROVIDER_ID}`"
             ));
         }
+        if provider.requires_openai_auth {
+            return Err(format!(
+                "model_providers.{key}: requires_openai_auth is only supported for built-in OpenAI providers"
+            ));
+        }
         if provider.name.trim().is_empty() {
             return Err(format!(
                 "model_providers.{key}: provider name must not be empty"
@@ -1017,5 +1023,22 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("TOML list of strings"));
         assert!(message.contains("comma-separated strings are not supported"));
+    }
+
+    #[test]
+    fn model_provider_rejects_custom_openai_auth_requirement() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+[model_providers.openai-custom]
+name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+requires_openai_auth = true
+"#,
+        )
+        .expect_err("custom provider must not enable OpenAI auth");
+
+        assert!(err.to_string().contains(
+            "model_providers.openai-custom: requires_openai_auth is only supported for built-in OpenAI providers"
+        ));
     }
 }

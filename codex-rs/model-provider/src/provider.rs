@@ -235,10 +235,12 @@ impl ModelProvider for ConfiguredModelProvider {
     }
 
     fn supports_attestation(&self) -> bool {
-        self.auth_manager
-            .as_ref()
-            .and_then(|auth_manager| auth_manager.auth_cached())
-            .is_some_and(|auth| auth.is_chatgpt_auth())
+        self.info.uses_openai_auth()
+            && self
+                .auth_manager
+                .as_ref()
+                .and_then(|auth_manager| auth_manager.auth_cached())
+                .is_some_and(|auth| auth.is_chatgpt_auth())
     }
 
     fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>> {
@@ -351,6 +353,7 @@ mod tests {
                     .try_into()
                     .expect("current dir should be absolute"),
             }),
+            base_url: Some("https://example.com/v1".to_string()),
             requires_openai_auth: false,
             ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
         }
@@ -506,6 +509,41 @@ mod tests {
         );
 
         assert!(provider.auth_manager().is_none());
+    }
+
+    #[tokio::test]
+    async fn create_model_provider_does_not_use_openai_auth_manager_for_custom_provider() {
+        let provider = create_model_provider(
+            ModelProviderInfo {
+                name: "Custom".to_string(),
+                base_url: Some("http://localhost:1234/v1".to_string()),
+                requires_openai_auth: false,
+                ..Default::default()
+            },
+            Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
+                "openai-api-key",
+            ))),
+        );
+
+        assert!(provider.auth_manager().is_none());
+        assert_eq!(provider.auth().await, None);
+    }
+
+    #[test]
+    fn custom_provider_does_not_support_attestation_with_chatgpt_auth_manager() {
+        let provider = create_model_provider(
+            ModelProviderInfo {
+                name: "Custom".to_string(),
+                base_url: Some("http://localhost:1234/v1".to_string()),
+                requires_openai_auth: false,
+                ..Default::default()
+            },
+            Some(AuthManager::from_auth_for_testing(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            )),
+        );
+
+        assert!(!provider.supports_attestation());
     }
 
     #[tokio::test]

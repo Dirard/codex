@@ -1,3 +1,4 @@
+use anyhow::Context;
 use anyhow::Result;
 use app_test_support::TestAppServer;
 use app_test_support::test_path_buf_with_windows;
@@ -33,6 +34,7 @@ use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -119,6 +121,114 @@ sandbox_mode = "workspace-write"
     let layers = layers.expect("layers present");
     assert_layers_user_then_optional_system(&layers, user_file)?;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_redacts_custom_provider_secrets_and_layers() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+model_provider = "key_provider"
+
+[model_providers.key_provider]
+name = "Key Provider"
+base_url = "https://key.example/v1"
+key = "sentinel-key-value"
+http_headers = { authorization = "sentinel-authorization-header", "x-provider-token" = "sentinel-provider-header" }
+
+[model_providers.env_provider]
+name = "Env Provider"
+base_url = "https://env.example/v1"
+env_key = "SENTINEL_PROVIDER_ENV_KEY"
+env_key_instructions = "sentinel env instructions"
+env_http_headers = { "x-env-token" = "SENTINEL_HEADER_ENV_NAME" }
+
+[model_providers.auth_provider]
+name = "Auth Provider"
+base_url = "https://auth.example/v1"
+
+[model_providers.auth_provider.auth]
+command = "sentinel-auth-command"
+args = ["sentinel-auth-arg"]
+"#,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: true,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let read: ConfigReadResponse = to_response(resp)?;
+
+    let model_providers = read
+        .config
+        .additional
+        .get("model_providers")
+        .context("effective model_providers should be present")?;
+    assert_redacted_model_providers(model_providers)?;
+    let user_layer = read
+        .layers
+        .as_ref()
+        .context("config layers should be returned when include_layers is true")?
+        .iter()
+        .find(|layer| matches!(&layer.name, ConfigLayerSource::User { .. }))
+        .context("user layer should be returned when include_layers is true")?;
+    let layer_model_providers = user_layer
+        .config
+        .get("model_providers")
+        .context("layer model_providers should be present")?;
+    assert_redacted_model_providers(layer_model_providers)?;
+
+    let serialized_response = serde_json::to_string(&read)?;
+    for secret in [
+        "sentinel-key-value",
+        "sentinel-authorization-header",
+        "sentinel-provider-header",
+        "SENTINEL_PROVIDER_ENV_KEY",
+        "sentinel env instructions",
+        "SENTINEL_HEADER_ENV_NAME",
+        "sentinel-auth-command",
+        "sentinel-auth-arg",
+    ] {
+        assert!(!serialized_response.contains(secret));
+    }
+
+    Ok(())
+}
+
+fn assert_redacted_model_providers(model_providers: &Value) -> Result<()> {
+    let providers = model_providers
+        .as_object()
+        .context("model_providers should be a table")?;
+    let redacted = json!("[redacted]");
+
+    let key_provider = providers.get("key_provider").context("key provider")?;
+    assert_eq!(key_provider["key"], redacted);
+    assert_eq!(key_provider["http_headers"]["authorization"], redacted);
+    assert_eq!(
+        key_provider["http_headers"]["x-provider-token"],
+        json!("[redacted]")
+    );
+
+    let env_provider = providers.get("env_provider").context("env provider")?;
+    assert_eq!(env_provider["env_key"], redacted);
+    assert_eq!(env_provider["env_key_instructions"], redacted);
+    assert_eq!(env_provider["env_http_headers"]["x-env-token"], redacted);
+
+    let auth_provider = providers.get("auth_provider").context("auth provider")?;
+    assert_eq!(auth_provider["auth"]["command"], redacted);
+    assert_eq!(auth_provider["auth"]["args"][0], redacted);
     Ok(())
 }
 

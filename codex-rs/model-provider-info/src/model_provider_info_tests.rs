@@ -220,6 +220,48 @@ fn test_personal_access_token_uses_chatgpt_codex_base_url() {
 }
 
 #[test]
+fn test_custom_provider_without_base_url_fails_before_defaulting_to_openai() {
+    let provider = ModelProviderInfo {
+        name: "Custom".to_string(),
+        base_url: None,
+        requires_openai_auth: false,
+        ..Default::default()
+    };
+
+    let err = provider
+        .to_api_provider(/*auth_mode*/ None)
+        .expect_err("custom provider without base_url should fail");
+
+    assert!(
+        err.to_string()
+            .contains("must define `base_url` unless it is the built-in OpenAI provider")
+    );
+}
+
+#[test]
+fn test_openai_auth_uses_configured_base_url() {
+    let provider =
+        ModelProviderInfo::create_openai_provider(Some("https://example.test/v1".to_string()));
+
+    let api_provider = provider
+        .to_api_provider(Some(AuthMode::ApiKey))
+        .expect("configured OpenAI base URL should build API provider");
+
+    assert_eq!(api_provider.base_url, "https://example.test/v1");
+}
+
+#[test]
+fn test_openai_auth_allows_openai_hosted_base_url() {
+    let provider = ModelProviderInfo::create_openai_provider(Some(OPENAI_API_BASE_URL.to_string()));
+
+    let api_provider = provider
+        .to_api_provider(Some(AuthMode::ApiKey))
+        .expect("OpenAI-hosted base URL should build API provider");
+
+    assert_eq!(api_provider.base_url, OPENAI_API_BASE_URL);
+}
+
+#[test]
 fn test_supports_remote_compaction_rejects_chat_wire_api() {
     let mut provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
     provider.wire_api = WireApi::Chat;

@@ -1649,7 +1649,7 @@
         },
         "supports_websockets": {
           "default": false,
-          "description": "Whether this provider supports the Responses API WebSocket transport.",
+          "description": "Whether this provider supports websocket-backed features. Responses-over-WebSocket turn transport also requires `wire_api = \"responses\"`; realtime websocket conversations can use a separate realtime base URL.",
           "type": "boolean"
         },
         "websocket_connect_timeout_ms": {
@@ -5227,7 +5227,7 @@
       "type": "array"
     },
     "openai_base_url": {
-      "description": "Base URL override for the built-in `openai` model provider.",
+      "description": "Legacy base URL override for the built-in `openai` model provider. Custom endpoints must be configured under `model_providers.<id>.base_url`.",
       "type": "string"
     },
     "oss_provider": {

@@ -144,14 +144,31 @@ fn merge_persisted_resume_metadata(
     typesafe_overrides: &mut ConfigOverrides,
     persisted_metadata: &ThreadMetadata,
 ) {
-    if has_model_resume_override(request_overrides.as_ref(), typesafe_overrides) {
-        return;
+    merge_persisted_model_metadata(
+        request_overrides,
+        typesafe_overrides,
+        persisted_metadata.model.clone(),
+        persisted_metadata.model_provider.clone(),
+        persisted_metadata.reasoning_effort.clone(),
+    );
+}
+
+fn merge_persisted_model_metadata(
+    request_overrides: &mut Option<HashMap<String, serde_json::Value>>,
+    typesafe_overrides: &mut ConfigOverrides,
+    model: Option<String>,
+    model_provider: String,
+    reasoning_effort: Option<ReasoningEffort>,
+) {
+    if !has_model_override(request_overrides.as_ref(), typesafe_overrides) {
+        typesafe_overrides.model = model;
     }
-
-    typesafe_overrides.model = persisted_metadata.model.clone();
-    typesafe_overrides.model_provider = Some(persisted_metadata.model_provider.clone());
-
-    if let Some(reasoning_effort) = persisted_metadata.reasoning_effort.as_ref() {
+    if !has_model_provider_override(request_overrides.as_ref(), typesafe_overrides) {
+        typesafe_overrides.model_provider = Some(model_provider);
+    }
+    if !has_reasoning_effort_override(request_overrides.as_ref())
+        && let Some(reasoning_effort) = reasoning_effort.as_ref()
+    {
         request_overrides.get_or_insert_with(HashMap::new).insert(
             "model_reasoning_effort".to_string(),
             serde_json::Value::String(reasoning_effort.to_string()),
@@ -183,15 +200,26 @@ fn normalize_thread_list_cwd_filters(
     Ok(Some(normalized_cwds))
 }
 
-fn has_model_resume_override(
+fn has_model_override(
     request_overrides: Option<&HashMap<String, serde_json::Value>>,
     typesafe_overrides: &ConfigOverrides,
 ) -> bool {
     typesafe_overrides.model.is_some()
-        || typesafe_overrides.model_provider.is_some()
         || request_overrides.is_some_and(|overrides| overrides.contains_key("model"))
-        || request_overrides
-            .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"))
+}
+
+fn has_model_provider_override(
+    request_overrides: Option<&HashMap<String, serde_json::Value>>,
+    typesafe_overrides: &ConfigOverrides,
+) -> bool {
+    typesafe_overrides.model_provider.is_some()
+        || request_overrides.is_some_and(|overrides| overrides.contains_key("model_provider"))
+}
+
+fn has_reasoning_effort_override(
+    request_overrides: Option<&HashMap<String, serde_json::Value>>,
+) -> bool {
+    request_overrides.is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"))
 }
 
 fn validate_dynamic_tools(tools: &[DynamicToolSpec]) -> Result<(), String> {
@@ -1040,6 +1068,12 @@ impl ThreadRequestProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         let thread_start_started_at = std::time::Instant::now();
         let requested_cwd = typesafe_overrides.cwd.clone();
+        let model_selection = model_selection::ModelSelectionRequest::from_overrides(
+            config_overrides.as_ref(),
+            &typesafe_overrides,
+            "thread/start",
+        )?;
+        model_selection.reject_provider_without_model("thread/start")?;
         let mut config = config_manager
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
             .await
@@ -1109,6 +1143,14 @@ impl ThreadRequestProcessor {
                 .await
                 .map_err(|err| config_load_error(&err))?;
         }
+
+        model_selection::validate_loaded_config_model_selection(
+            listener_task_context.thread_manager.as_ref(),
+            &config,
+            &model_selection,
+            "thread/start",
+        )
+        .await?;
 
         let environments = environments.unwrap_or_else(|| {
             listener_task_context
@@ -2256,7 +2298,7 @@ impl ThreadRequestProcessor {
                 let (mut thread, history) =
                     thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
                 if include_turns && let Some(history) = history {
-                    thread.turns = build_api_turns_from_rollout_items(&history.items);
+                    thread.turns = build_api_display_turns_from_rollout_items(&history.items);
                 }
                 Ok(Some(thread))
             }
@@ -2322,7 +2364,7 @@ impl ThreadRequestProcessor {
                 .load_history(/*include_archived*/ true)
                 .await
                 .map_err(|err| thread_read_history_load_error(thread_id, err))?;
-            thread.turns = build_api_turns_from_rollout_items(&history.items);
+            thread.turns = build_api_display_turns_from_rollout_items(&history.items);
         }
 
         Ok(())
@@ -2631,6 +2673,21 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
         );
+        let model_selection = match model_selection::ModelSelectionRequest::from_overrides(
+            request_overrides.as_ref(),
+            &typesafe_overrides,
+            "thread/resume",
+        )
+        .and_then(|selection| {
+            selection.reject_provider_without_model("thread/resume")?;
+            Ok(selection)
+        }) {
+            Ok(selection) => selection,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return Ok(());
+            }
+        };
         self.load_and_apply_persisted_resume_metadata(
             &thread_history,
             &mut request_overrides,
@@ -2651,6 +2708,17 @@ impl ThreadRequestProcessor {
                 return Ok(());
             }
         };
+        if let Err(error) = model_selection::validate_loaded_config_model_selection(
+            self.thread_manager.as_ref(),
+            &config,
+            &model_selection,
+            "thread/resume",
+        )
+        .await
+        {
+            self.outgoing.send_error(request_id, error).await;
+            return Ok(());
+        }
 
         let response_history = thread_history.clone();
 
@@ -3342,7 +3410,7 @@ impl ThreadRequestProcessor {
                 WindowsSandboxLevel::Disabled => {}
             }
         }
-        let request_overrides = if cli_overrides.is_empty() {
+        let mut request_overrides = if cli_overrides.is_empty() {
             None
         } else {
             Some(cli_overrides)
@@ -3363,12 +3431,32 @@ impl ThreadRequestProcessor {
             /*personality*/ None,
         );
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
+        let model_selection = model_selection::ModelSelectionRequest::from_overrides(
+            request_overrides.as_ref(),
+            &typesafe_overrides,
+            "thread/fork",
+        )?;
+        model_selection.reject_provider_without_model("thread/fork")?;
+        merge_persisted_model_metadata(
+            &mut request_overrides,
+            &mut typesafe_overrides,
+            source_thread.model.clone(),
+            source_thread.model_provider.clone(),
+            source_thread.reasoning_effort.clone(),
+        );
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let config = self
             .config_manager
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
             .await
             .map_err(|err| config_load_error(&err))?;
+        model_selection::validate_loaded_config_model_selection(
+            self.thread_manager.as_ref(),
+            &config,
+            &model_selection,
+            "thread/fork",
+        )
+        .await?;
 
         let fallback_model_provider = config.model_provider_id.clone();
 
@@ -4148,6 +4236,12 @@ pub(crate) fn thread_from_stored_thread(
     );
     let history = thread.history;
     let thread_id = thread.thread_id.to_string();
+    let model_provider = if thread.model_provider.is_empty() {
+        fallback_provider.to_string()
+    } else {
+        thread.model_provider
+    };
+    let model = thread.model;
     let thread = Thread {
         id: thread_id.clone(),
         session_id: thread_id,
@@ -4155,11 +4249,8 @@ pub(crate) fn thread_from_stored_thread(
         parent_thread_id: thread.parent_thread_id.map(|id| id.to_string()),
         preview: thread.preview,
         ephemeral: false,
-        model_provider: if thread.model_provider.is_empty() {
-            fallback_provider.to_string()
-        } else {
-            thread.model_provider
-        },
+        model_provider,
+        model,
         created_at: thread.created_at.timestamp(),
         updated_at: thread.updated_at.timestamp(),
         recency_at: Some(thread.recency_at.timestamp()),
@@ -4366,6 +4457,7 @@ fn build_thread_from_snapshot(
         preview: String::new(),
         ephemeral: config_snapshot.ephemeral,
         model_provider: config_snapshot.model_provider_id.clone(),
+        model: Some(config_snapshot.model.clone()),
         created_at: now,
         updated_at: now,
         recency_at: Some(now),
