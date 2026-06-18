@@ -128,6 +128,7 @@ mod display_history_tests {
                 text: text.to_string(),
             }],
             phase: None,
+            metadata: None,
         }
     }
 

@@ -1492,6 +1492,7 @@ async fn get_account_with_managed_bedrock_provider() -> Result<()> {
     let request_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
+            model_provider: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(

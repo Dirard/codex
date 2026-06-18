@@ -1173,11 +1173,13 @@ fn record_items_respects_configured_line_limit() {
         .collect::<Vec<_>>()
         .join("\n");
     let item = ResponseItem::FunctionCallOutput {
+        id: None,
         call_id: "call-line-limit".to_string(),
         output: FunctionCallOutputPayload {
             body: FunctionCallOutputBody::Text(long_output),
             success: Some(true),
         },
+        metadata: None,
     };
 
     history.record_items(
@@ -1208,13 +1210,16 @@ fn record_items_uses_mcp_line_limit_for_mcp_function_output() {
         namespace: Some("mcp__file_tools".to_string()),
         arguments: "{}".to_string(),
         call_id: "mcp-call-line-limit".to_string(),
+        metadata: None,
     };
     let output = ResponseItem::FunctionCallOutput {
+        id: None,
         call_id: "mcp-call-line-limit".to_string(),
         output: FunctionCallOutputPayload {
             body: FunctionCallOutputBody::Text(long_output),
             success: Some(true),
         },
+        metadata: None,
     };
 
     history.record_items(

@@ -83,7 +83,7 @@ async fn request_user_input_round_trip_for_mode(
 
     let server = start_mock_server().await;
 
-    let builder = test_codex();
+    let _builder = test_codex();
     #[allow(clippy::expect_used)]
     let TestCodex {
         codex,

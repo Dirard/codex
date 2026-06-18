@@ -465,6 +465,7 @@ config_file = "local-worker.toml"
         /*state_db*/ None,
         "22222222-2222-4222-8222-222222222222".to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
     let parent = manager
         .start_thread(config.clone())

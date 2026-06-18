@@ -25,12 +25,14 @@ impl TestCodexExecBuilder {
         let base = format!("{}/v1", server.uri());
         cmd.arg("-c")
             .arg(format!(
-                "model_providers.mock={{ name = \"mock\", base_url = {}, env_key = \"{}\", wire_api = \"responses\" }}",
+                "model_providers.mock={{ name = \"mock\", base_url = {}, models = [\"mock-model\"], env_key = \"{}\", wire_api = \"responses\" }}",
                 toml_string_literal(&base),
                 CODEX_API_KEY_ENV_VAR
             ))
             .arg("-c")
-            .arg("model_provider=\"mock\"");
+            .arg("model_provider=\"mock\"")
+            .arg("-c")
+            .arg("model=\"mock-model\"");
         cmd
     }
 

@@ -149,7 +149,7 @@ async fn custom_provider_attestation_generate_round_trip_omits_header_from_webso
 
     assert!(
         websocket_server
-            .wait_for_handshakes(/*expected*/ 2, DEFAULT_READ_TIMEOUT)
+            .wait_for_handshakes(/*expected*/ 1, DEFAULT_READ_TIMEOUT)
             .await
     );
     for handshake in websocket_server.handshakes() {

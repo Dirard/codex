@@ -266,7 +266,7 @@ impl Session {
         // Replay must not depend on the current user's output_truncation config, or resume/fork
         // can silently rewrite model-visible history after a config change.
         let replay_output_truncation = codex_utils_output_truncation::OutputTruncation::new(
-            turn_context.truncation_policy,
+            turn_context.model_info.truncation_policy.into(),
             None,
         );
         // Materialize exact history semantics from the replay-derived suffix. The eventual lazy

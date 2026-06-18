@@ -17,6 +17,7 @@ fn base_request(tools: Vec<Value>) -> ResponsesApiRequest {
         instructions: "system prompt".to_string(),
         input: vec![ResponseItem::Message {
             id: None,
+            metadata: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
                 text: "hello".to_string(),
@@ -179,6 +180,7 @@ fn converts_parallel_tool_call_history_to_chat_tool_call_group() {
     request.input = vec![
         ResponseItem::FunctionCall {
             id: None,
+            metadata: None,
             name: "first".to_string(),
             namespace: None,
             arguments: r#"{"value":1}"#.to_string(),
@@ -186,16 +188,21 @@ fn converts_parallel_tool_call_history_to_chat_tool_call_group() {
         },
         ResponseItem::FunctionCall {
             id: None,
+            metadata: None,
             name: "second".to_string(),
             namespace: None,
             arguments: r#"{"value":2}"#.to_string(),
             call_id: "call-second".to_string(),
         },
         ResponseItem::FunctionCallOutput {
+            id: None,
+            metadata: None,
             call_id: "call-first".to_string(),
             output: FunctionCallOutputPayload::from_text("first output".to_string()),
         },
         ResponseItem::FunctionCallOutput {
+            id: None,
+            metadata: None,
             call_id: "call-second".to_string(),
             output: FunctionCallOutputPayload::from_text("second output".to_string()),
         },
@@ -257,6 +264,7 @@ fn allocates_distinct_chat_tool_search_name_when_function_name_conflicts() {
     ]);
     request.input = vec![ResponseItem::ToolSearchCall {
         id: None,
+        metadata: None,
         call_id: Some("search-1".to_string()),
         status: Some("completed".to_string()),
         execution: "client".to_string(),
@@ -303,6 +311,8 @@ fn allocates_distinct_chat_tool_search_name_when_function_name_conflicts() {
 fn truncates_tool_search_output_history_for_chat_messages() {
     let mut request = base_request(vec![]);
     request.input = vec![ResponseItem::ToolSearchOutput {
+        id: None,
+        metadata: None,
         call_id: Some("search-1".to_string()),
         status: "completed".to_string(),
         execution: "client".to_string(),
@@ -319,7 +329,8 @@ fn truncates_tool_search_output_history_for_chat_messages() {
         .expect("tool output content should be text");
 
     assert!(content.len() < CHAT_TOOL_SEARCH_OUTPUT_MAX_BYTES + 1_000);
-    assert!(content.starts_with("Total output lines:"));
+    assert!(content.starts_with("Warning: truncated output"));
+    assert!(content.contains("\nTotal output lines:"));
 }
 
 #[test]
@@ -336,6 +347,7 @@ fn sanitizes_namespace_tool_names_and_preserves_original_mapping() {
     })]);
     request.input = vec![ResponseItem::FunctionCall {
         id: None,
+        metadata: None,
         name: "echo".to_string(),
         namespace: Some("extension/".to_string()),
         arguments: r#"{"message":"hello"}"#.to_string(),
@@ -377,6 +389,8 @@ fn sanitizes_namespace_tool_names_and_preserves_original_mapping() {
 fn converts_agent_message_history_to_chat_assistant_message() {
     let mut request = base_request(vec![]);
     request.input = vec![ResponseItem::AgentMessage {
+        id: None,
+        metadata: None,
         author: "worker".to_string(),
         recipient: "root".to_string(),
         content: vec![

@@ -363,7 +363,9 @@ fn append_response_item_to_chat_messages(
             &tool_catalog.chat_name_for_function(namespace.as_deref(), name),
             arguments.clone(),
         )),
-        ResponseItem::FunctionCallOutput { call_id, output } => {
+        ResponseItem::FunctionCallOutput {
+            call_id, output, ..
+        } => {
             flush_pending_tool_calls(messages, pending_tool_calls);
             messages.push(chat_tool_output(call_id, output_payload_to_text(output)));
         }
@@ -397,6 +399,7 @@ fn append_response_item_to_chat_messages(
             status,
             execution,
             tools,
+            ..
         } => {
             flush_pending_tool_calls(messages, pending_tool_calls);
             messages.push(chat_tool_output(
@@ -412,6 +415,7 @@ fn append_response_item_to_chat_messages(
             author,
             recipient,
             content,
+            ..
         } => {
             flush_pending_tool_calls(messages, pending_tool_calls);
             if let Some(text) = agent_message_content_to_text(author, recipient, content) {
@@ -425,7 +429,7 @@ fn append_response_item_to_chat_messages(
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. }
-        | ResponseItem::CompactionTrigger
+        | ResponseItem::CompactionTrigger { .. }
         | ResponseItem::ContextCompaction { .. }
         | ResponseItem::Other => {}
     }
@@ -1060,6 +1064,7 @@ fn assistant_message(text: String) -> ResponseItem {
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText { text }],
         phase: Some(MessagePhase::FinalAnswer),
+        metadata: None,
     }
 }
 
@@ -1085,6 +1090,7 @@ fn accumulated_tool_call_to_response_item(
             namespace,
             arguments,
             call_id,
+            metadata: None,
         },
         ChatToolMapping::Custom { name } => ResponseItem::CustomToolCall {
             id: None,
@@ -1092,6 +1098,7 @@ fn accumulated_tool_call_to_response_item(
             call_id,
             name,
             input: custom_tool_input_from_arguments(&arguments),
+            metadata: None,
         },
         ChatToolMapping::ToolSearch => ResponseItem::ToolSearchCall {
             id: None,
@@ -1099,6 +1106,7 @@ fn accumulated_tool_call_to_response_item(
             status: Some("completed".to_string()),
             execution: "client".to_string(),
             arguments: serde_json::from_str(&arguments).unwrap_or_else(|_| json!({})),
+            metadata: None,
         },
     }
 }

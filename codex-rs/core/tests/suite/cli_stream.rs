@@ -41,7 +41,7 @@ fn cli_sse_response() -> String {
 
 fn mock_provider_override(server: &MockServer) -> String {
     format!(
-        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"{}\", wire_api = \"responses\" }}",
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", models = [\"mock-model\"], env_key = \"{}\", wire_api = \"responses\" }}",
         server.uri(),
         CODEX_API_KEY_ENV_VAR
     )
@@ -197,6 +197,8 @@ async fn responses_mode_stream_cli() {
         .arg(mock_provider_override(&server))
         .arg("-c")
         .arg("model_provider=\"mock\"")
+        .arg("-c")
+        .arg("model=\"mock-model\"")
         .arg("-C")
         .arg(&repo_root)
         .arg("hello?");
@@ -272,7 +274,7 @@ async fn exec_cli_applies_model_instructions_file() {
     // Build a provider override that points at the mock server and instructs
     // Codex to use the Responses API with the dummy env var.
     let provider_override = format!(
-        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", models = [\"mock-model\"], env_key = \"PATH\", wire_api = \"responses\" }}",
         server.uri()
     );
 
@@ -286,6 +288,8 @@ async fn exec_cli_applies_model_instructions_file() {
         .arg(&provider_override)
         .arg("-c")
         .arg("model_provider=\"mock\"")
+        .arg("-c")
+        .arg("model=\"mock-model\"")
         .arg("-c")
         .arg(format!("model_instructions_file=\"{custom_path_str}\""))
         .arg("-C")
@@ -336,7 +340,7 @@ async fn exec_cli_profile_applies_model_instructions_file() {
     let custom_path_str = custom_path.to_string_lossy().replace('\\', "/");
 
     let provider_override = format!(
-        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", models = [\"mock-model\"], env_key = \"PATH\", wire_api = \"responses\" }}",
         server.uri()
     );
 
@@ -358,6 +362,8 @@ async fn exec_cli_profile_applies_model_instructions_file() {
         .arg(&provider_override)
         .arg("-c")
         .arg("model_provider=\"mock\"")
+        .arg("-c")
+        .arg("model=\"mock-model\"")
         .arg("-C")
         .arg(&repo_root)
         .arg("hello?\n");
@@ -401,6 +407,8 @@ async fn responses_api_stream_cli() {
         .arg(mock_provider_override(&server))
         .arg("-c")
         .arg("model_provider=\"mock\"")
+        .arg("-c")
+        .arg("model=\"mock-model\"")
         .arg("-C")
         .arg(&repo_root)
         .arg("hello?");
@@ -408,7 +416,13 @@ async fn responses_api_stream_cli() {
         .env(CODEX_API_KEY_ENV_VAR, "dummy");
 
     let output = run_cli_command(&mut cmd).unwrap();
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "Status: {}\nStdout:\n{}\nStderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("fixture hello"));
 
@@ -444,6 +458,8 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg(mock_provider_override(&server))
         .arg("-c")
         .arg("model_provider=\"mock\"")
+        .arg("-c")
+        .arg("model=\"mock-model\"")
         .arg("-C")
         .arg(&repo_root)
         .arg(&prompt);
@@ -562,6 +578,8 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg(mock_provider_override(&server))
         .arg("-c")
         .arg("model_provider=\"mock\"")
+        .arg("-c")
+        .arg("model=\"mock-model\"")
         .arg("-C")
         .arg(&repo_root)
         .arg(&prompt2)
