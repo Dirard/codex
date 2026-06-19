@@ -1587,6 +1587,82 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_start_rejects_custom_provider_model_overrides_outside_allowlist() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_provider_models(codex_home.path(), &server.uri(), &["mock-model"])?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            client_user_message_id: None,
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            model: Some("missing-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    assert_eq!(err.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert!(
+        err.error
+            .message
+            .contains("model 'missing-model' is not configured for modelProvider 'mock_provider'")
+    );
+
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model: "missing-collab-model".to_string(),
+            reasoning_effort: Some(ReasoningEffort::Medium),
+            developer_instructions: None,
+        },
+    };
+    let collab_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            client_user_message_id: None,
+            input: vec![V2UserInput::Text {
+                text: "Hello again".to_string(),
+                text_elements: Vec::new(),
+            }],
+            collaboration_mode: Some(collaboration_mode),
+            ..Default::default()
+        })
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(collab_req)),
+    )
+    .await??;
+    assert_eq!(err.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert!(err.error.message.contains(
+        "model 'missing-collab-model' is not configured for modelProvider 'mock_provider'"
+    ));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_uses_thread_feature_overrides_for_request_user_input_tool_description_v2()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -4333,6 +4409,39 @@ base_url = "{server_uri}/v1"
 wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
+"#
+        ),
+    )
+}
+
+fn create_config_toml_with_provider_models(
+    codex_home: &Path,
+    server_uri: &str,
+    models: &[&str],
+) -> std::io::Result<()> {
+    let model_entries = models
+        .iter()
+        .map(|model| format!("\"{model}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+models = [{model_entries}]
 "#
         ),
     )

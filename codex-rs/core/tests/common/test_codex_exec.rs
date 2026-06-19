@@ -24,7 +24,15 @@ impl TestCodexExecBuilder {
         let mut cmd = self.cmd();
         let base = format!("{}/v1", server.uri());
         cmd.arg("-c")
-            .arg(format!("openai_base_url={}", toml_string_literal(&base)));
+            .arg(format!(
+                "model_providers.mock={{ name = \"mock\", base_url = {}, models = [\"mock-model\"], env_key = \"{}\", wire_api = \"responses\" }}",
+                toml_string_literal(&base),
+                CODEX_API_KEY_ENV_VAR
+            ))
+            .arg("-c")
+            .arg("model_provider=\"mock\"")
+            .arg("-c")
+            .arg("model=\"mock-model\"");
         cmd
     }
 

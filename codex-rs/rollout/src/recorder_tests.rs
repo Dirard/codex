@@ -982,6 +982,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         agent_nickname: None,
         agent_role: None,
         model_provider: None,
+        model: None,
         cli_version: None,
         created_at: None,
         recency_at: Some("2025-01-03T15:59:00.000Z".to_string()),
@@ -1001,6 +1002,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         agent_nickname: Some("state-agent".to_string()),
         agent_role: Some("state-role".to_string()),
         model_provider: Some("state-provider".to_string()),
+        model: Some("state-model".to_string()),
         cli_version: Some("state-version".to_string()),
         created_at: Some("2025-01-03T16:00:00Z".to_string()),
         recency_at: Some("2025-01-03T16:00:30.001Z".to_string()),
@@ -1027,6 +1029,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
     assert_eq!(item.agent_nickname.as_deref(), Some("state-agent"));
     assert_eq!(item.agent_role.as_deref(), Some("state-role"));
     assert_eq!(item.model_provider.as_deref(), Some("state-provider"));
+    assert_eq!(item.model.as_deref(), Some("state-model"));
     assert_eq!(item.cli_version.as_deref(), Some("state-version"));
     assert_eq!(item.created_at.as_deref(), Some("2025-01-03T16:00:00Z"));
     assert_eq!(item.recency_at.as_deref(), Some("2025-01-03T16:00:30.001Z"));

@@ -378,6 +378,7 @@ use codex_mcp::read_mcp_resource as read_mcp_resource_without_thread;
 use codex_mcp::resolve_oauth_scopes;
 use codex_memories_write::clear_memory_roots_contents;
 use codex_model_provider::create_model_provider;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -390,9 +391,11 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 #[cfg(test)]
@@ -490,6 +493,7 @@ mod git_processor;
 mod initialize_processor;
 mod marketplace_processor;
 mod mcp_processor;
+mod model_selection;
 mod plugins;
 mod process_exec_processor;
 mod remote_control_processor;
@@ -613,4 +617,118 @@ pub(crate) fn build_api_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<T
         }
     }
     builder.finish()
+}
+
+pub(crate) fn build_api_display_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
+    let Some((compacted_index, compacted)) =
+        items
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, item)| match item {
+                RolloutItem::Compacted(compacted) => Some((index, compacted)),
+                _ => None,
+            })
+    else {
+        return build_api_turns_from_rollout_items(items);
+    };
+
+    let text_from_response_item = |item: &ResponseItem| match item {
+        ResponseItem::Message { content, .. } => {
+            let text = content
+                .iter()
+                .filter_map(|content_item| match content_item {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                        Some(text.as_str())
+                    }
+                    ContentItem::InputImage { .. } => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!text.trim().is_empty()).then_some(text)
+        }
+        ResponseItem::AgentMessage { content, .. } => {
+            let text = content
+                .iter()
+                .filter_map(|content_item| match content_item {
+                    AgentMessageInputContent::InputText { text } => Some(text.as_str()),
+                    AgentMessageInputContent::EncryptedContent { .. } => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!text.trim().is_empty()).then_some(text)
+        }
+        _ => None,
+    };
+
+    let compacted_text = if compacted.message.trim().is_empty() {
+        compacted.replacement_history.as_ref().and_then(|history| {
+            history.iter().rev().find_map(|item| match item {
+                ResponseItem::Message { role, .. } if role == "assistant" => {
+                    text_from_response_item(item)
+                }
+                ResponseItem::AgentMessage { .. } => text_from_response_item(item),
+                _ => None,
+            })
+        })
+    } else {
+        Some(compacted.message.clone())
+    };
+    let compaction_key = compacted.window_id.map_or_else(
+        || compacted_index.to_string(),
+        |window_id| window_id.to_string(),
+    );
+
+    let mut turns = Vec::new();
+    if let Some(text) = compacted_text {
+        turns.push(Turn {
+            id: format!("compacted-context-{compaction_key}"),
+            items: vec![ThreadItem::UserMessage {
+                id: format!("item-compacted-context-{compaction_key}"),
+                client_id: None,
+                content: vec![V2UserInput::Text {
+                    text,
+                    text_elements: Vec::new(),
+                }],
+            }],
+            items_view: TurnItemsView::Full,
+            status: TurnStatus::Completed,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        });
+    }
+
+    turns.push(Turn {
+        id: format!("context-compaction-{compaction_key}"),
+        items: vec![ThreadItem::ContextCompaction {
+            id: format!("item-context-compaction-{compaction_key}"),
+        }],
+        items_view: TurnItemsView::Full,
+        status: TurnStatus::Completed,
+        error: None,
+        started_at: None,
+        completed_at: None,
+        duration_ms: None,
+    });
+
+    let mut current_turns = build_api_turns_from_rollout_items(&items[compacted_index + 1..]);
+    while let Some(first_turn) = current_turns.first_mut() {
+        let leading_compaction_items = first_turn
+            .items
+            .iter()
+            .take_while(|item| matches!(item, ThreadItem::ContextCompaction { .. }))
+            .count();
+        if leading_compaction_items == 0 {
+            break;
+        }
+        first_turn.items.drain(..leading_compaction_items);
+        if !first_turn.items.is_empty() {
+            break;
+        }
+        current_turns.remove(0);
+    }
+    turns.extend(current_turns);
+    turns
 }

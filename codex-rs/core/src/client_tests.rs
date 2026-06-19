@@ -522,27 +522,24 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
 }
 
+#[derive(Debug)]
+struct CountingAttestationProvider {
+    calls: Arc<AtomicUsize>,
+}
+
+impl AttestationProvider for CountingAttestationProvider {
+    fn header_for_request(&self, _context: AttestationContext) -> GenerateAttestationFuture<'_> {
+        let calls = self.calls.clone();
+        Box::pin(async move {
+            let call = calls.fetch_add(1, Ordering::Relaxed) + 1;
+            Some(http::HeaderValue::from_bytes(format!("v1.header-{call}").as_bytes()).unwrap())
+        })
+    }
+}
+
 fn model_client_with_counting_attestation(
     include_attestation: bool,
 ) -> (ModelClient, Arc<AtomicUsize>) {
-    #[derive(Debug)]
-    struct CountingAttestationProvider {
-        calls: Arc<AtomicUsize>,
-    }
-
-    impl AttestationProvider for CountingAttestationProvider {
-        fn header_for_request(
-            &self,
-            _context: AttestationContext,
-        ) -> GenerateAttestationFuture<'_> {
-            let calls = self.calls.clone();
-            Box::pin(async move {
-                let call = calls.fetch_add(1, Ordering::Relaxed) + 1;
-                Some(http::HeaderValue::from_bytes(format!("v1.header-{call}").as_bytes()).unwrap())
-            })
-        }
-    }
-
     let attestation_calls = Arc::new(AtomicUsize::new(0));
     let (auth_manager, provider) = if include_attestation {
         (
@@ -561,6 +558,26 @@ fn model_client_with_counting_attestation(
         auth_manager,
         ThreadId::new(),
         provider,
+        SessionSource::Exec,
+        /*model_verbosity*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+        Some(Arc::new(CountingAttestationProvider {
+            calls: attestation_calls.clone(),
+        })),
+    );
+    (model_client, attestation_calls)
+}
+
+fn model_client_with_custom_provider_and_chatgpt_auth() -> (ModelClient, Arc<AtomicUsize>) {
+    let attestation_calls = Arc::new(AtomicUsize::new(0));
+    let model_client = ModelClient::new(
+        Some(AuthManager::from_auth_for_testing(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        )),
+        ThreadId::new(),
+        create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses),
         SessionSource::Exec,
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
@@ -628,5 +645,20 @@ async fn non_chatgpt_codex_endpoints_omit_attestation_generation() {
         realtime_headers.get(crate::attestation::X_OAI_ATTESTATION_HEADER),
         None,
     );
+    assert_eq!(attestation_calls.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn custom_provider_with_chatgpt_auth_omits_attestation_and_openai_headers() {
+    let (model_client, attestation_calls) = model_client_with_custom_provider_and_chatgpt_auth();
+
+    let client_setup = model_client
+        .current_client_setup()
+        .await
+        .expect("custom provider setup should resolve");
+    let attestation = model_client.generate_attestation_header_for().await;
+
+    assert!(client_setup.api_auth.to_auth_headers().is_empty());
+    assert_eq!(attestation, None);
     assert_eq!(attestation_calls.load(Ordering::Relaxed), 0);
 }

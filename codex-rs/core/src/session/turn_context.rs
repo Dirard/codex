@@ -15,6 +15,7 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
+use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_path_uri::PathUri;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -193,6 +194,18 @@ impl TurnContext {
             .map(|context_window| {
                 context_window.saturating_mul(effective_context_window_percent) / 100
             })
+    }
+
+    pub(crate) fn output_truncation(&self) -> codex_utils_output_truncation::OutputTruncation {
+        let policy = effective_output_truncation_policy(
+            self.model_info.truncation_policy.into(),
+            self.config.output_truncation.max_bytes,
+        );
+        codex_utils_output_truncation::OutputTruncation::new_with_mcp_max_lines(
+            policy,
+            self.config.output_truncation.max_lines,
+            self.config.output_truncation.mcp_max_lines,
+        )
     }
 
     pub(crate) fn apps_enabled(&self) -> bool {
@@ -406,6 +419,18 @@ impl TurnContext {
                 .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains)
                 .unwrap_or_default(),
         })
+    }
+}
+
+fn effective_output_truncation_policy(
+    model_policy: TruncationPolicy,
+    configured_max_bytes: Option<usize>,
+) -> TruncationPolicy {
+    match configured_max_bytes {
+        Some(configured_max_bytes) => {
+            TruncationPolicy::Bytes(configured_max_bytes.min(model_policy.byte_budget()))
+        }
+        None => model_policy,
     }
 }
 
@@ -823,5 +848,49 @@ impl Session {
     async fn default_turn_configuration(&self) -> SessionConfiguration {
         let state = self.state.lock().await;
         state.session_configuration.clone()
+    }
+}
+
+#[cfg(test)]
+mod output_truncation_tests {
+    use super::*;
+    use codex_utils_output_truncation::approx_bytes_for_tokens;
+
+    #[test]
+    fn configured_max_bytes_only_tightens_byte_policy() {
+        assert_eq!(
+            effective_output_truncation_policy(
+                TruncationPolicy::Bytes(1_000),
+                Some(/*configured_max_bytes*/ 1_500),
+            ),
+            TruncationPolicy::Bytes(1_000)
+        );
+        assert_eq!(
+            effective_output_truncation_policy(
+                TruncationPolicy::Bytes(1_000),
+                Some(/*configured_max_bytes*/ 250),
+            ),
+            TruncationPolicy::Bytes(250)
+        );
+    }
+
+    #[test]
+    fn configured_max_bytes_only_tightens_token_policy() {
+        let model_bytes = approx_bytes_for_tokens(2_000);
+
+        assert_eq!(
+            effective_output_truncation_policy(
+                TruncationPolicy::Tokens(2_000),
+                Some(/*configured_max_bytes*/ model_bytes + 100),
+            ),
+            TruncationPolicy::Bytes(model_bytes)
+        );
+        assert_eq!(
+            effective_output_truncation_policy(
+                TruncationPolicy::Tokens(2_000),
+                Some(/*configured_max_bytes*/ model_bytes / 2),
+            ),
+            TruncationPolicy::Bytes(model_bytes / 2)
+        );
     }
 }

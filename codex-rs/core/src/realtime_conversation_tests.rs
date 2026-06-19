@@ -1,14 +1,25 @@
 use super::RealtimeHandoffState;
 use super::RealtimeSessionKind;
+use super::ensure_realtime_transport_supported;
+use super::realtime_api_key;
+use super::realtime_auth_manager_for_provider;
 use super::realtime_delegation_from_handoff;
 use super::realtime_request_headers;
 use super::realtime_text_from_handoff_request;
 use super::wrap_realtime_delegation_input;
 use async_channel::bounded;
 use codex_config::config_toml::RealtimeWsVersion;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
+use codex_protocol::error::CodexErr;
+use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::RealtimeTranscriptEntry;
+use http::header::AUTHORIZATION;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
 
 #[test]
 fn prefers_handoff_input_transcript_over_active_transcript() {
@@ -170,4 +181,170 @@ fn omits_quicksilver_alpha_header_for_realtime_v2() {
             .expect("headers");
 
     assert!(headers.get("openai-alpha").is_none());
+}
+
+#[test]
+fn rejects_websocket_provider_without_realtime_websocket_support() {
+    let provider = ModelProviderInfo {
+        name: "Chat provider".to_string(),
+        wire_api: WireApi::Chat,
+        supports_websockets: false,
+        ..Default::default()
+    };
+
+    let err =
+        ensure_realtime_transport_supported(&provider, &ConversationStartTransport::Websocket)
+            .expect_err("provider should not support realtime without websocket capability");
+    match err {
+        CodexErr::InvalidRequest(message) => assert_eq!(
+            message,
+            "model provider 'Chat provider' does not support realtime websocket conversations"
+        ),
+        other => panic!("expected invalid request, got {other:?}"),
+    }
+}
+
+#[test]
+fn accepts_webrtc_provider_without_realtime_websocket_support() {
+    let provider = ModelProviderInfo {
+        name: "Chat provider".to_string(),
+        wire_api: WireApi::Chat,
+        supports_websockets: false,
+        ..Default::default()
+    };
+
+    ensure_realtime_transport_supported(
+        &provider,
+        &ConversationStartTransport::Webrtc {
+            sdp: "v=offer\r\n".to_string(),
+        },
+    )
+    .expect("webrtc transport should not require websocket capability");
+}
+
+#[test]
+fn accepts_chat_provider_with_realtime_websocket_support() {
+    let provider = ModelProviderInfo {
+        name: "Chat realtime provider".to_string(),
+        wire_api: WireApi::Chat,
+        supports_websockets: true,
+        ..Default::default()
+    };
+
+    ensure_realtime_transport_supported(&provider, &ConversationStartTransport::Websocket)
+        .expect("chat provider should support realtime when capability is enabled");
+}
+
+#[test]
+fn accepts_responses_provider_with_realtime_websocket_support() {
+    let provider = ModelProviderInfo {
+        name: "Realtime provider".to_string(),
+        wire_api: WireApi::Responses,
+        supports_websockets: true,
+        ..Default::default()
+    };
+
+    ensure_realtime_transport_supported(&provider, &ConversationStartTransport::Websocket)
+        .expect("provider should support realtime");
+}
+
+#[test]
+fn custom_realtime_provider_without_auth_does_not_use_global_auth_manager() {
+    let fallback_auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("sk-global-openai"));
+    let provider = ModelProviderInfo {
+        name: "Custom realtime provider".to_string(),
+        base_url: Some("http://localhost:1234/v1".to_string()),
+        wire_api: WireApi::Chat,
+        supports_websockets: true,
+        ..Default::default()
+    };
+
+    assert!(
+        realtime_auth_manager_for_provider(
+            /*provider_auth_manager*/ None,
+            &fallback_auth_manager,
+            &provider
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn openai_realtime_provider_uses_global_auth_manager_when_provider_auth_is_missing() {
+    let fallback_auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("sk-global-openai"));
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+
+    let selected = realtime_auth_manager_for_provider(
+        /*provider_auth_manager*/ None,
+        &fallback_auth_manager,
+        &provider,
+    )
+    .expect("OpenAI realtime should use global auth when provider auth is absent");
+
+    assert!(Arc::ptr_eq(&selected, &fallback_auth_manager));
+}
+
+#[test]
+fn custom_realtime_provider_preserves_provider_scoped_auth_manager() {
+    let provider_auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("sk-provider-local"));
+    let fallback_auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("sk-global-openai"));
+    let provider = ModelProviderInfo {
+        name: "Custom realtime provider".to_string(),
+        base_url: Some("http://localhost:1234/v1".to_string()),
+        wire_api: WireApi::Chat,
+        supports_websockets: true,
+        ..Default::default()
+    };
+
+    let selected = realtime_auth_manager_for_provider(
+        Some(Arc::clone(&provider_auth_manager)),
+        &fallback_auth_manager,
+        &provider,
+    )
+    .expect("provider-scoped auth should be preserved for custom realtime provider");
+
+    assert!(Arc::ptr_eq(&selected, &provider_auth_manager));
+}
+
+#[test]
+fn custom_openai_named_realtime_provider_without_auth_omits_authorization_header() {
+    let provider = ModelProviderInfo {
+        name: "OpenAI".to_string(),
+        base_url: Some("http://localhost:1234/v1".to_string()),
+        wire_api: WireApi::Chat,
+        supports_websockets: true,
+        ..Default::default()
+    };
+
+    let api_key = realtime_api_key(
+        /*auth*/ None,
+        &provider,
+        || Some("sk-global-openai".to_string()),
+    )
+    .expect("custom provider without auth should not require an API key");
+    assert_eq!(api_key, None);
+
+    let headers =
+        realtime_request_headers(Some("session_1"), api_key.as_deref(), RealtimeWsVersion::V2)
+            .expect("headers")
+            .expect("headers");
+    assert!(headers.get(AUTHORIZATION).is_none());
+}
+
+#[test]
+fn openai_realtime_provider_uses_env_key_when_auth_is_missing() {
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+
+    let api_key = realtime_api_key(
+        /*auth*/ None,
+        &provider,
+        || Some("sk-global-openai".to_string()),
+    )
+    .expect("OpenAI provider should still use env fallback");
+
+    assert_eq!(api_key.as_deref(), Some("sk-global-openai"));
 }

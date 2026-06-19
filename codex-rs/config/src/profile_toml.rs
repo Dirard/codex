@@ -3,6 +3,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::config_toml::OutputTruncationToml;
 use crate::config_toml::ToolsToml;
 use crate::types::AnalyticsConfigToml;
 use crate::types::ApprovalsReviewer;
@@ -55,6 +56,8 @@ pub struct ConfigProfile {
     pub include_environment_context: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub tools: Option<ToolsToml>,
+    /// Limits applied when formatting command output for model and UI consumption.
+    pub output_truncation: Option<OutputTruncationToml>,
     pub web_search: Option<WebSearchMode>,
     pub analytics: Option<AnalyticsConfigToml>,
     /// TUI settings scoped to this profile.

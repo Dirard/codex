@@ -70,6 +70,8 @@ pub struct ThreadItem {
     pub agent_role: Option<String>,
     /// Model provider from session metadata.
     pub model_provider: Option<String>,
+    /// Latest observed model from indexed metadata, if available.
+    pub model: Option<String>,
     /// CLI version from session metadata.
     pub cli_version: Option<String>,
     /// RFC3339 timestamp string for when the session was created, if available.
@@ -103,6 +105,7 @@ struct HeadTailSummary {
     agent_nickname: Option<String>,
     agent_role: Option<String>,
     model_provider: Option<String>,
+    model: Option<String>,
     cli_version: Option<String>,
     created_at: Option<String>,
     updated_at: Option<String>,
@@ -810,6 +813,7 @@ async fn build_thread_item(
             agent_nickname,
             agent_role,
             model_provider,
+            model,
             cli_version,
             created_at,
             updated_at: mut summary_updated_at,
@@ -832,6 +836,7 @@ async fn build_thread_item(
             agent_nickname,
             agent_role,
             model_provider,
+            model,
             cli_version,
             created_at,
             recency_at: summary_updated_at.clone(),

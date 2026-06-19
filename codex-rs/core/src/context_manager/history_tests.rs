@@ -22,6 +22,7 @@ use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnContextItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_output_truncation::OutputTruncation;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use image::ImageBuffer;
@@ -69,8 +70,15 @@ fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
     let mut h = ContextManager::new();
     // Use a generous but fixed token budget; tests only rely on truncation
     // behavior, not on a specific model's token limit.
-    h.record_items(items.iter(), TruncationPolicy::Tokens(10_000));
+    h.record_items(
+        items.iter(),
+        OutputTruncation::new(TruncationPolicy::Tokens(10_000), None),
+    );
     h
+}
+
+fn output_truncation(policy: TruncationPolicy) -> OutputTruncation {
+    OutputTruncation::new(policy, None)
 }
 
 fn user_msg(text: &str) -> ResponseItem {
@@ -211,12 +219,15 @@ fn filters_non_api_messages() {
         metadata: None,
     };
     let reasoning = reasoning_msg("thinking...");
-    h.record_items([&system, &reasoning, &ResponseItem::Other], policy);
+    h.record_items(
+        [&system, &reasoning, &ResponseItem::Other],
+        output_truncation(policy),
+    );
 
     // User and assistant should be retained.
     let u = user_msg("hi");
     let a = assistant_msg("hello");
-    h.record_items([&u, &a], policy);
+    h.record_items([&u, &a], output_truncation(policy));
 
     let items = h.raw_items();
     assert_eq!(
@@ -370,7 +381,7 @@ fn total_token_usage_includes_all_items_after_last_model_generated_item() {
     let added_tool_output = custom_tool_call_output("tool-tail", "new tool output");
     history.record_items(
         [&added_user, &added_tool_output],
-        TruncationPolicy::Tokens(10_000),
+        OutputTruncation::new(TruncationPolicy::Tokens(10_000), None),
     );
 
     assert_eq!(
@@ -1071,7 +1082,7 @@ fn record_items_truncates_function_call_output_content() {
         }),
     };
 
-    history.record_items([&item], policy);
+    history.record_items([&item], output_truncation(policy));
 
     assert_eq!(history.items.len(), 1);
     match &history.items[0] {
@@ -1106,7 +1117,7 @@ fn record_items_truncates_custom_tool_call_output_content() {
         metadata: None,
     };
 
-    history.record_items([&item], policy);
+    history.record_items([&item], output_truncation(policy));
 
     assert_eq!(history.items.len(), 1);
     match &history.items[0] {
@@ -1141,7 +1152,7 @@ fn record_items_respects_custom_token_limit() {
         metadata: None,
     };
 
-    history.record_items([&item], policy);
+    history.record_items([&item], output_truncation(policy));
 
     let stored = match &history.items[0] {
         ResponseItem::FunctionCallOutput { output, .. } => output,
@@ -1151,6 +1162,80 @@ fn record_items_respects_custom_token_limit() {
         stored
             .text_content()
             .is_some_and(|content| content.contains("tokens truncated"))
+    );
+}
+
+#[test]
+fn record_items_respects_configured_line_limit() {
+    let mut history = ContextManager::new();
+    let long_output = (1..=12)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let item = ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: "call-line-limit".to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text(long_output),
+            success: Some(true),
+        },
+        metadata: None,
+    };
+
+    history.record_items(
+        [&item],
+        OutputTruncation::new(TruncationPolicy::Bytes(10_000), Some(4)),
+    );
+
+    let stored = match &history.items[0] {
+        ResponseItem::FunctionCallOutput { output, .. } => output,
+        other => panic!("unexpected history item: {other:?}"),
+    };
+    assert_eq!(
+        stored.text_content(),
+        Some("line 1\nline 2\n…8 lines truncated…\nline 11\nline 12"),
+    );
+}
+
+#[test]
+fn record_items_uses_mcp_line_limit_for_mcp_function_output() {
+    let mut history = ContextManager::new();
+    let long_output = (1..=12)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let call = ResponseItem::FunctionCall {
+        id: None,
+        name: "read_file".to_string(),
+        namespace: Some("mcp__file_tools".to_string()),
+        arguments: "{}".to_string(),
+        call_id: "mcp-call-line-limit".to_string(),
+        metadata: None,
+    };
+    let output = ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: "mcp-call-line-limit".to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text(long_output),
+            success: Some(true),
+        },
+        metadata: None,
+    };
+
+    history.record_items(
+        [&call, &output],
+        OutputTruncation::new_with_mcp_max_lines(TruncationPolicy::Bytes(10_000), Some(4), Some(8)),
+    );
+
+    let stored = match &history.items[1] {
+        ResponseItem::FunctionCallOutput { output, .. } => output,
+        other => panic!("unexpected history item: {other:?}"),
+    };
+    assert_eq!(
+        stored.text_content(),
+        Some(
+            "line 1\nline 2\nline 3\nline 4\n…4 lines truncated…\nline 9\nline 10\nline 11\nline 12"
+        ),
     );
 }
 

@@ -154,9 +154,15 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
         &server.uri(),
         &BTreeMap::from([(Feature::RemoteCompactionV2, false)]),
         REMOTE_AUTO_COMPACT_LIMIT,
-        Some(true),
+        /*requires_openai_auth*/ None,
         "mock_provider",
         COMPACT_PROMPT,
+    )?;
+    let config_toml = codex_home.path().join("config.toml");
+    std::fs::write(
+        &config_toml,
+        std::fs::read_to_string(&config_toml)?
+            .replace("name = \"Mock provider for test\"", "name = \"OpenAI\""),
     )?;
     write_chatgpt_auth(
         codex_home.path(),

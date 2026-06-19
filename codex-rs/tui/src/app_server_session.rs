@@ -357,6 +357,7 @@ impl AppServerSession {
                 request_id: account_request_id,
                 params: GetAccountParams {
                     refresh_token: false,
+                    model_provider: None,
                 },
             })
             .await
@@ -1203,6 +1204,7 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
     ModelPreset {
         id: model.id,
         model: model.model,
+        model_provider: model.model_provider,
         display_name: model.display_name,
         description: model.description,
         default_reasoning_effort: model.default_reasoning_effort,
@@ -2320,6 +2322,7 @@ mod tests {
                 preview: "hello".to_string(),
                 ephemeral: false,
                 model_provider: "openai".to_string(),
+                model: None,
                 created_at: 1,
                 updated_at: 2,
                 recency_at: Some(2),

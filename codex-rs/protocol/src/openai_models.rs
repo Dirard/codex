@@ -198,6 +198,10 @@ pub struct ModelPreset {
     pub id: String,
     /// Model slug (e.g., "gpt-5").
     pub model: String,
+    /// Provider id to use when selecting this preset. When absent, callers keep
+    /// the current/default provider behavior for backward compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
     /// Display name shown in UIs.
     pub display_name: String,
     /// Short human description shown in UIs.
@@ -557,6 +561,7 @@ impl From<ModelInfo> for ModelPreset {
         ModelPreset {
             id: info.slug.clone(),
             model: info.slug.clone(),
+            model_provider: None,
             display_name: info.display_name,
             description: info.description.unwrap_or_default(),
             default_reasoning_effort: info

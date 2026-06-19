@@ -1,3 +1,164 @@
+mod display_history_tests {
+    use super::super::build_api_display_turns_from_rollout_items;
+    use codex_app_server_protocol::ThreadItem;
+    use codex_app_server_protocol::TurnStatus;
+    use codex_app_server_protocol::UserInput;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::MessagePhase;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::AgentMessageEvent;
+    use codex_protocol::protocol::CompactedItem;
+    use codex_protocol::protocol::ContextCompactedEvent;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::TurnCompleteEvent;
+    use codex_protocol::protocol::TurnStartedEvent;
+    use codex_protocol::protocol::UserMessageEvent;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn display_history_returns_compacted_context_marker_and_current_history() {
+        let items = vec![
+            RolloutItem::EventMsg(turn_started("old-turn")),
+            RolloutItem::EventMsg(user_message("old user")),
+            RolloutItem::EventMsg(agent_message("old answer")),
+            RolloutItem::EventMsg(turn_complete("old-turn")),
+            RolloutItem::Compacted(CompactedItem {
+                message: "compressed context".to_string(),
+                replacement_history: None,
+                window_id: Some(7),
+            }),
+            RolloutItem::EventMsg(turn_started("current-turn")),
+            RolloutItem::EventMsg(EventMsg::ContextCompacted(ContextCompactedEvent)),
+            RolloutItem::EventMsg(user_message("current user")),
+            RolloutItem::EventMsg(agent_message("current answer")),
+            RolloutItem::EventMsg(turn_complete("current-turn")),
+        ];
+
+        let turns = build_api_display_turns_from_rollout_items(&items);
+
+        assert_eq!(turns.len(), 3);
+        assert_eq!(turns[0].status, TurnStatus::Completed);
+        assert_eq!(user_texts(&turns[0].items), vec!["compressed context"]);
+        assert!(matches!(
+            turns[1].items.as_slice(),
+            [ThreadItem::ContextCompaction { .. }]
+        ));
+        assert_eq!(user_texts(&turns[2].items), vec!["current user"]);
+        assert_eq!(agent_texts(&turns[2].items), vec!["current answer"]);
+    }
+
+    #[test]
+    fn display_history_uses_replacement_history_when_compacted_message_is_empty() {
+        let items = vec![
+            RolloutItem::EventMsg(turn_started("old-turn")),
+            RolloutItem::EventMsg(user_message("old user")),
+            RolloutItem::EventMsg(turn_complete("old-turn")),
+            RolloutItem::Compacted(CompactedItem {
+                message: String::new(),
+                replacement_history: Some(vec![
+                    response_message("developer", "hidden instructions"),
+                    response_message("user", "retained user"),
+                    response_message("assistant", "remote compressed context"),
+                ]),
+                window_id: Some(8),
+            }),
+            RolloutItem::EventMsg(turn_started("current-turn")),
+            RolloutItem::EventMsg(user_message("current user")),
+            RolloutItem::EventMsg(turn_complete("current-turn")),
+        ];
+
+        let turns = build_api_display_turns_from_rollout_items(&items);
+
+        assert_eq!(
+            user_texts(&turns[0].items),
+            vec!["remote compressed context"]
+        );
+        assert!(matches!(
+            turns[1].items.as_slice(),
+            [ThreadItem::ContextCompaction { .. }]
+        ));
+        assert_eq!(user_texts(&turns[2].items), vec!["current user"]);
+    }
+
+    fn turn_started(turn_id: &str) -> EventMsg {
+        EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: turn_id.to_string(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        })
+    }
+
+    fn turn_complete(turn_id: &str) -> EventMsg {
+        EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: turn_id.to_string(),
+            last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })
+    }
+
+    fn user_message(message: &str) -> EventMsg {
+        EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
+            message: message.to_string(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+            ..Default::default()
+        })
+    }
+
+    fn agent_message(message: &str) -> EventMsg {
+        EventMsg::AgentMessage(AgentMessageEvent {
+            message: message.to_string(),
+            phase: Some(MessagePhase::FinalAnswer),
+            memory_citation: None,
+        })
+    }
+
+    fn response_message(role: &str, text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: role.to_string(),
+            content: vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+            phase: None,
+            metadata: None,
+        }
+    }
+
+    fn user_texts(items: &[ThreadItem]) -> Vec<&str> {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                ThreadItem::UserMessage { content, .. } => content.iter().find_map(|input| {
+                    if let UserInput::Text { text, .. } = input {
+                        Some(text.as_str())
+                    } else {
+                        None
+                    }
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn agent_texts(items: &[ThreadItem]) -> Vec<&str> {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                ThreadItem::AgentMessage { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
 mod thread_list_cwd_filter_tests {
     use super::super::normalize_thread_list_cwd_filters;
     use codex_app_server_protocol::ThreadListCwdFilter;
@@ -325,6 +486,113 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
+    fn thread_turns_list_keeps_full_history_after_compaction() {
+        let persisted_items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: "old-turn".to_string(),
+                    trace_id: None,
+                    started_at: None,
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    client_id: None,
+                    message: "old user".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                    ..Default::default()
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id: "old-turn".to_string(),
+                    last_agent_message: None,
+                    completed_at: None,
+                    duration_ms: None,
+                    time_to_first_token_ms: None,
+                },
+            )),
+            RolloutItem::Compacted(codex_protocol::protocol::CompactedItem {
+                message: "compressed context".to_string(),
+                replacement_history: None,
+                window_id: Some(7),
+            }),
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: "current-turn".to_string(),
+                    trace_id: None,
+                    started_at: None,
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::ContextCompacted(
+                codex_protocol::protocol::ContextCompactedEvent,
+            )),
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    client_id: None,
+                    message: "current user".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                    ..Default::default()
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::AgentMessage(
+                codex_protocol::protocol::AgentMessageEvent {
+                    message: "current answer".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id: "current-turn".to_string(),
+                    last_agent_message: None,
+                    completed_at: None,
+                    duration_ms: None,
+                    time_to_first_token_ms: None,
+                },
+            )),
+        ];
+
+        let turns = reconstruct_thread_turns_for_turns_list(
+            &persisted_items,
+            ThreadStatus::Idle,
+            /*has_live_running_thread*/ false,
+            None,
+        );
+
+        assert_eq!(turns.len(), 3);
+        let old_turn = turns
+            .iter()
+            .find(|turn| turn.id == "old-turn")
+            .expect("old turn should be preserved");
+        assert_eq!(user_texts(&old_turn.items), vec!["old user"]);
+        assert!(
+            !turns
+                .iter()
+                .any(|turn| user_texts(&turn.items) == vec!["compressed context"])
+        );
+
+        let current_turn = turns
+            .iter()
+            .find(|turn| turn.id == "current-turn")
+            .expect("current turn should be preserved");
+        assert!(matches!(
+            current_turn.items.first(),
+            Some(ThreadItem::ContextCompaction { .. })
+        ));
+        assert_eq!(user_texts(&current_turn.items), vec!["current user"]);
+        assert_eq!(agent_texts(&current_turn.items), vec!["current answer"]);
+    }
+
+    #[test]
     fn validate_dynamic_tools_rejects_empty_namespace() {
         let tools = vec![dynamic_tool(
             Some(""),
@@ -338,6 +606,32 @@ mod thread_processor_behavior_tests {
         )];
         let err = validate_dynamic_tools(&tools).expect_err("empty namespace");
         assert!(err.contains("namespace"), "unexpected error: {err}");
+    }
+
+    fn user_texts(items: &[ThreadItem]) -> Vec<&str> {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                ThreadItem::UserMessage { content, .. } => content.iter().find_map(|input| {
+                    if let V2UserInput::Text { text, .. } = input {
+                        Some(text.as_str())
+                    } else {
+                        None
+                    }
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn agent_texts(items: &[ThreadItem]) -> Vec<&str> {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                ThreadItem::AgentMessage { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
@@ -670,6 +964,7 @@ mod thread_processor_behavior_tests {
         let session_provider = ModelProviderInfo {
             name: "session".to_string(),
             base_url: Some("http://127.0.0.1:8061/api/codex".to_string()),
+            models: Vec::new(),
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
@@ -874,7 +1169,10 @@ mod thread_processor_behavior_tests {
         );
 
         assert_eq!(typesafe_overrides.model, Some("gpt-5.2-codex".to_string()));
-        assert_eq!(typesafe_overrides.model_provider, None);
+        assert_eq!(
+            typesafe_overrides.model_provider,
+            Some("mock_provider".to_string())
+        );
         assert_eq!(
             request_overrides,
             Some(HashMap::from([(
@@ -886,8 +1184,8 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
-    fn merge_persisted_resume_metadata_skips_persisted_values_when_model_overridden() -> Result<()>
-    {
+    fn merge_persisted_resume_metadata_preserves_model_override_and_historical_provider()
+    -> Result<()> {
         let mut request_overrides = Some(HashMap::from([(
             "model".to_string(),
             serde_json::Value::String("gpt-5.2-codex".to_string()),
@@ -903,19 +1201,28 @@ mod thread_processor_behavior_tests {
         );
 
         assert_eq!(typesafe_overrides.model, None);
-        assert_eq!(typesafe_overrides.model_provider, None);
+        assert_eq!(
+            typesafe_overrides.model_provider,
+            Some("mock_provider".to_string())
+        );
         assert_eq!(
             request_overrides,
-            Some(HashMap::from([(
-                "model".to_string(),
-                serde_json::Value::String("gpt-5.2-codex".to_string()),
-            )]))
+            Some(HashMap::from([
+                (
+                    "model".to_string(),
+                    serde_json::Value::String("gpt-5.2-codex".to_string()),
+                ),
+                (
+                    "model_reasoning_effort".to_string(),
+                    serde_json::Value::String("high".to_string()),
+                )
+            ]))
         );
         Ok(())
     }
 
     #[test]
-    fn merge_persisted_resume_metadata_skips_persisted_values_when_provider_overridden()
+    fn merge_persisted_resume_metadata_preserves_provider_override_and_historical_model()
     -> Result<()> {
         let mut request_overrides = None;
         let mut typesafe_overrides = ConfigOverrides {
@@ -931,14 +1238,23 @@ mod thread_processor_behavior_tests {
             &persisted_metadata,
         );
 
-        assert_eq!(typesafe_overrides.model, None);
+        assert_eq!(
+            typesafe_overrides.model,
+            Some("gpt-5.1-codex-max".to_string())
+        );
         assert_eq!(typesafe_overrides.model_provider, Some("oss".to_string()));
-        assert_eq!(request_overrides, None);
+        assert_eq!(
+            request_overrides,
+            Some(HashMap::from([(
+                "model_reasoning_effort".to_string(),
+                serde_json::Value::String("high".to_string()),
+            )]))
+        );
         Ok(())
     }
 
     #[test]
-    fn merge_persisted_resume_metadata_skips_persisted_values_when_reasoning_effort_overridden()
+    fn merge_persisted_resume_metadata_preserves_reasoning_override_and_historical_model()
     -> Result<()> {
         let mut request_overrides = Some(HashMap::from([(
             "model_reasoning_effort".to_string(),
@@ -954,8 +1270,14 @@ mod thread_processor_behavior_tests {
             &persisted_metadata,
         );
 
-        assert_eq!(typesafe_overrides.model, None);
-        assert_eq!(typesafe_overrides.model_provider, None);
+        assert_eq!(
+            typesafe_overrides.model,
+            Some("gpt-5.1-codex-max".to_string())
+        );
+        assert_eq!(
+            typesafe_overrides.model_provider,
+            Some("mock_provider".to_string())
+        );
         assert_eq!(
             request_overrides,
             Some(HashMap::from([(

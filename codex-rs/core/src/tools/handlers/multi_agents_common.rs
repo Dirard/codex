@@ -8,6 +8,7 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use codex_app_server_protocol::AuthMode;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -244,6 +245,40 @@ pub(crate) fn reject_full_fork_spawn_overrides(
         ));
     }
     Ok(())
+}
+
+pub(crate) fn ensure_spawn_agent_provider_auth(
+    config: &Config,
+    turn: &TurnContext,
+    agent_type: Option<&str>,
+) -> Result<(), FunctionCallError> {
+    if !config.model_provider.requires_openai_auth {
+        return Ok(());
+    }
+
+    let has_openai_auth = turn
+        .auth_manager
+        .as_ref()
+        .and_then(|auth_manager| auth_manager.auth_mode())
+        .is_some_and(|auth_mode| {
+            matches!(
+                auth_mode,
+                AuthMode::ApiKey
+                    | AuthMode::Chatgpt
+                    | AuthMode::ChatgptAuthTokens
+                    | AuthMode::AgentIdentity
+                    | AuthMode::PersonalAccessToken
+            )
+        });
+    if has_openai_auth {
+        return Ok(());
+    }
+
+    let agent_type = agent_type.unwrap_or("default");
+    Err(FunctionCallError::RespondToModel(format!(
+        "agent_type '{agent_type}' selects modelProvider '{}' which requires OpenAI auth, but no OpenAI auth is configured",
+        config.model_provider_id
+    )))
 }
 
 /// Copies runtime-only turn state onto a child config before it is handed to `AgentControl`.

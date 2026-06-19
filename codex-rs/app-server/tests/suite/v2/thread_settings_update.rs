@@ -95,6 +95,38 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
 }
 
 #[tokio::test]
+async fn thread_settings_update_rejects_custom_provider_model_outside_allowlist() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_provider_models(codex_home.path(), &server.uri(), &["mock-model"])?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let thread = start_thread(&mut mcp).await?.thread;
+
+    let request_id = mcp
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+            thread_id: thread.id,
+            model: Some("missing-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(err.error.code, -32600);
+    assert!(
+        err.error
+            .message
+            .contains("model 'missing-model' is not configured for modelProvider 'mock_provider'")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_settings_update_cwd_retargets_default_environment() -> Result<()> {
     let server = responses::start_mock_server().await;
     let body = responses::sse(vec![
@@ -454,5 +486,37 @@ fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io
         /*requires_openai_auth*/ None,
         "mock_provider",
         "compact",
+    )
+}
+
+fn create_config_toml_with_provider_models(
+    codex_home: &std::path::Path,
+    server_uri: &str,
+    models: &[&str],
+) -> std::io::Result<()> {
+    let model_entries = models
+        .iter()
+        .map(|model| format!("\"{model}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+models = [{model_entries}]
+"#
+        ),
     )
 }

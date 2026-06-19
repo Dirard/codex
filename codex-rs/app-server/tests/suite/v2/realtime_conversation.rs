@@ -181,6 +181,23 @@ impl RealtimeTestSandbox {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RealtimeConfigOptions {
+    realtime_version: RealtimeTestVersion,
+    sandbox: RealtimeTestSandbox,
+    supports_websockets: bool,
+}
+
+impl Default for RealtimeConfigOptions {
+    fn default() -> Self {
+        Self {
+            realtime_version: RealtimeTestVersion::V2,
+            sandbox: RealtimeTestSandbox::ReadOnly,
+            supports_websockets: true,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 struct StartedWebrtcRealtime {
     started: ThreadRealtimeStartedNotification,
@@ -286,8 +303,11 @@ impl RealtimeE2eHarness {
             realtime_server.uri(),
             /*realtime_enabled*/ true,
             StartupContextConfig::Override("startup context"),
-            realtime_version,
-            sandbox,
+            RealtimeConfigOptions {
+                realtime_version,
+                sandbox,
+                supports_websockets: false,
+            },
         )?;
 
         let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -947,6 +967,240 @@ async fn realtime_start_can_skip_startup_context() -> Result<()> {
     assert_eq!(instructions, "backend prompt");
     assert!(!instructions.contains(STARTUP_CONTEXT_HEADER));
 
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn realtime_start_uses_custom_websocket_provider_auth_without_openai_fallback() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let responses_server = MockServer::start().await;
+    let realtime_server = start_websocket_server(vec![vec![vec![]]]).await;
+
+    let codex_home = TempDir::new()?;
+    create_custom_realtime_provider_config(
+        codex_home.path(),
+        &responses_server.uri(),
+        realtime_server.uri(),
+        /*supports_websockets*/ true,
+    )?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_start_request_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_start_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
+    )
+    .await??;
+    let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
+
+    let start_request_id = mcp
+        .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
+            client_managed_handoffs: None,
+            codex_responses_as_items: None,
+            codex_response_item_prefix: None,
+            codex_response_handoff_prefix: None,
+            thread_id: thread_start.thread.id.clone(),
+            model: Some("custom-realtime".to_string()),
+            output_modality: RealtimeOutputModality::Text,
+            include_startup_context: None,
+            prompt: None,
+            realtime_session_id: None,
+            transport: None,
+            version: None,
+            voice: None,
+        })
+        .await?;
+    let start_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
+    )
+    .await??;
+    let _: ThreadRealtimeStartResponse = to_response(start_response)?;
+
+    let started =
+        read_notification::<ThreadRealtimeStartedNotification>(&mut mcp, "thread/realtime/started")
+            .await?;
+    assert_eq!(started.thread_id, thread_start.thread.id);
+    assert_eq!(
+        realtime_server.single_handshake().uri(),
+        "/v1/realtime?model=custom-realtime"
+    );
+    assert_eq!(
+        realtime_server
+            .single_handshake()
+            .header("authorization")
+            .as_deref(),
+        Some("Bearer custom-realtime-key")
+    );
+    assert_eq!(
+        realtime_server
+            .single_handshake()
+            .header("chatgpt-account-id")
+            .as_deref(),
+        None
+    );
+    assert_eq!(
+        realtime_server
+            .single_handshake()
+            .header("x-openai-fedramp")
+            .as_deref(),
+        None
+    );
+    assert_eq!(
+        realtime_server
+            .single_handshake()
+            .header("x-oai-attestation")
+            .as_deref(),
+        None
+    );
+    assert!(
+        responses_server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn realtime_start_rejects_provider_without_websocket_support_before_fallback() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let responses_server = MockServer::start().await;
+    let realtime_server = start_websocket_server(vec![vec![]]).await;
+
+    let codex_home = TempDir::new()?;
+    create_custom_realtime_provider_config(
+        codex_home.path(),
+        &responses_server.uri(),
+        realtime_server.uri(),
+        /*supports_websockets*/ false,
+    )?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_start_request_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_start_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
+    )
+    .await??;
+    let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
+
+    let start_request_id = mcp
+        .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
+            client_managed_handoffs: None,
+            codex_responses_as_items: None,
+            codex_response_item_prefix: None,
+            codex_response_handoff_prefix: None,
+            thread_id: thread_start.thread.id,
+            model: Some("custom-realtime".to_string()),
+            output_modality: RealtimeOutputModality::Text,
+            include_startup_context: None,
+            prompt: None,
+            realtime_session_id: None,
+            transport: None,
+            version: None,
+            voice: None,
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(start_request_id)),
+    )
+    .await??;
+    assert_invalid_request(
+        error,
+        "model provider 'Custom Realtime' does not support realtime websocket conversations"
+            .to_string(),
+    );
+    assert!(realtime_server.connections().is_empty());
+    assert!(
+        responses_server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn realtime_start_rejects_custom_provider_model_outside_allowlist() -> Result<()> {
+    let responses_server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let realtime_server = start_websocket_server(vec![vec![]]).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_provider_models(
+        codex_home.path(),
+        &responses_server.uri(),
+        realtime_server.uri(),
+        &["mock-model"],
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_start_request_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_start_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
+    )
+    .await??;
+    let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
+
+    let start_request_id = mcp
+        .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            architecture: None,
+            client_managed_handoffs: None,
+            codex_responses_as_items: None,
+            codex_response_item_prefix: None,
+            codex_response_handoff_prefix: None,
+            thread_id: thread_start.thread.id,
+            model: Some("missing-realtime-model".to_string()),
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: None,
+            prompt: None,
+            realtime_session_id: None,
+            transport: None,
+            version: None,
+            voice: None,
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(start_request_id)),
+    )
+    .await??;
+    assert_invalid_request(
+        error,
+        "invalid thread/realtime/start model selection: model 'missing-realtime-model' \
+         is not configured for modelProvider 'mock_provider'"
+            .to_string(),
+    );
+
+    assert!(realtime_server.connections().is_empty());
     realtime_server.shutdown().await;
     Ok(())
 }
@@ -3016,8 +3270,7 @@ fn create_config_toml(
         realtime_server_uri,
         realtime_enabled,
         startup_context,
-        RealtimeTestVersion::V2,
-        RealtimeTestSandbox::ReadOnly,
+        RealtimeConfigOptions::default(),
     )
 }
 
@@ -3027,16 +3280,20 @@ fn create_config_toml_with_realtime_version(
     realtime_server_uri: &str,
     realtime_enabled: bool,
     startup_context: StartupContextConfig<'_>,
-    realtime_version: RealtimeTestVersion,
-    sandbox: RealtimeTestSandbox,
+    options: RealtimeConfigOptions,
 ) -> std::io::Result<()> {
     let realtime_feature_key = FEATURES
         .iter()
         .find(|spec| spec.id == Feature::RealtimeConversation)
         .map(|spec| spec.key)
         .unwrap_or("realtime_conversation");
-    let realtime_version = realtime_version.config_value();
-    let sandbox = sandbox.config_value();
+    let realtime_version = options.realtime_version.config_value();
+    let sandbox = options.sandbox.config_value();
+    let supports_websockets_config = if options.supports_websockets {
+        "supports_websockets = true\n"
+    } else {
+        ""
+    };
     let startup_context = match startup_context {
         StartupContextConfig::Generated => String::new(),
         StartupContextConfig::Override(context) => {
@@ -3069,6 +3326,99 @@ base_url = "{responses_server_uri}/v1"
 wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
+{supports_websockets_config}
+"#
+        ),
+    )
+}
+
+fn create_config_toml_with_provider_models(
+    codex_home: &Path,
+    responses_server_uri: &str,
+    realtime_server_uri: &str,
+    models: &[&str],
+) -> std::io::Result<()> {
+    let model_entries = models
+        .iter()
+        .map(|model| format!("\"{model}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let realtime_feature_key = FEATURES
+        .iter()
+        .find(|spec| spec.id == Feature::RealtimeConversation)
+        .map(|spec| spec.key)
+        .unwrap_or("realtime_conversation");
+
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+model_provider = "mock_provider"
+experimental_realtime_ws_base_url = "{realtime_server_uri}"
+experimental_realtime_ws_backend_prompt = "backend prompt"
+
+[realtime]
+version = "v2"
+type = "conversational"
+
+[features]
+{realtime_feature_key} = true
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{responses_server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+supports_websockets = true
+models = [{model_entries}]
+"#
+        ),
+    )
+}
+
+fn create_custom_realtime_provider_config(
+    codex_home: &Path,
+    responses_server_uri: &str,
+    realtime_server_uri: &str,
+    supports_websockets: bool,
+) -> std::io::Result<()> {
+    let realtime_feature_key = FEATURES
+        .iter()
+        .find(|spec| spec.id == Feature::RealtimeConversation)
+        .map(|spec| spec.key)
+        .unwrap_or("realtime_conversation");
+
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"
+model = "custom-default"
+approval_policy = "never"
+sandbox_mode = "read-only"
+model_provider = "custom_realtime"
+experimental_realtime_ws_base_url = "{realtime_server_uri}"
+experimental_realtime_ws_backend_prompt = "backend prompt"
+
+[realtime]
+version = "v2"
+type = "conversational"
+
+[features]
+{realtime_feature_key} = true
+
+[model_providers.custom_realtime]
+name = "Custom Realtime"
+base_url = "{responses_server_uri}/v1"
+wire_api = "chat"
+key = "custom-realtime-key"
+request_max_retries = 0
+stream_max_retries = 0
+supports_websockets = {supports_websockets}
+models = ["custom-default", "custom-realtime"]
 "#
         ),
     )

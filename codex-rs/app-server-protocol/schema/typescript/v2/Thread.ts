@@ -34,6 +34,10 @@ ephemeral: boolean,
  */
 modelProvider: string,
 /**
+ * Model used for this thread, when known from thread metadata.
+ */
+model?: string | null,
+/**
  * Unix timestamp (in seconds) when the thread was created.
  */
 createdAt: number,

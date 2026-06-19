@@ -107,6 +107,12 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
         self.provider_info.has_command_auth()
     }
 
+    fn has_provider_scoped_auth(&self) -> bool {
+        self.provider_info.has_command_auth()
+            || self.provider_info.env_key.is_some()
+            || self.provider_info.experimental_bearer_token.is_some()
+    }
+
     fn uses_codex_backend(&self) -> ModelsEndpointFuture<'_, bool> {
         Box::pin(OpenAiModelsEndpoint::uses_codex_backend(self))
     }
@@ -230,6 +236,7 @@ mod tests {
                     .try_into()
                     .expect("current dir should be absolute"),
             }),
+            base_url: Some("https://example.com/v1".to_string()),
             requires_openai_auth: false,
             ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
         }
@@ -253,5 +260,15 @@ mod tests {
         );
 
         assert!(!endpoint.has_command_auth());
+    }
+
+    #[test]
+    fn provider_static_bearer_token_counts_as_provider_scoped_auth() {
+        let mut provider_info = provider_info_with_command_auth();
+        provider_info.auth = None;
+        provider_info.experimental_bearer_token = Some("provider-token".to_string());
+        let endpoint = OpenAiModelsEndpoint::new(provider_info, /*auth_manager*/ None);
+
+        assert!(endpoint.has_provider_scoped_auth());
     }
 }

@@ -82,6 +82,10 @@ pub struct ModelServiceTier {
 pub struct Model {
     pub id: String,
     pub model: String,
+    /// Provider id associated with this model preset, when the preset should
+    /// switch providers as part of model selection.
+    #[serde(default)]
+    pub model_provider: Option<String>,
     pub upgrade: Option<String>,
     pub upgrade_info: Option<ModelUpgradeInfo>,
     pub availability_nux: Option<ModelAvailabilityNux>,

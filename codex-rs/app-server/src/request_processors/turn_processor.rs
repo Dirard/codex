@@ -4,6 +4,7 @@ use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_utils_path_uri::PathUri;
 
 const DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR: &str =
     "direct app-server input is not allowed for multi-agent v2 sub-agents";
@@ -45,6 +46,21 @@ fn map_additional_context(
             )
         })
         .collect()
+}
+
+fn apply_cwd_to_local_environment(
+    environments: &mut TurnEnvironmentSelections,
+    cwd: AbsolutePathBuf,
+) {
+    let cwd_uri = PathUri::from_abs_path(&cwd);
+    if let Some(environment) = environments
+        .environments
+        .iter_mut()
+        .find(|environment| environment.environment_id == LOCAL_ENVIRONMENT_ID)
+    {
+        environment.cwd = cwd_uri;
+    }
+    environments.legacy_fallback_cwd = cwd;
 }
 
 struct ThreadSettingsBuildParams {
@@ -518,9 +534,9 @@ impl TurnRequestProcessor {
         match (cwd, environment_selections) {
             (None, None) => None,
             (Some(cwd), None) => {
-                let environment_selections =
-                    self.thread_manager.default_environment_selections(&cwd);
-                Some(TurnEnvironmentSelections::new(cwd, environment_selections))
+                let mut environments = thread.config_snapshot().await.environments;
+                apply_cwd_to_local_environment(&mut environments, cwd);
+                Some(environments)
             }
             (cwd, Some(environment_selections)) => {
                 let legacy_fallback_cwd = match cwd {
@@ -653,7 +669,7 @@ impl TurnRequestProcessor {
         let effort = effort.map(Some);
 
         if has_any_overrides {
-            thread
+            let preview = thread
                 .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
                     environments: environments.clone(),
                     workspace_roots: runtime_workspace_roots.clone(),
@@ -675,6 +691,18 @@ impl TurnRequestProcessor {
                 .map_err(|err| {
                     invalid_request(format!("invalid thread settings override: {err}"))
                 })?;
+            if model.is_some() || collaboration_mode.is_some() {
+                let config = thread.config().await;
+                model_selection::validate_model_for_provider(
+                    self.thread_manager.as_ref(),
+                    &config,
+                    preview.model_provider_id.as_str(),
+                    preview.model.as_str(),
+                    method,
+                    /*require_custom_allowlist*/ false,
+                )
+                .await?;
+            }
         }
 
         Ok(codex_protocol::protocol::ThreadSettingsOverrides {
@@ -937,6 +965,35 @@ impl TurnRequestProcessor {
         else {
             return Ok(None);
         };
+        let config = thread.config().await;
+        if let Some(model) = params.model.as_deref() {
+            let snapshot = thread.config_snapshot().await;
+            model_selection::validate_model_for_provider(
+                self.thread_manager.as_ref(),
+                &config,
+                snapshot.model_provider_id.as_str(),
+                model,
+                "thread/realtime/start",
+                /*require_custom_allowlist*/ false,
+            )
+            .await?;
+        }
+        let realtime_transport_requires_websocket_support = match params.transport.as_ref() {
+            None | Some(ThreadRealtimeStartTransport::Websocket) => true,
+            Some(ThreadRealtimeStartTransport::Webrtc { .. }) => false,
+        };
+        if realtime_transport_requires_websocket_support
+            && !config.model_provider.supports_websockets
+        {
+            let provider_name = if config.model_provider.name.trim().is_empty() {
+                "selected model provider"
+            } else {
+                config.model_provider.name.as_str()
+            };
+            return Err(invalid_request(format!(
+                "model provider '{provider_name}' does not support realtime websocket conversations"
+            )));
+        }
         self.submit_core_op(
             request_id,
             thread.as_ref(),
@@ -1386,3 +1443,7 @@ fn xcode_26_4_mcp_elicitations_auto_deny(
     client_name == Some("Xcode")
         && client_version.is_some_and(|version| version.starts_with("26.4"))
 }
+
+#[cfg(test)]
+#[path = "turn_processor_tests.rs"]
+mod turn_processor_tests;

@@ -2706,10 +2706,7 @@ impl Session {
         let items = items.as_ref();
         {
             let mut state = self.state.lock().await;
-            state.record_items(
-                items.iter(),
-                turn_context.model_info.truncation_policy.into(),
-            );
+            state.record_items(items.iter(), turn_context.output_truncation());
         }
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
@@ -2728,10 +2725,7 @@ impl Session {
         let items = items.as_ref();
         {
             let mut state = self.state.lock().await;
-            state.record_items(
-                items.iter(),
-                turn_context.model_info.truncation_policy.into(),
-            );
+            state.record_items(items.iter(), turn_context.output_truncation());
         }
         self.persist_rollout_items(&[RolloutItem::InterAgentCommunication(communication)])
             .await;

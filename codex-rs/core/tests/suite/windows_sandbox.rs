@@ -77,6 +77,8 @@ fn codex_home_for_windows_sandbox_test(name: &str) -> anyhow::Result<TestCodexHo
 }
 
 fn stage_windows_sandbox_helpers() -> anyhow::Result<()> {
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+
     let test_exe = std::env::current_exe().context("resolve current Windows test executable")?;
     let test_exe_dir = test_exe
         .parent()
@@ -99,7 +101,9 @@ fn stage_windows_sandbox_helpers() -> anyhow::Result<()> {
             // A sandbox helper can briefly remain alive after the sandboxed
             // command exits. Bazel may retry the test while that process still
             // has the staged executable open, so keep the already-staged copy.
-            if err.kind() == std::io::ErrorKind::PermissionDenied && destination.exists() {
+            let helper_is_still_running = err.kind() == std::io::ErrorKind::PermissionDenied
+                || err.raw_os_error() == Some(ERROR_SHARING_VIOLATION);
+            if helper_is_still_running && destination.exists() {
                 continue;
             }
             return Err(err).with_context(|| {
@@ -200,6 +204,16 @@ async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> a
 #[tokio::test]
 #[serial(codex_home)]
 async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyhow::Result<()> {
+    if std::env::var_os("CI").is_none()
+        && std::env::var_os("CODEX_RUN_ELEVATED_WINDOWS_SANDBOX_TESTS").is_none()
+    {
+        eprintln!(
+            "skipping local elevated Windows sandbox test; set \
+             CODEX_RUN_ELEVATED_WINDOWS_SANDBOX_TESTS=1 to run it outside CI"
+        );
+        return Ok(());
+    }
+
     let codex_home = codex_home_for_windows_sandbox_test("windows-elevated-deny-read-codex-home")?;
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
     stage_windows_sandbox_helpers()?;

@@ -1225,6 +1225,13 @@
     },
     "GetAccountParams": {
       "properties": {
+        "modelProvider": {
+          "description": "Optional model provider id whose account/auth state should be reported.\n\nWhen omitted or `null`, the response reports the active configured provider, matching the historical `account/read` behavior.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "refreshToken": {
           "description": "When `true`, requests a proactive token refresh before returning.\n\nIn managed auth mode this triggers the normal refresh-token flow. In external auth mode this flag is ignored. Clients should refresh tokens themselves and call `account/login/start` with `chatgptAuthTokens`.",
           "type": "boolean"

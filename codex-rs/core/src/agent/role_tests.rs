@@ -4,6 +4,8 @@ use crate::config::ConfigBuilder;
 use crate::skills_load_input_from_config;
 use codex_config::ConfigLayerStackOrdering;
 use codex_core_plugins::PluginsManager;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::test_support::PathExt;
@@ -209,6 +211,71 @@ async fn apply_role_preserves_unspecified_keys() {
     assert_eq!(
         config.main_execve_wrapper_exe,
         Some(PathBuf::from("/tmp/codex-execve-wrapper"))
+    );
+}
+
+#[tokio::test]
+async fn apply_role_can_select_configured_external_model_provider() {
+    let home = TempDir::new().expect("create temp dir");
+    let role_path = home.path().join("glm-agent.toml");
+    fs::write(
+        &role_path,
+        r#"developer_instructions = "Use the GLM provider for this role."
+model_provider = "glm"
+model = "glm-5.1"
+"#,
+    )
+    .expect("write role config");
+    fs::write(
+        home.path().join("config.toml"),
+        r#"[model_providers.glm]
+name = "GLM"
+base_url = "https://glm.example.test/v1"
+key = "test-glm-key"
+wire_api = "chat"
+
+[agents.glm]
+description = "GLM-backed subagent."
+config_file = "glm-agent.toml"
+"#,
+    )
+    .expect("write config");
+
+    let mut config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("load test config");
+
+    apply_role_to_config(&mut config, Some("glm"))
+        .await
+        .expect("custom provider role should apply");
+
+    assert_eq!(config.model.as_deref(), Some("glm-5.1"));
+    assert_eq!(config.model_provider_id, "glm");
+    assert_eq!(
+        config.model_provider,
+        ModelProviderInfo {
+            name: "GLM".to_string(),
+            base_url: Some("https://glm.example.test/v1".to_string()),
+            models: Vec::new(),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: Some("test-glm-key".to_string()),
+            auth: None,
+            aws: None,
+            wire_api: WireApi::Chat,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        }
     );
 }
 
@@ -503,6 +570,31 @@ fn spawn_tool_spec_marks_role_locked_model_and_reasoning_effort() {
     assert!(spec.contains(
             "Research carefully.\n- This role's model is set to `gpt-5` and its reasoning effort is set to `high`. These settings cannot be changed."
         ));
+}
+
+#[test]
+fn spawn_tool_spec_marks_role_locked_model_provider() {
+    let tempdir = TempDir::new().expect("create temp dir");
+    let role_path = tempdir.path().join("glm.toml");
+    fs::write(
+        &role_path,
+        "developer_instructions = \"Use GLM\"\nmodel_provider = \"glm\"\nmodel = \"glm-5.1\"\n",
+    )
+    .expect("write role config");
+    let user_defined_roles = BTreeMap::from([(
+        "glm".to_string(),
+        AgentRoleConfig {
+            description: Some("Use GLM.".to_string()),
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    )]);
+
+    let spec = spawn_tool_spec::build(&user_defined_roles);
+
+    assert!(spec.contains(
+        "Use GLM.\n- This role's model is set to `glm-5.1` and cannot be changed.\n- This role's model provider is set to `glm` and cannot be changed."
+    ));
 }
 
 #[test]

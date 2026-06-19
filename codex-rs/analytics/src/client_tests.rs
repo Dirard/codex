@@ -283,6 +283,7 @@ fn sample_thread(thread_id: &str) -> Thread {
         preview: "first prompt".to_string(),
         ephemeral: false,
         model_provider: "openai".to_string(),
+        model: Some("gpt-5".to_string()),
         created_at: 1,
         updated_at: 2,
         recency_at: Some(2),

@@ -108,6 +108,7 @@ async fn handle_spawn_agent(
             .await
             .map_err(FunctionCallError::RespondToModel)?;
     }
+    ensure_spawn_agent_provider_auth(&config, turn.as_ref(), role_name)?;
     apply_spawn_agent_service_tier(
         &session,
         &mut config,
@@ -177,6 +178,12 @@ async fn handle_spawn_agent(
         .and_then(|snapshot| snapshot.reasoning_effort.clone())
         .unwrap_or(args.reasoning_effort.unwrap_or_default());
     let nickname = new_agent_nickname.clone();
+    let model = agent_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.model.clone());
+    let model_provider_id = agent_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.model_provider_id.clone());
     session
         .send_event(
             &turn,
@@ -206,6 +213,8 @@ async fn handle_spawn_agent(
     Ok(SpawnAgentResult {
         agent_id: new_thread_id.to_string(),
         nickname,
+        model,
+        model_provider_id,
     })
 }
 
@@ -231,6 +240,8 @@ struct SpawnAgentArgs {
 pub(crate) struct SpawnAgentResult {
     agent_id: String,
     nickname: Option<String>,
+    model: Option<String>,
+    model_provider_id: Option<String>,
 }
 
 impl ToolOutput for SpawnAgentResult {

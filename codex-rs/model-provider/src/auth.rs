@@ -64,14 +64,15 @@ pub fn unauthenticated_auth_provider() -> SharedAuthProvider {
 
 /// Returns the provider-scoped auth manager when this provider uses command-backed auth.
 ///
-/// Providers without custom auth continue using the caller-supplied base manager, when present.
+/// Providers without custom auth use the caller-supplied base manager only when they use OpenAI auth.
 pub(crate) fn auth_manager_for_provider(
     auth_manager: Option<Arc<AuthManager>>,
     provider: &ModelProviderInfo,
 ) -> Option<Arc<AuthManager>> {
     match provider.auth.clone() {
         Some(config) => Some(AuthManager::external_bearer_only(config)),
-        None => auth_manager,
+        None if provider.uses_openai_auth() => auth_manager,
+        None => None,
     }
 }
 
@@ -79,14 +80,25 @@ pub(crate) fn resolve_provider_auth(
     auth: Option<&CodexAuth>,
     provider: &ModelProviderInfo,
 ) -> codex_protocol::error::Result<SharedAuthProvider> {
+    if let Some(auth) = bearer_auth_for_provider(provider)? {
+        return Ok(Arc::new(auth));
+    }
+
+    if provider.has_command_auth() {
+        return Ok(match auth {
+            Some(auth) => auth_provider_from_auth(auth),
+            None => unauthenticated_auth_provider(),
+        });
+    }
+
+    if !provider.uses_openai_auth() {
+        return Ok(unauthenticated_auth_provider());
+    }
+
     if matches!(auth, Some(CodexAuth::BedrockApiKey(_))) {
         return Err(CodexErr::UnsupportedOperation(
             BEDROCK_API_KEY_UNSUPPORTED_MESSAGE.to_string(),
         ));
-    }
-
-    if let Some(auth) = bearer_auth_for_provider(provider)? {
-        return Ok(Arc::new(auth));
     }
 
     Ok(match auth {
@@ -129,9 +141,12 @@ pub fn auth_provider_from_auth(auth: &CodexAuth) -> SharedAuthProvider {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU64;
+
     use codex_login::auth::BedrockApiKeyAuth;
     use codex_model_provider_info::WireApi;
     use codex_model_provider_info::create_oss_provider_with_base_url;
+    use codex_protocol::config_types::ModelProviderAuthInfo;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -143,6 +158,59 @@ mod tests {
         let auth = resolve_provider_auth(/*auth*/ None, &provider).expect("auth should resolve");
 
         assert!(auth.to_auth_headers().is_empty());
+    }
+
+    #[test]
+    fn custom_provider_ignores_openai_auth_fallback() {
+        let provider =
+            create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+        let openai_auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+        let auth =
+            resolve_provider_auth(Some(&openai_auth), &provider).expect("auth should resolve");
+
+        assert!(auth.to_auth_headers().is_empty());
+    }
+
+    #[test]
+    fn custom_provider_key_takes_precedence_over_openai_auth_fallback() {
+        let mut provider =
+            create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+        provider.experimental_bearer_token = Some("provider-token".to_string());
+        let openai_auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+        let auth =
+            resolve_provider_auth(Some(&openai_auth), &provider).expect("auth should resolve");
+
+        assert_eq!(
+            auth.to_auth_headers().get(http::header::AUTHORIZATION),
+            Some(&HeaderValue::from_static("Bearer provider-token"))
+        );
+    }
+
+    #[test]
+    fn custom_provider_command_auth_uses_provider_scoped_auth() {
+        let mut provider =
+            create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+        provider.auth = Some(ModelProviderAuthInfo {
+            command: "token-helper".to_string(),
+            args: Vec::new(),
+            timeout_ms: NonZeroU64::new(5_000).expect("timeout should be non-zero"),
+            refresh_interval_ms: 300_000,
+            cwd: std::env::current_dir()
+                .expect("current dir should be available")
+                .try_into()
+                .expect("current dir should be absolute"),
+        });
+        let command_auth = CodexAuth::from_api_key("command-token");
+
+        let auth =
+            resolve_provider_auth(Some(&command_auth), &provider).expect("auth should resolve");
+
+        assert_eq!(
+            auth.to_auth_headers().get(http::header::AUTHORIZATION),
+            Some(&HeaderValue::from_static("Bearer command-token"))
+        );
     }
 
     #[test]

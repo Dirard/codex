@@ -19,12 +19,12 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
 use codex_utils_cache::BlockingLruCache;
 use codex_utils_cache::sha1_digest;
-use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::OutputTruncation;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
-use codex_utils_output_truncation::truncate_function_output_items_with_policy;
-use codex_utils_output_truncation::truncate_text;
+use codex_utils_output_truncation::truncate_function_output_items_with_config;
+use codex_utils_output_truncation::truncate_text_with_config;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::LazyLock;
@@ -88,7 +88,7 @@ impl ContextManager {
     }
 
     /// `items` is ordered from oldest to newest.
-    pub(crate) fn record_items<I>(&mut self, items: I, policy: TruncationPolicy)
+    pub(crate) fn record_items<I>(&mut self, items: I, truncation: OutputTruncation)
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
@@ -99,7 +99,7 @@ impl ContextManager {
                 continue;
             }
 
-            let processed = self.process_item(item_ref, policy);
+            let processed = self.process_item(item_ref, truncation);
             self.items.push(processed);
         }
     }
@@ -335,20 +335,29 @@ impl ContextManager {
         normalize::strip_images_when_unsupported(input_modalities, &mut self.items);
     }
 
-    fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
-        let policy_with_serialization_budget = policy * 1.2;
+    fn process_item(&self, item: &ResponseItem, truncation: OutputTruncation) -> ResponseItem {
         match item {
             ResponseItem::FunctionCallOutput {
                 id,
                 call_id,
                 output,
                 metadata,
-            } => ResponseItem::FunctionCallOutput {
-                id: id.clone(),
-                call_id: call_id.clone(),
-                output: truncate_function_output_payload(output, policy_with_serialization_budget),
-                metadata: metadata.clone(),
-            },
+            } => {
+                let truncation = if self.is_mcp_function_call_output(call_id) {
+                    truncation.for_mcp_output()
+                } else {
+                    truncation
+                };
+                ResponseItem::FunctionCallOutput {
+                    id: id.clone(),
+                    call_id: call_id.clone(),
+                    output: truncate_function_output_payload(
+                        output,
+                        truncation.with_policy(truncation.policy * 1.2),
+                    ),
+                    metadata: metadata.clone(),
+                }
+            }
             ResponseItem::CustomToolCallOutput {
                 id,
                 call_id,
@@ -359,7 +368,10 @@ impl ContextManager {
                 id: id.clone(),
                 call_id: call_id.clone(),
                 name: name.clone(),
-                output: truncate_function_output_payload(output, policy_with_serialization_budget),
+                output: truncate_function_output_payload(
+                    output,
+                    truncation.with_policy(truncation.policy * 1.2),
+                ),
                 metadata: metadata.clone(),
             },
             ResponseItem::Message { .. }
@@ -377,6 +389,31 @@ impl ContextManager {
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other => item.clone(),
         }
+    }
+
+    fn is_mcp_function_call_output(&self, call_id: &str) -> bool {
+        self.items.iter().rev().any(|item| match item {
+            ResponseItem::FunctionCall {
+                call_id: item_call_id,
+                namespace,
+                ..
+            } => item_call_id == call_id && is_mcp_namespace(namespace.as_deref()),
+            ResponseItem::Message { .. }
+            | ResponseItem::AgentMessage { .. }
+            | ResponseItem::Reasoning { .. }
+            | ResponseItem::LocalShellCall { .. }
+            | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::FunctionCallOutput { .. }
+            | ResponseItem::CustomToolCall { .. }
+            | ResponseItem::CustomToolCallOutput { .. }
+            | ResponseItem::ToolSearchOutput { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::ImageGenerationCall { .. }
+            | ResponseItem::Compaction { .. }
+            | ResponseItem::CompactionTrigger { .. }
+            | ResponseItem::ContextCompaction { .. }
+            | ResponseItem::Other => false,
+        })
     }
 
     /// Walk backward from a rollback cut and trim contiguous pre-turn context-update items.
@@ -429,14 +466,14 @@ impl ContextManager {
 
 pub(crate) fn truncate_function_output_payload(
     output: &FunctionCallOutputPayload,
-    policy: TruncationPolicy,
+    truncation: OutputTruncation,
 ) -> FunctionCallOutputPayload {
     let body = match &output.body {
         FunctionCallOutputBody::Text(content) => {
-            FunctionCallOutputBody::Text(truncate_text(content, policy))
+            FunctionCallOutputBody::Text(truncate_text_with_config(content, truncation))
         }
         FunctionCallOutputBody::ContentItems(items) => FunctionCallOutputBody::ContentItems(
-            truncate_function_output_items_with_policy(items, policy),
+            truncate_function_output_items_with_config(items, truncation),
         ),
     };
 
@@ -444,6 +481,10 @@ pub(crate) fn truncate_function_output_payload(
         body,
         success: output.success,
     }
+}
+
+fn is_mcp_namespace(namespace: Option<&str>) -> bool {
+    namespace.is_some_and(|namespace| namespace == "mcp" || namespace.starts_with("mcp__"))
 }
 
 /// API messages include every non-system item (user/assistant messages, reasoning,

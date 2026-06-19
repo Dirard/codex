@@ -3576,6 +3576,14 @@
         "id": {
           "type": "string"
         },
+        "model": {
+          "default": null,
+          "description": "Model used for this thread, when known from thread metadata.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "modelProvider": {
           "description": "Model provider used for this thread (for example, 'openai').",
           "type": "string"

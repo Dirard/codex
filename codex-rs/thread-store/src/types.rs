@@ -52,6 +52,8 @@ pub struct ThreadPersistenceMetadata {
     pub cwd: Option<PathBuf>,
     /// Model provider associated with the thread.
     pub model_provider: String,
+    /// Effective model associated with the thread, if known.
+    pub model: Option<String>,
     /// Memory mode associated with the live thread.
     pub memory_mode: MemoryMode,
 }

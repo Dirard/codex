@@ -30,11 +30,10 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 const ATTESTATION_HEADER: &str = "v1.integration-test";
-const APP_SERVER_ATTESTATION_HEADER: &str = r#"{"v":1,"s":0,"t":"v1.integration-test"}"#;
 
 #[tokio::test]
-async fn attestation_generate_round_trip_adds_header_to_responses_websocket_handshake() -> Result<()>
-{
+async fn custom_provider_attestation_generate_round_trip_omits_header_from_websocket_handshake()
+-> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let websocket_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
@@ -146,18 +145,16 @@ async fn attestation_generate_round_trip_adds_header_to_responses_websocket_hand
         }
     })
     .await??;
-    assert!(attestation_requests > 0);
+    assert_eq!(attestation_requests, 0);
 
     assert!(
         websocket_server
             .wait_for_handshakes(/*expected*/ 1, DEFAULT_READ_TIMEOUT)
             .await
     );
-    let handshake = websocket_server.single_handshake();
-    assert_eq!(
-        handshake.header("x-oai-attestation").as_deref(),
-        Some(APP_SERVER_ATTESTATION_HEADER)
-    );
+    for handshake in websocket_server.handshakes() {
+        assert_eq!(handshake.header("x-oai-attestation").as_deref(), None);
+    }
 
     websocket_server.shutdown().await;
     Ok(())
@@ -175,12 +172,11 @@ sandbox_mode = "read-only"
 model_provider = "mock_provider"
 
 [model_providers.mock_provider]
-name = "Mock ChatGPT provider for test"
+name = "OpenAI"
 base_url = "{server_uri}/v1"
 wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
-requires_openai_auth = true
 supports_websockets = true
 "#
         ),

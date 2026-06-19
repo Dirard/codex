@@ -34,11 +34,15 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
+use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
@@ -230,10 +234,25 @@ pub fn build_models_manager(
     auth_manager: Arc<AuthManager>,
 ) -> SharedModelsManager {
     let provider = create_model_provider(config.model_provider.clone(), Some(auth_manager));
-    provider.models_manager(
-        config.codex_home.to_path_buf(),
-        config.model_catalog.clone(),
-    )
+    let model_catalog = config.model_catalog.clone().or_else(|| {
+        if config.model_provider.models.is_empty() {
+            None
+        } else {
+            let models = config
+                .model_provider
+                .models
+                .iter()
+                .enumerate()
+                .map(|(priority, slug)| ModelInfo {
+                    visibility: ModelVisibility::List,
+                    priority: i32::try_from(priority).unwrap_or(i32::MAX),
+                    ..model_info_from_slug(slug)
+                })
+                .collect();
+            Some(ModelsResponse { models })
+        }
+    });
+    provider.models_manager(config.codex_home.to_path_buf(), model_catalog)
 }
 
 pub fn thread_store_from_config(

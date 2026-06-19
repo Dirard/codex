@@ -172,6 +172,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             preview: String::new(),
             ephemeral: false,
             model_provider: "openai".to_string(),
+            model: Some("gpt-5".to_string()),
             created_at: 1,
             updated_at: 1,
             recency_at: Some(1),
@@ -217,6 +218,36 @@ fn thread_resume_response_round_trips_initial_turns_page() {
     let decoded = serde_json::from_value::<ThreadResumeResponse>(value)
         .expect("deserialize thread resume response");
     assert_eq!(decoded, response);
+}
+
+#[test]
+fn thread_deserializes_legacy_payload_without_model() {
+    let thread: Thread = serde_json::from_value(json!({
+        "id": "thr_123",
+        "sessionId": "sess_123",
+        "forkedFromId": null,
+        "parentThreadId": null,
+        "preview": "hello",
+        "ephemeral": false,
+        "modelProvider": "openai",
+        "createdAt": 1,
+        "updatedAt": 2,
+        "recencyAt": 2,
+        "status": { "type": "notLoaded" },
+        "path": null,
+        "cwd": absolute_path_string("tmp"),
+        "cliVersion": "0.0.0",
+        "source": "exec",
+        "threadSource": null,
+        "agentNickname": null,
+        "agentRole": null,
+        "gitInfo": null,
+        "name": null,
+        "turns": []
+    }))
+    .expect("legacy Thread payload should deserialize");
+
+    assert_eq!(thread.model, None);
 }
 
 #[test]

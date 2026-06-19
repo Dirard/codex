@@ -1072,6 +1072,7 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         agent_nickname,
         agent_role,
         model_provider,
+        model,
         cli_version,
         created_at,
         updated_at,
@@ -1110,6 +1111,9 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
     }
     if item.model_provider.is_none() {
         item.model_provider = model_provider;
+    }
+    if item.model.is_none() {
+        item.model = model;
     }
     if item.cli_version.is_none() {
         item.cli_version = cli_version;
@@ -1776,6 +1780,7 @@ fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadI
         agent_nickname: item.agent_nickname,
         agent_role: item.agent_role,
         model_provider: Some(item.model_provider),
+        model: item.model,
         cli_version: Some(item.cli_version),
         created_at: Some(item.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
         updated_at: Some(item.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true)),

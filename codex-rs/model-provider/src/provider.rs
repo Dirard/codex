@@ -9,6 +9,7 @@ use codex_api::SharedAuthProvider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
@@ -218,15 +219,28 @@ impl ModelProvider for ConfiguredModelProvider {
         &self.info
     }
 
+    fn capabilities(&self) -> ProviderCapabilities {
+        match self.info.wire_api {
+            WireApi::Responses => ProviderCapabilities::default(),
+            WireApi::Chat => ProviderCapabilities {
+                namespace_tools: true,
+                image_generation: false,
+                web_search: false,
+            },
+        }
+    }
+
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
     }
 
     fn supports_attestation(&self) -> bool {
-        self.auth_manager
-            .as_ref()
-            .and_then(|auth_manager| auth_manager.auth_cached())
-            .is_some_and(|auth| auth.is_chatgpt_auth())
+        self.info.uses_openai_auth()
+            && self
+                .auth_manager
+                .as_ref()
+                .and_then(|auth_manager| auth_manager.auth_cached())
+                .is_some_and(|auth| auth.is_chatgpt_auth())
     }
 
     fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>> {
@@ -339,6 +353,7 @@ mod tests {
                     .try_into()
                     .expect("current dir should be absolute"),
             }),
+            base_url: Some("https://example.com/v1".to_string()),
             requires_openai_auth: false,
             ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
         }
@@ -352,6 +367,7 @@ mod tests {
         ModelProviderInfo {
             name: "mock".into(),
             base_url: Some(base_url),
+            models: Vec::new(),
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
@@ -415,6 +431,29 @@ mod tests {
     }
 
     #[test]
+    fn chat_wire_provider_disables_hosted_tool_capabilities() {
+        let provider = create_model_provider(
+            ModelProviderInfo {
+                name: "Custom Chat".to_string(),
+                base_url: Some("http://localhost:1234/v1".to_string()),
+                wire_api: WireApi::Chat,
+                requires_openai_auth: false,
+                ..Default::default()
+            },
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(
+            provider.capabilities(),
+            ProviderCapabilities {
+                namespace_tools: true,
+                image_generation: false,
+                web_search: false,
+            }
+        );
+    }
+
+    #[test]
     fn configured_provider_uses_default_approval_review_preferred_model() {
         let provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
@@ -470,6 +509,41 @@ mod tests {
         );
 
         assert!(provider.auth_manager().is_none());
+    }
+
+    #[tokio::test]
+    async fn create_model_provider_does_not_use_openai_auth_manager_for_custom_provider() {
+        let provider = create_model_provider(
+            ModelProviderInfo {
+                name: "Custom".to_string(),
+                base_url: Some("http://localhost:1234/v1".to_string()),
+                requires_openai_auth: false,
+                ..Default::default()
+            },
+            Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
+                "openai-api-key",
+            ))),
+        );
+
+        assert!(provider.auth_manager().is_none());
+        assert_eq!(provider.auth().await, None);
+    }
+
+    #[test]
+    fn custom_provider_does_not_support_attestation_with_chatgpt_auth_manager() {
+        let provider = create_model_provider(
+            ModelProviderInfo {
+                name: "Custom".to_string(),
+                base_url: Some("http://localhost:1234/v1".to_string()),
+                requires_openai_auth: false,
+                ..Default::default()
+            },
+            Some(AuthManager::from_auth_for_testing(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            )),
+        );
+
+        assert!(!provider.supports_attestation());
     }
 
     #[tokio::test]

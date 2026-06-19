@@ -10,6 +10,7 @@ use thiserror::Error;
 use toml::Value as TomlValue;
 
 use crate::ConfigLayerEntry;
+use crate::config_toml::validate_model_providers;
 
 mod remote;
 
@@ -181,6 +182,13 @@ fn session_thread_config_to_toml(
     config: SessionThreadConfig,
 ) -> Result<TomlValue, ThreadConfigLoadError> {
     let mut table = toml::map::Map::new();
+    validate_model_providers(&config.model_providers).map_err(|message| {
+        ThreadConfigLoadError::new(
+            ThreadConfigLoadErrorCode::Parse,
+            /*status_code*/ None,
+            message,
+        )
+    })?;
 
     if let Some(model_provider) = config.model_provider {
         table.insert(
@@ -297,10 +305,52 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn loader_accepts_session_openai_auth_custom_provider() {
+        let loader =
+            StaticThreadConfigLoader::new(vec![ThreadConfigSource::Session(SessionThreadConfig {
+                model_provider: Some("local".to_string()),
+                model_providers: HashMap::from([(
+                    "local".to_string(),
+                    ModelProviderInfo {
+                        name: "Local".to_string(),
+                        base_url: Some("http://localhost:11434/v1".to_string()),
+                        requires_openai_auth: true,
+                        ..Default::default()
+                    },
+                )]),
+                features: BTreeMap::new(),
+            })]);
+
+        let layers = loader
+            .load_config_layers(ThreadConfigContext::default())
+            .await
+            .expect("session custom provider can require OpenAI auth");
+
+        assert_eq!(
+            layers,
+            vec![ConfigLayerEntry::new(
+                ConfigLayerSource::SessionFlags,
+                toml::toml! {
+                    model_provider = "local"
+
+                    [model_providers.local]
+                    name = "Local"
+                    base_url = "http://localhost:11434/v1"
+                    wire_api = "responses"
+                    requires_openai_auth = true
+                    supports_websockets = false
+                }
+                .into()
+            )]
+        );
+    }
+
     fn test_provider(name: &str) -> ModelProviderInfo {
         ModelProviderInfo {
             name: name.to_string(),
             base_url: Some("http://127.0.0.1:8061/api/codex".to_string()),
+            models: Vec::new(),
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,

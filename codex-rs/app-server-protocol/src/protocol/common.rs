@@ -1948,6 +1948,7 @@ mod tests {
             request_id: request_id(),
             params: v2::GetAccountParams {
                 refresh_token: false,
+                model_provider: None,
             },
         };
         assert_eq!(
@@ -2553,6 +2554,7 @@ mod tests {
                     preview: "first prompt".to_string(),
                     ephemeral: true,
                     model_provider: "openai".to_string(),
+                    model: Some("gpt-5".to_string()),
                     created_at: 1,
                     updated_at: 2,
                     recency_at: Some(3),
@@ -2597,6 +2599,7 @@ mod tests {
                         "preview": "first prompt",
                         "ephemeral": true,
                         "modelProvider": "openai",
+                        "model": "gpt-5",
                         "createdAt": 1,
                         "updatedAt": 2,
                         "recencyAt": 3,
@@ -2782,13 +2785,16 @@ mod tests {
             request_id: RequestId::Integer(6),
             params: v2::GetAccountParams {
                 refresh_token: false,
+                model_provider: None,
             },
         };
         assert_eq!(
             json!({
                 "method": "account/read",
                 "id": 6,
-                "params": {}
+                "params": {
+                    "modelProvider": null
+                }
             }),
             serde_json::to_value(&request)?,
         );
@@ -2796,6 +2802,7 @@ mod tests {
             request_id: RequestId::Integer(7),
             params: v2::GetAccountParams {
                 refresh_token: true,
+                model_provider: None,
             },
         };
         assert_eq!(
@@ -2803,7 +2810,25 @@ mod tests {
                 "method": "account/read",
                 "id": 7,
                 "params": {
-                    "refreshToken": true
+                    "refreshToken": true,
+                    "modelProvider": null
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        let request = ClientRequest::GetAccount {
+            request_id: RequestId::Integer(8),
+            params: v2::GetAccountParams {
+                refresh_token: false,
+                model_provider: Some("openai".to_string()),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "account/read",
+                "id": 8,
+                "params": {
+                    "modelProvider": "openai"
                 }
             }),
             serde_json::to_value(&request)?,

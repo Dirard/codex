@@ -1,6 +1,8 @@
 use super::*;
 use crate::ThreadManager;
 use crate::config::AgentRoleConfig;
+use crate::config::Config;
+use crate::config::ConfigBuilder;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
 use crate::function_tool::FunctionCallError;
 use crate::init_state_db;
@@ -19,7 +21,9 @@ use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::auth::BedrockApiKeyAuth;
 use codex_model_provider::create_model_provider;
+use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -133,6 +137,46 @@ model_reasoning_effort = "minimal"
     turn.config = Arc::new(config);
 
     role_name
+}
+
+async fn config_with_external_model_provider_role() -> (tempfile::TempDir, Config, String) {
+    let home = tempfile::TempDir::new().expect("create temp dir");
+    let role_name = "glm".to_string();
+    tokio::fs::write(
+        home.path().join("glm-agent.toml"),
+        r#"developer_instructions = "Use the GLM provider for this role."
+model_provider = "glm"
+model = "glm-5.1"
+"#,
+    )
+    .await
+    .expect("role config should be written");
+    tokio::fs::write(
+        home.path().join("config.toml"),
+        r#"[model_providers.glm]
+name = "GLM"
+base_url = "https://glm.example.test/v1"
+key = "test-glm-key"
+wire_api = "chat"
+
+[agents.glm]
+description = "GLM-backed subagent."
+config_file = "glm-agent.toml"
+
+[features.multi_agent_v2]
+hide_spawn_agent_metadata = false
+"#,
+    )
+    .await
+    .expect("config should be written");
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("test config should load");
+
+    (home, config, role_name)
 }
 
 fn set_turn_config(turn: &mut TurnContext, config: crate::config::Config) {
@@ -304,6 +348,187 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
         .await;
     assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
     assert_eq!(snapshot.model_provider_id, "ollama");
+}
+
+#[tokio::test]
+async fn spawn_agent_role_can_use_configured_external_model_provider() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        agent_id: String,
+        model: Option<String>,
+        model_provider_id: Option<String>,
+    }
+
+    let (mut session, mut turn) = make_session_and_context().await;
+    let (_home, config, role_name) = config_with_external_model_provider_role().await;
+    set_turn_config(&mut turn, config);
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+
+    let output = SpawnAgentHandler::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "agent_type": role_name
+            })),
+        ))
+        .await
+        .expect("spawn_agent should allow a role-specific external provider");
+    let (content, _) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    assert_eq!(result.model.as_deref(), Some("glm-5.1"));
+    assert_eq!(result.model_provider_id.as_deref(), Some("glm"));
+    let agent_thread = manager
+        .get_thread(parse_agent_id(&result.agent_id))
+        .await
+        .expect("spawned agent thread should exist");
+    let snapshot = agent_thread.config_snapshot().await;
+    let agent_config = agent_thread.config().await;
+
+    assert_eq!(snapshot.model, "glm-5.1");
+    assert_eq!(snapshot.model_provider_id, "glm");
+    assert_eq!(agent_config.model_provider.wire_api, WireApi::Chat);
+}
+
+#[tokio::test]
+async fn spawn_agent_openai_role_without_auth_does_not_break_parent_custom_provider() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        agent_id: String,
+        model: Option<String>,
+        model_provider_id: Option<String>,
+    }
+
+    let home = tempfile::TempDir::new().expect("create temp dir");
+    tokio::fs::write(
+        home.path().join("openai-reviewer.toml"),
+        r#"model_provider = "openai"
+model = "gpt-5.4"
+"#,
+    )
+    .await
+    .expect("OpenAI role config should be written");
+    tokio::fs::write(
+        home.path().join("local-worker.toml"),
+        r#"model = "local-child"
+"#,
+    )
+    .await
+    .expect("local role config should be written");
+    tokio::fs::write(
+        home.path().join("config.toml"),
+        r#"model_provider = "local"
+model = "local-parent"
+
+[model_providers.local]
+name = "Local"
+base_url = "http://localhost:1234/v1"
+wire_api = "chat"
+
+[agents.openai-reviewer]
+description = "OpenAI reviewer."
+config_file = "openai-reviewer.toml"
+
+[agents.local-worker]
+description = "Local worker."
+config_file = "local-worker.toml"
+"#,
+    )
+    .await
+    .expect("config should be written");
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("test config should load");
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+    assert!(auth_manager.auth_cached().is_none());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager,
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
+        "22222222-2222-4222-8222-222222222222".to_string(),
+        /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
+    );
+    let parent = manager
+        .start_thread(config.clone())
+        .await
+        .expect("parent custom-provider thread should start without OpenAI auth");
+    let parent_thread_id = parent.thread_id;
+    let parent_session = parent.thread.codex.session.clone();
+
+    let err = SpawnAgentHandler::default()
+        .handle(invocation(
+            parent_session.clone(),
+            parent_session.new_default_turn().await,
+            "spawn_agent",
+            function_payload(json!({
+                "message": "review this",
+                "agent_type": "openai-reviewer"
+            })),
+        ))
+        .await
+        .err()
+        .expect("OpenAI role should fail before spawning without auth");
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "agent_type 'openai-reviewer' selects modelProvider 'openai' which requires OpenAI auth, but no OpenAI auth is configured".to_string(),
+        )
+    );
+    let parent_snapshot = manager
+        .get_thread(parent_thread_id)
+        .await
+        .expect("parent thread should still exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(parent_snapshot.model, "local-parent");
+    assert_eq!(parent_snapshot.model_provider_id, "local");
+
+    let output = SpawnAgentHandler::default()
+        .handle(invocation(
+            parent_session.clone(),
+            parent_session.new_default_turn().await,
+            "spawn_agent",
+            function_payload(json!({
+                "message": "continue with local provider",
+                "agent_type": "local-worker"
+            })),
+        ))
+        .await
+        .expect("parent custom-provider thread should still spawn local roles");
+    let (content, success) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    assert_eq!(success, Some(true));
+    assert_eq!(result.model.as_deref(), Some("local-child"));
+    assert_eq!(result.model_provider_id.as_deref(), Some("local"));
+    let local_snapshot = manager
+        .get_thread(parse_agent_id(&result.agent_id))
+        .await
+        .expect("spawned local agent thread should exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(local_snapshot.model, "local-child");
+    assert_eq!(local_snapshot.model_provider_id, "local");
 }
 
 #[tokio::test]
@@ -1012,6 +1237,117 @@ async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
 }
 
 #[tokio::test]
+async fn multi_agent_v2_spawn_partial_fork_can_use_configured_external_model_provider() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let (_home, config, role_name) = config_with_external_model_provider_role().await;
+    set_turn_config(&mut turn, config);
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    let turn = TurnContext {
+        config: Arc::new(config),
+        multi_agent_version: codex_protocol::protocol::MultiAgentVersion::V2,
+        ..turn
+    };
+
+    let output = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "external_provider",
+                "agent_type": role_name,
+                "fork_turns": "1"
+            })),
+        ))
+        .await
+        .expect("partial fork should allow a role-specific external provider");
+    let (content, _) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    assert_eq!(result["task_name"], "/root/external_provider");
+    assert_eq!(result["model"], "glm-5.1");
+    assert_eq!(result["model_provider_id"], "glm");
+    let agent_id = manager
+        .captured_ops()
+        .into_iter()
+        .map(|(thread_id, _)| thread_id)
+        .find(|thread_id| *thread_id != root.thread_id)
+        .expect("spawned agent should receive an op");
+    let agent_thread = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned agent thread should exist");
+    let snapshot = agent_thread.config_snapshot().await;
+    let agent_config = agent_thread.config().await;
+
+    assert_eq!(snapshot.model, "glm-5.1");
+    assert_eq!(snapshot.model_provider_id, "glm");
+    assert_eq!(agent_config.model_provider.wire_api, WireApi::Chat);
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_openai_provider_rejects_bedrock_auth() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    let turn = TurnContext {
+        auth_manager: Some(AuthManager::from_auth_for_testing(
+            CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+                api_key: "bedrock-key".to_string(),
+                region: "us-east-1".to_string(),
+            }),
+        )),
+        config: Arc::new(config),
+        multi_agent_version: codex_protocol::protocol::MultiAgentVersion::V2,
+        ..turn
+    };
+
+    let err = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "bedrock_auth",
+                "fork_turns": "1"
+            })),
+        ))
+        .await
+        .err()
+        .expect("Bedrock auth should not satisfy OpenAI auth preflight");
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "agent_type 'default' selects modelProvider 'openai' which requires OpenAI auth, but no OpenAI auth is configured".to_string(),
+        )
+    );
+}
+
+#[tokio::test]
 async fn spawn_agent_returns_agent_id_without_task_name() {
     let (mut session, turn) = make_session_and_context().await;
     let manager = thread_manager();
@@ -1164,8 +1500,12 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
         .await
         .expect("spawn_agent should succeed");
     let (content, _) = expect_text_output(spawn_output);
+    let spawn_result_json: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn result should parse as json");
+    assert!(spawn_result_json.get("model").is_none());
+    assert!(spawn_result_json.get("model_provider_id").is_none());
     let spawn_result: SpawnAgentResult =
-        serde_json::from_str(&content).expect("spawn result should parse");
+        serde_json::from_value(spawn_result_json).expect("spawn result should parse");
     assert_eq!(spawn_result.task_name, "/root/test_process");
     assert_eq!(spawn_result.nickname, None);
 

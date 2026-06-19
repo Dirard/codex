@@ -133,6 +133,18 @@ of strings; comma-separated strings are not supported. Use \
     }
 }
 
+/// Limits applied when formatting tool and command output for model and UI consumption.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct OutputTruncationToml {
+    /// Maximum bytes retained in formatted output.
+    pub max_bytes: Option<usize>,
+    /// Maximum lines retained in formatted output.
+    pub max_lines: Option<usize>,
+    /// Maximum lines retained in MCP tool output.
+    pub mcp_max_lines: Option<usize>,
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -283,6 +295,9 @@ pub struct ConfigToml {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
+    /// Limits applied when formatting tool and command output for model and UI consumption.
+    pub output_truncation: Option<OutputTruncationToml>,
+
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).
     pub background_terminal_max_timeout: Option<u64>,
@@ -360,7 +375,8 @@ pub struct ConfigToml {
     /// Optional product SKU forwarded on host-owned Codex Apps MCP requests.
     pub apps_mcp_product_sku: Option<String>,
 
-    /// Base URL override for the built-in `openai` model provider.
+    /// Legacy base URL override for the built-in `openai` model provider.
+    /// Custom endpoints must be configured under `model_providers.<id>.base_url`.
     pub openai_base_url: Option<String>,
 
     /// Machine-local realtime audio device preferences used by realtime voice.
@@ -1002,5 +1018,26 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("TOML list of strings"));
         assert!(message.contains("comma-separated strings are not supported"));
+    }
+
+    #[test]
+    fn model_provider_accepts_custom_openai_auth_requirement() {
+        let config = toml::from_str::<ConfigToml>(
+            r#"
+[model_providers.openai-custom]
+name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+requires_openai_auth = true
+"#,
+        )
+        .expect("custom provider can require OpenAI auth");
+
+        assert!(
+            config
+                .model_providers
+                .get("openai-custom")
+                .expect("provider should deserialize")
+                .requires_openai_auth
+        );
     }
 }

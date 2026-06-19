@@ -763,6 +763,14 @@
         "oss_provider": {
           "type": "string"
         },
+        "output_truncation": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/OutputTruncationToml"
+            }
+          ],
+          "description": "Limits applied when formatting command output for model and UI consumption."
+        },
         "personality": {
           "$ref": "#/definitions/Personality"
         },
@@ -1586,16 +1594,23 @@
           "description": "Optional instructions to help the user get a valid value for the variable and set it.",
           "type": "string"
         },
-        "experimental_bearer_token": {
-          "description": "Value to use with `Authorization: Bearer <token>` header. Use of this config is discouraged in favor of `env_key` for security reasons, but this may be necessary when using this programmatically.",
-          "type": "string"
-        },
         "http_headers": {
           "additionalProperties": {
             "type": "string"
           },
           "description": "Additional HTTP headers to include in requests to this provider where the (key, value) pairs are the header name and value.",
           "type": "object"
+        },
+        "key": {
+          "description": "Value to use with `Authorization: Bearer <token>` header. In config files, this is written as `key`.",
+          "type": "string"
+        },
+        "models": {
+          "description": "Model slugs that should be offered in model picker surfaces for this provider.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "name": {
           "default": "",
@@ -1634,7 +1649,7 @@
         },
         "supports_websockets": {
           "default": false,
-          "description": "Whether this provider supports the Responses API WebSocket transport.",
+          "description": "Whether this provider supports websocket-backed features. Responses-over-WebSocket turn transport also requires `wire_api = \"responses\"`; realtime websocket conversations can use a separate realtime base URL.",
           "type": "boolean"
         },
         "websocket_connect_timeout_ms": {
@@ -2254,6 +2269,31 @@
         },
         "client-private-key": {
           "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      },
+      "type": "object"
+    },
+    "OutputTruncationToml": {
+      "additionalProperties": false,
+      "description": "Limits applied when formatting tool and command output for model and UI consumption.",
+      "properties": {
+        "max_bytes": {
+          "description": "Maximum bytes retained in formatted output.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_lines": {
+          "description": "Maximum lines retained in formatted output.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "mcp_max_lines": {
+          "description": "Maximum lines retained in MCP tool output.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
         }
       },
       "type": "object"
@@ -4471,6 +4511,13 @@
             "responses"
           ],
           "type": "string"
+        },
+        {
+          "description": "The Chat Completions API exposed by OpenAI-compatible providers at `/v1/chat/completions`.",
+          "enum": [
+            "chat"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -5180,7 +5227,7 @@
       "type": "array"
     },
     "openai_base_url": {
-      "description": "Base URL override for the built-in `openai` model provider.",
+      "description": "Legacy base URL override for the built-in `openai` model provider. Custom endpoints must be configured under `model_providers.<id>.base_url`.",
       "type": "string"
     },
     "oss_provider": {
@@ -5194,6 +5241,14 @@
         }
       ],
       "description": "OTEL configuration."
+    },
+    "output_truncation": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/OutputTruncationToml"
+        }
+      ],
+      "description": "Limits applied when formatting tool and command output for model and UI consumption."
     },
     "permissions": {
       "allOf": [

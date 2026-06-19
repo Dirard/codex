@@ -415,6 +415,7 @@ mod tests {
             preview: "read thread".to_string(),
             ephemeral: false,
             model_provider: "read-provider".to_string(),
+            model: None,
             created_at: 1,
             updated_at: 2,
             recency_at: Some(2),

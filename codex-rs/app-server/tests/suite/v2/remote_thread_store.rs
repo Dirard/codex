@@ -118,6 +118,27 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
     })
     .await??;
 
+    let other_provider_thread_id = ThreadId::from_string(&Uuid::new_v4().to_string())?;
+    thread_store
+        .create_thread(StoreCreateThreadParams {
+            thread_id: other_provider_thread_id,
+            extra_config: None,
+            forked_from_id: None,
+            parent_thread_id: None,
+            source: SessionSource::Cli,
+            thread_source: None,
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            multi_agent_version: None,
+            metadata: ThreadPersistenceMetadata {
+                cwd: Some(codex_home.path().to_path_buf()),
+                model_provider: "other_provider".to_string(),
+                model: Some("mock-model".to_string()),
+                memory_mode: ThreadMemoryMode::Enabled,
+            },
+        })
+        .await?;
+
     let response = client
         .request(ClientRequest::ThreadList {
             request_id: RequestId::Integer(3),
@@ -126,7 +147,7 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
                 limit: Some(10),
                 sort_key: None,
                 sort_direction: None,
-                model_providers: Some(Vec::new()),
+                model_providers: None,
                 source_kinds: None,
                 archived: None,
                 cwd: None,
@@ -142,31 +163,14 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].id, thread.id);
     assert_eq!(data[0].path, None);
+    assert_eq!(data[0].model_provider, "mock_provider");
+    assert_eq!(data[0].model.as_deref(), Some("mock-model"));
 
     delete_thread(&client, /*request_id*/ 4, thread.id.clone()).await?;
-    let unloaded_thread_id = ThreadId::from_string(&Uuid::new_v4().to_string())?;
-    thread_store
-        .create_thread(StoreCreateThreadParams {
-            thread_id: unloaded_thread_id,
-            extra_config: None,
-            forked_from_id: None,
-            parent_thread_id: None,
-            source: SessionSource::Cli,
-            thread_source: None,
-            base_instructions: BaseInstructions::default(),
-            dynamic_tools: Vec::new(),
-            multi_agent_version: None,
-            metadata: ThreadPersistenceMetadata {
-                cwd: Some(codex_home.path().to_path_buf()),
-                model_provider: "mock_provider".to_string(),
-                memory_mode: ThreadMemoryMode::Enabled,
-            },
-        })
-        .await?;
     delete_thread(
         &client,
         /*request_id*/ 5,
-        unloaded_thread_id.to_string(),
+        other_provider_thread_id.to_string(),
     )
     .await?;
 

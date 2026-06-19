@@ -1,6 +1,7 @@
 use codex_git_utils::collect_git_info;
 use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::CODEX_API_KEY_ENV_VAR;
+use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use codex_protocol::protocol::GitInfo;
 use core_test_support::fs_wait;
 use core_test_support::responses;
@@ -20,15 +21,10 @@ use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
-use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 const PERSONAL_ACCESS_TOKEN: &str = "at-cli-test";
-const PERSONAL_ACCESS_TOKEN_AUTHORIZATION: &str = "Bearer at-cli-test";
-const PERSONAL_ACCESS_TOKEN_ACCOUNT_ID: &str = "account-pat";
-const WHOAMI_PATH: &str = "/v1/user-auth-credential/whoami";
-const CLOUD_CONFIG_BUNDLE_PATH: &str = "/backend-api/wham/config/bundle";
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn repo_root() -> std::path::PathBuf {
@@ -43,27 +39,12 @@ fn cli_sse_response() -> String {
     ])
 }
 
-async fn mount_personal_access_token_startup(server: &MockServer) {
-    Mock::given(method("GET"))
-        .and(path(WHOAMI_PATH))
-        .and(header("authorization", PERSONAL_ACCESS_TOKEN_AUTHORIZATION))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "email": "user@example.com",
-            "chatgpt_user_id": "user-pat",
-            "chatgpt_account_id": PERSONAL_ACCESS_TOKEN_ACCOUNT_ID,
-            "chatgpt_plan_type": "enterprise",
-            "chatgpt_account_is_fedramp": true,
-        })))
-        .expect(1..)
-        .mount(server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path(CLOUD_CONFIG_BUNDLE_PATH))
-        .and(header("authorization", PERSONAL_ACCESS_TOKEN_AUTHORIZATION))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
-        .expect(1)
-        .mount(server)
-        .await;
+fn mock_provider_override(server: &MockServer) -> String {
+    format!(
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", models = [\"mock-model\"], env_key = \"{}\", wire_api = \"responses\" }}",
+        server.uri(),
+        CODEX_API_KEY_ENV_VAR
+    )
 }
 
 #[expect(clippy::unwrap_used)]
@@ -76,6 +57,10 @@ fn personal_access_token_exec_command(server: &MockServer, home: &TempDir) -> Co
         .arg(format!("openai_base_url=\"{}/api/codex\"", server.uri()))
         .arg("-c")
         .arg(format!("chatgpt_base_url=\"{}/backend-api\"", server.uri()))
+        .arg("-c")
+        .arg("cli_auth_credentials_store=\"file\"")
+        .arg("-c")
+        .arg("forced_login_method=\"chatgpt\"")
         .arg("-C")
         .arg(repo_root())
         .arg("hello?");
@@ -83,7 +68,8 @@ fn personal_access_token_exec_command(server: &MockServer, home: &TempDir) -> Co
         .env(CODEX_ACCESS_TOKEN_ENV_VAR, PERSONAL_ACCESS_TOKEN)
         .env("CODEX_AUTHAPI_BASE_URL", server.uri())
         .env_remove(CODEX_API_KEY_ENV_VAR)
-        .env_remove("OPENAI_API_KEY");
+        .env_remove("OPENAI_API_KEY")
+        .env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
     cmd
 }
 
@@ -144,55 +130,31 @@ fn run_cli_command(command: &mut Command) -> io::Result<Output> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_mode_stream_cli_supports_personal_access_tokens() {
+async fn responses_mode_stream_cli_rejects_personal_access_token_with_openai_base_url_override() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
-    mount_personal_access_token_startup(&server).await;
-    let resp_mock = responses::mount_sse_once(&server, cli_sse_response()).await;
     let home = TempDir::new().unwrap();
 
     let mut cmd = personal_access_token_exec_command(&server, &home);
     let output = run_cli_command(&mut cmd).unwrap();
 
     assert!(
-        output.status.success(),
-        "codex-cli exec failed: {}",
+        !output.status.success(),
+        "codex-cli exec unexpectedly succeeded: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let request = resp_mock.single_request();
-    assert_eq!(request.path(), "/api/codex/responses");
-    assert_eq!(
-        request.header("authorization").as_deref(),
-        Some("Bearer at-cli-test")
-    );
-    assert_eq!(
-        request.header("chatgpt-account-id").as_deref(),
-        Some(PERSONAL_ACCESS_TOKEN_ACCOUNT_ID)
-    );
-    assert_eq!(request.header("x-openai-fedramp").as_deref(), Some("true"));
-    server.verify().await;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("`openai_base_url` can only use the built-in OpenAI API URL"));
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_mode_stream_cli_does_not_attempt_oauth_refresh_for_personal_access_tokens_after_401()
- {
+async fn responses_mode_stream_cli_does_not_attempt_oauth_refresh_when_openai_base_url_rejected() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
-    mount_personal_access_token_startup(&server).await;
-    Mock::given(method("POST"))
-        .and(path("/api/codex/responses"))
-        .and(header("authorization", PERSONAL_ACCESS_TOKEN_AUTHORIZATION))
-        .and(header(
-            "chatgpt-account-id",
-            PERSONAL_ACCESS_TOKEN_ACCOUNT_ID,
-        ))
-        .and(header("x-openai-fedramp", "true"))
-        .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
-        .expect(1..)
-        .mount(&server)
-        .await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .respond_with(ResponseTemplate::new(500))
@@ -205,6 +167,10 @@ async fn responses_mode_stream_cli_does_not_attempt_oauth_refresh_for_personal_a
     let output = run_cli_command(&mut cmd).unwrap();
 
     assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("`openai_base_url` can only use the built-in OpenAI API URL"));
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 0);
     server.verify().await;
 }
 
@@ -223,23 +189,21 @@ async fn responses_mode_stream_cli() {
     let resp_mock = responses::mount_sse_once(&server, sse).await;
 
     let home = TempDir::new().unwrap();
-    let provider_override = format!(
-        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
-        server.uri()
-    );
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
     let mut cmd = Command::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
-        .arg(&provider_override)
+        .arg(mock_provider_override(&server))
         .arg("-c")
         .arg("model_provider=\"mock\"")
+        .arg("-c")
+        .arg("model=\"mock-model\"")
         .arg("-C")
         .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy");
+        .env(CODEX_API_KEY_ENV_VAR, "dummy");
 
     let output = run_cli_command(&mut cmd).unwrap();
     println!("Status: {}", output.status);
@@ -254,19 +218,13 @@ async fn responses_mode_stream_cli() {
     assert_eq!(request.path(), "/v1/responses");
 }
 
-/// Ensures `openai_base_url` config override routes built-in openai provider requests.
+/// Ensures arbitrary `openai_base_url` config override fails before a request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_mode_stream_cli_supports_openai_base_url_config_override() {
+async fn responses_mode_stream_cli_rejects_arbitrary_openai_base_url_config_override() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
     let repo_root = repo_root();
-    let sse = responses::sse(vec![
-        responses::ev_response_created("resp-1"),
-        responses::ev_assistant_message("msg-1", "hi"),
-        responses::ev_completed("resp-1"),
-    ]);
-    let resp_mock = responses::mount_sse_once(&server, sse).await;
 
     let home = TempDir::new().unwrap();
     let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
@@ -279,13 +237,14 @@ async fn responses_mode_stream_cli_supports_openai_base_url_config_override() {
         .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy");
+        .env(CODEX_API_KEY_ENV_VAR, "dummy");
 
     let output = run_cli_command(&mut cmd).unwrap();
-    assert!(output.status.success());
-
-    let request = resp_mock.single_request();
-    assert_eq!(request.path(), "/v1/responses");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("`openai_base_url` can only use the built-in OpenAI API URL"));
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 0);
 }
 
 /// Verify that passing `-c model_instructions_file=...` to the CLI
@@ -315,7 +274,7 @@ async fn exec_cli_applies_model_instructions_file() {
     // Build a provider override that points at the mock server and instructs
     // Codex to use the Responses API with the dummy env var.
     let provider_override = format!(
-        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", models = [\"mock-model\"], env_key = \"PATH\", wire_api = \"responses\" }}",
         server.uri()
     );
 
@@ -330,12 +289,14 @@ async fn exec_cli_applies_model_instructions_file() {
         .arg("-c")
         .arg("model_provider=\"mock\"")
         .arg("-c")
+        .arg("model=\"mock-model\"")
+        .arg("-c")
         .arg(format!("model_instructions_file=\"{custom_path_str}\""))
         .arg("-C")
         .arg(&repo_root)
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy");
+        .env(CODEX_API_KEY_ENV_VAR, "dummy");
 
     let output = run_cli_command(&mut cmd).unwrap();
     println!("Status: {}", output.status);
@@ -379,7 +340,7 @@ async fn exec_cli_profile_applies_model_instructions_file() {
     let custom_path_str = custom_path.to_string_lossy().replace('\\', "/");
 
     let provider_override = format!(
-        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", models = [\"mock-model\"], env_key = \"PATH\", wire_api = \"responses\" }}",
         server.uri()
     );
 
@@ -401,11 +362,13 @@ async fn exec_cli_profile_applies_model_instructions_file() {
         .arg(&provider_override)
         .arg("-c")
         .arg("model_provider=\"mock\"")
+        .arg("-c")
+        .arg("model=\"mock-model\"")
         .arg("-C")
         .arg(&repo_root)
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy");
+        .env(CODEX_API_KEY_ENV_VAR, "dummy");
 
     let output = run_cli_command(&mut cmd).unwrap();
     println!("Status: {}", output.status);
@@ -441,15 +404,25 @@ async fn responses_api_stream_cli() {
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
-        .arg(format!("openai_base_url=\"{}/v1\"", server.uri()))
+        .arg(mock_provider_override(&server))
+        .arg("-c")
+        .arg("model_provider=\"mock\"")
+        .arg("-c")
+        .arg("model=\"mock-model\"")
         .arg("-C")
         .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy");
+        .env(CODEX_API_KEY_ENV_VAR, "dummy");
 
     let output = run_cli_command(&mut cmd).unwrap();
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "Status: {}\nStdout:\n{}\nStderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("fixture hello"));
 
@@ -482,7 +455,11 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
-        .arg(format!("openai_base_url=\"{}/v1\"", server.uri()))
+        .arg(mock_provider_override(&server))
+        .arg("-c")
+        .arg("model_provider=\"mock\"")
+        .arg("-c")
+        .arg("model=\"mock-model\"")
         .arg("-C")
         .arg(&repo_root)
         .arg(&prompt);
@@ -598,14 +575,18 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     cmd2.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
-        .arg(format!("openai_base_url=\"{}/v1\"", server.uri()))
+        .arg(mock_provider_override(&server))
+        .arg("-c")
+        .arg("model_provider=\"mock\"")
+        .arg("-c")
+        .arg("model=\"mock-model\"")
         .arg("-C")
         .arg(&repo_root)
         .arg(&prompt2)
         .arg("resume")
         .arg("--last");
     cmd2.env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy");
+        .env(CODEX_API_KEY_ENV_VAR, "dummy");
 
     let output2 = run_cli_command(&mut cmd2).unwrap();
     assert!(output2.status.success(), "resume codex-cli run failed");

@@ -735,17 +735,31 @@ async fn prepare_realtime_start(
     params: ConversationStartParams,
 ) -> CodexResult<PreparedRealtimeConversationStart> {
     let provider = sess.provider().await;
-    let auth_manager = sess
-        .services
-        .model_client
-        .auth_manager()
-        .unwrap_or_else(|| Arc::clone(&sess.services.auth_manager));
-    let auth = auth_manager.auth().await;
     let config = sess.get_config().await;
     let transport = params
         .transport
         .clone()
         .unwrap_or(ConversationStartTransport::Websocket);
+    let version = params.version.unwrap_or(config.realtime.version);
+    // TODO(pbakkum): Remove the realtimeapi/AVAS branch once WebRTC realtime sessions always use AVAS.
+    let architecture = params.architecture.unwrap_or(config.realtime.architecture);
+    validate_realtime_architecture(
+        architecture,
+        version,
+        &transport,
+        config.realtime.session_type,
+    )?;
+    let session_config = build_realtime_session_config(sess, &params, version).await?;
+    ensure_realtime_transport_supported(&provider, &transport)?;
+    let auth_manager = realtime_auth_manager_for_provider(
+        sess.services.model_client.auth_manager(),
+        &sess.services.auth_manager,
+        &provider,
+    );
+    let auth = match auth_manager {
+        Some(auth_manager) => auth_manager.auth().await,
+        None => None,
+    };
     let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
         api_provider.base_url = realtime_ws_base_url.clone();
@@ -758,23 +772,14 @@ async fn prepare_realtime_start(
         } else {
             None
         };
-    let version = params.version.unwrap_or(config.realtime.version);
-    // TODO(pbakkum): Remove the realtimeapi/AVAS branch once WebRTC realtime sessions always use AVAS.
-    let architecture = params.architecture.unwrap_or(config.realtime.architecture);
-    validate_realtime_architecture(
-        architecture,
-        version,
-        &transport,
-        config.realtime.session_type,
-    )?;
-    let session_config = build_realtime_session_config(sess, &params, version).await?;
     let requested_realtime_session_id = session_config.session_id.clone();
     let extra_headers = match transport {
         ConversationStartTransport::Websocket => {
-            let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
+            let realtime_api_key =
+                realtime_api_key(auth.as_ref(), &provider, read_openai_api_key_from_env)?;
             realtime_request_headers(
                 requested_realtime_session_id.as_deref(),
-                Some(realtime_api_key.as_str()),
+                realtime_api_key.as_deref(),
                 version,
             )?
         }
@@ -800,6 +805,26 @@ async fn prepare_realtime_start(
         session_config,
         transport,
     })
+}
+
+fn ensure_realtime_transport_supported(
+    provider: &ModelProviderInfo,
+    transport: &ConversationStartTransport,
+) -> CodexResult<()> {
+    match transport {
+        ConversationStartTransport::Websocket if provider.supports_websockets => Ok(()),
+        ConversationStartTransport::Websocket => {
+            let provider_name = if provider.name.trim().is_empty() {
+                "selected model provider"
+            } else {
+                provider.name.as_str()
+            };
+            Err(CodexErr::InvalidRequest(format!(
+                "model provider '{provider_name}' does not support realtime websocket conversations"
+            )))
+        }
+        ConversationStartTransport::Webrtc { .. } => Ok(()),
+    }
 }
 
 fn validate_realtime_architecture(
@@ -1143,25 +1168,43 @@ fn escape_xml_text(input: &str) -> String {
         .replace('>', "&gt;")
 }
 
-fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> CodexResult<String> {
+fn realtime_auth_manager_for_provider(
+    provider_auth_manager: Option<Arc<codex_login::AuthManager>>,
+    fallback_auth_manager: &Arc<codex_login::AuthManager>,
+    provider: &ModelProviderInfo,
+) -> Option<Arc<codex_login::AuthManager>> {
+    provider_auth_manager.or_else(|| {
+        provider
+            .uses_openai_auth()
+            .then(|| Arc::clone(fallback_auth_manager))
+    })
+}
+
+fn realtime_api_key(
+    auth: Option<&CodexAuth>,
+    provider: &ModelProviderInfo,
+    openai_api_key_from_env: impl FnOnce() -> Option<String>,
+) -> CodexResult<Option<String>> {
     if let Some(api_key) = provider.api_key()? {
-        return Ok(api_key);
+        return Ok(Some(api_key));
     }
 
     if let Some(token) = provider.experimental_bearer_token.clone() {
-        return Ok(token);
+        return Ok(Some(token));
     }
 
     if let Some(api_key) = auth.and_then(CodexAuth::api_key) {
-        return Ok(api_key.to_string());
+        return Ok(Some(api_key.to_string()));
+    }
+
+    if !provider.uses_openai_auth() {
+        return Ok(None);
     }
 
     // TODO(aibrahim): Remove this temporary fallback once realtime auth no longer
     // requires API key auth for ChatGPT/SIWC sessions.
-    if provider.is_openai()
-        && let Some(api_key) = read_openai_api_key_from_env()
-    {
-        return Ok(api_key);
+    if let Some(api_key) = openai_api_key_from_env() {
+        return Ok(Some(api_key));
     }
 
     Err(CodexErr::InvalidRequest(
