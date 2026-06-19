@@ -2677,11 +2677,7 @@ impl ThreadRequestProcessor {
             request_overrides.as_ref(),
             &typesafe_overrides,
             "thread/resume",
-        )
-        .and_then(|selection| {
-            selection.reject_provider_without_model("thread/resume")?;
-            Ok(selection)
-        }) {
+        ) {
             Ok(selection) => selection,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -2694,6 +2690,12 @@ impl ThreadRequestProcessor {
             &mut typesafe_overrides,
         )
         .await;
+        let model_selection = model_selection
+            .with_model_for_provider_only_selection(typesafe_overrides.model.as_deref());
+        if let Err(error) = model_selection.reject_provider_without_model("thread/resume") {
+            self.outgoing.send_error(request_id, error).await;
+            return Ok(());
+        }
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let mut config = match self
@@ -3438,7 +3440,6 @@ impl ThreadRequestProcessor {
             &typesafe_overrides,
             "thread/fork",
         )?;
-        model_selection.reject_provider_without_model("thread/fork")?;
         merge_persisted_model_metadata(
             &mut request_overrides,
             &mut typesafe_overrides,
@@ -3446,6 +3447,9 @@ impl ThreadRequestProcessor {
             source_thread.model_provider.clone(),
             source_thread.reasoning_effort.clone(),
         );
+        let model_selection = model_selection
+            .with_model_for_provider_only_selection(typesafe_overrides.model.as_deref());
+        model_selection.reject_provider_without_model("thread/fork")?;
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let mut config = self
             .config_manager

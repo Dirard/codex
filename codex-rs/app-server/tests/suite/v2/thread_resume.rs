@@ -239,6 +239,43 @@ async fn thread_resume_model_only_validates_against_stored_provider() -> Result<
 }
 
 #[tokio::test]
+async fn thread_resume_provider_only_uses_stored_model() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_provider_models(codex_home.path(), &server.uri(), &["gpt-5.4"])?;
+
+    let RestartedThreadFixture {
+        mut mcp, thread_id, ..
+    } = start_materialized_thread_and_restart(codex_home.path(), "seed history").await?;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            model_provider: Some("other_provider".to_string()),
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread,
+        model,
+        model_provider,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(model, "gpt-5.4");
+    assert_eq!(model_provider, "other_provider");
+    assert_eq!(thread.model_provider, "other_provider");
+    assert_eq!(thread.model.as_deref(), Some("gpt-5.4"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_resume_with_empty_path_uses_running_thread_id() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -3999,6 +4036,14 @@ personality = true
 
 [model_providers.mock_provider]
 name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+models = [{model_entries}]
+
+[model_providers.other_provider]
+name = "Other provider for test"
 base_url = "{server_uri}/v1"
 wire_api = "responses"
 request_max_retries = 0

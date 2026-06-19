@@ -53,6 +53,32 @@ mod tests {
     use codex_protocol::models::BaseInstructions;
     use codex_protocol::protocol::SessionSource;
 
+    fn create_thread_params(
+        thread_id: ThreadId,
+        parent_thread_id: Option<ThreadId>,
+        model_provider: &str,
+        model: Option<&str>,
+        cwd: Option<PathBuf>,
+    ) -> CreateThreadParams {
+        CreateThreadParams {
+            thread_id,
+            extra_config: None,
+            forked_from_id: None,
+            parent_thread_id,
+            source: SessionSource::Exec,
+            thread_source: None,
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            multi_agent_version: None,
+            metadata: ThreadPersistenceMetadata {
+                cwd,
+                model_provider: model_provider.to_string(),
+                model: model.map(str::to_string),
+                memory_mode: ThreadMemoryMode::Enabled,
+            },
+        }
+    }
+
     #[tokio::test]
     async fn default_turn_pagination_methods_return_unsupported() {
         let store = InMemoryThreadStore::default();
@@ -109,23 +135,13 @@ mod tests {
             (unrelated_thread_id, None),
         ] {
             store
-                .create_thread(CreateThreadParams {
+                .create_thread(create_thread_params(
                     thread_id,
-                    extra_config: None,
-                    forked_from_id: None,
                     parent_thread_id,
-                    source: SessionSource::Exec,
-                    thread_source: None,
-                    base_instructions: BaseInstructions::default(),
-                    dynamic_tools: Vec::new(),
-                    multi_agent_version: None,
-                    metadata: ThreadPersistenceMetadata {
-                        cwd: None,
-                        model_provider: "test-provider".to_string(),
-                        model: None,
-                        memory_mode: ThreadMemoryMode::Enabled,
-                    },
-                })
+                    "test-provider",
+                    None,
+                    None,
+                ))
                 .await
                 .expect("create thread");
         }
@@ -156,6 +172,104 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![child_thread_id]
         );
+    }
+
+    #[tokio::test]
+    async fn list_threads_filters_by_model_provider() {
+        let store = InMemoryThreadStore::default();
+        let matching_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000001").expect("valid thread id");
+        let other_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000002").expect("valid thread id");
+
+        for (thread_id, model_provider) in [
+            (matching_thread_id, "matching-provider"),
+            (other_thread_id, "other-provider"),
+        ] {
+            store
+                .create_thread(create_thread_params(
+                    thread_id,
+                    None,
+                    model_provider,
+                    Some("test-model"),
+                    None,
+                ))
+                .await
+                .expect("create thread");
+        }
+
+        let page = ThreadStore::list_threads(
+            &store,
+            ListThreadsParams {
+                page_size: 10,
+                cursor: None,
+                sort_key: ThreadSortKey::CreatedAt,
+                sort_direction: SortDirection::Desc,
+                allowed_sources: Vec::new(),
+                model_providers: Some(vec!["matching-provider".to_string()]),
+                cwd_filters: None,
+                archived: false,
+                search_term: None,
+                parent_thread_id: None,
+                use_state_db_only: false,
+            },
+        )
+        .await
+        .expect("list matching provider threads");
+
+        assert_eq!(
+            page.items
+                .into_iter()
+                .map(|item| item.thread_id)
+                .collect::<Vec<_>>(),
+            vec![matching_thread_id]
+        );
+    }
+
+    #[tokio::test]
+    async fn read_thread_uses_creation_metadata_as_base_before_patch() {
+        let store = InMemoryThreadStore::default();
+        let thread_id = ThreadId::default();
+        store
+            .create_thread(create_thread_params(
+                thread_id,
+                None,
+                "created-provider",
+                Some("created-model"),
+                Some(PathBuf::from("created-cwd")),
+            ))
+            .await
+            .expect("create thread");
+
+        let created = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_history: false,
+                include_archived: false,
+            })
+            .await
+            .expect("read created thread");
+        assert_eq!(created.model_provider, "created-provider");
+        assert_eq!(created.model.as_deref(), Some("created-model"));
+        assert_eq!(created.cwd, PathBuf::from("created-cwd"));
+
+        let patched = store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    model_provider: Some("patched-provider".to_string()),
+                    model: Some("patched-model".to_string()),
+                    cwd: Some(PathBuf::from("patched-cwd")),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("patch thread metadata");
+
+        assert_eq!(patched.model_provider, "patched-provider");
+        assert_eq!(patched.model.as_deref(), Some("patched-model"));
+        assert_eq!(patched.cwd, PathBuf::from("patched-cwd"));
     }
 }
 
@@ -455,6 +569,15 @@ impl ThreadStore for InMemoryThreadStore {
     fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreFuture<'_, ThreadPage> {
         Box::pin(async move {
             let mut page = InMemoryThreadStore::list_threads(self).await?;
+            if let Some(model_providers) = params.model_providers
+                && !model_providers.is_empty()
+            {
+                page.items.retain(|thread| {
+                    model_providers
+                        .iter()
+                        .any(|model_provider| model_provider == &thread.model_provider)
+                });
+            }
             if let Some(parent_thread_id) = params.parent_thread_id {
                 page.items
                     .retain(|thread| thread.parent_thread_id == Some(parent_thread_id));
@@ -506,6 +629,7 @@ fn stored_thread_from_state(
     });
     let name = state.names.get(&thread_id).cloned().flatten();
     let metadata = state.metadata_updates.get(&thread_id);
+    let creation_metadata = &created.metadata;
     let rollout_path = state
         .rollout_paths
         .iter()
@@ -527,8 +651,10 @@ fn stored_thread_from_state(
         name,
         model_provider: metadata
             .and_then(|metadata| metadata.model_provider.clone())
-            .unwrap_or_else(|| "test".to_string()),
-        model: metadata.and_then(|metadata| metadata.model.clone()),
+            .unwrap_or_else(|| creation_metadata.model_provider.clone()),
+        model: metadata
+            .and_then(|metadata| metadata.model.clone())
+            .or_else(|| creation_metadata.model.clone()),
         reasoning_effort: metadata.and_then(|metadata| metadata.reasoning_effort.clone()),
         created_at: metadata
             .and_then(|metadata| metadata.created_at)
@@ -542,6 +668,7 @@ fn stored_thread_from_state(
         archived_at: None,
         cwd: metadata
             .and_then(|metadata| metadata.cwd.clone())
+            .or_else(|| creation_metadata.cwd.clone())
             .unwrap_or_default(),
         cli_version: metadata
             .and_then(|metadata| metadata.cli_version.clone())

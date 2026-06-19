@@ -42,13 +42,15 @@ async fn openai_model_presets(
             .list_models(RefreshStrategy::OnlineIfUncached)
             .await
     } else {
-        let Some(openai_provider) = config.model_providers.get(OPENAI_PROVIDER_ID) else {
-            return Vec::new();
-        };
+        let openai_provider = config
+            .model_providers
+            .get(OPENAI_PROVIDER_ID)
+            .cloned()
+            .unwrap_or_else(|| ModelProviderInfo::create_openai_provider(None));
 
         let mut openai_config = config.clone();
         openai_config.model_provider_id = OPENAI_PROVIDER_ID.to_string();
-        openai_config.model_provider = openai_provider.clone();
+        openai_config.model_provider = openai_provider;
         let mut presets = build_models_manager(&openai_config, thread_manager.auth_manager())
             .list_models(RefreshStrategy::OnlineIfUncached)
             .await;
@@ -75,8 +77,19 @@ fn add_configured_provider_model_presets(presets: &mut Vec<ModelPreset>, config:
         })
         .collect();
 
-    let mut providers = config.model_providers.iter().collect::<Vec<_>>();
-    providers.sort_by_key(|(provider_id, _)| provider_id.as_str());
+    let mut providers = config
+        .model_providers
+        .iter()
+        .map(|(provider_id, provider)| (provider_id.as_str(), provider))
+        .collect::<Vec<_>>();
+    if config.model_provider_id != OPENAI_PROVIDER_ID
+        && !config
+            .model_providers
+            .contains_key(&config.model_provider_id)
+    {
+        providers.push((config.model_provider_id.as_str(), &config.model_provider));
+    }
+    providers.sort_by_key(|(provider_id, _)| *provider_id);
 
     for (provider_id, provider) in providers {
         for model in provider
@@ -85,7 +98,7 @@ fn add_configured_provider_model_presets(presets: &mut Vec<ModelPreset>, config:
             .map(|model| model.trim())
             .filter(|model| !model.is_empty())
         {
-            if seen.insert((provider_id.clone(), model.to_string())) {
+            if seen.insert((provider_id.to_string(), model.to_string())) {
                 presets.push(configured_provider_model_preset(
                     provider_id,
                     provider,

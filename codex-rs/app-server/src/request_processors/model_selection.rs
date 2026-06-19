@@ -52,6 +52,13 @@ impl ModelSelectionRequest {
         Ok(())
     }
 
+    pub(crate) fn with_model_for_provider_only_selection(mut self, model: Option<&str>) -> Self {
+        if self.explicit_model_provider.is_some() && self.explicit_model.is_none() {
+            self.explicit_model = model.map(str::to_string);
+        }
+        self
+    }
+
     fn is_explicit(&self) -> bool {
         self.explicit_model.is_some() || self.explicit_model_provider.is_some()
     }
@@ -107,11 +114,27 @@ async fn inferred_provider_for_model_only_selection(
     method: &str,
 ) -> Result<Option<String>, JSONRPCErrorError> {
     let provider_ids = configured_provider_ids_for_model(config, model);
-    if provider_ids.is_empty()
-        || provider_ids
-            .iter()
-            .any(|provider_id| provider_id == &config.model_provider_id)
+    if provider_ids
+        .iter()
+        .any(|provider_id| provider_id == &config.model_provider_id)
     {
+        return Ok(None);
+    }
+
+    if provider_ids.is_empty() {
+        if config.model_provider_id != OPENAI_PROVIDER_ID
+            && !provider_has_model_allowlist(&config.model_provider)
+        {
+            return Ok(None);
+        }
+
+        if config.model_provider_id != OPENAI_PROVIDER_ID
+            && validate_openai_model(thread_manager, config, model, method)
+                .await
+                .is_ok()
+        {
+            return Ok(Some(OPENAI_PROVIDER_ID.to_string()));
+        }
         return Ok(None);
     }
 
@@ -256,11 +279,7 @@ fn validate_configured_provider_model(
     method: &str,
     require_custom_allowlist: bool,
 ) -> Result<(), JSONRPCErrorError> {
-    let has_model_allowlist = provider
-        .models
-        .iter()
-        .any(|configured| !configured.trim().is_empty());
-    if !has_model_allowlist {
+    if !provider_has_model_allowlist(provider) {
         if require_custom_allowlist {
             return Err(invalid_request(format!(
                 "invalid {method} model selection: modelProvider '{provider_id}' does not define any models"
@@ -276,6 +295,13 @@ fn validate_configured_provider_model(
             "invalid {method} model selection: model '{model}' is not configured for modelProvider '{provider_id}'"
         )))
     }
+}
+
+fn provider_has_model_allowlist(provider: &ModelProviderInfo) -> bool {
+    provider
+        .models
+        .iter()
+        .any(|configured| !configured.trim().is_empty())
 }
 
 fn provider_lists_model(provider: &ModelProviderInfo, model: &str) -> bool {

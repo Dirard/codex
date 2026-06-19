@@ -190,7 +190,7 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() -> 
     assert_eq!(summary.conversation_id, thread_id);
     assert_eq!(summary.path, PathBuf::new());
     assert_eq!(summary.cwd, PathBuf::new());
-    assert_eq!(summary.model_provider, "test");
+    assert_eq!(summary.model_provider, "test-provider");
 
     client.shutdown().await?;
     Ok(())
