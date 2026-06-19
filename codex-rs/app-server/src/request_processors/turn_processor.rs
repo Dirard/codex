@@ -48,6 +48,21 @@ fn map_additional_context(
         .collect()
 }
 
+fn apply_cwd_to_local_environment(
+    environments: &mut TurnEnvironmentSelections,
+    cwd: AbsolutePathBuf,
+) {
+    let cwd_uri = PathUri::from_abs_path(&cwd);
+    if let Some(environment) = environments
+        .environments
+        .iter_mut()
+        .find(|environment| environment.environment_id == LOCAL_ENVIRONMENT_ID)
+    {
+        environment.cwd = cwd_uri;
+    }
+    environments.legacy_fallback_cwd = cwd;
+}
+
 struct ThreadSettingsBuildParams {
     method: &'static str,
     environments: Option<TurnEnvironmentSelections>,
@@ -520,11 +535,7 @@ impl TurnRequestProcessor {
             (None, None) => None,
             (Some(cwd), None) => {
                 let mut environments = thread.config_snapshot().await.environments;
-                let cwd_uri = PathUri::from_abs_path(&cwd);
-                for environment in &mut environments.environments {
-                    environment.cwd = cwd_uri.clone();
-                }
-                environments.legacy_fallback_cwd = cwd;
+                apply_cwd_to_local_environment(&mut environments, cwd);
                 Some(environments)
             }
             (cwd, Some(environment_selections)) => {
@@ -1432,3 +1443,7 @@ fn xcode_26_4_mcp_elicitations_auto_deny(
     client_name == Some("Xcode")
         && client_version.is_some_and(|version| version.starts_with("26.4"))
 }
+
+#[cfg(test)]
+#[path = "turn_processor_tests.rs"]
+mod turn_processor_tests;

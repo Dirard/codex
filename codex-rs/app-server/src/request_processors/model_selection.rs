@@ -1,4 +1,5 @@
 use super::*;
+use codex_core::build_models_manager;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_models_manager::manager::RefreshStrategy;
 
@@ -115,7 +116,7 @@ async fn inferred_provider_for_model_only_selection(
     }
 
     if config.model_provider_id == OPENAI_PROVIDER_ID
-        && validate_openai_model(thread_manager, model, method)
+        && validate_openai_model(thread_manager, config, model, method)
             .await
             .is_ok()
     {
@@ -190,7 +191,7 @@ pub(crate) async fn validate_model_for_provider(
     require_custom_allowlist: bool,
 ) -> Result<(), JSONRPCErrorError> {
     if provider_id == OPENAI_PROVIDER_ID {
-        validate_openai_model(thread_manager, model, method).await
+        validate_openai_model(thread_manager, config, model, method).await
     } else {
         let Some(provider) = config.model_providers.get(provider_id).or_else(|| {
             (provider_id == config.model_provider_id).then_some(&config.model_provider)
@@ -211,11 +212,23 @@ pub(crate) async fn validate_model_for_provider(
 
 async fn validate_openai_model(
     thread_manager: &ThreadManager,
+    config: &Config,
     model: &str,
     method: &str,
 ) -> Result<(), JSONRPCErrorError> {
-    let model_exists = thread_manager
-        .list_models(RefreshStrategy::Offline)
+    let Some(openai_provider) = config.model_providers.get(OPENAI_PROVIDER_ID).or_else(|| {
+        (config.model_provider_id == OPENAI_PROVIDER_ID).then_some(&config.model_provider)
+    }) else {
+        return Err(invalid_request(format!(
+            "invalid {method} model selection: unknown modelProvider '{OPENAI_PROVIDER_ID}'"
+        )));
+    };
+    let mut openai_config = config.clone();
+    openai_config.model_provider_id = OPENAI_PROVIDER_ID.to_string();
+    openai_config.model_provider = openai_provider.clone();
+
+    let model_exists = build_models_manager(&openai_config, thread_manager.auth_manager())
+        .list_models(RefreshStrategy::OnlineIfUncached)
         .await
         .into_iter()
         .any(|preset| {

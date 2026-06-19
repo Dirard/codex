@@ -356,6 +356,12 @@ auth = {{ command = {}, args = {auth_args_toml}, timeout_ms = 1 }}
             ("zai".to_string(), "glm-4.7".to_string()),
         ]
     );
+    assert!(
+        items
+            .iter()
+            .any(|item| item.model_provider.as_deref() == Some(OPENAI_PROVIDER_ID)),
+        "model/list must keep OpenAI picker entries available when a custom provider is active"
+    );
     assert!(next_cursor.is_none());
     assert!(
         !items.iter().any(|item| item.model == "zai-runtime-only"),

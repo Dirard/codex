@@ -309,6 +309,42 @@ async fn thread_start_with_custom_provider_model_surfaces_in_thread_views() -> R
 }
 
 #[tokio::test]
+async fn thread_start_accepts_openai_model_when_custom_provider_is_active() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_provider_models(codex_home.path(), &server.uri(), &["custom-a"])?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2".to_string()),
+            model_provider: Some("openai".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        thread,
+        model,
+        model_provider,
+        ..
+    } = to_response::<ThreadStartResponse>(resp)?;
+
+    assert_eq!(model, "gpt-5.2");
+    assert_eq!(model_provider, "openai");
+    assert_eq!(thread.model_provider, "openai");
+    assert_eq!(thread.model.as_deref(), Some("gpt-5.2"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_infers_custom_provider_from_model_only_selection() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;

@@ -334,6 +334,36 @@ fn truncates_tool_search_output_history_for_chat_messages() {
 }
 
 #[test]
+fn renders_server_tool_search_output_as_assistant_context() {
+    let mut request = base_request(vec![]);
+    request.input = vec![ResponseItem::ToolSearchOutput {
+        id: None,
+        metadata: None,
+        call_id: Some("server-search-1".to_string()),
+        status: "completed".to_string(),
+        execution: "server".to_string(),
+        tools: vec![json!({
+            "name": "server_tool",
+            "description": "Available on the server",
+        })],
+    }];
+
+    let (chat_request, _) = chat_completions_request_from_responses(&request);
+    let body = serde_json::to_value(chat_request).expect("serialize chat request");
+    let message = &body["messages"][1];
+    let content = message["content"]
+        .as_str()
+        .expect("server tool search output should be text context");
+
+    assert_eq!(message["role"], "assistant");
+    assert!(message.get("tool_call_id").is_none());
+    assert!(message.get("tool_calls").is_none());
+    assert!(content.starts_with("Server-side tool search output:\n"));
+    assert!(content.contains("\"execution\":\"server\""));
+    assert!(content.contains("\"name\":\"server_tool\""));
+}
+
+#[test]
 fn sanitizes_namespace_tool_names_and_preserves_original_mapping() {
     let mut request = base_request(vec![json!({
         "type": "namespace",

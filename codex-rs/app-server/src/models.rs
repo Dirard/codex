@@ -6,6 +6,7 @@ use codex_app_server_protocol::ModelServiceTier;
 use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_core::ThreadManager;
+use codex_core::build_models_manager;
 use codex_core::config::Config;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
@@ -22,12 +23,7 @@ pub async fn supported_models(
     config: &Config,
     include_hidden: bool,
 ) -> Vec<Model> {
-    let refresh_strategy = if config.model_provider_id == OPENAI_PROVIDER_ID {
-        RefreshStrategy::OnlineIfUncached
-    } else {
-        RefreshStrategy::Offline
-    };
-    let mut presets = thread_manager.list_models(refresh_strategy).await;
+    let mut presets = openai_model_presets(thread_manager, config).await;
     add_configured_provider_model_presets(&mut presets, config);
 
     presets
@@ -35,6 +31,28 @@ pub async fn supported_models(
         .filter(|preset| include_hidden || preset.show_in_picker)
         .map(model_from_preset)
         .collect()
+}
+
+async fn openai_model_presets(
+    thread_manager: Arc<ThreadManager>,
+    config: &Config,
+) -> Vec<ModelPreset> {
+    if config.model_provider_id == OPENAI_PROVIDER_ID {
+        thread_manager
+            .list_models(RefreshStrategy::OnlineIfUncached)
+            .await
+    } else {
+        let Some(openai_provider) = config.model_providers.get(OPENAI_PROVIDER_ID) else {
+            return Vec::new();
+        };
+
+        let mut openai_config = config.clone();
+        openai_config.model_provider_id = OPENAI_PROVIDER_ID.to_string();
+        openai_config.model_provider = openai_provider.clone();
+        build_models_manager(&openai_config, thread_manager.auth_manager())
+            .list_models(RefreshStrategy::OnlineIfUncached)
+            .await
+    }
 }
 
 fn add_configured_provider_model_presets(presets: &mut Vec<ModelPreset>, config: &Config) {

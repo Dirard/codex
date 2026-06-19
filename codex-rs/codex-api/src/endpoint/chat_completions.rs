@@ -395,12 +395,31 @@ fn append_response_item_to_chat_messages(
             pending_tool_calls.push(chat_tool_call(call_id, &chat_name, arguments.to_string()));
         }
         ResponseItem::ToolSearchOutput {
+            status,
+            execution,
+            tools,
+            ..
+        } if execution == "server" => {
+            flush_pending_tool_calls(messages, pending_tool_calls);
+            messages.push(chat_message(
+                "assistant",
+                format!(
+                    "Server-side tool search output:\n{}",
+                    capped_chat_tool_search_output(json!({
+                        "status": status,
+                        "execution": execution,
+                        "tools": tools,
+                    }))
+                ),
+            ));
+        }
+        ResponseItem::ToolSearchOutput {
             call_id: Some(call_id),
             status,
             execution,
             tools,
             ..
-        } => {
+        } if execution == "client" => {
             flush_pending_tool_calls(messages, pending_tool_calls);
             messages.push(chat_tool_output(
                 call_id,
