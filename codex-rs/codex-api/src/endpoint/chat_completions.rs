@@ -35,6 +35,7 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -311,10 +312,12 @@ fn chat_completions_request_from_responses(
     }
 
     let mut pending_tool_calls = Vec::new();
+    let mut active_tool_call_ids = HashSet::new();
     for item in &request.input {
         append_response_item_to_chat_messages(
             &mut messages,
             &mut pending_tool_calls,
+            &mut active_tool_call_ids,
             item,
             &tool_catalog,
         );
@@ -343,6 +346,7 @@ fn chat_completions_request_from_responses(
 fn append_response_item_to_chat_messages(
     messages: &mut Vec<Value>,
     pending_tool_calls: &mut Vec<Value>,
+    active_tool_call_ids: &mut HashSet<String>,
     item: &ResponseItem,
     tool_catalog: &ChatToolCatalog,
 ) {
@@ -351,6 +355,7 @@ fn append_response_item_to_chat_messages(
             flush_pending_tool_calls(messages, pending_tool_calls);
             let role = chat_role(role);
             messages.push(chat_message(role, content_items_to_text(content)));
+            active_tool_call_ids.clear();
         }
         ResponseItem::FunctionCall {
             name,
@@ -358,33 +363,47 @@ fn append_response_item_to_chat_messages(
             arguments,
             call_id,
             ..
-        } => pending_tool_calls.push(chat_tool_call(
-            call_id,
-            &tool_catalog.chat_name_for_function(namespace.as_deref(), name),
-            arguments.clone(),
-        )),
+        } => {
+            active_tool_call_ids.insert(call_id.clone());
+            pending_tool_calls.push(chat_tool_call(
+                call_id,
+                &tool_catalog.chat_name_for_function(namespace.as_deref(), name),
+                arguments.clone(),
+            ));
+        }
         ResponseItem::FunctionCallOutput {
             call_id, output, ..
-        } => {
-            flush_pending_tool_calls(messages, pending_tool_calls);
-            messages.push(chat_tool_output(call_id, output_payload_to_text(output)));
-        }
+        } => push_chat_tool_output_if_matched(
+            messages,
+            pending_tool_calls,
+            active_tool_call_ids,
+            call_id,
+            output_payload_to_text(output),
+            "function_call_output",
+        ),
         ResponseItem::CustomToolCall {
             name,
             input,
             call_id,
             ..
-        } => pending_tool_calls.push(chat_tool_call(
-            call_id,
-            &tool_catalog.chat_name_for_custom(name),
-            json!({ "input": input }).to_string(),
-        )),
+        } => {
+            active_tool_call_ids.insert(call_id.clone());
+            pending_tool_calls.push(chat_tool_call(
+                call_id,
+                &tool_catalog.chat_name_for_custom(name),
+                json!({ "input": input }).to_string(),
+            ));
+        }
         ResponseItem::CustomToolCallOutput {
             call_id, output, ..
-        } => {
-            flush_pending_tool_calls(messages, pending_tool_calls);
-            messages.push(chat_tool_output(call_id, output_payload_to_text(output)));
-        }
+        } => push_chat_tool_output_if_matched(
+            messages,
+            pending_tool_calls,
+            active_tool_call_ids,
+            call_id,
+            output_payload_to_text(output),
+            "custom_tool_call_output",
+        ),
         ResponseItem::ToolSearchCall {
             call_id: Some(call_id),
             execution,
@@ -392,6 +411,7 @@ fn append_response_item_to_chat_messages(
             ..
         } if execution == "client" => {
             let chat_name = tool_catalog.chat_name_for_tool_search();
+            active_tool_call_ids.insert(call_id.clone());
             pending_tool_calls.push(chat_tool_call(call_id, &chat_name, arguments.to_string()));
         }
         ResponseItem::ToolSearchOutput {
@@ -412,6 +432,7 @@ fn append_response_item_to_chat_messages(
                     }))
                 ),
             ));
+            active_tool_call_ids.clear();
         }
         ResponseItem::ToolSearchOutput {
             call_id: Some(call_id),
@@ -420,15 +441,18 @@ fn append_response_item_to_chat_messages(
             tools,
             ..
         } if execution == "client" => {
-            flush_pending_tool_calls(messages, pending_tool_calls);
-            messages.push(chat_tool_output(
+            push_chat_tool_output_if_matched(
+                messages,
+                pending_tool_calls,
+                active_tool_call_ids,
                 call_id,
                 capped_chat_tool_search_output(json!({
                     "status": status,
                     "execution": execution,
                     "tools": tools,
                 })),
-            ));
+                "tool_search_output",
+            );
         }
         ResponseItem::AgentMessage {
             author,
@@ -437,6 +461,7 @@ fn append_response_item_to_chat_messages(
             ..
         } => {
             flush_pending_tool_calls(messages, pending_tool_calls);
+            active_tool_call_ids.clear();
             if let Some(text) = agent_message_content_to_text(author, recipient, content) {
                 messages.push(chat_message("assistant", text));
             }
@@ -451,6 +476,26 @@ fn append_response_item_to_chat_messages(
         | ResponseItem::CompactionTrigger { .. }
         | ResponseItem::ContextCompaction { .. }
         | ResponseItem::Other => {}
+    }
+}
+
+fn push_chat_tool_output_if_matched(
+    messages: &mut Vec<Value>,
+    pending_tool_calls: &mut Vec<Value>,
+    active_tool_call_ids: &mut HashSet<String>,
+    call_id: &str,
+    content: String,
+    output_kind: &'static str,
+) {
+    if active_tool_call_ids.remove(call_id) {
+        flush_pending_tool_calls(messages, pending_tool_calls);
+        messages.push(chat_tool_output(call_id, content));
+    } else {
+        tracing::warn!(
+            call_id,
+            output_kind,
+            "skipping orphan chat completions tool output without matching call"
+        );
     }
 }
 
@@ -539,7 +584,7 @@ fn agent_message_content_to_text(
 }
 
 fn output_payload_to_text(output: &FunctionCallOutputPayload) -> String {
-    output.body.to_text().unwrap_or_default()
+    output.to_string()
 }
 
 fn capped_chat_tool_search_output(output: Value) -> String {

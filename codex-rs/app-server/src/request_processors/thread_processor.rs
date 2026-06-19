@@ -3309,6 +3309,8 @@ impl ThreadRequestProcessor {
             )),
         };
         let mut thread = thread?;
+        thread.model_provider = config_snapshot.model_provider_id.clone();
+        thread.model = Some(config_snapshot.model.clone());
         thread.id = thread_id.to_string();
         thread.session_id = session_id;
         thread.path = Some(rollout_path.to_path_buf());

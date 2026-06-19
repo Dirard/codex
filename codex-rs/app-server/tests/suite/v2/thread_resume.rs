@@ -3677,6 +3677,75 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_resume_override_updates_nested_thread_model_metadata() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let server_uri = server.uri();
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"
+model = "stored-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[features]
+personality = true
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+models = ["gpt-5.4"]
+
+[model_providers.override_provider]
+name = "Override provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+models = ["override-model"]
+"#
+        ),
+    )?;
+
+    let RestartedThreadFixture {
+        mut mcp, thread_id, ..
+    } = start_materialized_thread_and_restart(codex_home.path(), "seed history").await?;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            model: Some("override-model".to_string()),
+            model_provider: Some("override_provider".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed,
+        model,
+        model_provider,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(model, "override-model");
+    assert_eq!(model_provider, "override_provider");
+    assert_eq!(resumed.model.as_deref(), Some("override-model"));
+    assert_eq!(resumed.model_provider, "override_provider");
+
+    Ok(())
+}
+
 struct RestartedThreadFixture {
     mcp: TestAppServer,
     thread_id: String,

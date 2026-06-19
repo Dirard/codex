@@ -49,9 +49,15 @@ async fn openai_model_presets(
         let mut openai_config = config.clone();
         openai_config.model_provider_id = OPENAI_PROVIDER_ID.to_string();
         openai_config.model_provider = openai_provider.clone();
-        build_models_manager(&openai_config, thread_manager.auth_manager())
+        let mut presets = build_models_manager(&openai_config, thread_manager.auth_manager())
             .list_models(RefreshStrategy::OnlineIfUncached)
-            .await
+            .await;
+        for preset in &mut presets {
+            if preset.model_provider.is_none() {
+                preset.model_provider = Some(OPENAI_PROVIDER_ID.to_string());
+            }
+        }
+        presets
     }
 }
 
@@ -63,7 +69,7 @@ fn add_configured_provider_model_presets(presets: &mut Vec<ModelPreset>, config:
                 preset
                     .model_provider
                     .clone()
-                    .unwrap_or_else(|| OPENAI_PROVIDER_ID.to_string()),
+                    .unwrap_or_else(|| config.model_provider_id.clone()),
                 preset.model.clone(),
             )
         })
@@ -136,11 +142,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
     Model {
         id: preset.id.to_string(),
         model: preset.model.to_string(),
-        model_provider: Some(
-            preset
-                .model_provider
-                .unwrap_or_else(|| OPENAI_PROVIDER_ID.to_string()),
-        ),
+        model_provider: preset.model_provider,
         upgrade: preset.upgrade.as_ref().map(|upgrade| upgrade.id.clone()),
         upgrade_info: preset.upgrade.as_ref().map(|upgrade| ModelUpgradeInfo {
             model: upgrade.id.clone(),

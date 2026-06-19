@@ -1420,12 +1420,11 @@ impl App {
                 let selected_provider_id = model_provider.as_deref();
                 let provider_differs_from_active_thread = selected_provider_id
                     .is_some_and(|provider| provider != active_provider_id.as_str());
-                let provider_to_persist = model_provider.clone().unwrap_or(active_provider_id);
                 match crate::config_update::write_config_batch(
                     app_server.request_handle(),
                     crate::config_update::build_model_selection_edits(
                         model.as_str(),
-                        Some(provider_to_persist.as_str()),
+                        selected_provider_id,
                         effort.as_ref(),
                     ),
                 )

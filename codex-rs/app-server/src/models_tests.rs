@@ -19,7 +19,7 @@ fn configured_chat_provider_model_preset_is_text_only() {
 }
 
 #[test]
-fn builtin_model_presets_report_openai_provider_id() {
+fn providerless_model_presets_keep_default_provider() {
     let provider = ModelProviderInfo {
         name: "OpenAI".to_string(),
         wire_api: WireApi::Responses,
@@ -30,5 +30,5 @@ fn builtin_model_presets_report_openai_provider_id() {
 
     let model = model_from_preset(preset);
 
-    assert_eq!(model.model_provider, Some(OPENAI_PROVIDER_ID.to_string()));
+    assert_eq!(model.model_provider, None);
 }

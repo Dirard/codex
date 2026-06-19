@@ -2708,6 +2708,70 @@ async fn model_picker_includes_configured_provider_models() {
 }
 
 #[tokio::test]
+async fn providerless_model_preset_keeps_active_provider_selection() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("openai.gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.model_provider_id = "amazon-bedrock".to_string();
+    chat.config.model_provider = ModelProviderInfo {
+        name: "Amazon Bedrock".to_string(),
+        wire_api: WireApi::Responses,
+        ..ModelProviderInfo::default()
+    };
+    while rx.try_recv().is_ok() {}
+
+    chat.open_reasoning_popup(ModelPreset {
+        id: "openai.gpt-5.4".to_string(),
+        model: "openai.gpt-5.4".to_string(),
+        model_provider: None,
+        display_name: "GPT-5.4".to_string(),
+        description: String::new(),
+        default_reasoning_effort: ReasoningEffortConfig::None,
+        supported_reasoning_efforts: vec![ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::None,
+            description: "No reasoning".to_string(),
+        }],
+        supports_personality: false,
+        additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
+        default_service_tier: None,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        availability_nux: None,
+        supported_in_api: true,
+        input_modalities: default_input_modalities(),
+    });
+
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(event);
+    }
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AppEvent::UpdateModel(model) if model == "openai.gpt-5.4"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AppEvent::PersistModelSelection {
+            model,
+            model_provider: None,
+            effort: Some(ReasoningEffortConfig::None)
+        } if model == "openai.gpt-5.4"
+    )));
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistModelSelection {
+                model_provider: Some(provider),
+                ..
+            } if provider == "openai"
+        )),
+        "providerless preset must not rewrite the active provider to OpenAI: {events:?}"
+    );
+}
+
+#[tokio::test]
 async fn model_picker_orders_configured_provider_models_by_provider_id() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.thread_id = Some(ThreadId::new());

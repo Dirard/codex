@@ -48,6 +48,25 @@ fn model_selection_edits_can_persist_provider() {
 }
 
 #[test]
+fn model_selection_edits_omit_provider_when_selection_is_providerless() {
+    assert_eq!(
+        build_model_selection_edits("gpt-5.4", None, Some("medium")),
+        vec![
+            ConfigEdit {
+                key_path: "model".to_string(),
+                value: serde_json::json!("gpt-5.4"),
+                merge_strategy: MergeStrategy::Replace,
+            },
+            ConfigEdit {
+                key_path: "model_reasoning_effort".to_string(),
+                value: serde_json::json!("medium"),
+                merge_strategy: MergeStrategy::Replace,
+            },
+        ]
+    );
+}
+
+#[test]
 fn format_config_error_preserves_server_validation_message() {
     let err = Err::<(), _>(color_eyre::eyre::eyre!(
         "config/batchWrite failed: Invalid configuration: features.fast_mode=true violates \

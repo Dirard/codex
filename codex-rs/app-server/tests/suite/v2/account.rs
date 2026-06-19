@@ -496,6 +496,89 @@ requires_openai_auth = false
 }
 
 #[tokio::test]
+async fn account_read_without_model_provider_uses_latest_config_and_skips_custom_refresh()
+-> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            ..Default::default()
+        },
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("fresh-access-token")
+            .refresh_token("fresh-refresh-token")
+            .account_id(WORKSPACE_ID_STALE)
+            .email("user@example.com")
+            .plan_type("pro")
+            .last_refresh(Some(Utc::now())),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let refresh_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(0..=0)
+        .mount(&refresh_server)
+        .await;
+    let refresh_url = format!("{}/oauth/token", refresh_server.uri());
+
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[
+            ("OPENAI_API_KEY", None),
+            (
+                REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
+                Some(refresh_url.as_str()),
+            ),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            model_provider_id: Some("later_provider".to_string()),
+            extra_provider_config: Some(
+                r#"[model_providers.later_provider]
+name = "Later provider"
+base_url = "http://127.0.0.1:0/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+requires_openai_auth = false
+"#
+                .to_string(),
+            ),
+            ..Default::default()
+        },
+    )?;
+
+    let request_id = mcp
+        .send_get_account_request(get_account_params(/*refresh_token*/ true))
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(resp)?;
+    assert_eq!(
+        received,
+        GetAccountResponse {
+            account: None,
+            requires_openai_auth: false,
+        }
+    );
+    refresh_server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn account_read_unknown_model_provider_returns_invalid_request() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(
@@ -650,6 +733,69 @@ async fn account_read_with_openai_model_provider_preserves_auth_behavior() -> Re
             requires_openai_auth: true,
         }
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn account_read_with_builtin_model_provider_works_when_not_active() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt")
+            .email("user@example.com")
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_get_account_request(get_account_params_for_provider(
+            "openai", /*refresh_token*/ false,
+        ))
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(resp)?;
+    assert_eq!(
+        received,
+        GetAccountResponse {
+            account: Some(Account::Chatgpt {
+                email: "user@example.com".to_string(),
+                plan_type: AccountPlanType::Pro,
+            }),
+            requires_openai_auth: true,
+        }
+    );
+
+    let request_id = mcp
+        .send_get_account_request(get_account_params_for_provider(
+            "amazon-bedrock",
+            /*refresh_token*/ false,
+        ))
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(resp)?;
+    assert_eq!(
+        received,
+        GetAccountResponse {
+            account: Some(Account::AmazonBedrock {
+                credential_source: AmazonBedrockCredentialSource::AwsManaged,
+            }),
+            requires_openai_auth: false,
+        }
+    );
+
     Ok(())
 }
 

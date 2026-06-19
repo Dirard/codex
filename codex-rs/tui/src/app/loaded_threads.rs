@@ -134,6 +134,7 @@ mod tests {
             preview: String::new(),
             ephemeral: false,
             model_provider: "openai".to_string(),
+            model: None,
             created_at: 0,
             updated_at: 0,
             recency_at: Some(0),

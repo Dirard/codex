@@ -37,12 +37,7 @@ use toml::Value as TomlValue;
 use toml_edit::Item as TomlItem;
 
 const REDACTED_CONFIG_VALUE: &str = "[redacted]";
-const MODEL_PROVIDER_SECRET_FIELDS: &[&str] = &[
-    "key",
-    "experimental_bearer_token",
-    "env_key",
-    "env_key_instructions",
-];
+const MODEL_PROVIDER_SECRET_FIELDS: &[&str] = &["key", "experimental_bearer_token"];
 const MODEL_PROVIDER_SECRET_STRUCTURES: &[&str] =
     &["http_headers", "env_http_headers", "auth", "aws"];
 

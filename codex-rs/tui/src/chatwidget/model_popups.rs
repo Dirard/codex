@@ -584,7 +584,7 @@ impl ChatWidget {
                     preset
                         .model_provider
                         .clone()
-                        .unwrap_or_else(|| OPENAI_PROVIDER_ID.to_string()),
+                        .unwrap_or_else(|| self.config.model_provider_id.clone()),
                     preset.model.clone(),
                 )
             })
@@ -673,16 +673,13 @@ impl ChatWidget {
         let provider_id = preset
             .model_provider
             .as_deref()
-            .unwrap_or(OPENAI_PROVIDER_ID);
+            .unwrap_or(self.config.model_provider_id.as_str());
         preset.model.as_str() == self.current_model()
             && provider_id == self.config.model_provider_id
     }
 
     fn provider_for_selection(&self, preset: &ModelPreset) -> Option<String> {
-        preset.model_provider.clone().or_else(|| {
-            (self.config.model_provider_id != OPENAI_PROVIDER_ID)
-                .then(|| OPENAI_PROVIDER_ID.to_string())
-        })
+        preset.model_provider.clone()
     }
 
     fn selection_applies_to_active_thread(&self, model_provider: Option<&str>) -> bool {

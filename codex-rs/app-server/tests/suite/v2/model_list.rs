@@ -36,12 +36,7 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
     Model {
         id: preset.id.clone(),
         model: preset.model.clone(),
-        model_provider: Some(
-            preset
-                .model_provider
-                .clone()
-                .unwrap_or_else(|| OPENAI_PROVIDER_ID.to_string()),
-        ),
+        model_provider: preset.model_provider.clone(),
         upgrade: preset.upgrade.as_ref().map(|upgrade| upgrade.id.clone()),
         upgrade_info: preset.upgrade.as_ref().map(|upgrade| ModelUpgradeInfo {
             model: upgrade.id.clone(),
@@ -340,12 +335,12 @@ auth = {{ command = {}, args = {auth_args_toml}, timeout_ms = 1 }}
     } = to_response::<ModelListResponse>(response)?;
     let custom_models = items
         .iter()
-        .filter(|item| item.model_provider.as_deref() != Some(OPENAI_PROVIDER_ID))
-        .map(|item| {
-            (
-                item.model_provider.clone().unwrap_or_default(),
-                item.model.clone(),
-            )
+        .filter_map(|item| {
+            let model_provider = item.model_provider.as_ref()?;
+            if model_provider == OPENAI_PROVIDER_ID {
+                return None;
+            }
+            Some((model_provider.clone(), item.model.clone()))
         })
         .collect::<Vec<_>>();
 
@@ -659,12 +654,13 @@ models = ["alpha-first"]
             data: page_items,
             next_cursor,
         } = to_response::<ModelListResponse>(response)?;
-        custom_models.extend(
-            page_items
-                .into_iter()
-                .filter(|item| item.model_provider.as_deref() != Some(OPENAI_PROVIDER_ID))
-                .map(|item| (item.model_provider.unwrap_or_default(), item.model)),
-        );
+        custom_models.extend(page_items.into_iter().filter_map(|item| {
+            let model_provider = item.model_provider?;
+            if model_provider == OPENAI_PROVIDER_ID {
+                return None;
+            }
+            Some((model_provider, item.model))
+        }));
 
         if next_cursor.is_none() {
             break;

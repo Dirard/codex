@@ -2,6 +2,7 @@ use super::*;
 use codex_client::TransportError;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use futures::TryStreamExt;
@@ -244,6 +245,61 @@ fn converts_parallel_tool_call_history_to_chat_tool_call_group() {
 }
 
 #[test]
+fn preserves_structured_function_call_output_history_for_chat_messages() {
+    let mut request = base_request(vec![json!({
+        "type": "function",
+        "name": "inspect_image",
+        "parameters": { "type": "object", "properties": {} }
+    })]);
+    request.input = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            metadata: None,
+            name: "inspect_image".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-image".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            metadata: None,
+            call_id: "call-image".to_string(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,Zm9v".to_string(),
+                    detail: None,
+                },
+                FunctionCallOutputContentItem::InputText {
+                    text: "OCR text".to_string(),
+                },
+            ]),
+        },
+    ];
+
+    let (chat_request, _) = chat_completions_request_from_responses(&request);
+    let body = serde_json::to_value(chat_request).expect("serialize chat request");
+    let content = body["messages"][2]["content"]
+        .as_str()
+        .expect("structured tool output should be serialized as text");
+    let content_items: Value =
+        serde_json::from_str(content).expect("structured output content should be JSON");
+
+    assert_eq!(
+        content_items,
+        json!([
+            {
+                "type": "input_image",
+                "image_url": "data:image/png;base64,Zm9v"
+            },
+            {
+                "type": "input_text",
+                "text": "OCR text"
+            }
+        ])
+    );
+}
+
+#[test]
 fn allocates_distinct_chat_tool_search_name_when_function_name_conflicts() {
     let mut request = base_request(vec![
         json!({
@@ -310,27 +366,70 @@ fn allocates_distinct_chat_tool_search_name_when_function_name_conflicts() {
 #[test]
 fn truncates_tool_search_output_history_for_chat_messages() {
     let mut request = base_request(vec![]);
-    request.input = vec![ResponseItem::ToolSearchOutput {
-        id: None,
-        metadata: None,
-        call_id: Some("search-1".to_string()),
-        status: "completed".to_string(),
-        execution: "client".to_string(),
-        tools: vec![json!({
-            "name": "large_tool",
-            "description": "x".repeat(CHAT_TOOL_SEARCH_OUTPUT_MAX_BYTES * 2),
-        })],
-    }];
+    request.input = vec![
+        ResponseItem::ToolSearchCall {
+            id: None,
+            metadata: None,
+            call_id: Some("search-1".to_string()),
+            status: Some("completed".to_string()),
+            execution: "client".to_string(),
+            arguments: json!({ "query": "large tool" }),
+        },
+        ResponseItem::ToolSearchOutput {
+            id: None,
+            metadata: None,
+            call_id: Some("search-1".to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: vec![json!({
+                "name": "large_tool",
+                "description": "x".repeat(CHAT_TOOL_SEARCH_OUTPUT_MAX_BYTES * 2),
+            })],
+        },
+    ];
 
     let (chat_request, _) = chat_completions_request_from_responses(&request);
     let body = serde_json::to_value(chat_request).expect("serialize chat request");
-    let content = body["messages"][1]["content"]
+    let content = body["messages"][2]["content"]
         .as_str()
         .expect("tool output content should be text");
 
     assert!(content.len() < CHAT_TOOL_SEARCH_OUTPUT_MAX_BYTES + 1_000);
     assert!(content.starts_with("Warning: truncated output"));
     assert!(content.contains("\nTotal output lines:"));
+}
+
+#[test]
+fn skips_orphan_function_call_output_history_for_chat_messages() {
+    let mut request = base_request(vec![]);
+    request.input = vec![
+        ResponseItem::Message {
+            id: None,
+            metadata: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+            phase: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            metadata: None,
+            call_id: "orphan-call".to_string(),
+            output: FunctionCallOutputPayload::from_text("orphan output".to_string()),
+        },
+    ];
+
+    let (chat_request, _) = chat_completions_request_from_responses(&request);
+    let body = serde_json::to_value(chat_request).expect("serialize chat request");
+
+    assert_eq!(
+        body["messages"],
+        json!([
+            { "role": "system", "content": "system prompt" },
+            { "role": "user", "content": "hello" }
+        ])
+    );
 }
 
 #[test]

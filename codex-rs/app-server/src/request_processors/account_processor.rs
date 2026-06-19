@@ -1,4 +1,5 @@
 use super::*;
+use codex_model_provider_info::built_in_model_providers;
 
 mod rate_limit_resets;
 
@@ -862,22 +863,25 @@ impl AccountRequestProcessor {
         &self,
         model_provider: Option<&str>,
     ) -> Result<ModelProviderInfo, JSONRPCErrorError> {
+        let config = self
+            .config_manager
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+            .map_err(|err| invalid_request(format!("failed to reload config: {err}")))?;
         match model_provider {
-            Some(model_provider) => {
-                let config = self
-                    .config_manager
-                    .load_latest_config(/*fallback_cwd*/ None)
-                    .await
-                    .map_err(|err| invalid_request(format!("failed to reload config: {err}")))?;
-                config
-                    .model_providers
-                    .get(model_provider)
-                    .cloned()
-                    .ok_or_else(|| {
-                        invalid_request(format!("unknown modelProvider: {model_provider}"))
-                    })
-            }
-            None => Ok(self.config.model_provider.clone()),
+            Some(model_provider) => config
+                .model_providers
+                .get(model_provider)
+                .cloned()
+                .or_else(|| {
+                    (config.model_provider_id == model_provider)
+                        .then(|| config.model_provider.clone())
+                })
+                .or_else(|| {
+                    built_in_model_providers(/*openai_base_url*/ None).remove(model_provider)
+                })
+                .ok_or_else(|| invalid_request(format!("unknown modelProvider: {model_provider}"))),
+            None => Ok(config.model_provider),
         }
     }
 

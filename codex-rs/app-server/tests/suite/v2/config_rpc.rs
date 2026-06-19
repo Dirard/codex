@@ -195,8 +195,6 @@ args = ["sentinel-auth-arg"]
         "sentinel-key-value",
         "sentinel-authorization-header",
         "sentinel-provider-header",
-        "SENTINEL_PROVIDER_ENV_KEY",
-        "sentinel env instructions",
         "SENTINEL_HEADER_ENV_NAME",
         "sentinel-auth-command",
         "sentinel-auth-arg",
@@ -222,8 +220,11 @@ fn assert_redacted_model_providers(model_providers: &Value) -> Result<()> {
     );
 
     let env_provider = providers.get("env_provider").context("env provider")?;
-    assert_eq!(env_provider["env_key"], redacted);
-    assert_eq!(env_provider["env_key_instructions"], redacted);
+    assert_eq!(env_provider["env_key"], json!("SENTINEL_PROVIDER_ENV_KEY"));
+    assert_eq!(
+        env_provider["env_key_instructions"],
+        json!("sentinel env instructions")
+    );
     assert_eq!(env_provider["env_http_headers"]["x-env-token"], redacted);
 
     let auth_provider = providers.get("auth_provider").context("auth provider")?;
