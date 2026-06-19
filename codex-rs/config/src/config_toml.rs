@@ -929,11 +929,6 @@ pub fn validate_model_providers(
                 "model_providers.{key}: provider aws is only supported for `{AMAZON_BEDROCK_PROVIDER_ID}`"
             ));
         }
-        if provider.requires_openai_auth {
-            return Err(format!(
-                "model_providers.{key}: requires_openai_auth is only supported for built-in OpenAI providers"
-            ));
-        }
         if provider.name.trim().is_empty() {
             return Err(format!(
                 "model_providers.{key}: provider name must not be empty"
@@ -1026,8 +1021,8 @@ mod tests {
     }
 
     #[test]
-    fn model_provider_rejects_custom_openai_auth_requirement() {
-        let err = toml::from_str::<ConfigToml>(
+    fn model_provider_accepts_custom_openai_auth_requirement() {
+        let config = toml::from_str::<ConfigToml>(
             r#"
 [model_providers.openai-custom]
 name = "OpenAI"
@@ -1035,10 +1030,14 @@ base_url = "https://api.openai.com/v1"
 requires_openai_auth = true
 "#,
         )
-        .expect_err("custom provider must not enable OpenAI auth");
+        .expect("custom provider can require OpenAI auth");
 
-        assert!(err.to_string().contains(
-            "model_providers.openai-custom: requires_openai_auth is only supported for built-in OpenAI providers"
-        ));
+        assert!(
+            config
+                .model_providers
+                .get("openai-custom")
+                .expect("provider should deserialize")
+                .requires_openai_auth
+        );
     }
 }

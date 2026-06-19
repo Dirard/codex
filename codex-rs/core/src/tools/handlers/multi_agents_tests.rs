@@ -21,6 +21,7 @@ use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::auth::BedrockApiKeyAuth;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
@@ -1294,6 +1295,56 @@ async fn multi_agent_v2_spawn_partial_fork_can_use_configured_external_model_pro
     assert_eq!(snapshot.model, "glm-5.1");
     assert_eq!(snapshot.model_provider_id, "glm");
     assert_eq!(agent_config.model_provider.wire_api, WireApi::Chat);
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_openai_provider_rejects_bedrock_auth() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    let turn = TurnContext {
+        auth_manager: Some(AuthManager::from_auth_for_testing(
+            CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+                api_key: "bedrock-key".to_string(),
+                region: "us-east-1".to_string(),
+            }),
+        )),
+        config: Arc::new(config),
+        multi_agent_version: codex_protocol::protocol::MultiAgentVersion::V2,
+        ..turn
+    };
+
+    let err = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "bedrock_auth",
+                "fork_turns": "1"
+            })),
+        ))
+        .await
+        .err()
+        .expect("Bedrock auth should not satisfy OpenAI auth preflight");
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "agent_type 'default' selects modelProvider 'openai' which requires OpenAI auth, but no OpenAI auth is configured".to_string(),
+        )
+    );
 }
 
 #[tokio::test]

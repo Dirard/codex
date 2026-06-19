@@ -2179,12 +2179,15 @@ mod tests {
             }
 
             // Only allow "?: T | null" in objects representing JSON-RPC requests,
-            // which we assume are called "*Params".
+            // which we assume are called "*Params". Response payload exceptions
+            // must stay explicit because they are compatibility affordances for
+            // clients reading payloads from older app-server versions.
             let allow_optional_nullable = path
                 .file_stem()
                 .and_then(|stem| stem.to_str())
                 .is_some_and(|stem| {
                     stem.ends_with("Params")
+                        || stem == "Thread"
                         || stem == "InitializeCapabilities"
                         || matches!(
                             stem,

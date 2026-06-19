@@ -147,6 +147,9 @@ pub struct Thread {
     /// Model provider used for this thread (for example, 'openai').
     pub model_provider: String,
     /// Model used for this thread, when known from thread metadata.
+    #[serde(default)]
+    #[ts(type = "string | null")]
+    #[ts(optional)]
     pub model: Option<String>,
     /// Unix timestamp (in seconds) when the thread was created.
     #[ts(type = "number")]

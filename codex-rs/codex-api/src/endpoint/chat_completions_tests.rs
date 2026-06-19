@@ -281,22 +281,8 @@ fn preserves_structured_function_call_output_history_for_chat_messages() {
     let content = body["messages"][2]["content"]
         .as_str()
         .expect("structured tool output should be serialized as text");
-    let content_items: Value =
-        serde_json::from_str(content).expect("structured output content should be JSON");
-
-    assert_eq!(
-        content_items,
-        json!([
-            {
-                "type": "input_image",
-                "image_url": "data:image/png;base64,Zm9v"
-            },
-            {
-                "type": "input_text",
-                "text": "OCR text"
-            }
-        ])
-    );
+    assert_eq!(content, "OCR text");
+    assert!(!content.contains("data:image/png;base64"));
 }
 
 #[test]

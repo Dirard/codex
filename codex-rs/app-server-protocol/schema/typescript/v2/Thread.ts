@@ -36,7 +36,7 @@ modelProvider: string,
 /**
  * Model used for this thread, when known from thread metadata.
  */
-model: string | null,
+model?: string | null,
 /**
  * Unix timestamp (in seconds) when the thread was created.
  */

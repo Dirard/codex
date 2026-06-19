@@ -610,8 +610,7 @@ async fn account_read_unknown_model_provider_returns_invalid_request() -> Result
 }
 
 #[tokio::test]
-async fn account_read_forbidden_custom_openai_auth_returns_invalid_request_without_refresh()
--> Result<()> {
+async fn account_read_accepts_custom_openai_auth_provider() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
     write_chatgpt_auth(
@@ -652,13 +651,13 @@ async fn account_read_forbidden_custom_openai_auth_returns_invalid_request_witho
 model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
-model_provider = "forbidden_provider"
+model_provider = "custom_openai_provider"
 
 [features]
 shell_snapshot = false
 
-[model_providers.forbidden_provider]
-name = "Forbidden provider"
+[model_providers.custom_openai_provider]
+name = "Custom OpenAI provider"
 base_url = "http://127.0.0.1:0/v1"
 wire_api = "responses"
 request_max_retries = 0
@@ -669,22 +668,25 @@ requires_openai_auth = true
 
     let request_id = mcp
         .send_get_account_request(get_account_params_for_provider(
-            "forbidden_provider",
-            /*refresh_token*/ true,
+            "custom_openai_provider",
+            /*refresh_token*/ false,
         ))
         .await?;
-    let err: JSONRPCError = timeout(
+    let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    assert_eq!(err.error.code, -32600);
-    assert!(
-        err.error
-            .message
-            .contains("requires_openai_auth is only supported for built-in OpenAI providers"),
-        "unexpected error: {:?}",
-        err.error.message
+    let received: GetAccountResponse = to_response(resp)?;
+    assert_eq!(
+        received,
+        GetAccountResponse {
+            account: Some(Account::Chatgpt {
+                email: "user@example.com".to_string(),
+                plan_type: AccountPlanType::Pro,
+            }),
+            requires_openai_auth: true,
+        }
     );
     refresh_server.verify().await;
     Ok(())

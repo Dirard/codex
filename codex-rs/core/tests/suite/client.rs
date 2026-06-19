@@ -183,6 +183,47 @@ impl Respond for ChatToolRoundTripResponder {
     }
 }
 
+struct ChatFinalResponder {
+    requests: Arc<Mutex<Vec<serde_json::Value>>>,
+}
+
+impl ChatFinalResponder {
+    fn new(requests: Arc<Mutex<Vec<serde_json::Value>>>) -> Self {
+        Self { requests }
+    }
+}
+
+impl Respond for ChatFinalResponder {
+    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+        let body: serde_json::Value = match serde_json::from_slice(&request.body) {
+            Ok(body) => body,
+            Err(err) => {
+                return ResponseTemplate::new(400)
+                    .set_body_string(format!("chat completions request should be json: {err}"));
+            }
+        };
+        let mut requests = match self.requests.lock() {
+            Ok(requests) => requests,
+            Err(err) => {
+                return ResponseTemplate::new(500)
+                    .set_body_string(format!("chat request log should not be poisoned: {err}"));
+            }
+        };
+        requests.push(body);
+        drop(requests);
+
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_raw(
+                concat!(
+                    "data: {\"id\":\"chatcmpl-final\",\"model\":\"glm-5.1\",\"choices\":[{\"delta\":{\"content\":\"final\"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"id\":\"chatcmpl-final\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                ),
+                "text/event-stream",
+            )
+    }
+}
+
 #[expect(clippy::unwrap_used)]
 fn assert_message_role(request_body: &serde_json::Value, role: &str) {
     assert_eq!(request_body["role"].as_str().unwrap(), role);
@@ -1081,6 +1122,194 @@ async fn wire_api_chat_round_trips_function_tool_calls() {
     let second_body = chat_requests[1].to_string();
     assert!(second_body.contains("\"tool_call_id\":\"call-shell\""));
     assert!(second_body.contains("chat-tool-ok"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wire_api_chat_serializes_structured_tool_history_without_image_blobs() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let chat_requests = Arc::new(Mutex::new(Vec::new()));
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ChatFinalResponder::new(Arc::clone(&chat_requests)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let provider = ModelProviderInfo {
+        name: "GLM".into(),
+        base_url: Some(format!("{}/v1", server.uri())),
+        models: Vec::new(),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        aws: None,
+        wire_api: WireApi::Chat,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    };
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.model_provider_id = provider.name.clone();
+    config.model_provider = provider.clone();
+    let effort = config.model_reasoning_effort.clone();
+    let summary = config.model_reasoning_summary;
+    let model = "glm-5.1".to_string();
+    config.model = Some(model.clone());
+    let config = Arc::new(config);
+    let model_info =
+        codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
+    let thread_id = ThreadId::new();
+    let session_telemetry = SessionTelemetry::new(
+        thread_id,
+        model.as_str(),
+        model_info.slug.as_str(),
+        /*account_id*/ None,
+        Some("test@test.com".to_string()),
+        /*auth_mode*/ None,
+        "test_originator".to_string(),
+        /*log_user_prompts*/ false,
+        "test".to_string(),
+        SessionSource::Exec,
+    );
+    let client = ModelClient::new(
+        Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
+            "unused-api-key",
+        ))),
+        thread_id,
+        provider,
+        SessionSource::Exec,
+        config.model_verbosity,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+        /*attestation_provider*/ None,
+    );
+    let responses_metadata = test_turn_responses_metadata(&client, thread_id);
+    let mut client_session = client.new_session();
+    let mut prompt = Prompt::default();
+    prompt.input.push(ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "hello".to_string(),
+        }],
+        phase: None,
+        metadata: None,
+    });
+    prompt.input.push(ResponseItem::FunctionCall {
+        id: None,
+        name: "lookup".to_string(),
+        namespace: Some("mcp__demo__".to_string()),
+        arguments: "{}".to_string(),
+        call_id: "call-namespace".to_string(),
+        metadata: None,
+    });
+    prompt.input.push(ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: "call-namespace".to_string(),
+        output: FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "OCR text".to_string(),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,Zm9v".to_string(),
+                detail: None,
+            },
+        ]),
+        metadata: None,
+    });
+    prompt.input.push(ResponseItem::CustomToolCall {
+        id: None,
+        status: Some("completed".to_string()),
+        call_id: "call-custom".to_string(),
+        name: "custom_tool".to_string(),
+        input: "raw custom input".to_string(),
+        metadata: None,
+    });
+    prompt.input.push(ResponseItem::CustomToolCallOutput {
+        id: None,
+        call_id: "call-custom".to_string(),
+        name: Some("custom_tool".to_string()),
+        output: FunctionCallOutputPayload::from_text("custom ok".to_string()),
+        metadata: None,
+    });
+    prompt.input.push(ResponseItem::ToolSearchCall {
+        id: None,
+        call_id: Some("call-tool-search".to_string()),
+        status: Some("completed".to_string()),
+        execution: "client".to_string(),
+        arguments: json!({ "query": "lookup" }),
+        metadata: None,
+    });
+    prompt.input.push(ResponseItem::ToolSearchOutput {
+        id: None,
+        call_id: Some("call-tool-search".to_string()),
+        status: "completed".to_string(),
+        execution: "client".to_string(),
+        tools: vec![json!({ "name": "lookup" })],
+        metadata: None,
+    });
+
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &model_info,
+            &session_telemetry,
+            effort,
+            summary.unwrap_or(ReasoningSummary::Auto),
+            /*service_tier*/ None,
+            &responses_metadata,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
+        )
+        .await
+        .expect("chat stream to start");
+
+    while let Some(event) = stream.next().await {
+        if let Ok(ResponseEvent::Completed { .. }) = event {
+            break;
+        }
+    }
+
+    let chat_requests = chat_requests
+        .lock()
+        .expect("chat request log should not be poisoned");
+    assert_eq!(chat_requests.len(), 1);
+    let request = &chat_requests[0];
+    let request_body = request.to_string();
+    assert!(request_body.contains("OCR text"));
+    assert!(!request_body.contains("data:image/png;base64"));
+    let messages = request["messages"]
+        .as_array()
+        .expect("chat request should include messages");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message["content"] == "OCR text")
+    );
+    let tool_call_names = messages
+        .iter()
+        .flat_map(|message| message["tool_calls"].as_array().into_iter().flatten())
+        .filter_map(|tool_call| tool_call["function"]["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(tool_call_names.contains(&"mcp__demo__lookup"));
+    assert!(tool_call_names.contains(&"custom_tool"));
+    assert!(tool_call_names.contains(&"tool_search"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

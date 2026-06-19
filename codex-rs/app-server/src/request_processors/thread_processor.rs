@@ -1073,11 +1073,17 @@ impl ThreadRequestProcessor {
             &typesafe_overrides,
             "thread/start",
         )?;
-        model_selection.reject_provider_without_model("thread/start")?;
         let mut config = config_manager
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
             .await
             .map_err(|err| config_load_error(&err))?;
+        model_selection::apply_loaded_config_model_selection(
+            &listener_task_context.thread_manager,
+            &mut config,
+            &model_selection,
+            "thread/start",
+        )
+        .await?;
 
         // The user may have requested WorkspaceWrite or DangerFullAccess via
         // the command line, though in the process of deriving the Config, it

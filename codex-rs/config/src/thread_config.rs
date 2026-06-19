@@ -306,7 +306,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn loader_rejects_session_openai_auth_custom_provider() {
+    async fn loader_accepts_session_openai_auth_custom_provider() {
         let loader =
             StaticThreadConfigLoader::new(vec![ThreadConfigSource::Session(SessionThreadConfig {
                 model_provider: Some("local".to_string()),
@@ -322,15 +322,28 @@ mod tests {
                 features: BTreeMap::new(),
             })]);
 
-        let err = loader
+        let layers = loader
             .load_config_layers(ThreadConfigContext::default())
             .await
-            .expect_err("session custom provider must not enable OpenAI auth");
+            .expect("session custom provider can require OpenAI auth");
 
-        assert_eq!(err.code(), ThreadConfigLoadErrorCode::Parse);
-        assert!(err.to_string().contains(
-            "model_providers.local: requires_openai_auth is only supported for built-in OpenAI providers"
-        ));
+        assert_eq!(
+            layers,
+            vec![ConfigLayerEntry::new(
+                ConfigLayerSource::SessionFlags,
+                toml::toml! {
+                    model_provider = "local"
+
+                    [model_providers.local]
+                    name = "Local"
+                    base_url = "http://localhost:11434/v1"
+                    wire_api = "responses"
+                    requires_openai_auth = true
+                    supports_websockets = false
+                }
+                .into()
+            )]
+        );
     }
 
     fn test_provider(name: &str) -> ModelProviderInfo {

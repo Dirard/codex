@@ -252,47 +252,64 @@ fn truncate_function_output_item_lines(
     items: &[FunctionCallOutputContentItem],
     max_lines: usize,
 ) -> Vec<FunctionCallOutputContentItem> {
-    let text_segments = items
+    let total_lines = items
         .iter()
-        .filter_map(|item| match item {
-            FunctionCallOutputContentItem::InputText { text } => Some(text.as_str()),
+        .map(|item| match item {
+            FunctionCallOutputContentItem::InputText { text } => text.lines().count(),
             FunctionCallOutputContentItem::InputImage { .. }
-            | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
+            | FunctionCallOutputContentItem::EncryptedContent { .. } => 0,
         })
-        .collect::<Vec<_>>();
+        .sum::<usize>();
 
-    if text_segments.is_empty() {
+    if total_lines <= max_lines {
         return items.to_vec();
     }
 
-    let mut combined = String::new();
-    for text in &text_segments {
-        if !combined.is_empty() {
-            combined.push('\n');
+    let omitted_lines = total_lines.saturating_sub(max_lines);
+    let marker = format!("…{omitted_lines} lines truncated…");
+    let head_count = max_lines.saturating_add(1) / 2;
+    let tail_count = max_lines.saturating_sub(head_count);
+    let tail_start = total_lines.saturating_sub(tail_count);
+    let mut out = Vec::new();
+    let mut text_line_index = 0usize;
+    let mut marker_inserted = false;
+    let mut current_text = String::new();
+
+    for item in items {
+        match item {
+            FunctionCallOutputContentItem::InputText { text } => {
+                for line in text.lines() {
+                    let keep_line = text_line_index < head_count || text_line_index >= tail_start;
+                    if keep_line {
+                        if !current_text.is_empty() {
+                            current_text.push('\n');
+                        }
+                        current_text.push_str(line);
+                    } else if !marker_inserted {
+                        if !current_text.is_empty() {
+                            current_text.push('\n');
+                        }
+                        current_text.push_str(&marker);
+                        marker_inserted = true;
+                    }
+                    text_line_index += 1;
+                }
+            }
+            FunctionCallOutputContentItem::InputImage { .. }
+            | FunctionCallOutputContentItem::EncryptedContent { .. } => {
+                if !current_text.is_empty() {
+                    out.push(FunctionCallOutputContentItem::InputText {
+                        text: std::mem::take(&mut current_text),
+                    });
+                }
+                out.push(item.clone());
+            }
         }
-        combined.push_str(text);
     }
 
-    let truncated = truncate_middle_lines(&combined, max_lines);
-    if truncated == combined {
-        return items.to_vec();
+    if !current_text.is_empty() {
+        out.push(FunctionCallOutputContentItem::InputText { text: current_text });
     }
-
-    let mut out = vec![FunctionCallOutputContentItem::InputText { text: truncated }];
-    out.extend(items.iter().filter_map(|item| match item {
-        FunctionCallOutputContentItem::InputImage { image_url, detail } => {
-            Some(FunctionCallOutputContentItem::InputImage {
-                image_url: image_url.clone(),
-                detail: *detail,
-            })
-        }
-        FunctionCallOutputContentItem::EncryptedContent { encrypted_content } => {
-            Some(FunctionCallOutputContentItem::EncryptedContent {
-                encrypted_content: encrypted_content.clone(),
-            })
-        }
-        FunctionCallOutputContentItem::InputText { .. } => None,
-    }));
 
     out
 }

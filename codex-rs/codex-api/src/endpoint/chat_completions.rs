@@ -584,7 +584,10 @@ fn agent_message_content_to_text(
 }
 
 fn output_payload_to_text(output: &FunctionCallOutputPayload) -> String {
-    output.to_string()
+    output
+        .body
+        .to_text()
+        .unwrap_or_else(|| "[structured tool output omitted]".to_string())
 }
 
 fn capped_chat_tool_search_output(output: Value) -> String {

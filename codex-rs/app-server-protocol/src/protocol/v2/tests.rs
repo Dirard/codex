@@ -221,6 +221,36 @@ fn thread_resume_response_round_trips_initial_turns_page() {
 }
 
 #[test]
+fn thread_deserializes_legacy_payload_without_model() {
+    let thread: Thread = serde_json::from_value(json!({
+        "id": "thr_123",
+        "sessionId": "sess_123",
+        "forkedFromId": null,
+        "parentThreadId": null,
+        "preview": "hello",
+        "ephemeral": false,
+        "modelProvider": "openai",
+        "createdAt": 1,
+        "updatedAt": 2,
+        "recencyAt": 2,
+        "status": { "type": "notLoaded" },
+        "path": null,
+        "cwd": absolute_path_string("tmp"),
+        "cliVersion": "0.0.0",
+        "source": "exec",
+        "threadSource": null,
+        "agentNickname": null,
+        "agentRole": null,
+        "gitInfo": null,
+        "name": null,
+        "turns": []
+    }))
+    .expect("legacy Thread payload should deserialize");
+
+    assert_eq!(thread.model, None);
+}
+
+#[test]
 fn thread_turns_items_list_round_trips() {
     let params = ThreadTurnsItemsListParams {
         thread_id: "thr_123".to_string(),

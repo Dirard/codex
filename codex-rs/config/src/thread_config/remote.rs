@@ -436,8 +436,8 @@ mod tests {
     }
 
     #[test]
-    fn session_thread_config_proto_rejects_openai_auth_custom_provider() {
-        let err = session_thread_config_from_proto(proto::SessionThreadConfig {
+    fn session_thread_config_proto_accepts_openai_auth_custom_provider() {
+        let config = session_thread_config_from_proto(proto::SessionThreadConfig {
             model_provider: Some("local".to_string()),
             model_providers: vec![proto::ModelProvider {
                 id: "local".to_string(),
@@ -449,12 +449,15 @@ mod tests {
             }],
             features: HashMap::new(),
         })
-        .expect_err("remote custom provider must not enable OpenAI auth");
+        .expect("remote custom provider can require OpenAI auth");
 
-        assert_eq!(err.code(), ThreadConfigLoadErrorCode::Parse);
-        assert!(err.to_string().contains(
-            "model_providers.local: requires_openai_auth is only supported for built-in OpenAI providers"
-        ));
+        assert!(
+            config
+                .model_providers
+                .get("local")
+                .expect("provider should deserialize")
+                .requires_openai_auth
+        );
     }
 
     fn proto_sources() -> Vec<proto::ThreadConfigSource> {

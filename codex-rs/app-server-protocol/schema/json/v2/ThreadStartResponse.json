@@ -1053,6 +1053,7 @@
           "type": "string"
         },
         "model": {
+          "default": null,
           "description": "Model used for this thread, when known from thread metadata.",
           "type": [
             "string",

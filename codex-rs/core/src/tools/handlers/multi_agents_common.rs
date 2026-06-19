@@ -8,6 +8,7 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use codex_app_server_protocol::AuthMode;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -259,7 +260,16 @@ pub(crate) fn ensure_spawn_agent_provider_auth(
         .auth_manager
         .as_ref()
         .and_then(|auth_manager| auth_manager.auth_mode())
-        .is_some();
+        .is_some_and(|auth_mode| {
+            matches!(
+                auth_mode,
+                AuthMode::ApiKey
+                    | AuthMode::Chatgpt
+                    | AuthMode::ChatgptAuthTokens
+                    | AuthMode::AgentIdentity
+                    | AuthMode::PersonalAccessToken
+            )
+        });
     if has_openai_auth {
         return Ok(());
     }

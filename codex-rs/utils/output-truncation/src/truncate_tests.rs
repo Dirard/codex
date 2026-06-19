@@ -213,6 +213,52 @@ fn truncate_function_output_items_with_config_applies_line_limit_to_text_items()
 }
 
 #[test]
+fn truncate_function_output_items_with_config_preserves_item_order() {
+    let items = vec![
+        FunctionCallOutputContentItem::InputText {
+            text: (1..=6)
+                .map(|line| format!("line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        },
+        FunctionCallOutputContentItem::InputImage {
+            image_url: "img:middle".to_string(),
+            detail: Some(DEFAULT_IMAGE_DETAIL),
+        },
+        FunctionCallOutputContentItem::InputText {
+            text: (7..=12)
+                .map(|line| format!("line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        },
+    ];
+
+    let output = truncate_function_output_items_with_config(
+        &items,
+        OutputTruncation::new(TruncationPolicy::Bytes(1024), Some(4)),
+    );
+
+    assert_eq!(
+        output,
+        vec![
+            FunctionCallOutputContentItem::InputText {
+                text: format!(
+                    "line 1\nline 2\n{}8 lines truncated{}",
+                    '\u{2026}', '\u{2026}'
+                ),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "img:middle".to_string(),
+                detail: Some(DEFAULT_IMAGE_DETAIL),
+            },
+            FunctionCallOutputContentItem::InputText {
+                text: "line 11\nline 12".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
 fn truncates_across_multiple_under_limit_texts_and_reports_omitted() {
     let chunk = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega.\n";
     let chunk_tokens = approx_token_count(chunk);

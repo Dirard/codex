@@ -420,7 +420,8 @@ async fn thread_start_infers_custom_provider_from_model_only_selection() -> Resu
 }
 
 #[tokio::test]
-async fn thread_start_rejects_invalid_custom_provider_model_selection() -> Result<()> {
+async fn thread_start_accepts_provider_only_and_rejects_invalid_custom_provider_model_selection()
+-> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_with_provider_models(codex_home.path(), &server.uri(), &["custom-a"])?;
@@ -434,13 +435,21 @@ async fn thread_start_rejects_invalid_custom_provider_model_selection() -> Resul
             ..Default::default()
         })
         .await?;
-    let err: JSONRPCError = timeout(
+    let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(provider_without_model_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(provider_without_model_id)),
     )
     .await??;
-    assert_eq!(err.error.code, INVALID_REQUEST_ERROR_CODE);
-    assert!(err.error.message.contains("modelProvider requires model"));
+    let ThreadStartResponse {
+        thread,
+        model,
+        model_provider,
+        ..
+    } = to_response::<ThreadStartResponse>(resp)?;
+    assert_eq!(model, "custom-a");
+    assert_eq!(model_provider, "mock_provider");
+    assert_eq!(thread.model_provider, "mock_provider");
+    assert_eq!(thread.model.as_deref(), Some("custom-a"));
 
     let unavailable_model_id = mcp
         .send_thread_start_request(ThreadStartParams {
