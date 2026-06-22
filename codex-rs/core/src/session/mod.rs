@@ -1542,7 +1542,7 @@ impl Session {
             )
         };
         let has_prior_user_turns = initial_history_has_prior_user_turns(&conversation_history);
-        {
+        let processed_items = {
             let mut state = self.state.lock().await;
             state.set_next_turn_is_first(!has_prior_user_turns);
         }
@@ -3646,7 +3646,7 @@ impl Session {
             }
             state
                 .history
-                .record_annotated_items(&mut items, model_info.truncation_policy.into());
+                .record_annotated_items(&mut items, turn_context.output_truncation());
         }
         for image in image_preparations {
             self.services
@@ -4011,7 +4011,7 @@ impl Session {
             state.current_time_reminder.note_recorded_items(items);
             state.history.record_annotated_items(
                 std::slice::from_mut(&mut response_item),
-                model_info.truncation_policy.into(),
+                turn_context.output_truncation(),
             );
         }
         self.persist_rollout_items(&[
