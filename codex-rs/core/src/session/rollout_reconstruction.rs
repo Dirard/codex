@@ -503,6 +503,9 @@ impl ContextManager {
                 None,
             );
         }
+        // Materialize exact history semantics from the replay-derived suffix. The eventual lazy
+        // design should keep this same replay shape, but drive it from a resumable reverse source
+        // instead of an eagerly loaded `&[RolloutItem]`.
         let rollout_suffix =
             history_checkpoint.map_or(rollout_items, |checkpoint| checkpoint.suffix);
         for item in rollout_suffix {

@@ -4,6 +4,7 @@ use crate::shell::default_user_shell;
 use crate::shell::get_shell;
 #[cfg(not(windows))]
 use codex_exec_server::Environment;
+use codex_utils_output_truncation::OutputTruncation;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
@@ -24,6 +25,10 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use tokio::sync::Mutex;
 
 const TEST_TRUNCATION_POLICY: TruncationPolicy = TruncationPolicy::Tokens(10_000);
+
+fn test_truncation() -> OutputTruncation {
+    OutputTruncation::new(TEST_TRUNCATION_POLICY, None)
+}
 
 async fn invocation_for_payload(
     tool_name: &str,
@@ -525,7 +530,7 @@ async fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_s
         chunk_id: "chunk-1".to_string(),
         wall_time: std::time::Duration::from_millis(498),
         raw_output: b"three".to_vec(),
-        truncation_policy: TEST_TRUNCATION_POLICY,
+        truncation: test_truncation(),
         max_output_tokens: None,
         process_id: None,
         exit_code: Some(0),
@@ -556,7 +561,7 @@ async fn exec_command_post_tool_use_payload_uses_output_for_interactive_completi
         chunk_id: "chunk-1".to_string(),
         wall_time: std::time::Duration::from_millis(498),
         raw_output: b"three".to_vec(),
-        truncation_policy: TEST_TRUNCATION_POLICY,
+        truncation: test_truncation(),
         max_output_tokens: None,
         process_id: None,
         exit_code: Some(0),
@@ -588,7 +593,7 @@ async fn exec_command_post_tool_use_payload_skips_running_sessions() {
         chunk_id: "chunk-1".to_string(),
         wall_time: std::time::Duration::from_millis(498),
         raw_output: b"three".to_vec(),
-        truncation_policy: TEST_TRUNCATION_POLICY,
+        truncation: test_truncation(),
         max_output_tokens: None,
         process_id: Some(45),
         exit_code: None,
@@ -615,7 +620,7 @@ async fn write_stdin_post_tool_use_payload_uses_original_exec_call_id_and_comman
         chunk_id: "chunk-2".to_string(),
         wall_time: std::time::Duration::from_millis(498),
         raw_output: b"finished\n".to_vec(),
-        truncation_policy: TEST_TRUNCATION_POLICY,
+        truncation: test_truncation(),
         max_output_tokens: None,
         process_id: None,
         exit_code: Some(0),
@@ -647,7 +652,7 @@ async fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separ
         chunk_id: "chunk-a".to_string(),
         wall_time: std::time::Duration::from_millis(498),
         raw_output: b"alpha\n".to_vec(),
-        truncation_policy: TEST_TRUNCATION_POLICY,
+        truncation: test_truncation(),
         max_output_tokens: None,
         process_id: None,
         exit_code: Some(0),
@@ -660,7 +665,7 @@ async fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separ
         chunk_id: "chunk-b".to_string(),
         wall_time: std::time::Duration::from_millis(498),
         raw_output: b"beta\n".to_vec(),
-        truncation_policy: TEST_TRUNCATION_POLICY,
+        truncation: test_truncation(),
         max_output_tokens: None,
         process_id: None,
         exit_code: Some(0),
