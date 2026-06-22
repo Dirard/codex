@@ -1,10 +1,13 @@
+use crate::OutputTruncation;
 use crate::TruncationPolicy;
 use crate::approx_token_count;
 use crate::approx_tokens_from_byte_count_i64;
 use crate::formatted_truncate_text;
 use crate::formatted_truncate_text_content_items_with_policy;
+use crate::truncate_function_output_items_with_config;
 use crate::truncate_function_output_items_with_policy;
 use crate::truncate_text;
+use crate::truncate_text_with_config;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use pretty_assertions::assert_eq;
@@ -96,6 +99,79 @@ fn truncate_middle_bytes_handles_utf8_content() {
     let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
     let out = truncate_text(s, TruncationPolicy::Bytes(20));
     assert_eq!(out, "😀😀…21 chars truncated…with text\n");
+}
+
+#[test]
+fn truncate_text_with_config_truncates_by_lines_before_bytes() {
+    let content = "line1\nline2\nline3\nline4\nline5";
+    let config = OutputTruncation::new(TruncationPolicy::Bytes(usize::MAX), Some(3));
+
+    assert_eq!(
+        truncate_text_with_config(content, config),
+        "line1\nline2\n... 2 lines truncated ...\nline5",
+    );
+}
+
+#[test]
+fn for_mcp_output_preserves_general_line_limit_without_override() {
+    let config = OutputTruncation::new_with_mcp_max_lines(
+        TruncationPolicy::Bytes(usize::MAX),
+        /*max_lines*/ Some(4),
+        /*mcp_max_lines*/ None,
+    )
+    .for_mcp_output();
+
+    assert_eq!(config.max_lines, Some(4));
+}
+
+#[test]
+fn for_mcp_output_clamps_mcp_line_limit_to_general_limit() {
+    let config = OutputTruncation::new_with_mcp_max_lines(
+        TruncationPolicy::Bytes(usize::MAX),
+        /*max_lines*/ Some(4),
+        /*mcp_max_lines*/ Some(10),
+    )
+    .for_mcp_output();
+
+    assert_eq!(config.max_lines, Some(4));
+}
+
+#[test]
+fn truncate_function_output_items_with_config_uses_mcp_line_limit() {
+    let items = vec![
+        FunctionCallOutputContentItem::InputText {
+            text: "line1\nline2\nline3".to_string(),
+        },
+        FunctionCallOutputContentItem::InputImage {
+            image_url: "img:mid".to_string(),
+            detail: Some(DEFAULT_IMAGE_DETAIL),
+        },
+        FunctionCallOutputContentItem::InputText {
+            text: "line4\nline5".to_string(),
+        },
+    ];
+    let config = OutputTruncation::new_with_mcp_max_lines(
+        TruncationPolicy::Bytes(usize::MAX),
+        Some(10),
+        Some(2),
+    )
+    .for_mcp_output();
+
+    assert_eq!(
+        truncate_function_output_items_with_config(&items, config, |_| 0),
+        vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "line1\n... 3 lines truncated ...".to_string(),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "img:mid".to_string(),
+                detail: Some(DEFAULT_IMAGE_DETAIL),
+            },
+            FunctionCallOutputContentItem::InputText {
+                text: "line5".to_string(),
+            },
+        ],
+    );
 }
 
 #[test]
