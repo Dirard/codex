@@ -9,6 +9,56 @@ use codex_utils_string::truncate_middle_with_token_budget;
 
 pub use codex_protocol::protocol::TruncationPolicy;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputTruncation {
+    pub policy: TruncationPolicy,
+    pub max_lines: Option<usize>,
+    pub mcp_max_lines: Option<usize>,
+}
+
+impl OutputTruncation {
+    pub const fn new(policy: TruncationPolicy, max_lines: Option<usize>) -> Self {
+        Self {
+            policy,
+            max_lines,
+            mcp_max_lines: None,
+        }
+    }
+
+    pub const fn new_with_mcp_max_lines(
+        policy: TruncationPolicy,
+        max_lines: Option<usize>,
+        mcp_max_lines: Option<usize>,
+    ) -> Self {
+        Self {
+            policy,
+            max_lines,
+            mcp_max_lines,
+        }
+    }
+
+    pub fn with_policy(self, policy: TruncationPolicy) -> Self {
+        Self { policy, ..self }
+    }
+
+    pub fn for_mcp_output(self) -> Self {
+        let max_lines = match (self.max_lines, self.mcp_max_lines) {
+            (Some(max_lines), Some(mcp_max_lines)) => Some(max_lines.min(mcp_max_lines)),
+            (Some(max_lines), None) => Some(max_lines),
+            (None, Some(mcp_max_lines)) => Some(mcp_max_lines),
+            (None, None) => None,
+        };
+
+        Self { max_lines, ..self }
+    }
+}
+
+impl From<TruncationPolicy> for OutputTruncation {
+    fn from(policy: TruncationPolicy) -> Self {
+        Self::new(policy, None)
+    }
+}
+
 pub fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -> String {
     if content.len() <= policy.byte_budget() {
         return content.to_string();
@@ -22,11 +72,63 @@ pub fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -> Strin
     )
 }
 
+pub fn formatted_truncate_text_with_config(content: &str, config: OutputTruncation) -> String {
+    let total_lines = content.lines().count();
+    let result = truncate_text_with_config(content, config);
+    if result == content {
+        return content.to_string();
+    }
+
+    format!("Total output lines: {total_lines}\n\n{result}")
+}
+
 pub fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
     match policy {
         TruncationPolicy::Bytes(bytes) => truncate_middle_chars(content, bytes),
         TruncationPolicy::Tokens(tokens) => truncate_middle_with_token_budget(content, tokens).0,
     }
+}
+
+pub fn truncate_text_with_config(content: &str, config: OutputTruncation) -> String {
+    let line_limited = match config.max_lines {
+        Some(max_lines) => truncate_middle_lines(content, max_lines),
+        None => content.to_string(),
+    };
+
+    truncate_text(&line_limited, config.policy)
+}
+
+fn truncate_middle_lines(content: &str, max_lines: usize) -> String {
+    let lines = content.lines().collect::<Vec<_>>();
+    let total_lines = lines.len();
+    if total_lines <= max_lines {
+        return content.to_string();
+    }
+
+    let omitted_lines = total_lines.saturating_sub(max_lines);
+    let marker = format!("... {omitted_lines} lines truncated ...");
+    if max_lines == 0 {
+        return marker;
+    }
+
+    let head_count = max_lines.saturating_add(1) / 2;
+    let tail_count = max_lines.saturating_sub(head_count);
+    let mut out = String::new();
+    for line in lines.iter().take(head_count) {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(line);
+    }
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(&marker);
+    for line in lines.iter().skip(total_lines.saturating_sub(tail_count)) {
+        out.push('\n');
+        out.push_str(line);
+    }
+    out
 }
 
 pub fn formatted_truncate_text_content_items_with_policy(
@@ -139,6 +241,84 @@ pub fn truncate_function_output_items_with_policy(
         out.push(FunctionCallOutputContentItem::InputText {
             text: format!("[omitted {omitted_text_items} text items ...]"),
         });
+    }
+
+    out
+}
+
+pub fn truncate_function_output_items_with_config(
+    items: &[FunctionCallOutputContentItem],
+    config: OutputTruncation,
+) -> Vec<FunctionCallOutputContentItem> {
+    let line_limited_items = match config.max_lines {
+        Some(max_lines) => truncate_function_output_item_lines(items, max_lines),
+        None => items.to_vec(),
+    };
+
+    truncate_function_output_items_with_policy(&line_limited_items, config.policy)
+}
+
+fn truncate_function_output_item_lines(
+    items: &[FunctionCallOutputContentItem],
+    max_lines: usize,
+) -> Vec<FunctionCallOutputContentItem> {
+    let total_lines = items
+        .iter()
+        .map(|item| match item {
+            FunctionCallOutputContentItem::InputText { text } => text.lines().count(),
+            FunctionCallOutputContentItem::InputImage { .. }
+            | FunctionCallOutputContentItem::EncryptedContent { .. } => 0,
+        })
+        .sum::<usize>();
+
+    if total_lines <= max_lines {
+        return items.to_vec();
+    }
+
+    let omitted_lines = total_lines.saturating_sub(max_lines);
+    let marker = format!("... {omitted_lines} lines truncated ...");
+    let head_count = max_lines.saturating_add(1) / 2;
+    let tail_count = max_lines.saturating_sub(head_count);
+    let tail_start = total_lines.saturating_sub(tail_count);
+    let mut out = Vec::new();
+    let mut text_line_index = 0usize;
+    let mut marker_inserted = false;
+    let mut current_text = String::new();
+
+    for item in items {
+        match item {
+            FunctionCallOutputContentItem::InputText { text } => {
+                for line in text.lines() {
+                    let keep_line = text_line_index < head_count || text_line_index >= tail_start;
+                    if keep_line {
+                        if !current_text.is_empty() {
+                            current_text.push('\n');
+                        }
+                        current_text.push_str(line);
+                    } else if !marker_inserted {
+                        if !current_text.is_empty() {
+                            current_text.push('\n');
+                        }
+                        current_text.push_str(&marker);
+                        marker_inserted = true;
+                    }
+                    text_line_index += 1;
+                }
+            }
+            FunctionCallOutputContentItem::InputImage { .. }
+            | FunctionCallOutputContentItem::EncryptedContent { .. } => {
+                if !current_text.is_empty() {
+                    out.push(FunctionCallOutputContentItem::InputText {
+                        text: std::mem::take(&mut current_text),
+                    });
+                }
+                out.push(item.clone());
+            }
+        }
+    }
+
+    if !current_text.is_empty() {
+        out.push(FunctionCallOutputContentItem::InputText { text: current_text });
     }
 
     out

@@ -308,7 +308,7 @@ pub(crate) async fn execute_user_shell_command(
                         duration: Some(output.duration),
                         formatted_output: Some(format_exec_output_str(
                             &output,
-                            turn_context.model_info.truncation_policy.into(),
+                            turn_context.output_truncation(),
                         )),
                     }),
                 )
@@ -347,7 +347,7 @@ pub(crate) async fn execute_user_shell_command(
                         duration: Some(exec_output.duration),
                         formatted_output: Some(format_exec_output_str(
                             &exec_output,
-                            turn_context.model_info.truncation_policy.into(),
+                            turn_context.output_truncation(),
                         )),
                     }),
                 )

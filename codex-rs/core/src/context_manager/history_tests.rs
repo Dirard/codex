@@ -28,6 +28,7 @@ use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnContextItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_output_truncation::OutputTruncation;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use image::ImageBuffer;
@@ -1249,6 +1250,34 @@ fn record_items_respects_custom_token_limit() {
         stored
             .text_content()
             .is_some_and(|content| content.contains("tokens truncated"))
+    );
+}
+
+#[test]
+fn record_items_returns_processed_items_for_rollout_persistence() {
+    let mut history = ContextManager::new();
+    let policy =
+        OutputTruncation::new(TruncationPolicy::Bytes(100_000), /*max_lines*/ Some(3));
+    let item = ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: "call-line-limit".to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text("line1\nline2\nline3\nline4\nline5".to_string()),
+            success: Some(true),
+        },
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    let processed_items = history.record_items([&item], policy);
+
+    assert_eq!(processed_items, history.items);
+    let stored = match &processed_items[0] {
+        ResponseItem::FunctionCallOutput { output, .. } => output,
+        other => panic!("unexpected history item: {other:?}"),
+    };
+    assert_eq!(
+        stored.text_content().as_deref(),
+        Some("Total output lines: 5\n\nline1\nline2\n... 2 lines truncated ...\nline5")
     );
 }
 
