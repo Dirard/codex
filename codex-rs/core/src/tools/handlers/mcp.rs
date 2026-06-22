@@ -219,11 +219,18 @@ impl McpHandler {
         };
 
         // Capture presentation policy from the same config snapshot used for execution.
-        let truncation_policy = prepared_mcp_call
+        let configured_truncation = turn.output_truncation();
+        let truncation = prepared_mcp_call
             .as_ref()
             .and_then(codex_mcp::PreparedMcpCall::output_token_limit)
             .map(TruncationPolicy::Tokens)
-            .unwrap_or(turn.model_info().truncation_policy.into());
+            .map_or(configured_truncation, |tool_policy| {
+                if tool_policy.byte_budget() < configured_truncation.policy.byte_budget() {
+                    configured_truncation.with_policy(tool_policy)
+                } else {
+                    configured_truncation
+                }
+            });
         let started = Instant::now();
         let result = handle_mcp_tool_call(
             Arc::clone(&session),
@@ -244,7 +251,7 @@ impl McpHandler {
             tool_input: result.tool_input,
             wall_time: started.elapsed(),
             original_image_detail_supported: can_request_original_image_detail(turn.model_info()),
-            truncation_policy,
+            truncation,
         }))
     }
 }
@@ -688,7 +695,10 @@ mod tests {
             }),
             wall_time: Duration::from_millis(42),
             original_image_detail_supported: true,
-            truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(1024),
+            truncation: codex_utils_output_truncation::OutputTruncation::new(
+                codex_utils_output_truncation::TruncationPolicy::Bytes(1024),
+                None,
+            ),
         };
         let (session, turn) = make_session_and_context().await;
         let turn = Arc::new(turn);
