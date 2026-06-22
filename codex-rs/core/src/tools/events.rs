@@ -386,7 +386,7 @@ impl ToolEmitter {
         output: &ExecToolCallOutput,
         ctx: ToolEventCtx<'_>,
     ) -> String {
-        super::format_exec_output_for_model(output, ctx.model_info.truncation_policy.into())
+        super::format_exec_output_for_model(output, ctx.turn.output_truncation())
     }
 
     pub async fn finish(
