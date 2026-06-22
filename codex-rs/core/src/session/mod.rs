@@ -1339,7 +1339,7 @@ impl Session {
             )
         };
         let has_prior_user_turns = initial_history_has_prior_user_turns(&conversation_history);
-        {
+        let processed_items = {
             let mut state = self.state.lock().await;
             state.set_next_turn_is_first(!has_prior_user_turns);
         }
@@ -3055,9 +3055,10 @@ impl Session {
             state
                 .current_time_reminder
                 .note_recorded_items(&response_items);
-            state
-                .history
-                .record_annotated_items(&items, turn_context.model_info.truncation_policy.into());
+            state.history.record_annotated_items(
+                &items,
+                turn_context.output_truncation(),
+            )
         }
         for image in image_preparations {
             self.services
@@ -3068,7 +3069,7 @@ impl Session {
                 });
         }
         let rollout_items: Vec<RolloutItem> =
-            items.into_iter().map(RolloutItem::ResponseItem).collect();
+            processed_items.into_iter().map(RolloutItem::ResponseItem).collect();
         self.persist_rollout_items(&rollout_items).await;
         self.send_raw_response_items(turn_context, &response_items)
             .await;
@@ -3250,10 +3251,7 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             state.current_time_reminder.note_recorded_items(items);
-            state.record_items(
-                items.iter(),
-                turn_context.model_info.truncation_policy.into(),
-            );
+            let _ = state.record_items(items.iter(), turn_context.output_truncation());
         }
         self.persist_rollout_items(&[
             RolloutItem::InterAgentCommunicationMetadata {
