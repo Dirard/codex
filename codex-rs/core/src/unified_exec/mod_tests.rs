@@ -21,6 +21,7 @@ use codex_exec_server::WriteResponse;
 use codex_exec_server::WriteStatus;
 use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_output_truncation::OutputTruncation;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_tokens_from_byte_count;
 use core_test_support::skip_if_no_remote_env;
@@ -198,7 +199,7 @@ async fn exec_command_with_tty(
         chunk_id: generate_chunk_id(),
         wall_time,
         raw_output: collected,
-        truncation_policy: turn.model_info.truncation_policy.into(),
+        truncation: turn.output_truncation(),
         max_output_tokens: None,
         process_id: response_process_id,
         exit_code,
@@ -320,7 +321,7 @@ async fn write_stdin(
             input,
             yield_time_ms,
             max_output_tokens: None,
-            truncation_policy: TruncationPolicy::Tokens(10_000),
+            truncation: OutputTruncation::new(TruncationPolicy::Tokens(10_000), None),
         })
         .await
 }

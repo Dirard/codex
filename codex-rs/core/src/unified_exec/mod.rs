@@ -30,7 +30,7 @@ use std::sync::Weak;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;
-use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::OutputTruncation;
 use codex_utils_path_uri::PathUri;
 use rand::Rng;
 use rand::rng;
@@ -115,7 +115,7 @@ pub(crate) struct WriteStdinRequest<'a> {
     pub input: &'a str,
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
-    pub truncation_policy: TruncationPolicy,
+    pub truncation: OutputTruncation,
 }
 
 #[derive(Default)]

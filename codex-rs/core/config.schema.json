@@ -2352,6 +2352,31 @@
       },
       "type": "object"
     },
+    "OutputTruncationToml": {
+      "additionalProperties": false,
+      "description": "Limits applied when formatting tool and command output for model and UI consumption.",
+      "properties": {
+        "max_bytes": {
+          "description": "Maximum bytes retained in formatted output.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_lines": {
+          "description": "Maximum lines retained in formatted output.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "mcp_max_lines": {
+          "description": "Maximum lines retained in MCP tool output.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "PermissionProfileToml": {
       "additionalProperties": false,
       "properties": {
@@ -5339,6 +5364,14 @@
         }
       ],
       "description": "OTEL configuration."
+    },
+    "output_truncation": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/OutputTruncationToml"
+        }
+      ],
+      "description": "Limits applied when formatting tool and command output for model and UI consumption."
     },
     "permissions": {
       "allOf": [

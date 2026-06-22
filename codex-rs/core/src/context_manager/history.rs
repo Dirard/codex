@@ -23,12 +23,12 @@ use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::WorldStateItem;
 use codex_utils_cache::BlockingLruCache;
 use codex_utils_cache::sha1_digest;
-use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::OutputTruncation;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
-use codex_utils_output_truncation::truncate_function_output_items_with_policy;
-use codex_utils_output_truncation::truncate_text;
+use codex_utils_output_truncation::truncate_function_output_items_with_config;
+use codex_utils_output_truncation::truncate_text_with_config;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::LazyLock;
@@ -117,21 +117,30 @@ impl ContextManager {
         }
     }
 
-    /// `items` is ordered from oldest to newest.
-    pub(crate) fn record_items<I>(&mut self, items: I, policy: TruncationPolicy)
+    /// `items` is ordered from oldest to newest. Returns the processed items
+    /// that were added to model-visible history.
+    pub(crate) fn record_items<I>(
+        &mut self,
+        items: I,
+        truncation: impl Into<OutputTruncation>,
+    ) -> Vec<ResponseItem>
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
+        let truncation = truncation.into();
+        let mut processed_items = Vec::new();
         for item in items {
             let item_ref = item.deref();
             if !is_api_message(item_ref) {
                 continue;
             }
 
-            let processed = self.process_item(item_ref, policy);
-            self.items.push(processed);
+            let processed = self.process_item(item_ref, truncation);
+            self.items.push(processed.clone());
+            processed_items.push(processed);
         }
+        processed_items
     }
 
     /// Returns the history prepared for sending to the model. This applies a proper
@@ -367,8 +376,8 @@ impl ContextManager {
         normalize::strip_images_when_unsupported(input_modalities, &mut self.items);
     }
 
-    fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
-        let policy_with_serialization_budget = policy * 1.2;
+    fn process_item(&self, item: &ResponseItem, truncation: OutputTruncation) -> ResponseItem {
+        let truncation_with_serialization_budget = truncation.with_policy(truncation.policy * 1.2);
         match item {
             ResponseItem::FunctionCallOutput {
                 id,
@@ -378,7 +387,10 @@ impl ContextManager {
             } => ResponseItem::FunctionCallOutput {
                 id: id.clone(),
                 call_id: call_id.clone(),
-                output: truncate_function_output_payload(output, policy_with_serialization_budget),
+                output: truncate_function_output_payload(
+                    output,
+                    truncation_with_serialization_budget,
+                ),
                 internal_chat_message_metadata_passthrough: metadata.clone(),
             },
             ResponseItem::CustomToolCallOutput {
@@ -391,7 +403,10 @@ impl ContextManager {
                 id: id.clone(),
                 call_id: call_id.clone(),
                 name: name.clone(),
-                output: truncate_function_output_payload(output, policy_with_serialization_budget),
+                output: truncate_function_output_payload(
+                    output,
+                    truncation_with_serialization_budget,
+                ),
                 internal_chat_message_metadata_passthrough: metadata.clone(),
             },
             ResponseItem::AdditionalTools { .. }
@@ -462,14 +477,14 @@ impl ContextManager {
 
 pub(crate) fn truncate_function_output_payload(
     output: &FunctionCallOutputPayload,
-    policy: TruncationPolicy,
+    truncation: OutputTruncation,
 ) -> FunctionCallOutputPayload {
     let body = match &output.body {
         FunctionCallOutputBody::Text(content) => {
-            FunctionCallOutputBody::Text(truncate_text(content, policy))
+            FunctionCallOutputBody::Text(truncate_text_with_config(content, truncation))
         }
         FunctionCallOutputBody::ContentItems(items) => FunctionCallOutputBody::ContentItems(
-            truncate_function_output_items_with_policy(items, policy),
+            truncate_function_output_items_with_config(items, truncation),
         ),
     };
 

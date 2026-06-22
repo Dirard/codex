@@ -148,6 +148,18 @@ pub struct OrchestratorFeatureToml {
     pub enabled: Option<bool>,
 }
 
+/// Limits applied when formatting tool and command output for model and UI consumption.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct OutputTruncationToml {
+    /// Maximum bytes retained in formatted output.
+    pub max_bytes: Option<usize>,
+    /// Maximum lines retained in formatted output.
+    pub max_lines: Option<usize>,
+    /// Maximum lines retained in MCP tool output.
+    pub mcp_max_lines: Option<usize>,
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -297,6 +309,9 @@ pub struct ConfigToml {
 
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
+
+    /// Limits applied when formatting tool and command output for model and UI consumption.
+    pub output_truncation: Option<OutputTruncationToml>,
 
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).

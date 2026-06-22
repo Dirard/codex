@@ -17,10 +17,12 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_tools::LoadableToolSpec;
 use codex_tools::ToolName;
+use codex_utils_output_truncation::OutputTruncation;
 use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::approx_bytes_for_tokens;
 use codex_utils_output_truncation::approx_token_count;
-use codex_utils_output_truncation::formatted_truncate_text;
-use codex_utils_output_truncation::truncate_text;
+use codex_utils_output_truncation::formatted_truncate_text_with_config;
+use codex_utils_output_truncation::truncate_text_with_config;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -75,7 +77,7 @@ pub struct McpToolOutput {
     pub tool_input: JsonValue,
     pub wall_time: Duration,
     pub original_image_detail_supported: bool,
-    pub truncation_policy: TruncationPolicy,
+    pub truncation: OutputTruncation,
 }
 
 impl ToolOutput for McpToolOutput {
@@ -116,7 +118,17 @@ impl ToolOutput for McpToolOutput {
 
 impl McpToolOutput {
     fn response_payload(&self) -> FunctionCallOutputPayload {
+        let mcp_truncation = self.truncation.for_mcp_output();
         let mut payload = self.result.as_function_call_output_payload();
+        if mcp_truncation.max_lines.is_some()
+            && let Some(text_content) = mcp_text_content_for_line_limit(&self.result)
+        {
+            payload = FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text(text_content),
+                success: Some(self.result.success()),
+            };
+        }
+
         if let Some(items) = payload.content_items_mut() {
             sanitize_original_image_detail(self.original_image_detail_supported, items);
         }
@@ -143,7 +155,35 @@ impl McpToolOutput {
         //
         // The text is serialized again inside the Responses payload, so allow
         // a small buffer for JSON escaping and wrapper overhead.
-        truncate_function_output_payload(&payload, self.truncation_policy * 1.2)
+        truncate_function_output_payload(
+            &payload,
+            mcp_truncation.with_policy(mcp_truncation.policy * 1.2),
+        )
+    }
+}
+
+fn mcp_text_content_for_line_limit(result: &CallToolResult) -> Option<String> {
+    if result
+        .structured_content
+        .as_ref()
+        .is_some_and(|structured_content| !structured_content.is_null())
+    {
+        return None;
+    }
+
+    let mut text_segments = Vec::new();
+    for content in &result.content {
+        let object = content.as_object()?;
+        if object.get("type").and_then(JsonValue::as_str)? != "text" {
+            return None;
+        }
+        text_segments.push(object.get("text").and_then(JsonValue::as_str)?.to_string());
+    }
+
+    if text_segments.is_empty() {
+        None
+    } else {
+        Some(text_segments.join("\n"))
     }
 }
 
@@ -318,7 +358,7 @@ pub struct ExecCommandToolOutput {
     pub wall_time: Duration,
     /// Raw bytes returned for this unified exec call before any truncation.
     pub raw_output: Vec<u8>,
-    pub truncation_policy: TruncationPolicy,
+    pub truncation: OutputTruncation,
     pub max_output_tokens: Option<usize>,
     pub process_id: Option<i32>,
     pub exit_code: Option<i32>,
@@ -407,18 +447,33 @@ impl ToolOutput for ExecCommandToolOutput {
 
 impl ExecCommandToolOutput {
     fn model_output_max_tokens(&self) -> usize {
-        resolve_max_tokens(self.max_output_tokens).min(self.truncation_policy.token_budget())
+        resolve_max_tokens(self.max_output_tokens).min(self.truncation.policy.token_budget())
     }
 
     pub(crate) fn truncated_output(&self, max_tokens: usize) -> String {
+        self.truncated_output_with_config(max_tokens, self.truncation)
+    }
+
+    fn truncated_output_with_config(
+        &self,
+        max_tokens: usize,
+        truncation: OutputTruncation,
+    ) -> String {
         let text = String::from_utf8_lossy(&self.raw_output).to_string();
-        let policy = TruncationPolicy::Tokens(max_tokens);
+        let policy = match truncation.policy {
+            TruncationPolicy::Bytes(bytes) => {
+                TruncationPolicy::Bytes(bytes.min(approx_bytes_for_tokens(max_tokens)))
+            }
+            TruncationPolicy::Tokens(tokens) => TruncationPolicy::Tokens(tokens.min(max_tokens)),
+        };
+        let truncation = truncation.with_policy(policy);
         let Some(omitted_bytes) = self.output_omitted_bytes else {
-            return formatted_truncate_text(&text, policy);
+            return formatted_truncate_text_with_config(&text, truncation);
         };
 
         let marker = format_output_omission_marker(omitted_bytes.get());
-        if text.len() <= policy.byte_budget() {
+        let truncated = truncate_text_with_config(&text, truncation);
+        if truncated == text {
             return if text.contains(&marker) {
                 text
             } else {
@@ -429,7 +484,6 @@ impl ExecCommandToolOutput {
         let original_token_count = self
             .original_token_count
             .unwrap_or_else(|| approx_token_count(&text));
-        let truncated = truncate_text(&text, policy);
         let omission_notice = if truncated.contains(&marker) {
             String::new()
         } else {
@@ -463,7 +517,16 @@ impl ExecCommandToolOutput {
         }
 
         sections.push("Output:".to_string());
-        sections.push(self.truncated_output(self.model_output_max_tokens()));
+        // History applies max_lines to the complete FunctionCallOutput. Do not
+        // line-limit the raw exec output first, or the second pass can retain
+        // only headers and drop the real output head.
+        sections.push(self.truncated_output_with_config(
+            self.model_output_max_tokens(),
+            OutputTruncation {
+                max_lines: None,
+                ..self.truncation
+            },
+        ));
 
         sections.join("\n")
     }
