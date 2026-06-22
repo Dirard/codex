@@ -40,6 +40,7 @@ use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_skills_extension::HostSkillsSnapshot;
 use codex_skills_extension::SkillLoadOutcome;
+use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::PluginIdentity;
 use futures::FutureExt;
@@ -763,6 +764,18 @@ impl TurnContext {
         self.model_info().usable_context_window()
     }
 
+    pub(crate) fn output_truncation(&self) -> codex_utils_output_truncation::OutputTruncation {
+        let policy = effective_output_truncation_policy(
+            self.model_info.truncation_policy.into(),
+            self.config.output_truncation.max_bytes,
+        );
+        codex_utils_output_truncation::OutputTruncation::new_with_mcp_max_lines(
+            policy,
+            self.config.output_truncation.max_lines,
+            self.config.output_truncation.mcp_max_lines,
+        )
+    }
+
     pub(crate) fn apps_enabled(&self) -> bool {
         let uses_codex_backend = self
             .auth_manager
@@ -982,6 +995,18 @@ impl TurnContext {
 struct TurnGrants {
     granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
     strict_auto_review_enabled: bool,
+}
+
+fn effective_output_truncation_policy(
+    model_policy: TruncationPolicy,
+    configured_max_bytes: Option<usize>,
+) -> TruncationPolicy {
+    match configured_max_bytes {
+        Some(configured_max_bytes) => {
+            TruncationPolicy::Bytes(configured_max_bytes.min(model_policy.byte_budget()))
+        }
+        None => model_policy,
+    }
 }
 
 fn local_time_context() -> (String, String) {
