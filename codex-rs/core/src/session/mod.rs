@@ -2779,15 +2779,12 @@ impl Session {
     ) {
         let items = self.prepare_conversation_items_for_history(turn_context, items);
         let items = items.as_ref();
-        {
+        let processed_items = {
             let mut state = self.state.lock().await;
             state.current_time_reminder.note_recorded_items(items);
-            state.record_items(
-                items.iter(),
-                turn_context.model_info.truncation_policy.into(),
-            );
-        }
-        self.persist_rollout_response_items(items).await;
+            state.record_items(items.iter(), turn_context.output_truncation())
+        };
+        self.persist_rollout_response_items(&processed_items).await;
         self.send_raw_response_items(turn_context, items).await;
     }
 
@@ -2887,10 +2884,7 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             state.current_time_reminder.note_recorded_items(items);
-            state.record_items(
-                items.iter(),
-                turn_context.model_info.truncation_policy.into(),
-            );
+            let _ = state.record_items(items.iter(), turn_context.output_truncation());
         }
         self.persist_rollout_items(&[
             RolloutItem::InterAgentCommunicationMetadata {

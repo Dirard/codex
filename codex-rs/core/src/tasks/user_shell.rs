@@ -303,7 +303,7 @@ pub(crate) async fn execute_user_shell_command(
                         duration: output.duration,
                         formatted_output: format_exec_output_str(
                             &output,
-                            turn_context.model_info.truncation_policy.into(),
+                            turn_context.output_truncation(),
                         ),
                         status: if output.exit_code == 0 {
                             ExecCommandStatus::Completed
@@ -348,7 +348,7 @@ pub(crate) async fn execute_user_shell_command(
                         duration: exec_output.duration,
                         formatted_output: format_exec_output_str(
                             &exec_output,
-                            turn_context.model_info.truncation_policy.into(),
+                            turn_context.output_truncation(),
                         ),
                         status: ExecCommandStatus::Failed,
                     }),

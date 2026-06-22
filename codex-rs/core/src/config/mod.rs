@@ -24,6 +24,7 @@ use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
+use codex_config::config_toml::OutputTruncationToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
@@ -604,6 +605,13 @@ pub enum ThreadStoreConfig {
     InMemory { id: String },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OutputTruncationConfig {
+    pub max_bytes: Option<usize>,
+    pub max_lines: Option<usize>,
+    pub mcp_max_lines: Option<usize>,
+}
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -851,6 +859,9 @@ pub struct Config {
 
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
+
+    /// Limits applied when formatting tool and command output for model and UI consumption.
+    pub output_truncation: OutputTruncationConfig,
 
     /// User-configured maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
@@ -3825,6 +3836,18 @@ impl Config {
                 })
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
+            output_truncation: cfg.output_truncation.map_or_else(
+                OutputTruncationConfig::default,
+                |OutputTruncationToml {
+                     max_bytes,
+                     max_lines,
+                     mcp_max_lines,
+                 }| OutputTruncationConfig {
+                    max_bytes,
+                    max_lines,
+                    mcp_max_lines,
+                },
+            ),
             agent_max_threads,
             agent_max_depth,
             agent_roles,

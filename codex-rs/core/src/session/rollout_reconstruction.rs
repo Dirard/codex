@@ -319,23 +319,24 @@ impl Session {
         if let Some(base_replacement_history) = base_replacement_history {
             history.replace(base_replacement_history.to_vec());
         }
+        // New rollouts persist already processed response items. Replay keeps
+        // using the model policy as a deterministic fallback for older raw
+        // rollout items rather than depending on today's config.
+        let replay_output_truncation = codex_utils_output_truncation::OutputTruncation::new(
+            turn_context.model_info.truncation_policy.into(),
+            /*max_lines*/ None,
+        );
         // Materialize exact history semantics from the replay-derived suffix. The eventual lazy
         // design should keep this same replay shape, but drive it from a resumable reverse source
         // instead of an eagerly loaded `&[RolloutItem]`.
         for item in rollout_suffix {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
-                    history.record_items(
-                        std::iter::once(response_item),
-                        turn_context.model_info.truncation_policy.into(),
-                    );
+                    history.record_items(std::iter::once(response_item), replay_output_truncation);
                 }
                 RolloutItem::InterAgentCommunication(communication) => {
                     let response_item = communication.to_model_input_item();
-                    history.record_items(
-                        std::iter::once(&response_item),
-                        turn_context.model_info.truncation_policy.into(),
-                    );
+                    history.record_items(std::iter::once(&response_item), replay_output_truncation);
                 }
                 RolloutItem::InterAgentCommunicationMetadata { .. } => {}
                 RolloutItem::Compacted(compacted) => {

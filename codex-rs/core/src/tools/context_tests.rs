@@ -1,9 +1,15 @@
 use super::*;
+use crate::context_manager::ContextManager;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+
+fn truncation(policy: TruncationPolicy) -> OutputTruncation {
+    OutputTruncation::new(policy, None)
+}
 
 #[test]
 fn custom_tool_calls_should_roundtrip_as_custom_outputs() {
@@ -100,7 +106,7 @@ fn mcp_tool_output_response_item_includes_wall_time() {
         tool_input: json!({}),
         wall_time: std::time::Duration::from_millis(1250),
         original_image_detail_supported: false,
-        truncation_policy: TruncationPolicy::Bytes(1024),
+        truncation: truncation(TruncationPolicy::Bytes(1024)),
     };
 
     let response = output.to_response_item(
@@ -136,6 +142,50 @@ fn mcp_tool_output_response_item_includes_wall_time() {
 }
 
 #[test]
+fn mcp_tool_output_response_item_uses_general_line_limit_without_override() {
+    let output = McpToolOutput {
+        result: CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": "line1\nline2\nline3\nline4",
+            })],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        },
+        tool_input: json!({}),
+        wall_time: std::time::Duration::from_millis(1250),
+        original_image_detail_supported: false,
+        truncation: OutputTruncation::new_with_mcp_max_lines(
+            TruncationPolicy::Bytes(100_000),
+            /*max_lines*/ Some(4),
+            /*mcp_max_lines*/ None,
+        ),
+    };
+
+    let response = output.to_response_item(
+        "mcp-call-lines",
+        &ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+    );
+
+    match response {
+        ResponseInputItem::FunctionCallOutput { call_id, output } => {
+            assert_eq!(call_id, "mcp-call-lines");
+            assert_eq!(output.success, Some(true));
+            assert_eq!(
+                output.body.to_text().as_deref(),
+                Some(
+                    "Total output lines: 6\n\nWall time: 1.2500 seconds\nOutput:\n... 2 lines truncated ...\nline3\nline4"
+                )
+            );
+        }
+        other => panic!("expected FunctionCallOutput, got {other:?}"),
+    }
+}
+
+#[test]
 fn mcp_tool_output_response_item_truncates_large_structured_content() {
     let output = McpToolOutput {
         result: CallToolResult {
@@ -152,7 +202,7 @@ fn mcp_tool_output_response_item_truncates_large_structured_content() {
         tool_input: json!({}),
         wall_time: std::time::Duration::from_millis(1250),
         original_image_detail_supported: false,
-        truncation_policy: TruncationPolicy::Bytes(128),
+        truncation: truncation(TruncationPolicy::Bytes(128)),
     };
 
     let response = output.to_response_item(
@@ -195,7 +245,7 @@ fn mcp_tool_output_response_item_preserves_content_items() {
         tool_input: json!({}),
         wall_time: std::time::Duration::from_millis(500),
         original_image_detail_supported: false,
-        truncation_policy: TruncationPolicy::Bytes(1024),
+        truncation: truncation(TruncationPolicy::Bytes(1024)),
     };
 
     let response = output.to_response_item(
@@ -249,7 +299,7 @@ fn mcp_tool_output_code_mode_result_stays_raw_call_tool_result() {
         tool_input: json!({}),
         wall_time: std::time::Duration::from_millis(1250),
         original_image_detail_supported: false,
-        truncation_policy: TruncationPolicy::Bytes(64),
+        truncation: truncation(TruncationPolicy::Bytes(64)),
     };
 
     let result = output.code_mode_result(&ToolPayload::Function {
@@ -429,7 +479,7 @@ fn exec_command_tool_output_formats_truncated_response() {
         chunk_id: "abc123".to_string(),
         wall_time: std::time::Duration::from_millis(1250),
         raw_output: b"token one token two token three token four token five".to_vec(),
-        truncation_policy: TruncationPolicy::Tokens(10_000),
+        truncation: truncation(TruncationPolicy::Tokens(10_000)),
         max_output_tokens: Some(4),
         process_id: None,
         exit_code: Some(0),
@@ -460,4 +510,42 @@ fn exec_command_tool_output_formats_truncated_response() {
         }
         other => panic!("expected FunctionCallOutput, got {other:?}"),
     }
+}
+
+#[test]
+fn exec_command_tool_output_applies_line_limit_once_when_recorded() {
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+    let response = ExecCommandToolOutput {
+        event_call_id: "call-42".to_string(),
+        chunk_id: String::new(),
+        wall_time: std::time::Duration::from_millis(1250),
+        raw_output: b"line1\nline2\nline3\nline4\nline5\nline6\nline7".to_vec(),
+        truncation: OutputTruncation::new(
+            TruncationPolicy::Bytes(100_000),
+            /*max_lines*/ Some(5),
+        ),
+        max_output_tokens: None,
+        process_id: None,
+        exit_code: None,
+        original_token_count: None,
+        hook_command: None,
+    }
+    .to_response_item("call-42", &payload);
+    let item = ResponseItem::from(response);
+    let mut history = ContextManager::new();
+
+    history.record_items(
+        [&item],
+        OutputTruncation::new(TruncationPolicy::Bytes(100_000), /*max_lines*/ Some(5)),
+    );
+
+    let [ResponseItem::FunctionCallOutput { output, .. }] = history.raw_items() else {
+        panic!("expected one function call output");
+    };
+    assert_eq!(
+        output.text_content().as_deref(),
+        Some("Wall time: 1.2500 seconds\nOutput:\nline1\n... 4 lines truncated ...\nline6\nline7")
+    );
 }
