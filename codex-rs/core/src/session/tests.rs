@@ -4723,7 +4723,7 @@ async fn includes_timed_out_message() {
     };
     let (_, turn_context) = make_session_and_context().await;
 
-    let out = format_exec_output_str(&exec, turn_context.model_info().truncation_policy.into());
+    let out = format_exec_output_str(&exec, turn_context.output_truncation());
 
     assert_eq!(
         out,
@@ -12435,20 +12435,20 @@ async fn sample_rollout(
     }
     live_history.record_items(
         initial_context.iter(),
-        reconstruction_turn.model_info().truncation_policy.into(),
+        reconstruction_turn.output_truncation(),
     );
 
     let user1 = user_message("first user");
     live_history.record_items(
         std::iter::once(&user1),
-        reconstruction_turn.model_info().truncation_policy.into(),
+        reconstruction_turn.output_truncation(),
     );
     rollout_items.push(RolloutItem::ResponseItem(user1.clone().into()));
 
     let assistant1 = assistant_message("assistant reply one");
     live_history.record_items(
         std::iter::once(&assistant1),
-        reconstruction_turn.model_info().truncation_policy.into(),
+        reconstruction_turn.output_truncation(),
     );
     rollout_items.push(RolloutItem::ResponseItem(assistant1.clone().into()));
 
@@ -12475,14 +12475,14 @@ async fn sample_rollout(
     let user2 = user_message("second user");
     live_history.record_items(
         std::iter::once(&user2),
-        reconstruction_turn.model_info().truncation_policy.into(),
+        reconstruction_turn.output_truncation(),
     );
     rollout_items.push(RolloutItem::ResponseItem(user2.clone().into()));
 
     let assistant2 = assistant_message("assistant reply two");
     live_history.record_items(
         std::iter::once(&assistant2),
-        reconstruction_turn.model_info().truncation_policy.into(),
+        reconstruction_turn.output_truncation(),
     );
     rollout_items.push(RolloutItem::ResponseItem(assistant2.clone().into()));
 
@@ -12509,14 +12509,14 @@ async fn sample_rollout(
     let user3 = user_message("third user");
     live_history.record_items(
         std::iter::once(&user3),
-        reconstruction_turn.model_info().truncation_policy.into(),
+        reconstruction_turn.output_truncation(),
     );
     rollout_items.push(RolloutItem::ResponseItem(user3.into()));
 
     let assistant3 = assistant_message("assistant reply three");
     live_history.record_items(
         std::iter::once(&assistant3),
-        reconstruction_turn.model_info().truncation_policy.into(),
+        reconstruction_turn.output_truncation(),
     );
     rollout_items.push(RolloutItem::ResponseItem(assistant3.into()));
 
