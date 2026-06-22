@@ -230,9 +230,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     let post_tool_use_response = out
         .as_ref()
         .ok()
-        .map(|output| {
-            crate::tools::format_exec_output_str(output, turn.model_info.truncation_policy.into())
-        })
+        .map(|output| crate::tools::format_exec_output_str(output, turn.output_truncation()))
         .map(JsonValue::String);
     let content = emitter
         .finish(event_ctx, out, /*applied_patch_delta*/ None)
