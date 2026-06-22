@@ -23,9 +23,9 @@ use codex_features::Feature;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::openai_models::ToolMode;
 use codex_tools::ToolName;
-use codex_utils_output_truncation::TruncationPolicy;
-use codex_utils_output_truncation::formatted_truncate_text;
-use codex_utils_output_truncation::truncate_text;
+use codex_utils_output_truncation::OutputTruncation;
+use codex_utils_output_truncation::formatted_truncate_text_with_config;
+use codex_utils_output_truncation::truncate_text_with_config;
 pub use router::ToolRouter;
 
 // Telemetry preview limits: keep log events smaller than model budgets.
@@ -77,7 +77,7 @@ fn effective_tool_mode(turn_context: &TurnContext) -> ToolMode {
 /// Includes exit code and duration metadata; truncates large bodies safely.
 pub fn format_exec_output_for_model(
     exec_output: &ExecToolCallOutput,
-    truncation_policy: TruncationPolicy,
+    truncation: OutputTruncation,
 ) -> String {
     // round to 1 decimal place
     let duration_seconds = ((exec_output.duration.as_secs_f32()) * 10.0).round() / 10.0;
@@ -86,13 +86,13 @@ pub fn format_exec_output_for_model(
 
     let total_lines = content.lines().count();
 
-    let formatted_output = truncate_text(&content, truncation_policy);
+    let formatted_output = truncate_text_with_config(&content, truncation);
 
     let mut sections = Vec::new();
 
     sections.push(format!("Exit code: {}", exec_output.exit_code));
     sections.push(format!("Wall time: {duration_seconds} seconds"));
-    if total_lines != formatted_output.lines().count() {
+    if formatted_output != content {
         sections.push(format!("Total output lines: {total_lines}"));
     }
 
@@ -104,12 +104,12 @@ pub fn format_exec_output_for_model(
 
 pub fn format_exec_output_str(
     exec_output: &ExecToolCallOutput,
-    truncation_policy: TruncationPolicy,
+    truncation: OutputTruncation,
 ) -> String {
     let content = build_content_with_timeout(exec_output);
 
     // Truncate for model consumption before serialization.
-    formatted_truncate_text(&content, truncation_policy)
+    formatted_truncate_text_with_config(&content, truncation)
 }
 
 /// Extracts exec output content and prepends a timeout message if the command timed out.
