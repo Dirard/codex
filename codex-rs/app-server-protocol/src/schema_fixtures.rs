@@ -10,14 +10,18 @@ use crate::protocol::common::visit_client_response_types;
 use crate::protocol::common::visit_server_response_types;
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::bail;
 use serde_json::Map;
 use serde_json::Value;
 use std::any::TypeId;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use ts_rs::TS;
 use ts_rs::TypeVisitor;
 
@@ -31,10 +35,10 @@ pub fn read_schema_fixture_tree(schema_root: &Path) -> Result<BTreeMap<PathBuf, 
     let json_root = schema_root.join("json");
 
     let mut all = BTreeMap::new();
-    for (rel, bytes) in collect_files_recursive(&typescript_root)? {
+    for (rel, bytes) in collect_files_recursive(&typescript_root, TypeScriptHeaderMode::Preserve)? {
         all.insert(PathBuf::from("typescript").join(rel), bytes);
     }
-    for (rel, bytes) in collect_files_recursive(&json_root)? {
+    for (rel, bytes) in collect_files_recursive(&json_root, TypeScriptHeaderMode::Preserve)? {
         all.insert(PathBuf::from("json").join(rel), bytes);
     }
 
@@ -46,7 +50,7 @@ pub fn read_schema_fixture_subtree(
     label: &str,
 ) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
     let subtree_root = schema_root.join(label);
-    collect_files_recursive(&subtree_root)
+    collect_files_recursive(&subtree_root, TypeScriptHeaderMode::Strip)
         .with_context(|| format!("read schema fixture subtree {}", subtree_root.display()))
 }
 
@@ -87,6 +91,33 @@ pub fn write_schema_fixtures(schema_root: &Path, prettier: Option<&Path>) -> Res
     write_schema_fixtures_with_options(schema_root, prettier, SchemaFixtureOptions::default())
 }
 
+pub fn check_schema_fixtures_with_options(
+    schema_root: &Path,
+    prettier: Option<&Path>,
+    options: SchemaFixtureOptions,
+) -> Result<()> {
+    let generated_root = TempSchemaFixtureRoot::new()?;
+    write_schema_fixtures_with_options(generated_root.path(), prettier, options).with_context(
+        || {
+            format!(
+                "generate schema fixtures under {}",
+                generated_root.display()
+            )
+        },
+    )?;
+
+    let checked_in_tree = read_schema_fixture_tree(schema_root)
+        .with_context(|| format!("read schema fixture tree under {}", schema_root.display()))?;
+    let generated_tree = read_schema_fixture_tree(generated_root.path()).with_context(|| {
+        format!(
+            "read generated schema fixture tree under {}",
+            generated_root.display()
+        )
+    })?;
+
+    ensure_schema_fixture_trees_match(schema_root, &checked_in_tree, &generated_tree)
+}
+
 /// Regenerates schema fixtures with configurable options.
 pub fn write_schema_fixtures_with_options(
     schema_root: &Path,
@@ -121,7 +152,96 @@ fn ensure_empty_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read_file_bytes(path: &Path) -> Result<Vec<u8>> {
+fn ensure_schema_fixture_trees_match(
+    schema_root: &Path,
+    checked_in_tree: &BTreeMap<PathBuf, Vec<u8>>,
+    generated_tree: &BTreeMap<PathBuf, Vec<u8>>,
+) -> Result<()> {
+    let checked_in_paths = checked_in_tree
+        .keys()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    let generated_paths = generated_tree
+        .keys()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+
+    if checked_in_paths != generated_paths {
+        bail!(
+            "schema fixture drift under {}: file set differs",
+            schema_root.display()
+        );
+    }
+
+    for (path, checked_in) in checked_in_tree {
+        let generated = generated_tree
+            .get(path)
+            .with_context(|| format!("missing generated schema fixture {}", path.display()))?;
+        if checked_in != generated {
+            bail!(
+                "schema fixture drift under {}: {} differs from freshly generated output",
+                schema_root.display(),
+                path.display()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+struct TempSchemaFixtureRoot {
+    path: PathBuf,
+}
+
+impl TempSchemaFixtureRoot {
+    fn new() -> Result<Self> {
+        let parent = std::env::temp_dir();
+        let process_id = std::process::id();
+        for attempt in 0..100 {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .context("system clock is before Unix epoch")?
+                .as_nanos();
+            let path = parent.join(format!(
+                "codex-app-server-schema-fixtures-{process_id}-{nanos}-{attempt}"
+            ));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Ok(Self { path }),
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("failed to create {}", path.display()));
+                }
+            }
+        }
+        bail!(
+            "failed to create unique schema fixture temp directory under {}",
+            parent.display()
+        );
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn display(&self) -> std::path::Display<'_> {
+        self.path.display()
+    }
+}
+
+impl Drop for TempSchemaFixtureRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TypeScriptHeaderMode {
+    Preserve,
+    Strip,
+}
+
+fn read_file_bytes(path: &Path, typescript_header_mode: TypeScriptHeaderMode) -> Result<Vec<u8>> {
     let bytes =
         std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     if path.extension().is_some_and(|ext| ext == "json") {
@@ -138,12 +258,15 @@ fn read_file_bytes(path: &Path) -> Result<Vec<u8>> {
         let text = String::from_utf8(bytes)
             .with_context(|| format!("expected UTF-8 TypeScript in {}", path.display()))?;
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
-        // Fixture comparisons care about schema content, not whether the generator
-        // re-prepended the standard banner to every TypeScript file.
-        let text = text
-            .strip_prefix(GENERATED_TS_HEADER)
-            .unwrap_or(&text)
-            .to_string();
+        let text = match typescript_header_mode {
+            TypeScriptHeaderMode::Preserve => text,
+            // Legacy in-memory TypeScript fixture comparisons care about schema content,
+            // not whether ts-rs output has been written with the standard tree banner.
+            TypeScriptHeaderMode::Strip => text
+                .strip_prefix(GENERATED_TS_HEADER)
+                .unwrap_or(&text)
+                .to_string(),
+        };
         return Ok(text.into_bytes());
     }
     Ok(bytes)
@@ -226,7 +349,10 @@ fn schema_array_item_sort_key(item: &Value) -> Option<String> {
     }
 }
 
-fn collect_files_recursive(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
+fn collect_files_recursive(
+    root: &Path,
+    typescript_header_mode: TypeScriptHeaderMode,
+) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
     let mut files = BTreeMap::new();
 
     let mut stack = vec![root.to_path_buf()];
@@ -260,7 +386,7 @@ fn collect_files_recursive(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
                 })?
                 .to_path_buf();
 
-            files.insert(rel, read_file_bytes(&path)?);
+            files.insert(rel, read_file_bytes(&path, typescript_header_mode)?);
         }
     }
 

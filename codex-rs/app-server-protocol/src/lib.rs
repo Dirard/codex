@@ -1,8 +1,13 @@
 mod experimental_api;
 mod export;
+pub mod go_manifest;
 mod protocol;
 pub mod rpc;
 mod schema_fixtures;
+
+#[cfg(test)]
+#[path = "go_manifest_tests.rs"]
+mod go_manifest_tests;
 
 pub use experimental_api::*;
 pub use export::GenerateTsOptions;
@@ -42,6 +47,7 @@ pub use protocol::v1::UserSavedConfig;
 pub use protocol::v2::*;
 pub use rpc::*;
 pub use schema_fixtures::SchemaFixtureOptions;
+pub use schema_fixtures::check_schema_fixtures_with_options;
 #[doc(hidden)]
 pub use schema_fixtures::generate_typescript_schema_fixture_subtree_for_tests;
 pub use schema_fixtures::read_schema_fixture_subtree;
