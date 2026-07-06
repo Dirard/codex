@@ -1,17 +1,21 @@
 mod experimental_api;
 #[cfg(test)]
 mod export;
+pub mod go_manifest;
 mod precomputed_exports;
 #[cfg(test)]
 #[path = "precomputed_exports_tests.rs"]
 mod precomputed_exports_tests;
 mod protocol;
 pub mod rpc;
-#[cfg(test)]
 mod schema_fixtures;
 #[cfg(test)]
 #[path = "schema_fixtures_tests.rs"]
 mod schema_fixtures_tests;
+
+#[cfg(test)]
+#[path = "go_manifest_tests.rs"]
+mod go_manifest_tests;
 
 pub use experimental_api::*;
 pub use precomputed_exports::GenerateTsOptions;
@@ -50,15 +54,13 @@ pub use protocol::v1::Tools;
 pub use protocol::v1::UserSavedConfig;
 pub use protocol::v2::*;
 pub use rpc::*;
-#[cfg(test)]
 pub use schema_fixtures::SchemaFixtureOptions;
-#[cfg(test)]
+pub use schema_fixtures::check_schema_fixtures_with_options;
+#[doc(hidden)]
+pub use schema_fixtures::generate_typescript_schema_fixture_subtree_for_tests;
 pub use schema_fixtures::read_schema_fixture_subtree;
-#[cfg(test)]
 pub use schema_fixtures::read_schema_fixture_tree;
-#[cfg(test)]
 pub use schema_fixtures::write_schema_fixtures;
-#[cfg(test)]
 pub use schema_fixtures::write_schema_fixtures_with_options;
 
 #[cfg(not(test))]
