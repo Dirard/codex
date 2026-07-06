@@ -17,6 +17,10 @@ struct Args {
     /// Include experimental API methods and fields in generated fixtures.
     #[arg(long = "experimental")]
     experimental: bool,
+
+    /// Check generated fixtures against `--schema-root` without mutating it.
+    #[arg(long = "check")]
+    check: bool,
 }
 
 fn main() -> Result<()> {
@@ -26,12 +30,27 @@ fn main() -> Result<()> {
         .schema_root
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("schema"));
 
+    let options = codex_app_server_protocol::SchemaFixtureOptions {
+        experimental_api: args.experimental,
+    };
+    if args.check {
+        return codex_app_server_protocol::check_schema_fixtures_with_options(
+            &schema_root,
+            args.prettier.as_deref(),
+            options,
+        )
+        .with_context(|| {
+            format!(
+                "failed to check schema fixtures under {}",
+                schema_root.display()
+            )
+        });
+    }
+
     codex_app_server_protocol::write_schema_fixtures_with_options(
         &schema_root,
         args.prettier.as_deref(),
-        codex_app_server_protocol::SchemaFixtureOptions {
-            experimental_api: args.experimental,
-        },
+        options,
     )
     .with_context(|| {
         format!(
