@@ -403,3 +403,7 @@ requests fail promptly and can be retried when sign-in succeeds.
 `model/list` also checks gateway authentication before returning cached models.
 If authentication fails after the provider configuration changes, it asks the client
 to restart Codex so the retained catalog and gateway sign-in use the same provider.
+
+## Protocol compatibility digests
+
+`initialize` reports protocol compatibility digests and the selected `activeProtocolMode`. Stable and experimental protocol, schema, and manifest digests are lowercase SHA-256 hex strings over the Rust-owned protocol, schema, manifest, serialization, serde-shape, visibility, routing/lifecycle, and experimental-filter inputs. Generated SDKs can compare these values with the app-server surface before using newer methods or events.
