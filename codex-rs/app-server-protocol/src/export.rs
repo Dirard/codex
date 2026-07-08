@@ -3,14 +3,14 @@ use crate::ClientRequest;
 use crate::ServerNotification;
 use crate::ServerNotificationEnvelope;
 use crate::ServerRequest;
+use crate::build_client_notification_schemas;
+use crate::build_client_param_schemas;
+use crate::build_client_response_schemas;
+use crate::build_server_notification_schemas;
+use crate::build_server_param_schemas;
+use crate::build_server_response_schemas;
 use crate::experimental_api::experimental_fields;
-use crate::export_client_notification_schemas;
-use crate::export_client_param_schemas;
-use crate::export_client_response_schemas;
 use crate::export_client_responses;
-use crate::export_server_notification_schemas;
-use crate::export_server_param_schemas;
-use crate::export_server_response_schemas;
 use crate::export_server_responses;
 use crate::protocol::common::EXPERIMENTAL_CLIENT_METHOD_PARAM_TYPES;
 use crate::protocol::common::EXPERIMENTAL_CLIENT_METHOD_RESPONSE_TYPES;
@@ -86,7 +86,7 @@ impl GeneratedSchema {
     }
 }
 
-type JsonSchemaEmitter = fn(&Path) -> Result<GeneratedSchema>;
+type JsonSchemaBuilder = fn() -> Result<GeneratedSchema>;
 pub fn generate_types(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     generate_ts(out_dir, prettier)?;
     generate_json(out_dir)?;
@@ -206,35 +206,10 @@ pub fn generate_internal_json_schema(out_dir: &Path) -> Result<()> {
 
 pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -> Result<()> {
     ensure_dir(out_dir)?;
-    let envelope_emitters: Vec<JsonSchemaEmitter> = vec![
-        |d| write_json_schema_with_return::<crate::RequestId>(d, "RequestId"),
-        |d| write_json_schema_with_return::<crate::JSONRPCMessage>(d, "JSONRPCMessage"),
-        |d| write_json_schema_with_return::<crate::JSONRPCRequest>(d, "JSONRPCRequest"),
-        |d| write_json_schema_with_return::<crate::JSONRPCNotification>(d, "JSONRPCNotification"),
-        |d| write_json_schema_with_return::<crate::JSONRPCResponse>(d, "JSONRPCResponse"),
-        |d| write_json_schema_with_return::<crate::JSONRPCError>(d, "JSONRPCError"),
-        |d| write_json_schema_with_return::<crate::JSONRPCErrorError>(d, "JSONRPCErrorError"),
-        |d| write_json_schema_with_return::<crate::ClientRequest>(d, "ClientRequest"),
-        |d| write_json_schema_with_return::<crate::ServerRequest>(d, "ServerRequest"),
-        |d| write_json_schema_with_return::<crate::ClientNotification>(d, "ClientNotification"),
-        |d| write_json_schema_with_return::<crate::ServerNotification>(d, "ServerNotification"),
-    ];
+    let schemas = build_json_schemas()?;
+    write_json_schema_files(out_dir, &schemas)?;
 
-    let mut schemas: Vec<GeneratedSchema> = Vec::new();
-    for emit in &envelope_emitters {
-        schemas.push(emit(out_dir)?);
-    }
-
-    schemas.extend(export_client_param_schemas(out_dir)?);
-    schemas.extend(export_client_response_schemas(out_dir)?);
-    schemas.extend(export_server_param_schemas(out_dir)?);
-    schemas.extend(export_server_response_schemas(out_dir)?);
-    schemas.extend(export_client_notification_schemas(out_dir)?);
-    schemas.extend(export_server_notification_schemas(out_dir)?);
-    schemas
-        .retain(|schema| !schema.in_v1_dir || JSON_V1_ALLOWLIST.contains(&schema.logical_name()));
-
-    let mut bundle = build_schema_bundle(schemas)?;
+    let mut bundle = build_schema_bundle(json_codegen_schemas(schemas))?;
     if !experimental_api {
         filter_experimental_schema(&mut bundle)?;
     }
@@ -253,6 +228,50 @@ pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -
     }
 
     Ok(())
+}
+
+pub(crate) fn build_json_schema_bundle(experimental_api: bool) -> Result<Value> {
+    let mut bundle = build_schema_bundle(json_codegen_schemas(build_json_schemas()?))?;
+    if !experimental_api {
+        filter_experimental_schema(&mut bundle)?;
+    }
+    Ok(bundle)
+}
+
+fn build_json_schemas() -> Result<Vec<GeneratedSchema>> {
+    let envelope_builders: Vec<JsonSchemaBuilder> = vec![
+        || build_json_schema::<crate::RequestId>("RequestId"),
+        || build_json_schema::<crate::JSONRPCMessage>("JSONRPCMessage"),
+        || build_json_schema::<crate::JSONRPCRequest>("JSONRPCRequest"),
+        || build_json_schema::<crate::JSONRPCNotification>("JSONRPCNotification"),
+        || build_json_schema::<crate::JSONRPCResponse>("JSONRPCResponse"),
+        || build_json_schema::<crate::JSONRPCError>("JSONRPCError"),
+        || build_json_schema::<crate::JSONRPCErrorError>("JSONRPCErrorError"),
+        || build_json_schema::<crate::ClientRequest>("ClientRequest"),
+        || build_json_schema::<crate::ServerRequest>("ServerRequest"),
+        || build_json_schema::<crate::ClientNotification>("ClientNotification"),
+        || build_json_schema::<crate::ServerNotification>("ServerNotification"),
+    ];
+
+    let mut schemas: Vec<GeneratedSchema> = Vec::new();
+    for build in &envelope_builders {
+        schemas.push(build()?);
+    }
+
+    schemas.extend(build_client_param_schemas()?);
+    schemas.extend(build_client_response_schemas()?);
+    schemas.extend(build_server_param_schemas()?);
+    schemas.extend(build_server_response_schemas()?);
+    schemas.extend(build_client_notification_schemas()?);
+    schemas.extend(build_server_notification_schemas()?);
+
+    Ok(schemas)
+}
+
+fn json_codegen_schemas(mut schemas: Vec<GeneratedSchema>) -> Vec<GeneratedSchema> {
+    schemas
+        .retain(|schema| !schema.in_v1_dir || JSON_V1_ALLOWLIST.contains(&schema.logical_name()));
+    schemas
 }
 
 fn filter_experimental_ts(out_dir: &Path) -> Result<()> {
@@ -1333,6 +1352,15 @@ fn write_json_schema_with_return<T>(out_dir: &Path, name: &str) -> Result<Genera
 where
     T: JsonSchema,
 {
+    let schema = build_json_schema::<T>(name)?;
+    write_generated_json_schema(out_dir, &schema)?;
+    Ok(schema)
+}
+
+pub(crate) fn build_json_schema<T>(name: &str) -> Result<GeneratedSchema>
+where
+    T: JsonSchema,
+{
     let file_stem = name.trim();
     let (raw_namespace, logical_name) = split_namespace(file_stem);
     let include_in_json_codegen =
@@ -1349,22 +1377,6 @@ where
         enforce_numbered_definition_collision_overrides(file_stem, &mut schema_value);
         annotate_schema(&mut schema_value, Some(file_stem));
     }
-    // If the name looks like a namespaced path (e.g., "v2::Type"), mirror
-    // the TypeScript layout and write to out_dir/v2/Type.json. Otherwise
-    // write alongside the legacy files.
-    let out_path = if let Some(ns) = raw_namespace {
-        let dir = out_dir.join(ns);
-        ensure_dir(&dir)?;
-        dir.join(format!("{logical_name}.json"))
-    } else {
-        out_dir.join(format!("{file_stem}.json"))
-    };
-
-    if include_in_json_codegen && !IGNORED_DEFINITIONS.contains(&logical_name) {
-        write_pretty_json(out_path, &schema_value)
-            .with_context(|| format!("Failed to write JSON schema for {file_stem}"))?;
-    }
-
     let namespace = match raw_namespace {
         Some("v1") | None => None,
         Some(ns) => Some(ns.to_string()),
@@ -1394,6 +1406,36 @@ fn add_server_notification_emitted_at_to_json_schema(schema: &mut Value) -> Resu
     // Keep this optional in generated client schemas for compatibility with
     // older app-server versions. New servers still always emit it.
     Ok(())
+}
+
+pub(crate) fn write_json_schema_files(out_dir: &Path, schemas: &[GeneratedSchema]) -> Result<()> {
+    for schema in schemas {
+        write_generated_json_schema(out_dir, schema)?;
+    }
+    Ok(())
+}
+
+fn write_generated_json_schema(out_dir: &Path, schema: &GeneratedSchema) -> Result<()> {
+    if (schema.in_v1_dir && !JSON_V1_ALLOWLIST.contains(&schema.logical_name()))
+        || IGNORED_DEFINITIONS.contains(&schema.logical_name())
+    {
+        return Ok(());
+    }
+
+    let out_path = if schema.in_v1_dir {
+        let dir = out_dir.join("v1");
+        ensure_dir(&dir)?;
+        dir.join(format!("{}.json", schema.logical_name()))
+    } else if let Some(ns) = schema.namespace() {
+        let dir = out_dir.join(ns);
+        ensure_dir(&dir)?;
+        dir.join(format!("{}.json", schema.logical_name()))
+    } else {
+        out_dir.join(format!("{}.json", schema.logical_name()))
+    };
+
+    write_pretty_json(out_path, schema.value())
+        .with_context(|| format!("Failed to write JSON schema for {}", schema.logical_name()))
 }
 
 fn enforce_numbered_definition_collision_overrides(schema_name: &str, schema: &mut Value) {

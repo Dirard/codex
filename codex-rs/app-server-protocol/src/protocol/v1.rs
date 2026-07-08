@@ -61,6 +61,7 @@ pub struct InitializeCapabilities {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct InitializeResponse {
     pub user_agent: String,
     /// Absolute path to the server's $CODEX_HOME directory.
