@@ -1,0 +1,329 @@
+package protocodex
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+func renderHandlersGenerated(manifest *Manifest) string {
+	var b strings.Builder
+	b.WriteString("package codex\n\n")
+	b.WriteString("import (\n\t\"context\"\n\t\"encoding/json\"\n\t\"fmt\"\n\n\t\"github.com/openai/codex/sdk/go/protocol\"\n)\n\n")
+	serverRequests := mapServerRequests(manifest.Experimental.ServerRequests)
+	publicByField := map[string][]ServerHandlerMapping{}
+	var fieldNames []string
+	for _, mapping := range serverHandlerMappings {
+		if !isPublicServerHandler(mapping) {
+			continue
+		}
+		field := strings.TrimPrefix(mapping.HandlerOwner, "ServerHandlers.")
+		if _, ok := publicByField[field]; !ok {
+			fieldNames = append(fieldNames, field)
+		}
+		publicByField[field] = append(publicByField[field], mapping)
+	}
+	sort.Strings(fieldNames)
+	b.WriteString("type ServerHandlers struct {\n")
+	for _, field := range fieldNames {
+		b.WriteString(fmt.Sprintf("\t%s %s\n", field, field+"Handler"))
+	}
+	b.WriteString("}\n\n")
+	for _, field := range fieldNames {
+		b.WriteString(fmt.Sprintf("type %s interface {\n", field+"Handler"))
+		for _, mapping := range publicByField[field] {
+			entry := serverRequests[mapping.Method]
+			params := typeNameForDefinition(entry.PayloadType)
+			response := typeNameForDefinition(entry.ResponseType)
+			if params == "" {
+				params = "json.RawMessage"
+			}
+			if response == "" {
+				response = "json.RawMessage"
+			}
+			b.WriteString(fmt.Sprintf("\tHandle%s(ctx context.Context, params %s) (%s, error)\n", RawMethodName(mapping.Method), qualifiedProtocolType(params), qualifiedProtocolType(response)))
+		}
+		b.WriteString("}\n\n")
+		if len(publicByField[field]) > 1 {
+			b.WriteString(fmt.Sprintf("type %s struct {\n", field+"HandlerFuncs"))
+			for _, mapping := range publicByField[field] {
+				entry := serverRequests[mapping.Method]
+				params := typeNameForDefinition(entry.PayloadType)
+				response := typeNameForDefinition(entry.ResponseType)
+				if params == "" {
+					params = "json.RawMessage"
+				}
+				if response == "" {
+					response = "json.RawMessage"
+				}
+				funcField := RawMethodName(mapping.Method)
+				b.WriteString(fmt.Sprintf("\t%s func(ctx context.Context, params %s) (%s, error)\n", funcField, qualifiedProtocolType(params), qualifiedProtocolType(response)))
+			}
+			b.WriteString("}\n\n")
+			for _, mapping := range publicByField[field] {
+				entry := serverRequests[mapping.Method]
+				params := typeNameForDefinition(entry.PayloadType)
+				response := typeNameForDefinition(entry.ResponseType)
+				if params == "" {
+					params = "json.RawMessage"
+				}
+				if response == "" {
+					response = "json.RawMessage"
+				}
+				methodName := "Handle" + RawMethodName(mapping.Method)
+				funcField := RawMethodName(mapping.Method)
+				b.WriteString(fmt.Sprintf("func (f %s) %s(ctx context.Context, params %s) (%s, error) {\n", field+"HandlerFuncs", methodName, qualifiedProtocolType(params), qualifiedProtocolType(response)))
+				b.WriteString(fmt.Sprintf("\tvar zero %s\n", qualifiedProtocolType(response)))
+				b.WriteString(fmt.Sprintf("\tif f.%s == nil { return zero, fmt.Errorf(\"server handler %%q is not configured\", %q) }\n", funcField, mapping.Method))
+				b.WriteString(fmt.Sprintf("\treturn f.%s(ctx, params)\n", funcField))
+				b.WriteString("}\n\n")
+			}
+		}
+		for _, mapping := range publicByField[field] {
+			entry := serverRequests[mapping.Method]
+			params := typeNameForDefinition(entry.PayloadType)
+			response := typeNameForDefinition(entry.ResponseType)
+			if params == "" {
+				params = "json.RawMessage"
+			}
+			if response == "" {
+				response = "json.RawMessage"
+			}
+			methodName := "Handle" + RawMethodName(mapping.Method)
+			funcName := field + RawMethodName(mapping.Method) + "Func"
+			b.WriteString(fmt.Sprintf("type %s func(ctx context.Context, params %s) (%s, error)\n\n", funcName, qualifiedProtocolType(params), qualifiedProtocolType(response)))
+			b.WriteString(fmt.Sprintf("func (f %s) %s(ctx context.Context, params %s) (%s, error) { return f(ctx, params) }\n\n", funcName, methodName, qualifiedProtocolType(params), qualifiedProtocolType(response)))
+		}
+	}
+	b.WriteString("func (h ServerHandlers) DispatchServerRequest(ctx context.Context, method string, params json.RawMessage) (any, error) {\n")
+	b.WriteString("\tswitch method {\n")
+	for _, mapping := range serverHandlerMappings {
+		entry := serverRequests[mapping.Method]
+		params := typeNameForDefinition(entry.PayloadType)
+		if params == "" {
+			params = "json.RawMessage"
+		}
+		b.WriteString(fmt.Sprintf("\tcase %q:\n", mapping.Method))
+		if !isPublicServerHandler(mapping) {
+			b.WriteString(fmt.Sprintf("\t\tif _, err := decode%sServerRequest(params); err != nil { return nil, err }\n", RawMethodName(mapping.Method)))
+			b.WriteString(fmt.Sprintf("\t\treturn nil, fmt.Errorf(\"server request %%q has no public handler: %s\", method)\n", mapping.Method))
+			continue
+		}
+		b.WriteString(fmt.Sprintf("\t\tdecoded, err := decode%sServerRequest(params)\n", RawMethodName(mapping.Method)))
+		b.WriteString("\t\tif err != nil { return nil, err }\n")
+		field := strings.TrimPrefix(mapping.HandlerOwner, "ServerHandlers.")
+		b.WriteString(fmt.Sprintf("\t\tif h.%s == nil { return nil, fmt.Errorf(\"server handler %%q is not configured\", method) }\n", field))
+		b.WriteString(fmt.Sprintf("\t\treturn h.%s.Handle%s(ctx, decoded)\n", field, RawMethodName(mapping.Method)))
+	}
+	b.WriteString("\tdefault:\n\t\treturn nil, fmt.Errorf(\"unsupported server request method %q\", method)\n\t}\n}\n\n")
+	for _, mapping := range serverHandlerMappings {
+		entry := serverRequests[mapping.Method]
+		params := typeNameForDefinition(entry.PayloadType)
+		if params == "" {
+			params = "json.RawMessage"
+		}
+		if !isPublicServerHandler(mapping) {
+			params = "json.RawMessage"
+		}
+		b.WriteString(fmt.Sprintf("func decode%sServerRequest(params json.RawMessage) (%s, error) {\n", RawMethodName(mapping.Method), qualifiedProtocolType(params)))
+		if params == "json.RawMessage" {
+			b.WriteString("\tif !json.Valid(params) { return nil, fmt.Errorf(\"invalid JSON params\") }\n")
+			b.WriteString("\treturn params, nil\n")
+		} else {
+			b.WriteString(fmt.Sprintf("\tvar decoded %s\n", qualifiedProtocolType(params)))
+			b.WriteString("\tif err := json.Unmarshal(params, &decoded); err != nil { return decoded, err }\n")
+			b.WriteString("\treturn decoded, nil\n")
+		}
+		b.WriteString("}\n\n")
+	}
+	b.WriteString("type generatedServerHandlerMetadataRow struct { Method string; Visibility string; Capability string; HandlerOwner string }\n\n")
+	b.WriteString("var generatedServerHandlerMetadata = []generatedServerHandlerMetadataRow{\n")
+	for _, mapping := range serverHandlerMappings {
+		b.WriteString(fmt.Sprintf("\t{Method: %q, Visibility: %q, Capability: %q, HandlerOwner: %q},\n", mapping.Method, mapping.Visibility, mapping.Capability, mapping.HandlerOwner))
+	}
+	b.WriteString("}\n")
+	return b.String()
+}
+
+func isPublicServerHandler(mapping ServerHandlerMapping) bool {
+	return mapping.Visibility == "sdk-public" || mapping.Visibility == "experimental-public"
+}
+
+func qualifiedProtocolType(name string) string {
+	if strings.HasPrefix(name, "json.") {
+		return name
+	}
+	return "protocol." + name
+}
+
+func renderResourceCoverageGenerated(manifest *Manifest) string {
+	var b strings.Builder
+	b.WriteString("package codex\n\n")
+	b.WriteString("type generatedResourceCoverageRow struct { Method string; SDKVisibility string; ResourceOwner string; RawMethodName string; WrapperName string; WrapperFile string; PublicSignature string; SignatureConventionID string; CompileCallsite string; UnitTestOwner string; SafeIntegrationOwner string; SafeIntegrationReason string; DocsExampleOwner string; ServerNotificationMethods []string; ServerHandlerCapabilities []string; GeneratedOnlyException string; ReviewNote string }\n\n")
+	b.WriteString("var generatedResourceCoverage = []generatedResourceCoverageRow{\n")
+	visibility := map[string]string{}
+	for _, entry := range manifest.Experimental.ClientRequests {
+		visibility[entry.Method] = entry.SDKVisibility
+	}
+	notificationsByOwner := serverNotificationMethodsByOwner(manifest)
+	handlersByOwner := serverHandlerCapabilitiesByOwner()
+	for _, mapping := range resourceAPIMappings {
+		b.WriteString(fmt.Sprintf("\t{Method: %q, SDKVisibility: %q, ResourceOwner: %q, RawMethodName: %q, WrapperName: %q, WrapperFile: %q, PublicSignature: %q, SignatureConventionID: %q, CompileCallsite: %q, UnitTestOwner: %q, SafeIntegrationOwner: %q, SafeIntegrationReason: %q, DocsExampleOwner: %q, ServerNotificationMethods: %#v, ServerHandlerCapabilities: %#v, GeneratedOnlyException: %q, ReviewNote: %q},\n", mapping.Method, visibility[mapping.Method], mapping.ResourceOwner, RawMethodName(mapping.Method), mapping.WrapperName, mapping.WrapperFile, mapping.PublicSignature, mapping.SignatureConventionID, mapping.CompileCallsite, mapping.UnitTestOwner, mapping.SafeIntegrationOwner, mapping.SafeIntegrationReason, mapping.DocsExampleOwner, notificationsByOwner[mapping.ResourceOwner], handlersByOwner[mapping.ResourceOwner], mapping.GeneratedOnlyException, mapping.ReviewNote))
+	}
+	b.WriteString("}\n")
+	return b.String()
+}
+
+func renderInventory(manifest *Manifest) string {
+	var b strings.Builder
+	b.WriteString("# Current Protocol Inventory\n\n")
+	b.WriteString("## Client Methods By Resource Owner\n\n")
+	mappingsByOwner := map[string][]ResourceAPIMapping{}
+	var owners []string
+	for _, mapping := range resourceAPIMappings {
+		if _, ok := mappingsByOwner[mapping.ResourceOwner]; !ok {
+			owners = append(owners, mapping.ResourceOwner)
+		}
+		mappingsByOwner[mapping.ResourceOwner] = append(mappingsByOwner[mapping.ResourceOwner], mapping)
+	}
+	sort.Strings(owners)
+	for _, owner := range owners {
+		b.WriteString(fmt.Sprintf("### %s\n\n", owner))
+		ownerNotifications := strings.Join(serverNotificationMethodsByOwner(manifest)[owner], ",")
+		ownerHandlers := strings.Join(serverHandlerCapabilitiesByOwner()[owner], ",")
+		b.WriteString(fmt.Sprintf("serverNotifications=%s\n", ownerNotifications))
+		b.WriteString(fmt.Sprintf("serverHandlers=%s\n\n", ownerHandlers))
+		for _, mapping := range mappingsByOwner[owner] {
+			b.WriteString(fmt.Sprintf("- `%s` raw=%s wrapper=%s file=%s signature=%s convention=%s callsite=%s unitTest=%s safeIntegration=%s%s docs=%s exception=%s review=%s\n", mapping.Method, RawMethodName(mapping.Method), mapping.WrapperName, mapping.WrapperFile, mapping.PublicSignature, mapping.SignatureConventionID, mapping.CompileCallsite, mapping.UnitTestOwner, mapping.SafeIntegrationOwner, mapping.SafeIntegrationReason, mapping.DocsExampleOwner, mapping.GeneratedOnlyException, mapping.ReviewNote))
+		}
+		b.WriteByte('\n')
+	}
+	b.WriteString("\n## Server Requests\n\n")
+	for _, mapping := range serverHandlerMappings {
+		b.WriteString(fmt.Sprintf("- `%s` handler=%s visibility=%s capability=%s unitTest=%s docs=%s exception=%s review=%s\n", mapping.Method, mapping.HandlerOwner, mapping.Visibility, mapping.Capability, mapping.UnitTestOwner, mapping.DocsExampleOwner, mapping.GeneratedOnlyException, mapping.ReviewNote))
+	}
+	b.WriteString("\n## Server Notifications\n\n")
+	for _, entry := range manifest.Experimental.ServerNotifications {
+		var domains []string
+		for _, route := range entry.RoutingStrategy.Routes {
+			domains = append(domains, route.ResourceDomain)
+		}
+		b.WriteString(fmt.Sprintf("- `%s` payload=%s visibility=%s routing=%s routeDomains=%s\n", entry.Method, entry.PayloadType, entry.SDKVisibility, entry.RoutingStrategy.Kind, strings.Join(domains, ",")))
+	}
+	b.WriteString("\n## Client Notifications\n\n")
+	for _, entry := range manifest.Experimental.ClientNotifications {
+		b.WriteString(fmt.Sprintf("- `%s` payload=%s visibility=%s\n", entry.Method, entry.PayloadType, entry.SDKVisibility))
+	}
+	return b.String()
+}
+
+func serverNotificationMethodsByOwner(manifest *Manifest) map[string][]string {
+	byOwner := map[string][]string{}
+	for _, entry := range manifest.Experimental.ServerNotifications {
+		owners := routeOwners(entry)
+		for _, owner := range owners {
+			byOwner[owner] = appendUnique(byOwner[owner], entry.Method)
+		}
+	}
+	for owner := range byOwner {
+		sort.Strings(byOwner[owner])
+	}
+	return byOwner
+}
+
+func routeOwners(entry NotificationEntry) []string {
+	owners := routedOwners(entry)
+	for _, mapping := range serverNotificationResourceMappings {
+		if mapping.Method != entry.Method {
+			continue
+		}
+		for _, owner := range mapping.ResourceOwners {
+			owners = appendUnique(owners, owner)
+		}
+	}
+	return owners
+}
+
+func routedOwners(entry NotificationEntry) []string {
+	var owners []string
+	for _, route := range entry.RoutingStrategy.Routes {
+		for _, owner := range routingDomainResourceOwners(route.ResourceDomain) {
+			owners = appendUnique(owners, owner)
+		}
+	}
+	return owners
+}
+
+func routingDomainResourceOwners(domain string) []string {
+	switch domain {
+	case "account":
+		return []string{"Accounts"}
+	case "command":
+		return []string{"Commands"}
+	case "externalAgentConfig":
+		return []string{"ExternalAgents"}
+	case "fs":
+		return []string{"FileSystem"}
+	case "fuzzyFileSearch":
+		return []string{"FuzzyFileSearch"}
+	case "hook":
+		return []string{"Hooks"}
+	case "mcpServer":
+		return []string{"MCP"}
+	case "model":
+		return []string{"Models"}
+	case "process":
+		return []string{"Processes"}
+	case "remoteControl":
+		return []string{"RemoteControl"}
+	case "thread":
+		return []string{"Threads"}
+	case "turn", "item", "rawResponseItem":
+		return []string{"Turns"}
+	case "error", "guardianWarning", "serverRequest", "warning":
+		return []string{"Threads", "Turns"}
+	default:
+		return nil
+	}
+}
+
+func serverHandlerCapabilitiesByOwner() map[string][]string {
+	byOwner := map[string][]string{}
+	for _, mapping := range serverHandlerMappings {
+		for _, owner := range handlerOwners(mapping.HandlerOwner) {
+			value := mapping.Method + "(" + mapping.Capability + ")"
+			byOwner[owner] = appendUnique(byOwner[owner], value)
+		}
+	}
+	for owner := range byOwner {
+		sort.Strings(byOwner[owner])
+	}
+	return byOwner
+}
+
+func handlerOwners(handlerOwner string) []string {
+	switch handlerOwner {
+	case "ServerHandlers.Approvals", "ServerHandlers.Permissions", "ServerHandlers.UserInput", "ServerHandlers.DynamicTools":
+		return []string{"Turns"}
+	case "ServerHandlers.MCPElicitation":
+		return []string{"MCP"}
+	case "ServerHandlers.ChatGPTTokenRefresh", "ServerHandlers.Attestation":
+		return []string{"Accounts"}
+	case "ServerHandlers.CurrentTime":
+		return []string{"Threads"}
+	default:
+		return nil
+	}
+}
+
+func appendUnique(values []string, value string) []string {
+	if value == "" {
+		return values
+	}
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
