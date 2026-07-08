@@ -1,8 +1,11 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "AbsolutePathBuf": {
-      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+    "ActiveProtocolMode": {
+      "enum": [
+        "stable",
+        "experimental"
+      ],
       "type": "string"
     },
     "AdditionalPermissionProfile": {
@@ -2971,6 +2974,9 @@
     "InitializeResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "activeProtocolMode": {
+          "$ref": "#/definitions/ActiveProtocolMode"
+        },
         "codexHome": {
           "allOf": [
             {
@@ -2978,6 +2984,15 @@
             }
           ],
           "description": "Absolute path to the server's $CODEX_HOME directory."
+        },
+        "experimentalManifestDigest": {
+          "type": "string"
+        },
+        "experimentalProtocolDigest": {
+          "type": "string"
+        },
+        "experimentalSchemaDigest": {
+          "type": "string"
         },
         "platformFamily": {
           "description": "Platform family for the running app-server target, for example `\"unix\"` or `\"windows\"`.",
@@ -2987,14 +3002,30 @@
           "description": "Operating system for the running app-server target, for example `\"macos\"`, `\"linux\"`, or `\"windows\"`.",
           "type": "string"
         },
+        "stableManifestDigest": {
+          "type": "string"
+        },
+        "stableProtocolDigest": {
+          "type": "string"
+        },
+        "stableSchemaDigest": {
+          "type": "string"
+        },
         "userAgent": {
           "type": "string"
         }
       },
       "required": [
+        "activeProtocolMode",
         "codexHome",
+        "experimentalManifestDigest",
+        "experimentalProtocolDigest",
+        "experimentalSchemaDigest",
         "platformFamily",
         "platformOs",
+        "stableManifestDigest",
+        "stableProtocolDigest",
+        "stableSchemaDigest",
         "userAgent"
       ],
       "title": "InitializeResponse",

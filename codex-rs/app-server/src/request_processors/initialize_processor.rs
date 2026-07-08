@@ -3,6 +3,8 @@ use std::sync::atomic::Ordering;
 
 use axum::http::HeaderValue;
 use codex_analytics::AppServerRpcTransport;
+use codex_app_server_protocol::ActiveProtocolMode;
+use codex_app_server_protocol::go_manifest;
 use codex_login::default_client::SetOriginatorError;
 use codex_login::default_client::USER_AGENT_SUFFIX;
 use codex_login::default_client::get_codex_user_agent;
@@ -135,11 +137,24 @@ impl InitializeRequestProcessor {
         }
 
         let user_agent = get_codex_user_agent();
+        let digests = go_manifest::initialize_digest_snapshot();
+        let active_protocol_mode = if experimental_api_enabled {
+            ActiveProtocolMode::Experimental
+        } else {
+            ActiveProtocolMode::Stable
+        };
         let response = InitializeResponse {
             user_agent,
             codex_home,
             platform_family: std::env::consts::FAMILY.to_string(),
             platform_os: std::env::consts::OS.to_string(),
+            stable_protocol_digest: digests.stable_protocol_digest.to_string(),
+            experimental_protocol_digest: digests.experimental_protocol_digest.to_string(),
+            stable_schema_digest: digests.stable_schema_digest.to_string(),
+            experimental_schema_digest: digests.experimental_schema_digest.to_string(),
+            stable_manifest_digest: digests.stable_manifest_digest.to_string(),
+            experimental_manifest_digest: digests.experimental_manifest_digest.to_string(),
+            active_protocol_mode,
         };
 
         self.outgoing
