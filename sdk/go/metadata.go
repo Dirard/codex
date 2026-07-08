@@ -9,4 +9,5 @@ type Metadata struct {
 	Compatibility               CompatibilityPolicy
 	CompatibilityOverrideActive bool
 	CompatibilityNote           string
+	DisabledHighLevelWorkflows  []string
 }
