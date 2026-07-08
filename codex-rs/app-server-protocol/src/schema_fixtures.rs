@@ -15,7 +15,6 @@ use anyhow::bail;
 use serde_json::Map;
 use serde_json::Value;
 use std::any::TypeId;
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::io::ErrorKind;
@@ -249,7 +248,7 @@ fn read_file_bytes(path: &Path, typescript_header_mode: TypeScriptHeaderMode) ->
     if path.extension().is_some_and(|ext| ext == "json") {
         let value: Value = serde_json::from_slice(&bytes)
             .with_context(|| format!("failed to parse JSON in {}", path.display()))?;
-        let value = canonicalize_json(&value);
+        let value = canonicalize_schema_json(&value);
         let normalized = serde_json::to_vec_pretty(&value)
             .with_context(|| format!("failed to reserialize JSON in {}", path.display()))?;
         return Ok(normalized);
@@ -274,57 +273,28 @@ fn read_file_bytes(path: &Path, typescript_header_mode: TypeScriptHeaderMode) ->
     Ok(bytes)
 }
 
-fn canonicalize_json(value: &Value) -> Value {
+pub(crate) fn canonicalize_schema_json(value: &Value) -> Value {
+    canonicalize_json_for_key(None, value)
+}
+
+fn canonicalize_json_for_key(parent_key: Option<&str>, value: &Value) -> Value {
     match value {
         Value::Array(items) => {
-            // NOTE: We sort some JSON arrays to make schema fixture comparisons stable across
-            // platforms.
-            //
-            // In general, JSON array ordering is significant. However, this code path is used
-            // only by `schema_fixtures_match_generated` to compare our *vendored* JSON schema
-            // files against freshly generated output. Some parts of schema generation end up
-            // with non-deterministic ordering across platforms (often due to map iteration order
-            // upstream), which can cause Windows CI failures even when the generated schema is
-            // semantically equivalent.
-            //
-            // JSON Schema itself also contains a number of array-valued keywords whose ordering
-            // does not affect validation semantics (e.g. `required`, `type`, `enum`, `anyOf`,
-            // `oneOf`, `allOf`). That makes it reasonable to treat many schema-emitted arrays as
-            // order-insensitive for the purpose of fixture diffs.
-            //
-            // To avoid accidentally changing the meaning of arrays where order *could* matter
-            // (e.g. tuple validation / `prefixItems`-style arrays), we only sort arrays when we
-            // can derive a stable sort key for *every* element. If we cannot, we preserve the
-            // original ordering.
-            let items = items.iter().map(canonicalize_json).collect::<Vec<_>>();
-            let mut sortable = Vec::with_capacity(items.len());
-            for item in &items {
-                let Some(key) = schema_array_item_sort_key(item) else {
-                    return Value::Array(items);
-                };
-                let stable = serde_json::to_string(item).unwrap_or_default();
-                sortable.push((key, stable));
+            let mut items = items
+                .iter()
+                .map(|item| canonicalize_json_for_key(None, item))
+                .collect::<Vec<_>>();
+            if should_sort_schema_array(parent_key, &items) {
+                items.sort_by_key(schema_array_sort_key);
             }
-
-            let mut items = items.into_iter().zip(sortable).collect::<Vec<_>>();
-
-            items.sort_by(
-                |(_, (key_left, stable_left)), (_, (key_right, stable_right))| match key_left
-                    .cmp(key_right)
-                {
-                    Ordering::Equal => stable_left.cmp(stable_right),
-                    other => other,
-                },
-            );
-
-            Value::Array(items.into_iter().map(|(item, _)| item).collect())
+            Value::Array(items)
         }
         Value::Object(map) => {
             let mut entries: Vec<_> = map.iter().collect();
             entries.sort_by_key(|(key, _)| *key);
             let mut sorted = Map::with_capacity(map.len());
             for (key, child) in entries {
-                sorted.insert(key.clone(), canonicalize_json(child));
+                sorted.insert(key.clone(), canonicalize_json_for_key(Some(key), child));
             }
             Value::Object(sorted)
         }
@@ -332,22 +302,40 @@ fn canonicalize_json(value: &Value) -> Value {
     }
 }
 
-fn schema_array_item_sort_key(item: &Value) -> Option<String> {
+fn should_sort_schema_array(parent_key: Option<&str>, items: &[Value]) -> bool {
+    match parent_key {
+        Some("required") => items.iter().all(|item| matches!(item, Value::String(_))),
+        Some("enum") => items.iter().all(is_scalar_json_value),
+        Some("type") => items.iter().all(is_json_schema_primitive_type_name),
+        _ => false,
+    }
+}
+
+fn is_scalar_json_value(item: &Value) -> bool {
+    matches!(
+        item,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)
+    )
+}
+
+fn is_json_schema_primitive_type_name(item: &Value) -> bool {
+    matches!(
+        item,
+        Value::String(value)
+            if matches!(
+                value.as_str(),
+                "array" | "boolean" | "integer" | "null" | "number" | "object" | "string"
+            )
+    )
+}
+
+fn schema_array_sort_key(item: &Value) -> String {
     match item {
-        Value::Null => Some("null".to_string()),
-        Value::Bool(b) => Some(format!("b:{b}")),
-        Value::Number(n) => Some(format!("n:{n}")),
-        Value::String(s) => Some(format!("s:{s}")),
-        Value::Object(map) => {
-            if let Some(Value::String(reference)) = map.get("$ref") {
-                Some(format!("ref:{reference}"))
-            } else if let Some(Value::String(title)) = map.get("title") {
-                Some(format!("title:{title}"))
-            } else {
-                None
-            }
-        }
-        Value::Array(_) => None,
+        Value::Null => "null".to_string(),
+        Value::Bool(value) => format!("bool:{value}"),
+        Value::Number(value) => format!("number:{value}"),
+        Value::String(value) => format!("string:{value}"),
+        Value::Array(_) | Value::Object(_) => serde_json::to_string(item).unwrap_or_default(),
     }
 }
 
@@ -468,22 +456,46 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn canonicalize_json_sorts_string_arrays() {
-        let value = serde_json::json!(["b", "a"]);
-        let expected = serde_json::json!(["a", "b"]);
-        assert_eq!(canonicalize_json(&value), expected);
+    fn canonicalize_json_sorts_required_string_arrays() {
+        let value = serde_json::json!({
+            "required": ["b", "a"],
+        });
+        let expected = serde_json::json!({
+            "required": ["a", "b"],
+        });
+        assert_eq!(canonicalize_schema_json(&value), expected);
     }
 
     #[test]
-    fn canonicalize_json_sorts_schema_ref_arrays() {
-        let value = serde_json::json!([
-            {"$ref": "#/definitions/B"},
-            {"$ref": "#/definitions/A"}
-        ]);
-        let expected = serde_json::json!([
-            {"$ref": "#/definitions/A"},
-            {"$ref": "#/definitions/B"}
-        ]);
-        assert_eq!(canonicalize_json(&value), expected);
+    fn canonicalize_json_sorts_scalar_enum_and_type_arrays() {
+        let value = serde_json::json!({
+            "enum": ["z", "a", "m"],
+            "type": ["null", "string"],
+        });
+        let expected = serde_json::json!({
+            "enum": ["a", "m", "z"],
+            "type": ["null", "string"],
+        });
+        assert_eq!(canonicalize_schema_json(&value), expected);
+    }
+
+    #[test]
+    fn canonicalize_json_preserves_one_of_any_of_and_all_of_order() {
+        let value = serde_json::json!({
+            "oneOf": [
+                {"$ref": "#/definitions/B"},
+                {"$ref": "#/definitions/A"}
+            ],
+            "anyOf": [
+                {"title": "B"},
+                {"title": "A"}
+            ],
+            "allOf": [
+                {"type": "string"},
+                {"type": "null"}
+            ],
+        });
+        let expected = value.clone();
+        assert_eq!(canonicalize_schema_json(&value), expected);
     }
 }

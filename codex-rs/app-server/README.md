@@ -82,7 +82,9 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 
 ## Initialization
 
-Clients must send a single `initialize` request per transport connection before invoking any other method on that connection, then acknowledge with an `initialized` notification. The server returns the user agent string it will present to upstream services, `codexHome` for the server's Codex home directory, and `platformFamily` and `platformOs` strings describing the app-server runtime target; subsequent requests issued before initialization receive a `"Not initialized"` error, and repeated `initialize` calls on the same connection receive an `"Already initialized"` error.
+Clients must send a single `initialize` request per transport connection before invoking any other method on that connection, then acknowledge with an `initialized` notification. The server returns the user agent string it will present to upstream services, `codexHome` for the server's Codex home directory, `platformFamily` and `platformOs` strings describing the app-server runtime target, protocol compatibility digests, and `activeProtocolMode` selected from `initialize.params.capabilities.experimentalApi`; subsequent requests issued before initialization receive a `"Not initialized"` error, and repeated `initialize` calls on the same connection receive an `"Already initialized"` error.
+
+The digest fields are lowercase SHA-256 hex strings over Rust-owned protocol, schema, manifest, request-serialization, serde-shape, visibility, routing/lifecycle, and experimental-filter inputs. Clients can use `stableProtocolDigest`, `experimentalProtocolDigest`, `stableSchemaDigest`, `experimentalSchemaDigest`, `stableManifestDigest`, and `experimentalManifestDigest` to verify generated SDK compatibility with the app-server protocol surface.
 
 `initialize.params.capabilities` also supports per-connection notification opt-out via `optOutNotificationMethods`, which is a list of exact method names to suppress for that connection. Matching is exact (no wildcards/prefixes). Unknown method names are accepted and ignored.
 
@@ -132,6 +134,24 @@ Example with notification opt-out:
       "optOutNotificationMethods": ["thread/started", "item/agentMessage/delta"]
     }
   }
+}
+```
+
+Example response fields:
+
+```json
+{
+  "userAgent": "codex_vscode; 0.1.0",
+  "codexHome": "/home/alice/.codex",
+  "platformFamily": "unix",
+  "platformOs": "linux",
+  "stableProtocolDigest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "experimentalProtocolDigest": "123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
+  "stableSchemaDigest": "23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+  "experimentalSchemaDigest": "3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012",
+  "stableManifestDigest": "456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123",
+  "experimentalManifestDigest": "56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234",
+  "activeProtocolMode": "experimental"
 }
 ```
 

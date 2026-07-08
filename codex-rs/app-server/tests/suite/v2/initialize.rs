@@ -3,6 +3,7 @@ use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
+use codex_app_server_protocol::ActiveProtocolMode;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeResponse;
@@ -14,11 +15,13 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_app_server_protocol::go_manifest;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::fs_wait;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::fs;
 use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -57,6 +60,7 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
         codex_home: response_codex_home,
         platform_family,
         platform_os,
+        ..
     } = to_response::<InitializeResponse>(response)?;
 
     assert!(user_agent.starts_with("codex_vscode/"));
@@ -163,12 +167,103 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
         codex_home: response_codex_home,
         platform_family,
         platform_os,
+        ..
     } = to_response::<InitializeResponse>(response)?;
 
     assert!(user_agent.starts_with("codex_originator_via_env_var/"));
     assert_eq!(response_codex_home, expected_codex_home);
     assert_eq!(platform_family, std::env::consts::FAMILY);
     assert_eq!(platform_os, std::env::consts::OS);
+    Ok(())
+}
+
+#[tokio::test]
+async fn initialize_response_includes_protocol_digests_without_runtime_schema_tree() -> Result<()> {
+    let responses = Vec::new();
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    let runtime_cwd = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    assert!(!codex_home.path().join("codex-rs").exists());
+    assert!(!codex_home.path().join("sdk/go").exists());
+    let poison_manifest = runtime_cwd
+        .path()
+        .join("sdk/go/internal/protocodex/manifest/app_server_protocol_manifest.json");
+    fs::create_dir_all(poison_manifest.parent().unwrap())?;
+    fs::write(
+        &poison_manifest,
+        r#"{"stable":{"digests":{"protocolDigest":"poison"}}}"#,
+    )?;
+    let poison_schema = runtime_cwd
+        .path()
+        .join("codex-rs/app-server-protocol/schema/json/InitializeResponse.json");
+    fs::create_dir_all(poison_schema.parent().unwrap())?;
+    fs::write(&poison_schema, r#"{"$schema":"poison"}"#)?;
+    let mut mcp = TestAppServer::new_with_cwd(codex_home.path(), runtime_cwd.path()).await?;
+
+    let message = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_capabilities(
+            ClientInfo {
+                name: "codex_vscode".to_string(),
+                title: Some("Codex VS Code Extension".to_string()),
+                version: "0.1.0".to_string(),
+            },
+            Some(InitializeCapabilities {
+                experimental_api: false,
+                ..Default::default()
+            }),
+        ),
+    )
+    .await??;
+
+    let JSONRPCMessage::Response(response) = message else {
+        anyhow::bail!("expected initialize response, got {message:?}");
+    };
+    let initialize_response: InitializeResponse = to_response(response)?;
+    let digests = go_manifest::initialize_digest_snapshot();
+
+    assert_eq!(
+        initialize_response.active_protocol_mode,
+        ActiveProtocolMode::Stable
+    );
+    assert_eq!(
+        initialize_response.stable_protocol_digest,
+        digests.stable_protocol_digest
+    );
+    assert_eq!(
+        initialize_response.experimental_protocol_digest,
+        digests.experimental_protocol_digest
+    );
+    assert_eq!(
+        initialize_response.stable_schema_digest,
+        digests.stable_schema_digest
+    );
+    assert_eq!(
+        initialize_response.experimental_schema_digest,
+        digests.experimental_schema_digest
+    );
+    assert_eq!(
+        initialize_response.stable_manifest_digest,
+        digests.stable_manifest_digest
+    );
+    assert_eq!(
+        initialize_response.experimental_manifest_digest,
+        digests.experimental_manifest_digest
+    );
+    for digest in [
+        initialize_response.stable_protocol_digest,
+        initialize_response.experimental_protocol_digest,
+        initialize_response.stable_schema_digest,
+        initialize_response.experimental_schema_digest,
+        initialize_response.stable_manifest_digest,
+        initialize_response.experimental_manifest_digest,
+    ] {
+        assert_eq!(digest.len(), 64);
+        assert!(digest.chars().all(|ch| ch.is_ascii_hexdigit()));
+        assert!(!digest.chars().any(|ch| ch.is_ascii_uppercase()));
+    }
+
     Ok(())
 }
 
