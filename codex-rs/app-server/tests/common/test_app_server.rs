@@ -174,6 +174,19 @@ impl TestAppServer {
         self.process.wait().await
     }
 
+    pub async fn new_with_cwd(codex_home: &Path, cwd: &Path) -> anyhow::Result<Self> {
+        let program = codex_utils_cargo_bin::cargo_bin("codex-app-server")
+            .context("should find binary for codex-app-server")?;
+        Self::new_with_program_env_args_and_cwd(
+            codex_home,
+            &program,
+            &[],
+            &[DISABLE_PLUGIN_STARTUP_TASKS_ARG],
+            cwd,
+        )
+        .await
+    }
+
     /// Returns the automatically selected test environment retained by this server.
     ///
     /// Tests can use the environment to arrange target-native filesystem fixtures before starting
@@ -228,12 +241,29 @@ impl TestAppServer {
         env_overrides: &[(&str, Option<&str>)],
         args: &[&str],
     ) -> anyhow::Result<Self> {
+        Self::new_with_program_env_args_and_cwd(
+            codex_home,
+            program,
+            env_overrides,
+            args,
+            codex_home,
+        )
+        .await
+    }
+
+    async fn new_with_program_env_args_and_cwd(
+        codex_home: &Path,
+        program: &Path,
+        env_overrides: &[(&str, Option<&str>)],
+        args: &[&str],
+        cwd: &Path,
+    ) -> anyhow::Result<Self> {
         let mut cmd = Command::new(program);
 
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
-        cmd.current_dir(codex_home);
+        cmd.current_dir(cwd);
         cmd.env("CODEX_HOME", codex_home);
         cmd.env("RUST_LOG", "warn");
         // Keep integration tests isolated from host managed configuration.

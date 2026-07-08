@@ -1,11 +1,4 @@
 package codex
 
-// ServerHandlers groups handlers for app-server requests sent to the SDK client.
-type ServerHandlers struct {
-	Approvals ApprovalHandler
-}
-
-// ApprovalHandler handles approval requests.
-type ApprovalHandler interface {
-	HandleApproval() error
-}
+// Handwritten server-handler conveniences live here. The ServerHandlers type
+// and protocol-specific handler interfaces are generated in handlers_generated.go.
