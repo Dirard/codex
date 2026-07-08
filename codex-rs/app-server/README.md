@@ -567,3 +567,7 @@ and out-of-scope item IDs return invalid params (`-32602`) with
 Omitted or null cursors preserve normal first-page behavior. Continue anchored
 pages with the returned opaque string `nextCursor`; response fields and
 `backwardsCursor` semantics are unchanged.
+
+## Protocol compatibility digests
+
+`initialize` reports protocol compatibility digests and the selected `activeProtocolMode`. Stable and experimental protocol, schema, and manifest digests are lowercase SHA-256 hex strings over the Rust-owned protocol, schema, manifest, serialization, serde-shape, visibility, routing/lifecycle, and experimental-filter inputs. Generated SDKs can compare these values with the app-server surface before using newer methods or events.
