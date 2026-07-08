@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 
 #[test]
 fn write_schema_fixtures_check_accepts_crlf_equivalent_fixture() -> Result<()> {
-    let _guard = fixture_writer_lock();
+    let _guard = fixture_writer_lock()?;
     let temp_dir = tempfile::tempdir().context("create temp dir")?;
     let schema_root = temp_dir.path().join("schema");
     write_schema_fixtures_with_options(&schema_root, None, SchemaFixtureOptions::default())
@@ -49,7 +49,7 @@ fn write_schema_fixtures_check_accepts_crlf_equivalent_fixture() -> Result<()> {
 
 #[test]
 fn write_schema_fixtures_check_rejects_missing_typescript_header() -> Result<()> {
-    let _guard = fixture_writer_lock();
+    let _guard = fixture_writer_lock()?;
     let temp_dir = tempfile::tempdir().context("create temp dir")?;
     let schema_root = temp_dir.path().join("schema");
     write_schema_fixtures_with_options(&schema_root, None, SchemaFixtureOptions::default())
@@ -86,7 +86,7 @@ fn write_schema_fixtures_check_rejects_missing_typescript_header() -> Result<()>
 
 #[test]
 fn write_schema_fixtures_check_rejects_changed_content() -> Result<()> {
-    let _guard = fixture_writer_lock();
+    let _guard = fixture_writer_lock()?;
     let temp_dir = tempfile::tempdir().context("create temp dir")?;
     let schema_root = temp_dir.path().join("schema");
     write_schema_fixtures_with_options(&schema_root, None, SchemaFixtureOptions::default())
@@ -121,7 +121,7 @@ fn write_schema_fixtures_check_rejects_changed_content() -> Result<()> {
 
 #[test]
 fn write_go_sdk_manifest_check_accepts_crlf_equivalent_manifest() -> Result<()> {
-    let _guard = fixture_writer_lock();
+    let _guard = fixture_writer_lock()?;
     let temp_dir = tempfile::tempdir().context("create temp dir")?;
     let manifest_path = temp_dir.path().join("app_server_protocol_manifest.json");
     fs::write(
@@ -150,7 +150,7 @@ fn write_go_sdk_manifest_check_accepts_crlf_equivalent_manifest() -> Result<()> 
 
 #[test]
 fn write_go_sdk_manifest_check_rejects_changed_content() -> Result<()> {
-    let _guard = fixture_writer_lock();
+    let _guard = fixture_writer_lock()?;
     let temp_dir = tempfile::tempdir().context("create temp dir")?;
     let manifest_path = temp_dir.path().join("app_server_protocol_manifest.json");
     let mut json = go_manifest::canonical_pretty_manifest_json(&go_manifest::go_sdk_manifest())?;
@@ -182,11 +182,11 @@ fn write_go_sdk_manifest_check_rejects_changed_content() -> Result<()> {
     Ok(())
 }
 
-fn fixture_writer_lock() -> MutexGuard<'static, ()> {
+fn fixture_writer_lock() -> Result<MutexGuard<'static, ()>> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("fixture writer lock poisoned")
+        .map_err(|err| anyhow::anyhow!("fixture writer lock poisoned: {err}"))
 }
 
 fn write_schema_fixtures_command() -> Result<Command> {
