@@ -314,3 +314,7 @@ compatibility but is not emitted. Non-Windows hosts report `notConfigured`.
 MXC uses the standard `command/exec` streaming and process-control path, including
 ConPTY when `tty` is enabled. The buffered legacy Windows sandbox restrictions on
 process control and custom output caps do not apply to MXC.
+
+## Protocol compatibility digests
+
+`initialize` reports protocol compatibility digests and the selected `activeProtocolMode`. Stable and experimental protocol, schema, and manifest digests are lowercase SHA-256 hex strings over the Rust-owned protocol, schema, manifest, serialization, serde-shape, visibility, routing/lifecycle, and experimental-filter inputs. Generated SDKs can compare these values with the app-server surface before using newer methods or events.
