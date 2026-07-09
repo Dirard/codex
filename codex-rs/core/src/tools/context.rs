@@ -434,7 +434,7 @@ impl ToolOutput for ExecCommandToolOutput {
             session_id: self.process_id,
             original_token_count: self.original_token_count,
             output: match self.max_output_tokens {
-                Some(max_tokens) => self.truncated_output(max_tokens),
+                Some(max_tokens) => self.truncated_code_mode_output(max_tokens),
                 None => String::from_utf8_lossy(&self.raw_output).to_string(),
             },
         };
@@ -452,6 +452,14 @@ impl ExecCommandToolOutput {
 
     pub(crate) fn truncated_output(&self, max_tokens: usize) -> String {
         self.truncated_output_with_config(max_tokens, self.truncation)
+    }
+
+    fn truncated_code_mode_output(&self, max_tokens: usize) -> String {
+        self.truncated_output_with_config(
+            max_tokens,
+            self.truncation
+                .with_policy(TruncationPolicy::Tokens(max_tokens)),
+        )
     }
 
     fn truncated_output_with_config(

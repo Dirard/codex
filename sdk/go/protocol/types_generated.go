@@ -8898,6 +8898,7 @@ type AppToolApproval string
 const (
 	AppToolApprovalAuto    AppToolApproval = "auto"
 	AppToolApprovalPrompt  AppToolApproval = "prompt"
+	AppToolApprovalWrites  AppToolApproval = "writes"
 	AppToolApprovalApprove AppToolApproval = "approve"
 )
 
@@ -9260,6 +9261,7 @@ const (
 	AuthModeApikey              AuthMode = "apikey"
 	AuthModeChatgpt             AuthMode = "chatgpt"
 	AuthModeChatgptAuthTokens   AuthMode = "chatgptAuthTokens"
+	AuthModeHeaders             AuthMode = "headers"
 	AuthModeAgentIdentity       AuthMode = "agentIdentity"
 	AuthModePersonalAccessToken AuthMode = "personalAccessToken"
 	AuthModeBedrockApiKey       AuthMode = "bedrockApiKey"
@@ -12131,11 +12133,15 @@ const (
 )
 
 type ConsumeAccountRateLimitResetCreditParams struct {
-	IDempotencyKey string `json:"idempotencyKey,omitempty"`
+	CreditID       Optional[string] `json:"creditId,omitempty"`
+	IDempotencyKey string           `json:"idempotencyKey,omitempty"`
 }
 
 func (v ConsumeAccountRateLimitResetCreditParams) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
+	if v.CreditID.IsSet() {
+		out["creditId"] = v.CreditID
+	}
 	out["idempotencyKey"] = v.IDempotencyKey
 	return json.Marshal(out)
 }
@@ -12147,6 +12153,12 @@ func (v *ConsumeAccountRateLimitResetCreditParams) UnmarshalJSON(data []byte) er
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
+	}
+	rawCreditID, ok := raw["creditId"]
+	if ok {
+		if err := json.Unmarshal(rawCreditID, &v.CreditID); err != nil {
+			return fmt.Errorf("field creditId: %w", err)
+		}
 	}
 	rawIDempotencyKey, ok := raw["idempotencyKey"]
 	if !ok {
@@ -17763,13 +17775,15 @@ const (
 )
 
 type LoginAccountParams struct {
-	AccessToken           OptionalNonNull[string] `json:"accessToken,omitempty"`
-	APIKey                OptionalNonNull[string] `json:"apiKey,omitempty"`
-	ChatgptAccountID      OptionalNonNull[string] `json:"chatgptAccountId,omitempty"`
-	ChatgptPlanType       Optional[string]        `json:"chatgptPlanType,omitempty"`
-	CodexStreamlinedLogin OptionalNonNull[bool]   `json:"codexStreamlinedLogin,omitempty"`
-	TypeValue             string                  `json:"type,omitempty"`
-	RawJSON               json.RawMessage         `json:"-"`
+	AccessToken               OptionalNonNull[string] `json:"accessToken,omitempty"`
+	APIKey                    OptionalNonNull[string] `json:"apiKey,omitempty"`
+	AppBrand                  Optional[LoginAppBrand] `json:"appBrand,omitempty"`
+	ChatgptAccountID          OptionalNonNull[string] `json:"chatgptAccountId,omitempty"`
+	ChatgptPlanType           Optional[string]        `json:"chatgptPlanType,omitempty"`
+	CodexStreamlinedLogin     OptionalNonNull[bool]   `json:"codexStreamlinedLogin,omitempty"`
+	TypeValue                 string                  `json:"type,omitempty"`
+	UseHostedLoginSuccessPage OptionalNonNull[bool]   `json:"useHostedLoginSuccessPage,omitempty"`
+	RawJSON                   json.RawMessage         `json:"-"`
 }
 
 func (v LoginAccountParams) MarshalJSON() ([]byte, error) {
@@ -17779,6 +17793,9 @@ func (v LoginAccountParams) MarshalJSON() ([]byte, error) {
 	}
 	if v.APIKey.IsSet() {
 		out["apiKey"] = v.APIKey
+	}
+	if v.AppBrand.IsSet() {
+		out["appBrand"] = v.AppBrand
 	}
 	if v.ChatgptAccountID.IsSet() {
 		out["chatgptAccountId"] = v.ChatgptAccountID
@@ -17792,6 +17809,9 @@ func (v LoginAccountParams) MarshalJSON() ([]byte, error) {
 		}
 	}
 	out["type"] = v.TypeValue
+	if v.UseHostedLoginSuccessPage.IsSet() {
+		out["useHostedLoginSuccessPage"] = v.UseHostedLoginSuccessPage
+	}
 	switch v.TypeValue {
 	case "apiKey":
 		if !v.APIKey.IsSet() {
@@ -17856,6 +17876,12 @@ func (v *LoginAccountParams) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field apiKey: %w", err)
 		}
 	}
+	rawAppBrand, ok := raw["appBrand"]
+	if ok {
+		if err := json.Unmarshal(rawAppBrand, &v.AppBrand); err != nil {
+			return fmt.Errorf("field appBrand: %w", err)
+		}
+	}
 	rawChatgptAccountID, ok := raw["chatgptAccountId"]
 	if ok {
 		if err := json.Unmarshal(rawChatgptAccountID, &v.ChatgptAccountID); err != nil {
@@ -17887,6 +17913,12 @@ func (v *LoginAccountParams) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawTypeValue, &v.TypeValue); err != nil {
 		return fmt.Errorf("field type: %w", err)
+	}
+	rawUseHostedLoginSuccessPage, ok := raw["useHostedLoginSuccessPage"]
+	if ok {
+		if err := json.Unmarshal(rawUseHostedLoginSuccessPage, &v.UseHostedLoginSuccessPage); err != nil {
+			return fmt.Errorf("field useHostedLoginSuccessPage: %w", err)
+		}
 	}
 	v.RawJSON = nil
 	switch v.TypeValue {
@@ -18067,6 +18099,13 @@ func (v *LoginAccountResponse) UnmarshalJSON(data []byte) error {
 	}
 	return nil
 }
+
+type LoginAppBrand string
+
+const (
+	LoginAppBrandCodex   LoginAppBrand = "codex"
+	LoginAppBrandChatgpt LoginAppBrand = "chatgpt"
+)
 
 type LogoutAccountResponse map[string]json.RawMessage
 
@@ -20650,13 +20689,97 @@ func (v *ModelsRequirements) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type MultiAgentMode string
+type MultiAgentMode struct {
+	Mode    string                  `json:"-"`
+	Custom  OptionalNonNull[string] `json:"custom,omitempty"`
+	RawJSON json.RawMessage         `json:"-"`
+}
 
-const (
-	MultiAgentModeNone                MultiAgentMode = "none"
-	MultiAgentModeExplicitRequestOnly MultiAgentMode = "explicitRequestOnly"
-	MultiAgentModeProactive           MultiAgentMode = "proactive"
+var (
+	MultiAgentModeExplicitRequestOnly = MultiAgentMode{Mode: "explicitRequestOnly"}
+	MultiAgentModeProactive           = MultiAgentMode{Mode: "proactive"}
 )
+
+func CustomMultiAgentMode(custom string) MultiAgentMode {
+	return MultiAgentMode{Custom: SomeNonNull(custom)}
+}
+
+func (v MultiAgentMode) IsSet() bool {
+	return v.Mode != "" || v.Custom.IsSet() || len(bytes.TrimSpace(v.RawJSON)) > 0
+}
+
+func (v MultiAgentMode) MarshalJSON() ([]byte, error) {
+	modeSet := v.Mode != ""
+	customSet := v.Custom.IsSet()
+	rawSet := len(bytes.TrimSpace(v.RawJSON)) > 0
+	matches := 0
+	if modeSet {
+		matches++
+	}
+	if customSet {
+		matches++
+	}
+	if rawSet {
+		matches++
+	}
+	if matches == 0 {
+		return nil, DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if matches > 1 {
+		return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
+	if modeSet {
+		switch v.Mode {
+		case "explicitRequestOnly", "proactive":
+			return json.Marshal(v.Mode)
+		default:
+			return nil, DecodeError{Field: "", Reason: fmt.Sprintf("unsupported multiAgentMode value %q", v.Mode)}
+		}
+	}
+	if customSet {
+		return json.Marshal(map[string]any{"custom": v.Custom})
+	}
+	if !json.Valid(v.RawJSON) {
+		return nil, fmt.Errorf("invalid MultiAgentMode raw fallback")
+	}
+	return append([]byte(nil), v.RawJSON...), nil
+}
+
+func (v *MultiAgentMode) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var mode string
+	if err := json.Unmarshal(trimmed, &mode); err == nil {
+		switch mode {
+		case "explicitRequestOnly", "proactive":
+			*v = MultiAgentMode{Mode: mode}
+		default:
+			v.Mode = ""
+			v.Custom = OptionalNonNull[string]{}
+			v.RawJSON = append(v.RawJSON[:0], data...)
+		}
+		return nil
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawCustom, ok := raw["custom"]
+	if !ok {
+		v.Mode = ""
+		v.Custom = OptionalNonNull[string]{}
+		v.RawJSON = append(v.RawJSON[:0], data...)
+		return nil
+	}
+	var custom OptionalNonNull[string]
+	if err := json.Unmarshal(rawCustom, &custom); err != nil {
+		return fmt.Errorf("field custom: %w", err)
+	}
+	*v = MultiAgentMode{Custom: custom}
+	return nil
+}
 
 type NetworkAccess string
 
@@ -21560,6 +21683,13 @@ const (
 	PluginInstallPolicyNotAvailable       PluginInstallPolicy = "NOT_AVAILABLE"
 	PluginInstallPolicyAvailable          PluginInstallPolicy = "AVAILABLE"
 	PluginInstallPolicyInstalledByDefault PluginInstallPolicy = "INSTALLED_BY_DEFAULT"
+)
+
+type PluginInstallPolicySource string
+
+const (
+	PluginInstallPolicySourceWorkspaceSetting     PluginInstallPolicySource = "WORKSPACE_SETTING"
+	PluginInstallPolicySourceImplicitCanonicalApp PluginInstallPolicySource = "IMPLICIT_CANONICAL_APP"
 )
 
 type PluginInstallResponse struct {
@@ -23143,19 +23273,21 @@ func (v *PluginSource) UnmarshalJSON(data []byte) error {
 }
 
 type PluginSummary struct {
-	AuthPolicy     PluginAuthPolicy                    `json:"authPolicy,omitempty"`
-	Availability   OptionalNonNull[PluginAvailability] `json:"availability,omitempty"`
-	Enabled        bool                                `json:"enabled,omitempty"`
-	ID             string                              `json:"id,omitempty"`
-	InstallPolicy  PluginInstallPolicy                 `json:"installPolicy,omitempty"`
-	Installed      bool                                `json:"installed,omitempty"`
-	InterfaceValue Optional[PluginInterface]           `json:"interface,omitempty"`
-	Keywords       OptionalNonNull[[]string]           `json:"keywords,omitempty"`
-	LocalVersion   Optional[string]                    `json:"localVersion,omitempty"`
-	Name           string                              `json:"name,omitempty"`
-	RemotePluginID Optional[string]                    `json:"remotePluginId,omitempty"`
-	ShareContext   Optional[PluginShareContext]        `json:"shareContext,omitempty"`
-	Source         PluginSource                        `json:"source,omitempty"`
+	AuthPolicy          PluginAuthPolicy                    `json:"authPolicy,omitempty"`
+	Availability        OptionalNonNull[PluginAvailability] `json:"availability,omitempty"`
+	Enabled             bool                                `json:"enabled,omitempty"`
+	ID                  string                              `json:"id,omitempty"`
+	InstallPolicy       PluginInstallPolicy                 `json:"installPolicy,omitempty"`
+	InstallPolicySource Optional[PluginInstallPolicySource] `json:"installPolicySource,omitempty"`
+	Installed           bool                                `json:"installed,omitempty"`
+	InterfaceValue      Optional[PluginInterface]           `json:"interface,omitempty"`
+	Keywords            OptionalNonNull[[]string]           `json:"keywords,omitempty"`
+	LocalVersion        Optional[string]                    `json:"localVersion,omitempty"`
+	Name                string                              `json:"name,omitempty"`
+	RemotePluginID      Optional[string]                    `json:"remotePluginId,omitempty"`
+	ShareContext        Optional[PluginShareContext]        `json:"shareContext,omitempty"`
+	Source              PluginSource                        `json:"source,omitempty"`
+	Version             Optional[string]                    `json:"version,omitempty"`
 }
 
 func (v PluginSummary) MarshalJSON() ([]byte, error) {
@@ -23167,6 +23299,9 @@ func (v PluginSummary) MarshalJSON() ([]byte, error) {
 	out["enabled"] = v.Enabled
 	out["id"] = v.ID
 	out["installPolicy"] = v.InstallPolicy
+	if v.InstallPolicySource.IsSet() {
+		out["installPolicySource"] = v.InstallPolicySource
+	}
 	out["installed"] = v.Installed
 	if v.InterfaceValue.IsSet() {
 		out["interface"] = v.InterfaceValue
@@ -23185,6 +23320,9 @@ func (v PluginSummary) MarshalJSON() ([]byte, error) {
 		out["shareContext"] = v.ShareContext
 	}
 	out["source"] = v.Source
+	if v.Version.IsSet() {
+		out["version"] = v.Version
+	}
 	return json.Marshal(out)
 }
 
@@ -23245,6 +23383,12 @@ func (v *PluginSummary) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawInstallPolicy, &v.InstallPolicy); err != nil {
 		return fmt.Errorf("field installPolicy: %w", err)
+	}
+	rawInstallPolicySource, ok := raw["installPolicySource"]
+	if ok {
+		if err := json.Unmarshal(rawInstallPolicySource, &v.InstallPolicySource); err != nil {
+			return fmt.Errorf("field installPolicySource: %w", err)
+		}
 	}
 	rawInstalled, ok := raw["installed"]
 	if !ok {
@@ -23313,6 +23457,12 @@ func (v *PluginSummary) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawSource, &v.Source); err != nil {
 		return fmt.Errorf("field source: %w", err)
+	}
+	rawVersion, ok := raw["version"]
+	if ok {
+		if err := json.Unmarshal(rawVersion, &v.Version); err != nil {
+			return fmt.Errorf("field version: %w", err)
+		}
 	}
 	return nil
 }
@@ -23999,13 +24149,123 @@ const (
 	RateLimitReachedTypeWorkspaceMemberUsageLimitReached RateLimitReachedType = "workspace_member_usage_limit_reached"
 )
 
+type RateLimitResetCredit struct {
+	Description Optional[string]           `json:"description,omitempty"`
+	ExpiresAt   Optional[int64]            `json:"expiresAt,omitempty"`
+	GrantedAt   int64                      `json:"grantedAt,omitempty"`
+	ID          string                     `json:"id,omitempty"`
+	ResetType   RateLimitResetType         `json:"resetType,omitempty"`
+	Status      RateLimitResetCreditStatus `json:"status,omitempty"`
+	Title       Optional[string]           `json:"title,omitempty"`
+}
+
+func (v RateLimitResetCredit) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if v.Description.IsSet() {
+		out["description"] = v.Description
+	}
+	if v.ExpiresAt.IsSet() {
+		out["expiresAt"] = v.ExpiresAt
+	}
+	out["grantedAt"] = v.GrantedAt
+	out["id"] = v.ID
+	out["resetType"] = v.ResetType
+	out["status"] = v.Status
+	if v.Title.IsSet() {
+		out["title"] = v.Title
+	}
+	return json.Marshal(out)
+}
+
+func (v *RateLimitResetCredit) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	rawDescription, ok := raw["description"]
+	if ok {
+		if err := json.Unmarshal(rawDescription, &v.Description); err != nil {
+			return fmt.Errorf("field description: %w", err)
+		}
+	}
+	rawExpiresAt, ok := raw["expiresAt"]
+	if ok {
+		if err := json.Unmarshal(rawExpiresAt, &v.ExpiresAt); err != nil {
+			return fmt.Errorf("field expiresAt: %w", err)
+		}
+	}
+	rawGrantedAt, ok := raw["grantedAt"]
+	if !ok {
+		return DecodeError{Field: "grantedAt", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawGrantedAt, []byte("null")) {
+		return DecodeError{Field: "grantedAt", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawGrantedAt, &v.GrantedAt); err != nil {
+		return fmt.Errorf("field grantedAt: %w", err)
+	}
+	rawID, ok := raw["id"]
+	if !ok {
+		return DecodeError{Field: "id", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawID, []byte("null")) {
+		return DecodeError{Field: "id", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawID, &v.ID); err != nil {
+		return fmt.Errorf("field id: %w", err)
+	}
+	rawResetType, ok := raw["resetType"]
+	if !ok {
+		return DecodeError{Field: "resetType", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawResetType, []byte("null")) {
+		return DecodeError{Field: "resetType", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawResetType, &v.ResetType); err != nil {
+		return fmt.Errorf("field resetType: %w", err)
+	}
+	rawStatus, ok := raw["status"]
+	if !ok {
+		return DecodeError{Field: "status", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawStatus, []byte("null")) {
+		return DecodeError{Field: "status", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawStatus, &v.Status); err != nil {
+		return fmt.Errorf("field status: %w", err)
+	}
+	rawTitle, ok := raw["title"]
+	if ok {
+		if err := json.Unmarshal(rawTitle, &v.Title); err != nil {
+			return fmt.Errorf("field title: %w", err)
+		}
+	}
+	return nil
+}
+
+type RateLimitResetCreditStatus string
+
+const (
+	RateLimitResetCreditStatusAvailable RateLimitResetCreditStatus = "available"
+	RateLimitResetCreditStatusRedeeming RateLimitResetCreditStatus = "redeeming"
+	RateLimitResetCreditStatusRedeemed  RateLimitResetCreditStatus = "redeemed"
+	RateLimitResetCreditStatusUnknown   RateLimitResetCreditStatus = "unknown"
+)
+
 type RateLimitResetCreditsSummary struct {
-	AvailableCount int64 `json:"availableCount,omitempty"`
+	AvailableCount int64                            `json:"availableCount,omitempty"`
+	Credits        Optional[[]RateLimitResetCredit] `json:"credits,omitempty"`
 }
 
 func (v RateLimitResetCreditsSummary) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
 	out["availableCount"] = v.AvailableCount
+	if v.Credits.IsSet() {
+		out["credits"] = v.Credits
+	}
 	return json.Marshal(out)
 }
 
@@ -24027,8 +24287,21 @@ func (v *RateLimitResetCreditsSummary) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(rawAvailableCount, &v.AvailableCount); err != nil {
 		return fmt.Errorf("field availableCount: %w", err)
 	}
+	rawCredits, ok := raw["credits"]
+	if ok {
+		if err := json.Unmarshal(rawCredits, &v.Credits); err != nil {
+			return fmt.Errorf("field credits: %w", err)
+		}
+	}
 	return nil
 }
+
+type RateLimitResetType string
+
+const (
+	RateLimitResetTypeCodexRateLimits RateLimitResetType = "codexRateLimits"
+	RateLimitResetTypeUnknown         RateLimitResetType = "unknown"
+)
 
 type RateLimitSnapshot struct {
 	Credits              Optional[CreditsSnapshot]           `json:"credits,omitempty"`
@@ -29190,8 +29463,8 @@ func (v *ThreadDecrementElicitationParams) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadDecrementElicitationResponse struct {
-	Count  uint64 `json:"count,omitempty"`
-	Paused bool   `json:"paused,omitempty"`
+	Count  int64 `json:"count,omitempty"`
+	Paused bool  `json:"paused,omitempty"`
 }
 
 func (v ThreadDecrementElicitationResponse) MarshalJSON() ([]byte, error) {
@@ -29218,9 +29491,6 @@ func (v *ThreadDecrementElicitationResponse) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawCount, &v.Count); err != nil {
 		return fmt.Errorf("field count: %w", err)
-	}
-	if v.Count < 0 {
-		return DecodeError{Field: "count", Reason: "below minimum 0"}
 	}
 	rawPaused, ok := raw["paused"]
 	if !ok {
@@ -30194,8 +30464,8 @@ func (v *ThreadIncrementElicitationParams) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadIncrementElicitationResponse struct {
-	Count  uint64 `json:"count,omitempty"`
-	Paused bool   `json:"paused,omitempty"`
+	Count  int64 `json:"count,omitempty"`
+	Paused bool  `json:"paused,omitempty"`
 }
 
 func (v ThreadIncrementElicitationResponse) MarshalJSON() ([]byte, error) {
@@ -30222,9 +30492,6 @@ func (v *ThreadIncrementElicitationResponse) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawCount, &v.Count); err != nil {
 		return fmt.Errorf("field count: %w", err)
-	}
-	if v.Count < 0 {
-		return DecodeError{Field: "count", Reason: "below minimum 0"}
 	}
 	rawPaused, ok := raw["paused"]
 	if !ok {
@@ -32550,19 +32817,20 @@ func (v *ThreadRealtimeSdpNotification) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadRealtimeStartParams struct {
-	ClientManagedHandoffs      Optional[bool]                         `json:"clientManagedHandoffs,omitempty"`
-	CodexResponseHandoffPrefix Optional[string]                       `json:"codexResponseHandoffPrefix,omitempty"`
-	CodexResponseItemPrefix    Optional[string]                       `json:"codexResponseItemPrefix,omitempty"`
-	CodexResponsesAsItems      Optional[bool]                         `json:"codexResponsesAsItems,omitempty"`
-	IncludeStartupContext      Optional[bool]                         `json:"includeStartupContext,omitempty"`
-	Model                      Optional[string]                       `json:"model,omitempty"`
-	OutputModality             RealtimeOutputModality                 `json:"outputModality,omitempty"`
-	Prompt                     Optional[string]                       `json:"prompt,omitempty"`
-	RealtimeSessionID          Optional[string]                       `json:"realtimeSessionId,omitempty"`
-	ThreadID                   string                                 `json:"threadId,omitempty"`
-	Transport                  Optional[ThreadRealtimeStartTransport] `json:"transport,omitempty"`
-	Version                    Optional[RealtimeConversationVersion]  `json:"version,omitempty"`
-	Voice                      Optional[RealtimeVoice]                `json:"voice,omitempty"`
+	ClientManagedHandoffs           Optional[bool]                         `json:"clientManagedHandoffs,omitempty"`
+	CodexResponseHandoffPrefix      Optional[string]                       `json:"codexResponseHandoffPrefix,omitempty"`
+	CodexResponseItemPrefix         Optional[string]                       `json:"codexResponseItemPrefix,omitempty"`
+	CodexResponsesAsItems           Optional[bool]                         `json:"codexResponsesAsItems,omitempty"`
+	FlushTranscriptTailOnSessionEnd Optional[bool]                         `json:"flushTranscriptTailOnSessionEnd,omitempty"`
+	IncludeStartupContext           Optional[bool]                         `json:"includeStartupContext,omitempty"`
+	Model                           Optional[string]                       `json:"model,omitempty"`
+	OutputModality                  RealtimeOutputModality                 `json:"outputModality,omitempty"`
+	Prompt                          Optional[string]                       `json:"prompt,omitempty"`
+	RealtimeSessionID               Optional[string]                       `json:"realtimeSessionId,omitempty"`
+	ThreadID                        string                                 `json:"threadId,omitempty"`
+	Transport                       Optional[ThreadRealtimeStartTransport] `json:"transport,omitempty"`
+	Version                         Optional[RealtimeConversationVersion]  `json:"version,omitempty"`
+	Voice                           Optional[RealtimeVoice]                `json:"voice,omitempty"`
 }
 
 func (v ThreadRealtimeStartParams) MarshalJSON() ([]byte, error) {
@@ -32578,6 +32846,9 @@ func (v ThreadRealtimeStartParams) MarshalJSON() ([]byte, error) {
 	}
 	if v.CodexResponsesAsItems.IsSet() {
 		out["codexResponsesAsItems"] = v.CodexResponsesAsItems
+	}
+	if v.FlushTranscriptTailOnSessionEnd.IsSet() {
+		out["flushTranscriptTailOnSessionEnd"] = v.FlushTranscriptTailOnSessionEnd
 	}
 	if v.IncludeStartupContext.IsSet() {
 		out["includeStartupContext"] = v.IncludeStartupContext
@@ -32635,6 +32906,12 @@ func (v *ThreadRealtimeStartParams) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawCodexResponsesAsItems, &v.CodexResponsesAsItems); err != nil {
 			return fmt.Errorf("field codexResponsesAsItems: %w", err)
+		}
+	}
+	rawFlushTranscriptTailOnSessionEnd, ok := raw["flushTranscriptTailOnSessionEnd"]
+	if ok {
+		if err := json.Unmarshal(rawFlushTranscriptTailOnSessionEnd, &v.FlushTranscriptTailOnSessionEnd); err != nil {
+			return fmt.Errorf("field flushTranscriptTailOnSessionEnd: %w", err)
 		}
 	}
 	rawIncludeStartupContext, ok := raw["includeStartupContext"]
