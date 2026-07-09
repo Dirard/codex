@@ -572,21 +572,21 @@ grep -F 'shipping-release-readiness.json' .github/workflows/go-sdk-shipping-rele
 grep -E 'reusedWorkflows|reusedJobs|reusedScripts|workflowLocalDuplicateCommands' .github/workflows/go-sdk-shipping-release-readiness.yml
 grep -E 'package-macos|finalize-macos|Build Codex package archive|Build Codex package archives|publish-dotslash|dotslash-config|codex-command-runner.exe|codex-windows-sandbox-setup.exe' .github/workflows/go-sdk-shipping-release-readiness.yml
 awk '
-  /- name: Test Go SDK against package-builder archive/ { in_archive = 1 }
+  /- name: Test Go SDK release archive runtime/ { in_archive = 1 }
   in_archive && /- name: Rust protocol\/schema source-of-truth checks/ { in_archive = 0 }
   in_archive && /--cargo-profile release/ { has_release = 1 }
   in_archive && /--cargo-profile dev/ { has_dev = 1 }
   END { exit (has_release && !has_dev) ? 0 : 1 }
 ' .github/workflows/sdk.yml
-grep -F 'Test Go SDK against package-builder archive' .github/workflows/sdk.yml
+grep -F 'Test Go SDK release archive runtime' .github/workflows/sdk.yml
 awk '
-  /- name: Test Go SDK against package-builder archive/ { in_archive = 1 }
+  /- name: Test Go SDK release archive runtime/ { in_archive = 1 }
   in_archive && /- name: Rust protocol\/schema source-of-truth checks/ { in_archive = 0 }
   in_archive && /TestRealAppServerRejectsDebugHookEnv/ { found = 1 }
   END { exit found ? 0 : 1 }
 ' .github/workflows/sdk.yml
 if awk '
-  /- name: Test Go SDK against package-builder archive/ { in_archive = 1 }
+  /- name: Test Go SDK release archive runtime/ { in_archive = 1 }
   in_archive && /- name: Rust protocol\/schema source-of-truth checks/ { in_archive = 0 }
   in_archive && /runner\.os != .macOS./ { found = 1 }
   END { exit found ? 0 : 1 }
@@ -597,11 +597,11 @@ fi
 awk '
   /bazel_target: aarch64-apple-darwin/ { has_macos_arm64 = 1 }
   /bazel_target: x86_64-apple-darwin/ { has_macos_x64 = 1 }
-  /- name: Test Go SDK against package-builder archive/ { has_archive_step = 1 }
+  /- name: Test Go SDK release archive runtime/ { has_archive_step = 1 }
   END { exit (has_macos_arm64 && has_macos_x64 && has_archive_step) ? 0 : 1 }
 ' .github/workflows/sdk.yml
 grep -F 'go-sdk-release-archive' .github/workflows/sdk.yml
-grep -F 'Verify macOS x64 runner' .github/workflows/sdk.yml
+grep -F 'Assert macOS x64 runner architecture' .github/workflows/sdk.yml
 grep -F 'linux-x64-xl' .github/workflows/sdk.yml
 grep -F 'linux-x64-xl' .github/workflows/rust-release.yml
 grep -F 'runs_on: macos-15-large' .github/workflows/sdk.yml
@@ -626,7 +626,15 @@ grep -F 'WindowsReleaseShapedMsvc' .github/scripts/stage-codex-runtime.ps1
 grep -F 'BootstrapOnly' .github/scripts/stage-codex-runtime.ps1
 grep -F 'windowsMsvcHostPlatform' .github/scripts/stage-codex-runtime.ps1
 grep -F 'x86_64-unknown-linux-musl' .github/workflows/sdk.yml
-! grep -F 'x86_64-unknown-linux-gnu' .github/workflows/sdk.yml
+if awk '
+  /- name: Test Go SDK release archive runtime/ { in_archive = 1 }
+  in_archive && /- name: Rust protocol\/schema source-of-truth checks/ { in_archive = 0 }
+  in_archive && /x86_64-unknown-linux-gnu/ { found = 1 }
+  END { exit found ? 0 : 1 }
+' .github/workflows/sdk.yml; then
+  echo "Go SDK packageArchive smoke must not use the generic Linux GNU Bazel cache target" >&2
+  exit 1
+fi
 grep -F 'aarch64-unknown-linux-musl' .github/workflows/sdk.yml
 grep -F "runner.os == 'Linux'" .github/workflows/sdk.yml
 ! grep -F "matrix.name == 'linux'" .github/workflows/sdk.yml
@@ -636,7 +644,7 @@ grep -F 'x86_64-pc-windows-msvc' .github/workflows/sdk.yml
 grep -F 'aarch64-pc-windows-msvc' .github/workflows/sdk.yml
 grep -F '//codex-rs/cli:codex_go_sdk_runtime_layout' .github/scripts/stage-codex-runtime.sh
 grep -F 'codex-resources/bwrap' .github/scripts/stage-codex-runtime.sh
-grep -F 'codex-path/rg' .github/scripts/stage-codex-runtime.sh
+grep -F 'codex-path/$(rg_name)' .github/scripts/stage-codex-runtime.sh
 grep -F 'codex-resources/zsh/bin/zsh' .github/scripts/stage-codex-runtime.sh
 grep -F -- '-ExportEnvironment' .github/scripts/stage-codex-runtime.ps1
 grep -F 'Set-Item -Path Env:' .github/scripts/stage-codex-runtime.ps1
@@ -644,7 +652,8 @@ if grep -F 'CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE=1' .github/workflows/sdk.
   echo "workflow must not export SDK integration test mode at parent job scope" >&2
   exit 1
 fi
-grep -F 'clean parent env' sdk/go/integration_app_server_test.go
+grep -F 'reserved env leaked into child env' sdk/go/config_test.go
+grep -F 'parent debug hook env was scrubbed' sdk/go/real_app_server_test.go
 ```
 
 - [ ] Verify real GitHub Actions release-readiness evidence. This gate is mandatory after local source checks; local `grep`/`awk`/unit tests are not enough to claim Linux/macOS/Windows release readiness. The executor must provide run IDs for successful runs on the reviewed commit:
