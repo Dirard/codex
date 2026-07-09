@@ -198,6 +198,15 @@ func TestStageCodexRuntimePowerShellReleaseArchiveMarkers(t *testing.T) {
 		"[string]$ZstdSource",
 		"Get-Command zstd",
 		"Set-Item -Path Env:CODEX_EXEC_PATH",
+		"Initialize-WindowsBazelBootstrap",
+		"BAZEL_OUTPUT_USER_ROOT",
+		"BAZEL_REPO_CONTENTS_CACHE",
+		"BAZEL_REPOSITORY_CACHE",
+		"setup-msvc-env.ps1",
+		"compute-bazel-windows-path.ps1",
+		"core.longpaths",
+		"$script:WindowsMsvcHostPlatform = $true",
+		"--host_platform=//:local_windows_msvc",
 		"windowsMsvcHostPlatform",
 		"packageArchive",
 		"requires -CargoProfile release",
@@ -214,6 +223,7 @@ func TestStageCodexRuntimeScriptThreadsWindowsMsvcHostPlatform(t *testing.T) {
 	for _, required := range []string{
 		"bazel_host_platform_args+=(--host_platform=//:local_windows_msvc)",
 		`-- build "${bazel_host_platform_args[@]}" -- "$label"`,
+		`-- cquery "${bazel_host_platform_args[@]}" --output=files "$label"`,
 		`bazel build "${bazel_host_platform_args[@]}" "$label"`,
 		`bazel cquery "${bazel_host_platform_args[@]}" --output=files "$label"`,
 		"--windows-msvc-host-platform requires a Windows target",
@@ -256,6 +266,13 @@ func TestStageCodexRuntimeScriptStagesReleasePackageArchive(t *testing.T) {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("stage-codex-runtime.sh package archive mode failed: %v\n%s", err, output)
+	}
+	scriptContent := readRepoText(t, ".github/scripts/stage-codex-runtime.sh")
+	if !strings.Contains(scriptContent, `zstd -dc "$zstd_archive" | tar -xf - -C "$out"`) {
+		t.Fatalf("packageArchive staging must extract the tar.zst archive")
+	}
+	if strings.Contains(scriptContent, `tar -xzf "$gzip_archive" -C "$out"`) {
+		t.Fatalf("packageArchive staging must not use the supplemental gzip archive")
 	}
 
 	for _, required := range []string{
