@@ -108,17 +108,35 @@ ${CODEX_PACKAGE_HELPER_ROOT}/<target>/codex-windows-sandbox-setup.exe
 
 The workflow-owned materializer uses the pinned manifest metadata for managed
 `rg` and patched zsh, downloads those provider archives into the helper root,
-verifies their declared size and SHA-256 digest, and extracts the configured
-payload path. Linux `bwrap` and Windows sandbox helper executables are copied
-from the same release binaries that the workflow already builds, signs, and
-verifies.
+verifies their declared size and SHA-256 digest, extracts the configured payload
+path, and writes `${CODEX_PACKAGE_HELPER_ROOT}/<target>/codex-package-helpers.json`.
+That manifest records the target, generator, relative helper paths, byte sizes,
+and SHA-256 digests for every concrete payload. Linux `bwrap` and Windows
+sandbox helper executables are copied from the same release binaries that the
+workflow already builds, signs, and verifies.
+
+Stage 6 Go SDK runtime staging may consume that helper root only as a
+pre-produced artifact. The consumer must make the helper root available before
+the network-disabled staging/test segment, run:
+
+```bash
+PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m codex_package.materialize_helpers \
+  --target "$TARGET" \
+  --output-root "$CODEX_PACKAGE_HELPER_ROOT" \
+  --verify-only
+```
+
+and then stage from the verified files. After this verification step, Go SDK
+runtime staging must not call the materializer, DotSlash, package-cache lookup,
+PATH discovery, or any network fetch for `rg`, zsh, `bwrap`, or Windows sandbox
+helpers.
 
 `zstd` is a fail-fast prerequisite for `.tar.zst` archive creation and release
 artifact compression. The package builder no longer falls back to
 `.github/workflows/zstd` or DotSlash for archive validation.
 
 This makes the shipping package assembly path reviewed and explicit instead of
-depending on an out-of-band environment variable. Stage 6 runtime staging and
-release-readiness claims still remain blocked until the same helper payloads are
-available before Go SDK CI and release-readiness runs begin with network
-disabled.
+depending on an out-of-band environment variable. It also gives Stage 6 a
+reviewed helper-root artifact contract for runtime staging. Full Go SDK release
+readiness still requires the later Stage 6 CI wiring and Stage 7 downloaded
+GitHub Actions evidence; local manifest verification alone is only a preflight.
