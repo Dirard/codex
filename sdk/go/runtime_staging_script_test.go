@@ -19,6 +19,7 @@ eval "$("$STAGE_SCRIPT" --out "$STAGE_OUT" --bazel-target "$STAGE_TARGET" --help
 test "$CODEX_EXEC_PATH" = "$STAGE_OUT/bin/codex"
 test "$CODEX_HOME" = "$STAGE_OUT/codex-home"
 test "$CODEX_GO_SDK_RUNTIME_ROOT" = "$STAGE_OUT"
+test "$CODEX_RUNTIME_METADATA_PATH" = "$STAGE_OUT/codex-go-sdk-runtime-staging.json"
 case "${CODEX_PACKAGE_HELPER_ROOT-}" in
   "") ;;
   *) echo "CODEX_PACKAGE_HELPER_ROOT leaked into eval output" >&2; exit 1 ;;
@@ -65,6 +66,10 @@ esac
 	}
 	if len(metadata.ArchiveFormats) != 0 {
 		t.Fatalf("archiveFormats = %v, want none for bazel layout staging", metadata.ArchiveFormats)
+	}
+	assertRuntimeHelperManifest(t, metadata, fixture.target, []string{"bwrap", "rg", "zsh"})
+	if metadata.PackageArchive != nil {
+		t.Fatalf("packageArchive = %#v, want nil for bazel layout staging", metadata.PackageArchive)
 	}
 }
 
@@ -181,6 +186,22 @@ func TestStageCodexRuntimeScriptStagesReleasePackageArchive(t *testing.T) {
 	if strings.Join(metadata.ArchiveFormats, ",") != "tar.gz,tar.zst" {
 		t.Fatalf("archiveFormats = %v, want tar.gz and tar.zst", metadata.ArchiveFormats)
 	}
+	if metadata.PackageArchive == nil {
+		t.Fatalf("packageArchive metadata missing")
+	}
+	if metadata.PackageArchive.Target != fixture.target {
+		t.Fatalf("packageArchive target = %q, want %q", metadata.PackageArchive.Target, fixture.target)
+	}
+	if !strings.HasSuffix(metadata.PackageArchive.Path, ".tar.zst") {
+		t.Fatalf("packageArchive path = %q, want tar.zst", metadata.PackageArchive.Path)
+	}
+	if !strings.HasSuffix(metadata.PackageArchive.GzipPath, ".tar.gz") {
+		t.Fatalf("packageArchive gzipPath = %q, want tar.gz", metadata.PackageArchive.GzipPath)
+	}
+	if strings.Join(metadata.PackageArchive.ArchiveFormats, ",") != "tar.gz,tar.zst" {
+		t.Fatalf("packageArchive archiveFormats = %v, want tar.gz and tar.zst", metadata.PackageArchive.ArchiveFormats)
+	}
+	assertRuntimeHelperManifest(t, metadata, fixture.target, []string{"bwrap", "rg", "zsh"})
 }
 
 func TestStageCodexRuntimeScriptsUseVerifiedHelpersOnly(t *testing.T) {
@@ -227,11 +248,28 @@ type runtimeStagingMetadata struct {
 	BazelTarget              string   `json:"bazelTarget"`
 	CargoProfile             string   `json:"cargoProfile"`
 	CodeExecPath             string   `json:"codeExecPath"`
+	HelperManifest           *runtimeHelperManifest  `json:"helperManifest"`
 	LayoutTarget             string   `json:"layoutTarget"`
+	PackageArchive           *runtimePackageArchive  `json:"packageArchive"`
 	RuntimeSource            string   `json:"runtimeSource"`
 	WindowsMsvcHostPlatform  bool     `json:"windowsMsvcHostPlatform"`
 	WindowsReleaseShapedMsvc bool     `json:"windowsReleaseShapedMsvc"`
 	ZstdSource               string   `json:"zstdSource"`
+}
+
+type runtimeHelperManifest struct {
+	Files []string `json:"files"`
+	Path  string   `json:"path"`
+	Target string  `json:"target"`
+}
+
+type runtimePackageArchive struct {
+	ArchiveFormats           []string `json:"archiveFormats"`
+	GzipPath                 string   `json:"gzipPath"`
+	Path                     string   `json:"path"`
+	Target                   string   `json:"target"`
+	WindowsMsvcHostPlatform  bool     `json:"windowsMsvcHostPlatform"`
+	WindowsReleaseShapedMsvc bool     `json:"windowsReleaseShapedMsvc"`
 }
 
 func newLinuxStagingFixture(t *testing.T, outName string) linuxStagingFixture {
@@ -296,6 +334,22 @@ func readRuntimeStagingMetadata(t *testing.T, out string) runtimeStagingMetadata
 		t.Fatalf("unmarshal runtime staging metadata: %v", err)
 	}
 	return metadata
+}
+
+func assertRuntimeHelperManifest(t *testing.T, metadata runtimeStagingMetadata, target string, files []string) {
+	t.Helper()
+	if metadata.HelperManifest == nil {
+		t.Fatalf("helperManifest metadata missing")
+	}
+	if metadata.HelperManifest.Target != target {
+		t.Fatalf("helperManifest target = %q, want %q", metadata.HelperManifest.Target, target)
+	}
+	if strings.Join(metadata.HelperManifest.Files, ",") != strings.Join(files, ",") {
+		t.Fatalf("helperManifest files = %v, want %v", metadata.HelperManifest.Files, files)
+	}
+	if !strings.HasSuffix(metadata.HelperManifest.Path, filepath.Join(target, "codex-package-helpers.json")) {
+		t.Fatalf("helperManifest path = %q, want target manifest path", metadata.HelperManifest.Path)
+	}
 }
 
 func writeHelperManifest(t *testing.T, targetRoot string, target string, helpers map[string]string) {
