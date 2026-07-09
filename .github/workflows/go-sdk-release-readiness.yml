@@ -1,0 +1,209 @@
+name: go-sdk-release-readiness
+
+on:
+  workflow_call:
+    inputs:
+      checkout_ref:
+        required: true
+        type: string
+      validate_synthetic_tags:
+        required: false
+        type: boolean
+        default: true
+  workflow_dispatch:
+    inputs:
+      checkout_ref:
+        description: "Optional checkout ref for manual validation"
+        required: false
+        type: string
+  push:
+    tags:
+      - "sdk/go/v*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-go-sdk-release:
+    if: github.event_name == 'workflow_call' || github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch'
+    runs-on:
+      group: ${{ github.event.repository.name }}-runners
+      labels: ${{ github.event.repository.name }}-linux-x64
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ inputs.checkout_ref || github.ref }}
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.25"
+          cache-dependency-path: |
+            sdk/go/go.mod
+            sdk/go/go.sum
+
+      - name: Validate tag and module
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref_name="${GITHUB_REF_NAME:-manual}"
+          module_version="$(git rev-parse HEAD)"
+          module_import="$(awk '/^module / { print $2; exit }' sdk/go/go.mod)"
+          [[ -n "${module_import}" ]]
+
+          release_tags=()
+          declare -A synthetic_tag_refs=()
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            checked_out_commit="$(git rev-parse HEAD)"
+            tagged_commit="$(git rev-parse "${GITHUB_REF}^{commit}")"
+            test "${checked_out_commit}" = "${tagged_commit}"
+            [[ "${ref_name}" =~ ^sdk/go/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+            module_version="${ref_name#sdk/go/}"
+            major="${module_version%%.*}"
+            major_number="${major#v}"
+            if (( major_number >= 2 )); then
+              module_import="github.com/openai/codex/sdk/go/${major}"
+            fi
+            release_tags=("${ref_name}")
+          elif [[ "${{ inputs.validate_synthetic_tags || false }}" == "true" ]]; then
+            annotated_synthetic_tag="sdk/go/v1.99.1-go-sdk-ci-annotated"
+            release_tags=(
+              "sdk/go/v0.99.0-go-sdk-ci"
+              "sdk/go/v1.99.0-go-sdk-ci"
+              "${annotated_synthetic_tag}"
+              "sdk/go/v2.99.0-go-sdk-ci"
+            )
+            synthetic_tag_refs["sdk/go/v0.99.0-go-sdk-ci"]="$(git rev-parse HEAD)"
+            synthetic_tag_refs["sdk/go/v1.99.0-go-sdk-ci"]="$(git rev-parse HEAD)"
+            synthetic_tag_refs["${annotated_synthetic_tag}"]="$(git rev-parse HEAD)"
+          fi
+
+          grep -Fx "module ${module_import}" sdk/go/go.mod
+          go -C sdk/go test ./...
+          go -C sdk/go test ./... -run TestReleaseReadiness
+
+          bare_remote="${RUNNER_TEMP}/codex-go-sdk-release.git"
+          git clone --bare "${GITHUB_WORKSPACE}" "${bare_remote}"
+
+          if [[ -n "${synthetic_tag_refs[sdk/go/v1.99.0-go-sdk-ci]:-}" ]]; then
+            synthetic_v2_worktree="${RUNNER_TEMP}/codex-go-sdk-synthetic-v2"
+            git clone "${bare_remote}" "${synthetic_v2_worktree}"
+            (
+              cd "${synthetic_v2_worktree}"
+              go -C sdk/go mod edit -module github.com/openai/codex/sdk/go/v2
+              self_imports="${RUNNER_TEMP}/codex-go-sdk-v2-self-imports"
+              if grep -RIl 'github.com/openai/codex/sdk/go' sdk/go --include='*.go' > "${self_imports}"; then
+                xargs -r perl -0pi -e 's#github\.com/openai/codex/sdk/go"#github.com/openai/codex/sdk/go/v2"#g; s#github\.com/openai/codex/sdk/go/(?!v[0-9]+(?:/|"))#github.com/openai/codex/sdk/go/v2/#g' < "${self_imports}"
+              fi
+              stale_v2_imports="${RUNNER_TEMP}/codex-go-sdk-v2-stale-imports"
+              find sdk/go -name '*.go' -print0 | xargs -0 perl -ne 'print "$ARGV:$.:$_" if /github\.com\/openai\/codex\/sdk\/go(?:"|\/(?!v[0-9]+(?:\/|")))/' > "${stale_v2_imports}"
+              test ! -s "${stale_v2_imports}" || { cat "${stale_v2_imports}"; exit 1; }
+              go -C sdk/go test ./...
+              git add sdk/go
+              git -c user.name=codex-go-sdk-ci -c user.email=codex-go-sdk-ci@example.invalid commit -m "synthetic Go SDK v2 module path"
+              git push "${bare_remote}" HEAD:refs/heads/synthetic-go-sdk-v2
+              git rev-parse HEAD > "${RUNNER_TEMP}/codex-go-sdk-synthetic-v2-ref"
+            )
+            synthetic_tag_refs["sdk/go/v2.99.0-go-sdk-ci"]="$(cat "${RUNNER_TEMP}/codex-go-sdk-synthetic-v2-ref")"
+          fi
+
+          for release_tag in "${release_tags[@]}"; do
+            if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+              git --git-dir="${bare_remote}" show-ref --verify "refs/tags/${release_tag}"
+            elif [[ "${release_tag}" == "${annotated_synthetic_tag:-}" ]]; then
+              git --git-dir="${bare_remote}" \
+                -c user.name=codex-go-sdk-ci \
+                -c user.email=codex-go-sdk-ci@example.invalid \
+                tag -a "${release_tag}" "${synthetic_tag_refs[$release_tag]}" -m "synthetic Go SDK annotated tag"
+              peeled_commit="$(git --git-dir="${bare_remote}" rev-parse "${release_tag}^{commit}")"
+              test "${peeled_commit}" = "${synthetic_tag_refs[$release_tag]}"
+            else
+              git --git-dir="${bare_remote}" tag "${release_tag}" "${synthetic_tag_refs[$release_tag]}"
+            fi
+          done
+
+          git_config_global="${RUNNER_TEMP}/codex-go-sdk-release.gitconfig"
+          : > "${git_config_global}"
+          export GIT_CONFIG_GLOBAL="${git_config_global}"
+          trace_dir="$(mktemp -d "${RUNNER_TEMP}/codex-go-sdk-release-trace.XXXXXX")"
+          rewrites=(
+            "https://github.com/openai/codex.git"
+            "https://github.com/openai/codex"
+            "ssh://git@github.com/openai/codex.git"
+            "ssh://git@github.com/openai/codex"
+            "git@github.com:openai/codex.git"
+            "git@github.com:openai/codex"
+          )
+          for rewrite in "${rewrites[@]}"; do
+            git config --global --add url."file://${bare_remote}".insteadOf "${rewrite}"
+          done
+          for rewrite in "${rewrites[@]}"; do
+            git config --global --get-all url."file://${bare_remote}".insteadOf | grep -Fx "${rewrite}"
+          done
+          GIT_TRACE=1 git ls-remote https://github.com/openai/codex HEAD > /dev/null 2> "${trace_dir}/rewrite-trace.log"
+          grep -F "${bare_remote}" "${trace_dir}/rewrite-trace.log"
+
+          export GOPRIVATE=github.com/openai/codex
+          export GONOSUMDB=github.com/openai/codex
+          export GIT_ALLOW_PROTOCOL=file:https:ssh
+          export GOMODCACHE="$(mktemp -d)"
+
+          consumer_dir="$(mktemp -d)"
+          cd "${consumer_dir}"
+          go mod init example.com/codex-go-sdk-consumer
+          go_get_trace="${trace_dir}/go-get-trace.log"
+          GIT_TRACE="${go_get_trace}" go get "${module_import}@${module_version}" 2> "${trace_dir}/go-get-stderr.log"
+          grep -F "${bare_remote}" "${go_get_trace}"
+          cat > main.go <<GO
+          package main
+
+          import (
+              codex "${module_import}"
+              _ "${module_import}/protocol"
+          )
+
+          func main() {
+              _ = codex.ClientConfig{}
+          }
+          GO
+          go mod tidy
+          go test ./...
+
+          for release_tag in "${release_tags[@]}"; do
+            release_version="${release_tag#sdk/go/}"
+            release_major="${release_version%%.*}"
+            release_import="$(awk '/^module / { print $2; exit }' "${GITHUB_WORKSPACE}/sdk/go/go.mod")"
+            release_major_number="${release_major#v}"
+            if (( release_major_number >= 2 )); then
+              release_import="github.com/openai/codex/sdk/go/${release_major}"
+            fi
+            git --git-dir="${bare_remote}" show "${release_tag}:sdk/go/go.mod" | grep -Fx "module ${release_import}"
+            release_consumer_dir="$(mktemp -d)"
+            cd "${release_consumer_dir}"
+            go mod init example.com/codex-go-sdk-release-consumer
+            release_go_get_trace="${trace_dir}/go-get-${release_version}.log"
+            GIT_TRACE="${release_go_get_trace}" go get "${release_import}@${release_version}" 2> "${trace_dir}/go-get-${release_version}-stderr.log"
+            grep -F "${bare_remote}" "${release_go_get_trace}"
+            cat > main.go <<GO
+          package main
+
+          import (
+              codex "${release_import}"
+              _ "${release_import}/protocol"
+          )
+
+          func main() {
+              _ = codex.ClientConfig{}
+          }
+          GO
+            go mod tidy
+            go test ./...
+          done
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
