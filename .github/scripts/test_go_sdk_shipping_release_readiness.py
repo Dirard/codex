@@ -182,6 +182,13 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
                 sorted(go_sdk_shipping_release_readiness.EXPECTED_TARGETS),
             )
             linux_target = metadata["targets"]["x86_64-unknown-linux-musl"]
+            self.assertTrue(linux_target["fixtureOnly"])
+            self.assertFalse(linux_target["packageArchiveSmokeTestsRan"])
+            self.assertEqual(
+                linux_target["expectedPackageArchiveSmokeTests"],
+                go_sdk_shipping_release_readiness.REQUIRED_PACKAGE_ARCHIVE_SMOKE_TESTS,
+            )
+            self.assertNotIn("packageArchiveSmokeTests", linux_target)
             self.assertEqual(
                 linux_target["jobName"],
                 "Shipping package archive - x86_64-unknown-linux-musl",
