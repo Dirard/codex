@@ -507,6 +507,13 @@ jobs:
           mkdir -p "$evidence_dir"
           cp "${CODEX_RUNTIME_METADATA_PATH:?}" "$evidence_dir/staging-metadata.json"
           printf '%s\n' "${smoke_tests[@]}" > "$evidence_dir/package-archive-smoke-tests.txt"
+          {
+            printf 'step=Test Go SDK release archive runtime\n'
+            printf 'bounded=true\n'
+            printf 'target=%s\n' "${{ matrix.bazel_target }}"
+            printf 'runtimeSource=packageArchive\n'
+            printf 'cargoProfile=release\n'
+          } > "$evidence_dir/release-archive-smoke.log"
           uname -m > "$evidence_dir/uname-machine.txt" 2>/dev/null || printf 'unknown\n' > "$evidence_dir/uname-machine.txt"
           export GO_SDK_EVIDENCE_DIR="$evidence_dir"
           export GO_SDK_MATRIX_NAME="${{ matrix.name }}"
@@ -537,18 +544,22 @@ jobs:
               "architectureProof": architecture_proof,
               "architectureProofPath": architecture_proof_path.name,
               "bazelTarget": target,
-              "boundedLogReferences": ["Test Go SDK release archive runtime"],
+              "boundedLogs": [
+                  {
+                      "path": "release-archive-smoke.log",
+                      "maxBytes": 4096,
+                      "redaction": "none-required",
+                      "retention": "artifact",
+                  }
+              ],
               "cargoProfile": metadata.get("cargoProfile"),
-              "exactPackageArchiveSmokeTests": smoke_tests,
               "jobConclusion": "success",
               "jobName": f"Go SDK - {os.environ['GO_SDK_MATRIX_NAME']}",
-              "packageArchiveVerifier": {
-                  "metadataPath": metadata_path.name,
-                  "status": "passed",
-              },
+              "packageArchiveSmokeTests": smoke_tests,
+              "packageArchiveVerifier": "success",
               "runnerLabel": runner_label,
               "runtimeSource": metadata.get("runtimeSource"),
-              "sanitizedStagingMetadata": metadata,
+              "stagingMetadata": metadata,
           }
           if "windows" in target:
               windows_host_proof = {
@@ -556,8 +567,18 @@ jobs:
                   "windowsMsvcHostPlatform": bool(package_archive.get("windowsMsvcHostPlatform")),
                   "windowsReleaseShapedMsvc": bool(package_archive.get("windowsReleaseShapedMsvc")),
               }
-              windows_host_proof_path = evidence_dir / "windows-host-proof.json"
-              windows_host_proof_path.write_text(json.dumps(windows_host_proof, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+              windows_host_proof_path = evidence_dir / "windows-host-proof.txt"
+              windows_host_proof_path.write_text(
+                  "\n".join(
+                      [
+                          f"target={target}",
+                          f"windowsReleaseShapedMsvc={str(windows_host_proof['windowsReleaseShapedMsvc']).lower()}",
+                          f"windowsMsvcHostPlatform={str(windows_host_proof['windowsMsvcHostPlatform']).lower()}",
+                          "",
+                      ]
+                  ),
+                  encoding="utf-8",
+              )
               evidence["windowsHostProofPath"] = windows_host_proof_path.name
               evidence.update(windows_host_proof)
           (evidence_dir / "target-evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -635,6 +656,7 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           import json
+          import shutil
           from pathlib import Path
 
           expected_targets = {
@@ -645,21 +667,36 @@ jobs:
               "x86_64-pc-windows-msvc",
               "aarch64-pc-windows-msvc",
           }
+          output_dir = Path("go-sdk-ci-release-evidence")
+          if output_dir.exists():
+              shutil.rmtree(output_dir)
+          target_output_root = output_dir / "targets"
+          target_output_root.mkdir(parents=True)
           targets = {}
           for evidence_path in Path("downloaded-go-sdk-ci-release-evidence").glob("**/target-evidence.json"):
               evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
               target = evidence.get("bazelTarget")
+              if target not in expected_targets:
+                  raise SystemExit(f"unexpected Go SDK CI evidence target {target!r}")
               if target in targets:
                   raise SystemExit(f"duplicate Go SDK CI evidence for {target}")
               if evidence.get("jobConclusion") != "success":
                   raise SystemExit(f"Go SDK CI evidence for {target} did not record success")
               if "skipped" in evidence or "notReleaseReady" in evidence:
                   raise SystemExit(f"Go SDK CI evidence for {target} must not contain skipped/notReleaseReady markers")
+              target_dir = target_output_root / target
+              target_dir.mkdir()
+              for source in evidence_path.parent.iterdir():
+                  if source.is_file():
+                      shutil.copy2(source, target_dir / source.name)
+              for field in ["architectureProofPath", "windowsHostProofPath"]:
+                  if evidence.get(field):
+                      evidence[field] = f"targets/{target}/{Path(evidence[field]).name}"
+              for log in evidence.get("boundedLogs") or []:
+                  log["path"] = f"targets/{target}/{Path(log['path']).name}"
               targets[target] = evidence
           if set(targets) != expected_targets:
               raise SystemExit(f"Go SDK CI evidence targets {sorted(targets)} did not match {sorted(expected_targets)}")
-          output_dir = Path("go-sdk-ci-release-evidence")
-          output_dir.mkdir(exist_ok=True)
           (output_dir / "go-sdk-ci-release-evidence.json").write_text(
               json.dumps({"targets": targets}, indent=2, sort_keys=True) + "\n",
               encoding="utf-8",
@@ -670,7 +707,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: go-sdk-ci-release-evidence
-          path: go-sdk-ci-release-evidence/go-sdk-ci-release-evidence.json
+          path: go-sdk-ci-release-evidence/
           if-no-files-found: error
 
   go-sdk-release-readiness:
