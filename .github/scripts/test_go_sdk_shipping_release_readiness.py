@@ -90,61 +90,7 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
             out_dir = root / "shipping-release-readiness-metadata"
             artifacts_dir.mkdir()
 
-            for target in go_sdk_shipping_release_readiness.EXPECTED_TARGETS:
-                windows = "windows" in target
-                linux = "linux" in target
-                macos = "apple-darwin" in target
-                exe = ".exe" if windows else ""
-                codex_paths = ["codex-package.json", f"bin/codex{exe}"]
-                app_server_paths = [f"bin/codex-app-server{exe}"]
-                if windows:
-                    codex_paths.extend(
-                        [
-                            "codex-path/rg.exe",
-                            "codex-resources/codex-command-runner.exe",
-                            "codex-resources/codex-windows-sandbox-setup.exe",
-                        ]
-                    )
-                else:
-                    codex_paths.extend(
-                        [
-                            "codex-path/rg",
-                            "codex-resources/zsh/bin/zsh",
-                        ]
-                    )
-                    if linux:
-                        codex_paths.append("codex-resources/bwrap")
-
-                self.write_tar_zst(
-                    artifacts_dir / f"codex-package-{target}.tar.zst",
-                    root,
-                    codex_paths,
-                )
-                self.write_tar_zst(
-                    artifacts_dir / f"codex-app-server-package-{target}.tar.zst",
-                    root,
-                    app_server_paths,
-                )
-
-                if macos:
-                    for artifact_name in [
-                        f"codex-{target}.dmg",
-                        f"codex-{target}",
-                        f"codex-app-server-{target}",
-                    ]:
-                        (artifacts_dir / artifact_name).write_text(
-                            artifact_name,
-                            encoding="utf-8",
-                        )
-
-                if windows:
-                    with ZipFile(artifacts_dir / f"codex-{target}.exe.zip", "w") as zip_file:
-                        for member in [
-                            f"codex-{target}.exe",
-                            "codex-command-runner.exe",
-                            "codex-windows-sandbox-setup.exe",
-                        ]:
-                            zip_file.writestr(member, member)
+            self.write_shipping_artifacts(artifacts_dir, root)
 
             go_sdk_shipping_release_readiness.collect_artifacts(
                 artifacts_dir,
@@ -222,6 +168,7 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
             self.assertTrue(macos_x64["directArtifactNames"])
 
             windows_target = metadata["targets"]["x86_64-pc-windows-msvc"]
+            self.assertIn("codex-code-mode-host.exe", windows_target["publishedZipMembers"])
             self.assertIn("codex-command-runner.exe", windows_target["publishedZipMembers"])
             self.assertIn(
                 "codex-windows-sandbox-setup.exe",
@@ -240,6 +187,37 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
                     encoding="utf-8"
                 ),
             )
+
+    def test_collect_artifacts_rejects_missing_required_runtime_members(self) -> None:
+        if shutil.which("tar") is None or shutil.which("zstd") is None:
+            self.skipTest("tar and zstd are required for package archive fixtures")
+
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            artifacts_dir = root / "artifacts"
+            out_dir = root / "shipping-release-readiness-metadata"
+            artifacts_dir.mkdir()
+            self.write_shipping_artifacts(
+                artifacts_dir,
+                root,
+                omitted_members={
+                    (
+                        "x86_64-pc-windows-msvc",
+                        "codex",
+                        "bin/codex-code-mode-host.exe",
+                    )
+                },
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "codex-package-x86_64-pc-windows-msvc.tar.zst.*bin/codex-code-mode-host.exe",
+            ):
+                go_sdk_shipping_release_readiness.collect_artifacts(
+                    artifacts_dir,
+                    out_dir,
+                    fixture_substitutions=go_sdk_shipping_release_readiness.fixture_substitution_records(),
+                )
 
     def test_build_fixture_artifacts_uses_shared_package_archive_script(self) -> None:
         if shutil.which("tar") is None or shutil.which("zstd") is None:
@@ -291,6 +269,77 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
                 "nonPublishingFixtureBinaries",
                 {record["name"] for record in metadata["fixtureSubstitutions"]},
             )
+
+    def write_shipping_artifacts(
+        self,
+        artifacts_dir: Path,
+        root: Path,
+        *,
+        omitted_members: set[tuple[str, str, str]] | None = None,
+    ) -> None:
+        omitted_members = omitted_members or set()
+        for target in go_sdk_shipping_release_readiness.EXPECTED_TARGETS:
+            macos = "apple-darwin" in target
+            windows = "windows" in target
+            codex_paths = self.filtered_members(
+                target,
+                "codex",
+                go_sdk_shipping_release_readiness.required_codex_package_paths(target),
+                omitted_members,
+            )
+            app_server_paths = self.filtered_members(
+                target,
+                "app-server",
+                go_sdk_shipping_release_readiness.required_app_server_package_paths(target),
+                omitted_members,
+            )
+
+            self.write_tar_zst(
+                artifacts_dir / f"codex-package-{target}.tar.zst",
+                root,
+                codex_paths,
+            )
+            self.write_tar_zst(
+                artifacts_dir / f"codex-app-server-package-{target}.tar.zst",
+                root,
+                app_server_paths,
+            )
+
+            if macos:
+                for artifact_name in [
+                    f"codex-{target}.dmg",
+                    f"codex-{target}",
+                    f"codex-app-server-{target}",
+                ]:
+                    (artifacts_dir / artifact_name).write_text(
+                        artifact_name,
+                        encoding="utf-8",
+                    )
+
+            if windows:
+                with ZipFile(artifacts_dir / f"codex-{target}.exe.zip", "w") as zip_file:
+                    for member in self.filtered_members(
+                        target,
+                        "zip",
+                        go_sdk_shipping_release_readiness.required_windows_zip_members(
+                            target
+                        ),
+                        omitted_members,
+                    ):
+                        zip_file.writestr(member, member)
+
+    def filtered_members(
+        self,
+        target: str,
+        artifact_kind: str,
+        members: list[str],
+        omitted_members: set[tuple[str, str, str]],
+    ) -> list[str]:
+        return [
+            member
+            for member in members
+            if (target, artifact_kind, member) not in omitted_members
+        ]
 
     def write_tar_zst(self, archive_path: Path, temp_root: Path, entries: list[str]) -> None:
         package_dir = temp_root / f"package-{archive_path.name}"
