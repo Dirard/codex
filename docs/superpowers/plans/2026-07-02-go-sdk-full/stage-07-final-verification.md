@@ -310,20 +310,20 @@ PY
 done
 ```
 
-- [ ] On native Windows PowerShell, run the release-package archive verifier once per release-shaped MSVC target, on the matching native Windows runner. Each invocation must set exactly one `CODEX_GO_SDK_ARCHIVE_TARGET`; a Windows x64 host cannot stand in for ARM64 release-readiness, and a Windows ARM64 host cannot stand in for x64 release-readiness:
+- [ ] On native Windows PowerShell, do not claim local packageArchive release-readiness until the PowerShell archive path is implemented. Record the explicit fail-closed blocker for exactly one matching MSVC target on the current runner; Windows packageArchive release-readiness must come from the downloaded SDK CI and shipping workflow artifacts in the later GitHub Actions evidence gate:
 
 ```powershell
 # Run from the native Windows checkout root for this worktree.
 $repo = (Get-Location).Path
 Set-Location $repo
 if (-not $env:CODEX_GO_SDK_ARCHIVE_TARGET) { throw "set CODEX_GO_SDK_ARCHIVE_TARGET to exactly one Windows MSVC target for this runner" }
-$windowsArchiveTargets = @($env:CODEX_GO_SDK_ARCHIVE_TARGET)
-if ($windowsArchiveTargets[0] -eq "x86_64-pc-windows-msvc") {
+$expectedBazelTarget = $env:CODEX_GO_SDK_ARCHIVE_TARGET
+if ($expectedBazelTarget -eq "x86_64-pc-windows-msvc") {
   if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64" -and $env:PROCESSOR_ARCHITEW6432 -ne "AMD64") { throw "x86_64-pc-windows-msvc requires a native x64 Windows runner" }
-} elseif ($windowsArchiveTargets[0] -eq "aarch64-pc-windows-msvc") {
+} elseif ($expectedBazelTarget -eq "aarch64-pc-windows-msvc") {
   if ($env:PROCESSOR_ARCHITECTURE -ne "ARM64" -and $env:PROCESSOR_ARCHITEW6432 -ne "ARM64") { throw "aarch64-pc-windows-msvc requires a native ARM64 Windows runner" }
 } else {
-  throw "unsupported CODEX_GO_SDK_ARCHIVE_TARGET=$($windowsArchiveTargets[0])"
+  throw "unsupported CODEX_GO_SDK_ARCHIVE_TARGET=$expectedBazelTarget"
 }
 $zstdArgs = @()
 if ($env:CODEX_GO_SDK_ZSTD_SOURCE) {
@@ -332,45 +332,14 @@ if ($env:CODEX_GO_SDK_ZSTD_SOURCE) {
 } elseif (-not (Get-Command zstd -ErrorAction SilentlyContinue)) {
   throw "zstd must be installed unless CODEX_GO_SDK_ZSTD_SOURCE points at the Stage 5G no-network source; DotSlash fallback is not accepted"
 }
-foreach ($expectedBazelTarget in $windowsArchiveTargets) {
-  Set-Location $repo
-  $archiveRuntimeDir = Join-Path $env:TEMP ("codex-go-sdk-release-archive-" + [guid]::NewGuid())
-  New-Item -ItemType Directory -Force $archiveRuntimeDir | Out-Null
+$archiveRuntimeDir = Join-Path $env:TEMP ("codex-go-sdk-release-archive-blocked-" + [guid]::NewGuid())
+New-Item -ItemType Directory -Force $archiveRuntimeDir | Out-Null
+try {
   & .github\scripts\stage-codex-runtime.ps1 -Out $archiveRuntimeDir -BazelTarget $expectedBazelTarget -CargoProfile release -ReleasePackageArchive @zstdArgs -WindowsReleaseShapedMsvc -ExportEnvironment | Invoke-Expression
-  if (-not $env:CODEX_EXEC_PATH) { throw "CODEX_EXEC_PATH was not exported" }
-  if ($env:CODEX_EXEC_PATH -notmatch '[\\/]bin[\\/]codex\.exe$') { throw "CODEX_EXEC_PATH must point inside the staged package bin directory: $env:CODEX_EXEC_PATH" }
-  $archiveMetadata = Get-Content (Join-Path $archiveRuntimeDir 'codex-go-sdk-runtime-staging.json') | ConvertFrom-Json
-  if ($archiveMetadata.runtimeSource -ne "packageArchive") { throw "archive verification did not stage packageArchive runtime" }
-  if ($archiveMetadata.cargoProfile -ne "release") { throw "archive verification did not record release cargoProfile" }
-  if ($archiveMetadata.bazelTarget -ne $expectedBazelTarget) { throw "archive verification staged $($archiveMetadata.bazelTarget) instead of $expectedBazelTarget" }
-  if ($archiveMetadata.windowsReleaseShapedMsvc -ne $true) { throw "archive Windows runtime was not marked release-shaped MSVC" }
-  if ($archiveMetadata.windowsMsvcHostPlatform -ne $true) { throw "archive Windows runtime did not use the MSVC host-platform override" }
-  if ($archiveMetadata.zstdSource -notin @("preinstalled", "stage5gMaterialized")) { throw "archive verification did not record the hermetic zstd source contract" }
-  if ($archiveMetadata.archiveFormats -notcontains "tar.zst") { throw "archive verification did not record tar.zst archive validation" }
-  if (-not (Test-Path (Join-Path $archiveRuntimeDir 'codex-resources'))) { throw "missing archive codex-resources" }
-  if (-not (Test-Path (Join-Path $archiveRuntimeDir 'codex-path'))) { throw "missing archive codex-path" }
-  if (-not (Test-Path (Join-Path $archiveRuntimeDir 'codex-path\rg.exe'))) { throw "missing archive rg helper" }
-  if (-not (Test-Path (Join-Path $archiveRuntimeDir 'codex-resources\codex-windows-sandbox-setup.exe'))) { throw "missing archive Windows sandbox setup helper" }
-  if (-not (Test-Path (Join-Path $archiveRuntimeDir 'codex-resources\codex-command-runner.exe'))) { throw "missing archive command runner helper" }
-  Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
-  Remove-Item Env:CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG -ErrorAction SilentlyContinue
-  Remove-Item Env:CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE -ErrorAction SilentlyContinue
-  Remove-Item Env:CODEX_APP_SERVER_AUTH_BASE_URL_FOR_TESTS -ErrorAction SilentlyContinue
-  $env:CODEX_GO_SDK_REQUIRE_REAL_APP_SERVER = "1"
-  Set-Location sdk\go
-  $archiveTests = @(
-    "TestRealAppServerInitializeStrictDigest",
-    "TestRealAppServerRejectsDebugHookEnv",
-    "TestRealAppServerThreadRunHappyPath",
-    "TestRealAppServerCommandExecStreaming",
-    "TestRealAppServerProcessLifecycle",
-    "TestRealAppServerFilesystemWatch"
-  )
-  foreach ($testName in $archiveTests) {
-    $listed = go test ./... -list "^$testName$"
-    if ($LASTEXITCODE -ne 0 -or $listed -notcontains $testName) { throw "required archive test not listed: $testName" }
-    go test ./... -run "^$testName$"
-    if ($LASTEXITCODE -ne 0) { throw "required archive test failed: $testName" }
+  throw "native Windows packageArchive verifier unexpectedly succeeded; update this Stage 7 gate to validate implemented packageArchive evidence before using it"
+} catch {
+  if ($_.Exception.Message -notmatch "packageArchive staging is blocked until the native Windows app-server package archive lane is implemented") {
+    throw
   }
 }
 ```
@@ -399,22 +368,18 @@ just test -p codex-app-server-protocol
 just fmt-check
 Pop-Location
 Set-Location $repo
-$windowsTargets = @("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc")
-$zstdArgs = @()
-if ($env:CODEX_GO_SDK_ZSTD_SOURCE) {
-  if (-not (Test-Path $env:CODEX_GO_SDK_ZSTD_SOURCE)) { throw "CODEX_GO_SDK_ZSTD_SOURCE must point at the Stage 5G materialized zstd executable" }
-  $zstdArgs = @("-ZstdSource", $env:CODEX_GO_SDK_ZSTD_SOURCE)
-} elseif (-not (Get-Command zstd -ErrorAction SilentlyContinue)) {
-  throw "zstd must be installed unless CODEX_GO_SDK_ZSTD_SOURCE points at the Stage 5G no-network source; DotSlash fallback is not accepted"
-}
-foreach ($expectedBazelTarget in $windowsTargets) {
-  & .github\scripts\stage-codex-runtime.ps1 -Out "$env:TEMP\codex-go-sdk-runtime-$expectedBazelTarget" -BazelTarget $expectedBazelTarget -CargoProfile release -ReleasePackageArchive @zstdArgs -WindowsReleaseShapedMsvc -ExportEnvironment | Invoke-Expression
-}
+$expectedBazelTarget = if ($env:CODEX_GO_SDK_WINDOWS_TARGET) { $env:CODEX_GO_SDK_WINDOWS_TARGET } else { "x86_64-pc-windows-msvc" }
+$runtimeDir = Join-Path $env:TEMP ("codex-go-sdk-runtime-" + [guid]::NewGuid())
+& .github\scripts\stage-codex-runtime.ps1 -Out $runtimeDir -BazelTarget $expectedBazelTarget -ExportEnvironment | Invoke-Expression
+if (-not $env:CODEX_EXEC_PATH) { throw "CODEX_EXEC_PATH was not exported" }
+$stagingMetadata = Get-Content (Join-Path $runtimeDir 'codex-go-sdk-runtime-staging.json') | ConvertFrom-Json
+if ($stagingMetadata.runtimeSource -ne "bazelLayout") { throw "native Windows verifier did not stage Bazel layout runtime" }
+if ($stagingMetadata.bazelTarget -ne $expectedBazelTarget) { throw "native Windows verifier staged the wrong MSVC target" }
 bazel version
 bazel test //codex-rs/app-server-protocol:app-server-protocol
 ```
 
-Expected: `cargo-nextest` and Bazel are available; install repo-pinned `cargo-nextest` version `0.9.103` and the repo-supported Bazel/Bazelisk tool before continuing if either command is missing. Cargo/nextest and local Bazel both run the app-server-protocol manifest/digest tests on the current host, and `just fmt-check` proves formatting without mutating the final verification tree. The CI-only `.github/scripts/run-bazel-ci.sh` path is verified by Stage 6 workflow execution, not by local final verification unless the runner environment explicitly provides `RUNNER_OS`, Windows toolchain env, and `CODEX_BAZEL_WINDOWS_PATH`. Native Windows local verification must set short Bazel output/cache paths, materialize the Visual Studio/MSVC environment, compute the Bazel Windows PATH, and enable `core.longpaths` through the same contract as `setup-bazel-ci`/`stage-codex-runtime.ps1`; otherwise Windows Stage 7 is not accepted. If any repair command such as `just fix` or `just fmt` is needed at this point, stop final verification, run the repair in the relevant stage, and restart Stage 7 from the beginning on the changed tree. Bazel runfiles/data drift or digest mismatch blocks final verification.
+Expected: `cargo-nextest` and Bazel are available; install repo-pinned `cargo-nextest` version `0.9.103` and the repo-supported Bazel/Bazelisk tool before continuing if either command is missing. Cargo/nextest and local Bazel both run the app-server-protocol manifest/digest tests on the current host, and `just fmt-check` proves formatting without mutating the final verification tree. The CI-only `.github/scripts/run-bazel-ci.sh` path is verified by Stage 6 workflow execution, not by local final verification unless the runner environment explicitly provides `RUNNER_OS`, Windows toolchain env, and `CODEX_BAZEL_WINDOWS_PATH`. Native Windows local verification must set short Bazel output/cache paths, materialize the Visual Studio/MSVC environment, compute the Bazel Windows PATH, and enable `core.longpaths` through the same contract as `setup-bazel-ci`/`stage-codex-runtime.ps1`; otherwise Windows Stage 7 is not accepted. The earlier native PowerShell packageArchive blocker is intentionally not release-readiness evidence and must be replaced by downloaded target-bound GitHub artifact evidence before any Windows packageArchive release claim. If any repair command such as `just fix` or `just fmt` is needed at this point, stop final verification, run the repair in the relevant stage, and restart Stage 7 from the beginning on the changed tree. Bazel runfiles/data drift or digest mismatch blocks final verification.
 
 - [ ] If protocol/common/shared Rust changed and user approves full suite:
 
@@ -482,7 +447,7 @@ grep -F 'annotated_synthetic_tag="sdk/go/v1.99.1-go-sdk-ci-annotated"' .github/w
 grep -F -- '--git-dir="${bare_remote}"' .github/workflows/go-sdk-release-readiness.yml
 grep -F 'user.name=codex-go-sdk-ci' .github/workflows/go-sdk-release-readiness.yml
 grep -F 'user.email=codex-go-sdk-ci@example.invalid' .github/workflows/go-sdk-release-readiness.yml
-grep -F 'tag -a "${release_tag}" "${synthetic_tag_refs[${release_tag}]}"' .github/workflows/go-sdk-release-readiness.yml
+grep -F 'tag -a "${release_tag}" "${synthetic_tag_refs[$release_tag]}" -m "synthetic Go SDK annotated tag"' .github/workflows/go-sdk-release-readiness.yml
 grep -F 'rev-parse "${release_tag}^{commit}"' .github/workflows/go-sdk-release-readiness.yml
 ! grep -F 'git tag -a "sdk/go/v1.99.1-go-sdk-ci-annotated"' .github/workflows/go-sdk-release-readiness.yml
 grep -F 'sdk/go/v2.99.0-go-sdk-ci' .github/workflows/go-sdk-release-readiness.yml
@@ -506,7 +471,7 @@ grep -F 'go get "${module_import}@${module_version}"' .github/workflows/go-sdk-r
 grep -F '_ "${module_import}/protocol"' .github/workflows/go-sdk-release-readiness.yml
 grep -F '_ "${release_import}/protocol"' .github/workflows/go-sdk-release-readiness.yml
 grep -F 'go -C sdk/go test ./...' .github/workflows/go-sdk-release-readiness.yml
-grep -F 'grep -F "file://${bare_remote}" "${trace_dir}/go-get-trace.log"' .github/workflows/go-sdk-release-readiness.yml
+grep -F 'grep -F "${bare_remote}" "${go_get_trace}"' .github/workflows/go-sdk-release-readiness.yml
 grep -F 'uses: ./.github/actions/check-clean-worktree' .github/workflows/go-sdk-release-readiness.yml
 ! grep -F 'go mod edit -replace github.com/openai/codex/sdk/go' .github/workflows/go-sdk-release-readiness.yml
 grep -F 'uses: ./.github/workflows/go-sdk-release-readiness.yml' .github/workflows/sdk.yml
@@ -986,6 +951,7 @@ targets = metadata.get("targets") or {}
 missing_targets = [target for target in expected_targets if target not in targets]
 if missing_targets:
     raise SystemExit(f"shipping metadata missing targets: {missing_targets}")
+required_provenance_source = "shippingReadinessWrapper" if fixture_mode else "realReleaseWorkflow"
 for target in expected_targets:
     target_metadata = targets[target]
     job_name = target_metadata.get("jobName") or target_metadata.get("packageArchiveJob")
@@ -1010,8 +976,8 @@ for target in expected_targets:
     if archive_name not in checksum_manifest or checksum.get("value") not in checksum_manifest:
         raise SystemExit(f"{target} public checksum manifest does not contain the package archive checksum")
     provenance = target_metadata.get("packageArchiveProvenance") or {}
-    if provenance.get("source") not in {"realReleaseWorkflow", "shippingReadinessWrapper"}:
-        raise SystemExit(f"{target} metadata missing reviewed packageArchive provenance source")
+    if provenance.get("source") != required_provenance_source:
+        raise SystemExit(f"{target} metadata packageArchive provenance must be {required_provenance_source}")
     if target_metadata.get("packageArchiveChecksumException"):
         raise SystemExit(f"{target} has a .tar.zst checksum exception and is not release-ready")
     archive_paths = set(target_metadata.get("archivePaths") or [])
@@ -1062,8 +1028,8 @@ for target in expected_targets:
     if app_server_archive_name not in app_server_manifest or app_server_checksum.get("value") not in app_server_manifest:
         raise SystemExit(f"{target} public checksum manifest does not contain the app-server archive checksum")
     app_server_provenance = app_server_archive.get("provenance") or {}
-    if app_server_provenance.get("source") not in {"realReleaseWorkflow", "shippingReadinessWrapper"}:
-        raise SystemExit(f"{target} metadata missing reviewed app-server packageArchive provenance source")
+    if app_server_provenance.get("source") != required_provenance_source:
+        raise SystemExit(f"{target} metadata app-server packageArchive provenance must be {required_provenance_source}")
     if app_server_archive.get("checksumException"):
         raise SystemExit(f"{target} app-server packageArchive has a checksum exception and is not release-ready")
     if not target_metadata.get("runnerLabel"):
@@ -1105,6 +1071,10 @@ for target in expected_targets:
 dotslash = metadata.get("dotslash") or {}
 if dotslash.get("configPath") != ".github/dotslash-config.json":
     raise SystemExit("DotSlash metadata did not use .github/dotslash-config.json")
+if not fixture_mode:
+    dotslash_provenance = dotslash.get("provenance") or {}
+    if dotslash_provenance.get("source") != "realReleaseWorkflow":
+        raise SystemExit("real shipping DotSlash metadata must come from realReleaseWorkflow provenance")
 if not dotslash.get("publishDotslashJob"):
     raise SystemExit("DotSlash metadata missing publish-dotslash job proof")
 require_job_success(dotslash.get("publishDotslashJob"), "DotSlash publish job")
@@ -1147,7 +1117,7 @@ grep -R 'publish-dotslash\|dotslash-config.json\|test_dotslash_release_archive_c
 rm -rf .verification
 ```
 
-Expected: all three run IDs point to successful completed runs for the reviewed commit. The `sdk.yml` run uploads `go-sdk-ci-release-evidence/go-sdk-ci-release-evidence.json`, and Stage 7 cross-checks that metadata against `gh run view --json jobs` so every claimed release target has a successful, non-skipped SDK CI job plus target-bound packageArchive verifier, release cargo profile, staging metadata, runner label, bounded log, no skipped/not-release-ready marker, macOS x64 architecture proof with downloaded proof-file evidence, Windows MSVC release-shaped host proof with downloaded proof-file evidence, and required smoke-test evidence. The shipping release-readiness run uploads `shipping-release-readiness-metadata/shipping-release-readiness.json`, and Stage 7 cross-checks that artifact against the shipping run jobs for downloaded real release workflow/script reuse proof, downloaded duplicate-command audit proof, successful critical reused jobs (`packageMacosJob`, `finalizeMacosJob`, and `publishDotslashJob`), explicit reviewed `fixtureSubstitutions`, top-level readiness semantics (`nonPublishingFixtureEvidence` must keep `notReleaseReady=true`, while real `releaseArtifactEvidence` must be non-fixture evidence with `notReleaseReady=false`), present bounded log files, target-specific successful job names/conclusions, target-specific `codex-package-*.tar.zst` and `codex-app-server-package-*.tar.zst` archive filenames, downloaded archive member inventories, downloaded public checksum manifest copies, manifest-backed provenance records, in-archive executable paths, runtime helper paths inside the `codex-package` archives, and the full required packageArchive smoke suite, plus macOS `package-macos`/`finalize-macos` DMG/direct artifact names, macOS x64 runner/architecture proof, Windows package archive plus downloaded published zip helper inventory, and `publish-dotslash` consumption/parity for every entry in `.github/dotslash-config.json` with a downloaded parity report. `sdk.yml`, release-readiness, and shipping logs are supplemental anchors only; if GitHub Actions access, run IDs, downloaded artifacts, required metadata fields, or required downloaded evidence files are unavailable, Stage 7 is blocked rather than downgraded to local YAML parsing, metadata-only proof, or log-only greps. The command removes `.verification` after consuming the evidence so the subsequent clean-worktree gate is not failed by its own downloaded artifacts.
+Expected: all three run IDs point to successful completed runs for the reviewed commit. The `sdk.yml` run uploads `go-sdk-ci-release-evidence/go-sdk-ci-release-evidence.json`, and Stage 7 cross-checks that metadata against `gh run view --json jobs` so every claimed release target has a successful, non-skipped SDK CI job plus target-bound packageArchive verifier, release cargo profile, staging metadata, runner label, bounded log, no skipped/not-release-ready marker, macOS x64 architecture proof with downloaded proof-file evidence, Windows MSVC release-shaped host proof with downloaded proof-file evidence, and required smoke-test evidence. The shipping release-readiness run uploads `shipping-release-readiness-metadata/shipping-release-readiness.json`, and Stage 7 cross-checks that artifact against the shipping run jobs for downloaded real release workflow/script reuse proof, downloaded duplicate-command audit proof, successful critical reused jobs (`packageMacosJob`, `finalizeMacosJob`, and `publishDotslashJob`), explicit reviewed `fixtureSubstitutions`, top-level readiness semantics (`nonPublishingFixtureEvidence` must keep `notReleaseReady=true`, while real `releaseArtifactEvidence` must be non-fixture evidence with `notReleaseReady=false`), present bounded log files, target-specific successful job names/conclusions, target-specific `codex-package-*.tar.zst` and `codex-app-server-package-*.tar.zst` archive filenames, downloaded archive member inventories, downloaded public checksum manifest copies, mode-matched provenance records (`shippingReadinessWrapper` only for fixture evidence and `realReleaseWorkflow` for non-fixture evidence), in-archive executable paths, runtime helper paths inside the `codex-package` archives, and the full required packageArchive smoke suite, plus macOS `package-macos`/`finalize-macos` DMG/direct artifact names, macOS x64 runner/architecture proof, Windows package archive plus downloaded published zip helper inventory, and `publish-dotslash` consumption/parity for every entry in `.github/dotslash-config.json` with a downloaded parity report. `sdk.yml`, release-readiness, and shipping logs are supplemental anchors only; if GitHub Actions access, run IDs, downloaded artifacts, required metadata fields, or required downloaded evidence files are unavailable, Stage 7 is blocked rather than downgraded to local YAML parsing, metadata-only proof, or log-only greps. The command removes `.verification` after consuming the evidence so the subsequent clean-worktree gate is not failed by its own downloaded artifacts.
 
 - [ ] Resolve ignored plan/spec artifacts before the final clean gate. For this plan bundle, execute exactly one reviewed path and record it in the final verification notes: force-add `docs/superpowers/plans/2026-07-02-go-sdk-full` if the plan bundle is part of the deliverable, move/remove the ignored plan bundle from the final release-readiness worktree after handoff if it is not part of the deliverable, or provide a committed reviewed allowlist file through `CODEX_GO_SDK_IGNORED_PLAN_ALLOWLIST` containing the exact `git status --porcelain` ignored lines that are intentionally accepted. Do not leave `!! docs/superpowers/` as an unexamined side effect.
 - [ ] Check clean generated output with the same fail-fast gate as CI, including untracked generated files and unresolved ignored plan/spec artifacts:
