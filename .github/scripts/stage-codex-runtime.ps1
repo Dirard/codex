@@ -79,6 +79,75 @@ function Get-EntryPointName {
     'codex.exe'
 }
 
+function Export-StagingEnv([string]$Name, [string]$Value) {
+    Set-Item -Path "Env:$Name" -Value $Value
+    if ($env:GITHUB_ENV) {
+        "$Name=$Value" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+    }
+}
+
+function Import-GitHubEnvFile([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path -PathType Leaf)) {
+        return
+    }
+    foreach ($Line in Get-Content -Encoding UTF8 $Path) {
+        if ($Line -notmatch '^(.*?)=(.*)$') {
+            continue
+        }
+        Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2]
+    }
+}
+
+function Initialize-WindowsBazelBootstrap {
+    if (-not $IsWindows) {
+        return
+    }
+    if ($WindowsReleaseShapedMsvc -and -not $WindowsMsvcHostPlatform) {
+        $script:WindowsMsvcHostPlatform = $true
+    }
+
+    $OriginalGithubEnv = $env:GITHUB_ENV
+    if ([string]::IsNullOrWhiteSpace($env:GITHUB_ENV)) {
+        if ($GithubEnv) {
+            $env:GITHUB_ENV = $GithubEnv
+        } else {
+            $env:GITHUB_ENV = Join-Path ([System.IO.Path]::GetTempPath()) "codex-go-sdk-stage-env-$PID.txt"
+            New-Item -ItemType File -Force -Path $env:GITHUB_ENV | Out-Null
+        }
+    }
+
+    $RepositoryCachePath = Join-Path $HOME '.cache/bazel-repo-cache'
+    Export-StagingEnv 'BAZEL_REPOSITORY_CACHE' $RepositoryCachePath
+
+    if ([string]::IsNullOrWhiteSpace($env:BAZEL_OUTPUT_USER_ROOT)) {
+        $BazelOutputUserRoot = if (Test-Path 'D:\') { 'D:\b' } else { 'C:\b' }
+        Export-StagingEnv 'BAZEL_OUTPUT_USER_ROOT' $BazelOutputUserRoot
+    }
+    if ([string]::IsNullOrWhiteSpace($env:BAZEL_REPO_CONTENTS_CACHE)) {
+        $RunId = if ($env:GITHUB_RUN_ID) { $env:GITHUB_RUN_ID } else { 'local' }
+        $JobName = if ($env:GITHUB_JOB) { $env:GITHUB_JOB } else { 'go-sdk-stage' }
+        $TempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+        Export-StagingEnv 'BAZEL_REPO_CONTENTS_CACHE' (Join-Path $TempRoot "bazel-repo-contents-cache-$RunId-$JobName")
+    }
+
+    if ($WindowsMsvcHostPlatform) {
+        & (Join-Path $RepoRoot '.github/actions/setup-msvc-env/setup-msvc-env.ps1') -Target $BazelTarget
+        Import-GitHubEnvFile $env:GITHUB_ENV
+    }
+
+    & (Join-Path $RepoRoot '.github/scripts/compute-bazel-windows-path.ps1')
+    Import-GitHubEnvFile $env:GITHUB_ENV
+    if ([string]::IsNullOrWhiteSpace($env:CODEX_BAZEL_WINDOWS_PATH)) {
+        throw 'CODEX_BAZEL_WINDOWS_PATH was not exported by compute-bazel-windows-path.ps1.'
+    }
+    git config --global core.longpaths true
+
+    if ([string]::IsNullOrWhiteSpace($OriginalGithubEnv) -and -not $GithubEnv) {
+        Remove-Item -Force $env:GITHUB_ENV -ErrorAction SilentlyContinue
+        Remove-Item Env:GITHUB_ENV -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-HelperRootVerification {
     if ([string]::IsNullOrWhiteSpace($HelperRoot)) {
         throw '-HelperRoot or CODEX_PACKAGE_HELPER_ROOT is required.'
@@ -91,7 +160,7 @@ function Invoke-HelperRootVerification {
     python -m codex_package.materialize_helpers `
         --target $BazelTarget `
         --output-root $HelperRoot `
-        --verify-only 1>&2
+        --verify-only
     if ($LASTEXITCODE -ne 0) {
         throw 'Stage 5G helper verification failed.'
     }
@@ -104,13 +173,19 @@ function Get-BazelSeedRoot {
 
     $PlatformName = Get-PlatformName $BazelTarget
     $Label = "//codex-rs/cli:codex_go_sdk_runtime_layout_$PlatformName"
-    $BazelArgs = @('build', $Label)
+    $BazelArgs = @('build')
     if ($WindowsMsvcHostPlatform) {
-        $BazelArgs = @('--host_platform=//:local_windows_msvc') + $BazelArgs
+        $BazelArgs += '--host_platform=//:local_windows_msvc'
     }
+    $BazelArgs += $Label
     bazel @BazelArgs
 
-    $Metadata = bazel cquery --output=files $Label |
+    $BazelCqueryArgs = @('cquery')
+    if ($WindowsMsvcHostPlatform) {
+        $BazelCqueryArgs += '--host_platform=//:local_windows_msvc'
+    }
+    $BazelCqueryArgs += @('--output=files', $Label)
+    $Metadata = bazel @BazelCqueryArgs |
         Where-Object { $_ -like '*/codex-package.json' -or $_ -like '*\codex-package.json' } |
         Select-Object -First 1
     if ([string]::IsNullOrWhiteSpace($Metadata)) {
@@ -179,6 +254,7 @@ if ([string]::IsNullOrWhiteSpace($Out)) {
 }
 
 Invoke-HelperRootVerification
+Initialize-WindowsBazelBootstrap
 $SeedRoot = Get-BazelSeedRoot
 $HelperTargetRoot = Join-Path $HelperRoot $BazelTarget
 
