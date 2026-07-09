@@ -428,17 +428,20 @@ jobs:
             # Must run from inside the dest dir so 7z does not embed the
             # directory path inside the zip.
             if [[ "$base" == "codex-${target}.exe" ]]; then
-              # Bundle the sandbox helper binaries into the main codex zip so
-              # WinGet installs include the required helpers next to codex.exe.
+              # Bundle required runtime binaries and sandbox helpers into the
+              # main codex zip so WinGet installs include everything next to
+              # codex.exe.
               bundle_dir="$(mktemp -d)"
+              host_src="$dest/codex-code-mode-host-${target}.exe"
               runner_src="$dest/codex-command-runner-${target}.exe"
               setup_src="$dest/codex-windows-sandbox-setup-${target}.exe"
-              if [[ ! -f "$runner_src" || ! -f "$setup_src" ]]; then
-                echo "missing sandbox helper binaries for $base" >&2
-                echo "expected $runner_src and $setup_src" >&2
+              if [[ ! -f "$host_src" || ! -f "$runner_src" || ! -f "$setup_src" ]]; then
+                echo "missing required bundled binaries for $base" >&2
+                echo "expected $host_src, $runner_src, and $setup_src" >&2
                 exit 1
               fi
               cp "$dest/$base" "$bundle_dir/$base"
+              cp "$host_src" "$bundle_dir/codex-code-mode-host.exe"
               cp "$runner_src" "$bundle_dir/codex-command-runner.exe"
               cp "$setup_src" "$bundle_dir/codex-windows-sandbox-setup.exe"
               # Use an absolute path so bundle zips land in the real dist
