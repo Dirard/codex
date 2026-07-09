@@ -10,6 +10,8 @@ from .dotslash import artifact_for_target
 from .dotslash import download_archive
 from .dotslash import extract_archive_member
 from .dotslash import verify_archive
+from .helper_manifest import write_helper_manifest
+from .helper_manifest import verify_helper_manifest
 from .ripgrep import RG_MANIFEST
 from .targets import TARGET_SPECS
 from .targets import TargetSpec
@@ -20,14 +22,20 @@ from .zsh import ZSH_MANIFEST
 def main() -> int:
     args = parse_args()
     spec = TARGET_SPECS[args.target]
-    materialize_target_helpers(
+    target_root = args.output_root / spec.target
+    if args.verify_only:
+        verify_helper_manifest(spec, target_root)
+        print(f"Verified materialized package helpers at {target_root}")
+        return 0
+
+    target_root = materialize_target_helpers(
         spec,
         output_root=args.output_root,
         bwrap_bin=args.bwrap_bin,
         codex_command_runner_bin=args.codex_command_runner_bin,
         codex_windows_sandbox_setup_bin=args.codex_windows_sandbox_setup_bin,
     )
-    print(f"Materialized package helpers at {args.output_root / spec.target}")
+    print(f"Materialized package helpers at {target_root}")
     return 0
 
 
@@ -41,6 +49,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bwrap-bin", type=Path)
     parser.add_argument("--codex-command-runner-bin", type=Path)
     parser.add_argument("--codex-windows-sandbox-setup-bin", type=Path)
+    parser.add_argument(
+        "--verify-only",
+        action="store_true",
+        help=(
+            "Verify an existing materialized helper root and its manifest "
+            "without downloading, copying, or resolving helpers."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -103,6 +119,7 @@ def materialize_target_helpers(
             description="Windows codex-windows-sandbox-setup.exe executable",
             flag_name="--codex-windows-sandbox-setup-bin",
         )
+    write_helper_manifest(spec, target_root)
     return target_root
 
 
