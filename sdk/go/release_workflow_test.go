@@ -107,7 +107,7 @@ func TestReleaseChecksumManifestCoversZstdPackageArchives(t *testing.T) {
 	}
 }
 
-func TestShippingReleaseReadinessWorkflowSourcePreflight(t *testing.T) {
+func TestShippingReleaseReadinessWorkflowArtifactMetadata(t *testing.T) {
 	workflow := readRepoText(t, ".github/workflows/go-sdk-shipping-release-readiness.yml")
 	collector := readRepoText(t, ".github/scripts/go_sdk_shipping_release_readiness.py")
 	shippingSources := workflow + "\n" + collector
@@ -128,12 +128,16 @@ func TestShippingReleaseReadinessWorkflowSourcePreflight(t *testing.T) {
 		"name: go-sdk-shipping-release-readiness",
 		"workflow_call:",
 		"workflow_dispatch:",
-		"Shipping release source preflight",
+		"Shipping release-readiness evidence",
 		"actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2",
 		"persist-credentials: false",
 		"shipping-release-readiness-metadata",
 		"go_sdk_shipping_release_readiness.py",
-		"source-preflight",
+		"build-fixture-artifacts",
+		"collect-artifacts",
+		"--fixture-substitutions non-publishing",
+		"nonPublishingFixtureBinaries",
+		"disabledSigningAndNotarization",
 		"shipping-release-readiness.json",
 		"workflowShape",
 		"thinWrapper",
