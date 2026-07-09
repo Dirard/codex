@@ -55,7 +55,9 @@ class Stage5GPackageSourceContractTest(unittest.TestCase):
                 resolve_rg_source(spec, None, require_materialized=True)
             fetch_rg.assert_not_called()
 
-    def test_strict_resolvers_accept_materialized_helpers_without_fetching(self) -> None:
+    def test_strict_resolvers_accept_materialized_helpers_without_fetching(
+        self,
+    ) -> None:
         spec = TARGET_SPECS["x86_64-unknown-linux-musl"]
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -125,7 +127,13 @@ class Stage5GPackageSourceContractTest(unittest.TestCase):
                     "DotSlash",
                 ),
             ]
-            for case_name, target, entrypoint_name, helper_args, expected_error in cases:
+            for (
+                case_name,
+                target,
+                entrypoint_name,
+                helper_args,
+                expected_error,
+            ) in cases:
                 with self.subTest(case=case_name):
                     case_root = root / case_name
                     case_root.mkdir()
@@ -167,7 +175,9 @@ class Stage5GPackageSourceContractTest(unittest.TestCase):
                     self.assertIn(expected_error, result.stderr)
                     self.assertFalse(package_dir.exists(), package_dir)
 
-    def test_package_archive_script_blocks_missing_windows_helpers_before_python(self) -> None:
+    def test_package_archive_script_blocks_missing_windows_helpers_before_python(
+        self,
+    ) -> None:
         script = REPO_ROOT / ".github/scripts/build-codex-package-archive.sh"
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -178,7 +188,9 @@ class Stage5GPackageSourceContractTest(unittest.TestCase):
             fake_bin_dir.mkdir()
             touch_executable(entrypoint_dir / "codex.exe")
             rg_bin = touch_executable(root / "rg.exe")
-            fake_python = touch_executable(fake_bin_dir / "python3", "#!/usr/bin/env sh\nexit 99\n")
+            fake_python = touch_executable(
+                fake_bin_dir / "python3", "#!/usr/bin/env sh\nexit 99\n"
+            )
 
             env = os.environ.copy()
             env["GITHUB_WORKSPACE"] = str(REPO_ROOT)
@@ -216,7 +228,9 @@ class Stage5GPackageSourceContractTest(unittest.TestCase):
         script = REPO_ROOT / "scripts/build_codex_package.py"
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            fake_cargo = touch_executable(root / "cargo", "#!/usr/bin/env sh\nexit 99\n")
+            fake_cargo = touch_executable(
+                root / "cargo", "#!/usr/bin/env sh\nexit 99\n"
+            )
 
             for target, entrypoint_name, rg_name, missing_flag in [
                 (
@@ -271,7 +285,9 @@ class Stage5GPackageSourceContractTest(unittest.TestCase):
         script = REPO_ROOT / "scripts/build_codex_package.py"
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            fake_cargo = touch_executable(root / "cargo", "#!/usr/bin/env sh\nexit 99\n")
+            fake_cargo = touch_executable(
+                root / "cargo", "#!/usr/bin/env sh\nexit 99\n"
+            )
             cases = [("missing-rg", ["--bwrap-bin", "bwrap"], "--rg-bin")]
             for case_name, provided_helpers, missing_flag in cases:
                 with self.subTest(case=case_name):
@@ -387,9 +403,13 @@ class Stage5GPackageSourceContractTest(unittest.TestCase):
         self.assertNotIn("--zsh-bin", workflow)
         self.assertNotIn("codex-zsh\" \\", workflow)
         self.assertNotIn("curl -fsSL \\", workflow)
-        self.assertGreaterEqual(workflow.count("--require-materialized-helper-sources"), 2)
+        self.assertGreaterEqual(
+            workflow.count("--require-materialized-helper-sources"), 2
+        )
         self.assertGreaterEqual(workflow.count("--rg-bin"), 2)
-        self.assertIn('binaries: "codex-app-server bwrap"', workflow)
+        self.assertIn(
+            'binaries: "codex-app-server codex-code-mode-host bwrap"', workflow
+        )
         self.assertIn("CODEX_PACKAGE_BWRAP_BIN", workflow)
         self.assertIn("--bwrap-bin", workflow)
 
@@ -406,7 +426,9 @@ class Stage5GPackageSourceContractTest(unittest.TestCase):
             workflow.index('--bwrap-bin "$CODEX_PACKAGE_BWRAP_BIN"'),
         )
 
-    def test_windows_release_package_archives_require_materialized_helpers(self) -> None:
+    def test_windows_release_package_archives_require_materialized_helpers(
+        self,
+    ) -> None:
         workflow = read_text(".github/workflows/rust-release-windows.yml")
         readme = read_text("scripts/codex_package/README.md")
 
@@ -595,7 +617,9 @@ class Stage5GPackageSourceContractTest(unittest.TestCase):
 
                     package_dir = root / output_name / target
                     build_fixture_package(package_dir, variant_name, spec)
-                    archive_path = root / f"{archive_name.removesuffix('.tar.zst')}.tar.gz"
+                    archive_path = (
+                        root / f"{archive_name.removesuffix('.tar.zst')}.tar.gz"
+                    )
                     write_archive(package_dir, archive_path, force=False)
                     with tarfile.open(archive_path, "r:gz") as archive:
                         self.assertIn(configured["path"], archive.getnames())
@@ -643,7 +667,9 @@ class Stage5GPackageSourceContractTest(unittest.TestCase):
                     spec = TARGET_SPECS[target]
                     package_dir = root / target
                     build_fixture_package(package_dir, "codex", spec)
-                    self.assertTrue((package_dir / "codex-path" / spec.rg_name).is_file())
+                    self.assertTrue(
+                        (package_dir / "codex-path" / spec.rg_name).is_file()
+                    )
                     if spec.is_linux:
                         self.assertTrue(
                             (package_dir / "codex-resources/bwrap").is_file()
@@ -651,8 +677,7 @@ class Stage5GPackageSourceContractTest(unittest.TestCase):
                     if spec.is_windows:
                         self.assertTrue(
                             (
-                                package_dir
-                                / "codex-resources/codex-command-runner.exe"
+                                package_dir / "codex-resources/codex-command-runner.exe"
                             ).is_file()
                         )
                         self.assertTrue(
@@ -760,7 +785,9 @@ def unix_helper_workflow_production(
         '"$dest/${binary}-${{ matrix.target }}"',
     )
     require_contains(workflow, 'zstd -T0 -19 --rm "$dest/$base"')
-    return render_workflow_template("${binary}-${{ matrix.target }}", output_name, target), output_name
+    return render_workflow_template(
+        "${binary}-${{ matrix.target }}", output_name, target
+    ), output_name
 
 
 def windows_helper_workflow_production(
@@ -769,7 +796,9 @@ def windows_helper_workflow_production(
     workflow: str,
 ) -> tuple[str, str]:
     require_matrix_binary(workflow, target, output_name)
-    require_contains(workflow, 'cp "target/${{ matrix.target }}/release/${binary}.exe" \\')
+    require_contains(
+        workflow, 'cp "$CARGO_TARGET_DIR/${{ matrix.target }}/release/${binary}.exe" \\'
+    )
     require_contains(workflow, '"$dest/${binary}-${{ matrix.target }}.exe"')
     require_contains(workflow, 'zstd -T0 -19 "$dest/$base"')
     return (
@@ -817,7 +846,9 @@ def build_fixture_package(package_dir: Path, variant_name: str, spec) -> None:
     variant = PACKAGE_VARIANTS[variant_name]
     inputs = PackageInputs(
         entrypoint_bin=touch_executable(root / variant.entrypoint_name(spec)),
-        code_mode_host_bin=touch_executable(root / f"codex-code-mode-host{spec.exe_suffix}"),
+        code_mode_host_bin=touch_executable(
+            root / f"codex-code-mode-host{spec.exe_suffix}"
+        ),
         rg_bin=touch_executable(root / spec.rg_name),
         bwrap_bin=touch_executable(root / "bwrap") if spec.is_linux else None,
         codex_command_runner_bin=touch_executable(root / "codex-command-runner.exe")
