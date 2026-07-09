@@ -240,6 +240,7 @@ func TestStageCodexRuntimeScriptsUseVerifiedHelpersOnly(t *testing.T) {
 			}
 		}
 		for _, forbidden := range []string{
+			".github/workflows/zstd",
 			"fetch_dotslash",
 			"download_archive",
 			"curl ",
