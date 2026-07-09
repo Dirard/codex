@@ -208,7 +208,8 @@ if [[ -z "$zstd_bin" ]]; then
 fi
 zstd_dir="$(cd "$(dirname "$zstd_bin")" && pwd -P)"
 zstd_real="${zstd_dir}/$(basename "$zstd_bin")"
-repo_zstd="${repo_root%/}/.github/workflows/zstd"
+repo_zstd_dir="${repo_root%/}/.github/workflows"
+repo_zstd="$repo_zstd_dir/zstd"
 if [[ "$zstd_real" == "$repo_zstd" ]]; then
   echo "Repo DotSlash zstd manifest is not allowed for package archives: $zstd_real" >&2
   exit 1
