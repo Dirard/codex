@@ -164,6 +164,10 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
                 sorted(go_sdk_shipping_release_readiness.EXPECTED_TARGETS),
             )
             linux_target = metadata["targets"]["x86_64-unknown-linux-musl"]
+            self.assertEqual(
+                linux_target["jobName"],
+                "Shipping package archive - x86_64-unknown-linux-musl",
+            )
             self.assertIn("codex-resources/bwrap", linux_target["archivePaths"])
             self.assertIn(
                 "codex-resources/bwrap",
@@ -179,6 +183,14 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
             self.assertIn(checksum["value"], checksum_manifest)
 
             macos_x64 = metadata["targets"]["x86_64-apple-darwin"]
+            self.assertEqual(
+                macos_x64["packageMacosJob"],
+                "Package macOS artifacts - x86_64-apple-darwin",
+            )
+            self.assertEqual(
+                macos_x64["finalizeMacosJob"],
+                "Verify macOS artifacts - x86_64-apple-darwin",
+            )
             self.assertEqual(macos_x64["architectureProof"]["unameMachine"], "x86_64")
             self.assertEqual(macos_x64["runnerLabel"], "macos-15-large")
             self.assertTrue(macos_x64["dmgArtifactNames"])
@@ -193,6 +205,10 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
                 ),
             )
             self.assertTrue(metadata["dotslash"]["archiveParity"])
+            self.assertEqual(
+                metadata["dotslash"]["publishDotslashJob"],
+                "Shipping DotSlash parity",
+            )
             self.assertIn(
                 "codex-windows-sandbox-setup",
                 (out_dir / metadata["dotslash"]["archiveParityReportPath"]).read_text(
