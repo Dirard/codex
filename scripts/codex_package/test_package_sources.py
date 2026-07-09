@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from codex_package.archive import resolve_zstd_command
 from codex_package.archive import write_archive
 from codex_package.helper_manifest import HELPER_MANIFEST_NAME
 from codex_package.helper_manifest import verify_helper_manifest
@@ -410,6 +411,18 @@ class Stage5GPackageSourceContractTest(unittest.TestCase):
         self.assertFalse(package_dir.exists(), package_dir)
         self.assertFalse(gzip_archive.exists(), gzip_archive)
         self.assertFalse(zstd_archive.exists(), zstd_archive)
+
+    def test_zstd_resolver_rejects_dotslash_wrapper_outside_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wrapper = touch_executable(
+                Path(temp_dir) / "zstd",
+                "#!/usr/bin/env dotslash\n{}\n",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "DotSlash"):
+                resolve_zstd_command(
+                    which=lambda name: str(wrapper) if name == "zstd" else None,
+                )
 
     def test_package_archive_script_never_prepends_workflow_zstd(self) -> None:
         script = read_text(".github/scripts/build-codex-package-archive.sh")

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .targets import REPO_ROOT
 
+
 def write_archive(package_dir: Path, archive_path: Path, *, force: bool) -> None:
     if is_relative_to(archive_path, package_dir):
         raise RuntimeError(
@@ -95,14 +96,16 @@ def resolve_zstd_command(
     if zstd is not None:
         if is_repo_dotslash_zstd(Path(zstd)):
             raise RuntimeError(
-                "zstd from a repo DotSlash manifest is not allowed for package "
+                "DotSlash-backed zstd wrapper is not allowed for package "
                 f"archives: {zstd}. Install zstd before package assembly starts."
             )
         return [zstd]
 
     extra = ""
     if dotslash_manifest is not None:
-        extra = f" DotSlash fallback is disabled for package archives: {dotslash_manifest}"
+        extra = (
+            f" DotSlash fallback is disabled for package archives: {dotslash_manifest}"
+        )
     raise RuntimeError(
         "zstd is required to write .tar.zst archives. Install zstd before "
         f"package assembly starts.{extra}"
@@ -114,11 +117,6 @@ def is_repo_dotslash_zstd(path: Path) -> bool:
     repo_root = REPO_ROOT.resolve()
     if resolved_path == repo_root / ".github/workflows/zstd":
         return True
-
-    try:
-        resolved_path.relative_to(repo_root)
-    except ValueError:
-        return False
 
     try:
         with resolved_path.open("rb") as candidate:
