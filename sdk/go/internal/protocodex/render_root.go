@@ -188,6 +188,9 @@ func resourceImplementationStatus(mapping ResourceAPIMapping) string {
 	if stage5CImplementedResourceMethods[mapping.Method] {
 		return "implemented-stage5c"
 	}
+	if stage5DImplementedResourceMethods[mapping.Method] {
+		return "implemented-stage5d"
+	}
 	return "planned-stage5"
 }
 
@@ -271,6 +274,27 @@ var stage5CImplementedResourceMethods = map[string]bool{
 	"process/writeStdin":      true,
 	"process/kill":            true,
 	"process/resizePty":       true,
+}
+
+var stage5DImplementedResourceMethods = map[string]bool{
+	"app/list":                   true,
+	"marketplace/add":            true,
+	"marketplace/remove":         true,
+	"marketplace/upgrade":        true,
+	"mcpServer/resource/read":    true,
+	"mcpServer/tool/call":        true,
+	"mcpServerStatus/list":       true,
+	"plugin/list":                true,
+	"plugin/installed":           true,
+	"plugin/read":                true,
+	"plugin/skill/read":          true,
+	"plugin/share/save":          true,
+	"plugin/share/updateTargets": true,
+	"plugin/share/list":          true,
+	"plugin/share/checkout":      true,
+	"plugin/share/delete":        true,
+	"plugin/install":             true,
+	"plugin/uninstall":           true,
 }
 
 func renderInventory(manifest *Manifest) string {
