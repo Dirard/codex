@@ -187,6 +187,7 @@ func TestRuntimeLayoutGoSDKWorkflowWiring(t *testing.T) {
 		`metadata.get("packageArchive")`,
 		`metadata.get("runtimeSource") != "packageArchive"`,
 		`metadata.get("cargoProfile") != "release"`,
+		`required_helpers = {"rg.exe" if "windows" in target else "rg"}`,
 		"windowsReleaseShapedMsvc",
 		"go-sdk-ci-release-evidence",
 		"target-evidence.json",
@@ -208,6 +209,10 @@ func TestRuntimeLayoutGoSDKWorkflowWiring(t *testing.T) {
 		"go run ./internal/cmd/protocodex --check --mode stable",
 		"go run ./internal/cmd/protocodex --check --mode experimental",
 		"go run ./internal/cmd/protocodex --check --mode both",
+		"--stable-schema-root ../../codex-rs/app-server-protocol/schema",
+		"--experimental-schema-root internal/protocodex/schema-experimental",
+		"--out protocol",
+		"--root-out .",
 		"TestResourceCoverage|TestResourceDocsCoverage|TestServerHandlerDocsCoverage",
 	} {
 		if !strings.Contains(workflow, required) {
@@ -251,6 +256,7 @@ func TestRuntimeLayoutGoSDKWorkflowWiring(t *testing.T) {
 		"CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE=",
 		".github/workflows/zstd",
 		"TestSandboxPolicy",
+		"--schema-root internal/protocodex/schema",
 	} {
 		if strings.Contains(workflow, forbidden) {
 			t.Fatalf("sdk.yml go-sdk job contains forbidden runtime staging source %q", forbidden)
