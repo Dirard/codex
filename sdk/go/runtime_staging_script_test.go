@@ -127,6 +127,26 @@ func TestStageCodexRuntimeScriptRequiresReleaseProfileForPackageArchive(t *testi
 	}
 }
 
+func TestStageCodexRuntimePowerShellReleaseArchiveMarkers(t *testing.T) {
+	content := readRepoText(t, ".github/scripts/stage-codex-runtime.ps1")
+	for _, required := range []string{
+		"[switch]$ExportEnvironment",
+		"[switch]$BootstrapOnly",
+		"[switch]$ReleasePackageArchive",
+		"[string]$ZstdSource",
+		"Get-Command zstd",
+		"Set-Item -Path Env:CODEX_EXEC_PATH",
+		"windowsMsvcHostPlatform",
+		"packageArchive",
+		"requires -CargoProfile release",
+		"native Windows app-server package archive lane",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("stage-codex-runtime.ps1 missing %q", required)
+		}
+	}
+}
+
 func TestStageCodexRuntimeScriptStagesReleasePackageArchive(t *testing.T) {
 	zstdBin, err := exec.LookPath("zstd")
 	if err != nil {
@@ -244,23 +264,23 @@ type linuxStagingFixture struct {
 }
 
 type runtimeStagingMetadata struct {
-	ArchiveFormats           []string `json:"archiveFormats"`
-	BazelTarget              string   `json:"bazelTarget"`
-	CargoProfile             string   `json:"cargoProfile"`
-	CodeExecPath             string   `json:"codeExecPath"`
-	HelperManifest           *runtimeHelperManifest  `json:"helperManifest"`
-	LayoutTarget             string   `json:"layoutTarget"`
-	PackageArchive           *runtimePackageArchive  `json:"packageArchive"`
-	RuntimeSource            string   `json:"runtimeSource"`
-	WindowsMsvcHostPlatform  bool     `json:"windowsMsvcHostPlatform"`
-	WindowsReleaseShapedMsvc bool     `json:"windowsReleaseShapedMsvc"`
-	ZstdSource               string   `json:"zstdSource"`
+	ArchiveFormats           []string               `json:"archiveFormats"`
+	BazelTarget              string                 `json:"bazelTarget"`
+	CargoProfile             string                 `json:"cargoProfile"`
+	CodeExecPath             string                 `json:"codeExecPath"`
+	HelperManifest           *runtimeHelperManifest `json:"helperManifest"`
+	LayoutTarget             string                 `json:"layoutTarget"`
+	PackageArchive           *runtimePackageArchive `json:"packageArchive"`
+	RuntimeSource            string                 `json:"runtimeSource"`
+	WindowsMsvcHostPlatform  bool                   `json:"windowsMsvcHostPlatform"`
+	WindowsReleaseShapedMsvc bool                   `json:"windowsReleaseShapedMsvc"`
+	ZstdSource               string                 `json:"zstdSource"`
 }
 
 type runtimeHelperManifest struct {
-	Files []string `json:"files"`
-	Path  string   `json:"path"`
-	Target string  `json:"target"`
+	Files  []string `json:"files"`
+	Path   string   `json:"path"`
+	Target string   `json:"target"`
 }
 
 type runtimePackageArchive struct {
