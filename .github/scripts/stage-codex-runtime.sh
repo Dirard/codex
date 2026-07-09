@@ -37,6 +37,8 @@ zstd_source=""
 zstd_source_kind=""
 windows_release_shaped_msvc=0
 windows_msvc_host_platform=0
+package_archive_gzip=""
+package_archive_zstd=""
 build_metadata_job=""
 
 while [[ $# -gt 0 ]]; do
@@ -366,6 +368,8 @@ stage_from_archive() {
   archive_dir="$archive_root/archives"
   gzip_archive="$archive_dir/codex-package-${target}.tar.gz"
   zstd_archive="$archive_dir/codex-package-${target}.tar.zst"
+  package_archive_gzip="$gzip_archive"
+  package_archive_zstd="$zstd_archive"
   python="$(python_bin)"
   resource_args=(--rg-bin "$helper_target_root/$(rg_name)")
   if ! is_windows_target; then
@@ -441,6 +445,30 @@ metadata = {
     "windowsReleaseShapedMsvc": bool(${windows_release_shaped_msvc}),
     "zstdSource": "${zstd_source_kind}",
 }
+helper_manifest_path = os.path.abspath("${helper_target_root}/codex-package-helpers.json")
+if os.path.isfile(helper_manifest_path):
+    with open(helper_manifest_path, encoding="utf-8") as handle:
+        helper_manifest = json.load(handle)
+    helper_files = sorted(
+        str(entry.get("relativePath", ""))
+        for entry in (helper_manifest.get("helpers") or {}).values()
+    )
+    metadata["helperManifest"] = {
+        "files": helper_files,
+        "helpers": helper_manifest.get("helpers", {}),
+        "path": helper_manifest_path,
+        "schemaVersion": helper_manifest.get("schemaVersion"),
+        "target": helper_manifest.get("target"),
+    }
+if "${runtime_source}" == "packageArchive":
+    metadata["packageArchive"] = {
+        "archiveFormats": ${archive_formats_json},
+        "gzipPath": os.path.abspath("${package_archive_gzip}"),
+        "path": os.path.abspath("${package_archive_zstd}"),
+        "target": "${target}",
+        "windowsMsvcHostPlatform": bool(${windows_msvc_host_platform}),
+        "windowsReleaseShapedMsvc": bool(${windows_release_shaped_msvc}),
+    }
 with open(sys.argv[1], "w", encoding="utf-8") as handle:
     json.dump(metadata, handle, indent=2, sort_keys=True)
     handle.write("\\n")
@@ -453,11 +481,13 @@ emit_environment() {
   mkdir -p "$code_home"
   if [[ -n "$github_env" ]]; then
     echo "CODEX_EXEC_PATH=$exec_path" >> "$github_env"
+    echo "CODEX_RUNTIME_METADATA_PATH=$out/codex-go-sdk-runtime-staging.json" >> "$github_env"
   fi
   if [[ "$print_shell_env" -eq 1 ]]; then
     printf 'export CODEX_EXEC_PATH=%q\n' "$exec_path"
     printf 'export CODEX_HOME=%q\n' "$code_home"
     printf 'export CODEX_GO_SDK_RUNTIME_ROOT=%q\n' "$out"
+    printf 'export CODEX_RUNTIME_METADATA_PATH=%q\n' "$out/codex-go-sdk-runtime-staging.json"
   fi
 }
 
