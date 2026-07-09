@@ -1,11 +1,16 @@
 package protocol
 
-const StableProtocolDigest = "ffeab0733adaaf9f98aa2b8d7964e29b03792ee47a7bd62eedeff57293950fe9"
+const StableProtocolDigest = "2d755ab03c494734ddb9981f3a5e9658421a7dfa908042e5fe19da839de0a4ec"
 const StableSchemaDigest = "01d788c9c33d7ae40965fe65289bd47cb4142a438cb43ed3cf1b7254305238e7"
-const StableManifestDigest = "39948b3b8d28d2b4c464964b89e8e58cf24b827b00d300a557ee2667d851c1c8"
-const ExperimentalProtocolDigest = "fbedd64121f2107f1f95d913f147a6c1e14125ebd6d428e75143de801ab2a341"
+const StableManifestDigest = "9ea3688d02036720df0d13f9218bdfae3d72d02c62ad00fbded61438718b02a2"
+const ExperimentalProtocolDigest = "3fd736fb41b4bd387d6d009917f3943103342a01cb8578cb5cf605de6ba9ceeb"
 const ExperimentalSchemaDigest = "b7646a75890b517468df186764bf20ca61bd43b718adfa45aa1b5f1a44a814ed"
-const ExperimentalManifestDigest = "a1d38a9c4b4bf599ff10f561ab46aae7ea1acac0862ba9ef1da33a3f9604662d"
+const ExperimentalManifestDigest = "5d73f060640df1e1d8bbd751dd9319445e38530bbd8713b1bd7f7cbd415a1041"
+
+const MaxAdditionalContextEntries = 8
+const MaxAdditionalContextKeyBytes = 128
+const MaxAdditionalContextValueBytes = 1000
+const MaxAdditionalContextTotalBytes = 4096
 
 type ExperimentalFieldMetadata struct {
 	ContainingType    string
