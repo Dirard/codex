@@ -16,6 +16,14 @@ type ServerRequestHandler interface {
 	HandleServerRequest(ctx context.Context, method string, params json.RawMessage, trace json.RawMessage) (any, error)
 }
 
+type ServerNotificationHandler interface {
+	HandleServerNotification(ctx context.Context, method string, params json.RawMessage, trace json.RawMessage)
+}
+
+type safeError interface {
+	SafeJSONRPCMessage() string
+}
+
 type ClientOptions struct {
 	HandlerConcurrency int
 	HandlerQueue       int
@@ -265,6 +273,12 @@ func (c *Client) route(env Envelope) {
 		default:
 			c.sendServerError(env, -32001, "codex sdk server request queue is full")
 		}
+		return
+	}
+	if env.Method != "" {
+		if handler, ok := c.handler.(ServerNotificationHandler); ok {
+			handler.HandleServerNotification(c.ctx, env.Method, env.Params, env.Trace)
+		}
 	}
 }
 
@@ -350,6 +364,10 @@ func safeHandlerErrorMessage(ctx context.Context, err error) string {
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 		return "codex sdk server request handler canceled"
+	}
+	var safe safeError
+	if errors.As(err, &safe) {
+		return safe.SafeJSONRPCMessage()
 	}
 	return "codex sdk server request handler failed"
 }

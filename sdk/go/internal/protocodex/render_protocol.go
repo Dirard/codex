@@ -36,6 +36,10 @@ func renderMetadata(manifest *Manifest) string {
 	b.WriteString(fmt.Sprintf("const ExperimentalProtocolDigest = %q\n", manifest.Experimental.Digests["protocolDigest"]))
 	b.WriteString(fmt.Sprintf("const ExperimentalSchemaDigest = %q\n", manifest.Experimental.Digests["schemaDigest"]))
 	b.WriteString(fmt.Sprintf("const ExperimentalManifestDigest = %q\n\n", manifest.Experimental.Digests["manifestDigest"]))
+	b.WriteString(fmt.Sprintf("const MaxAdditionalContextEntries = %d\n", manifest.ModelContextLimits.MaxAdditionalContextEntries))
+	b.WriteString(fmt.Sprintf("const MaxAdditionalContextKeyBytes = %d\n", manifest.ModelContextLimits.MaxAdditionalContextKeyBytes))
+	b.WriteString(fmt.Sprintf("const MaxAdditionalContextValueBytes = %d\n", manifest.ModelContextLimits.MaxAdditionalContextValueBytes))
+	b.WriteString(fmt.Sprintf("const MaxAdditionalContextTotalBytes = %d\n\n", manifest.ModelContextLimits.MaxAdditionalContextTotalBytes))
 	b.WriteString("type ExperimentalFieldMetadata struct { ContainingType string; FieldPath string; Reason string; InspectParams bool; DiscriminatorJSON string }\n\n")
 	b.WriteString("type BoundedModelContextFieldMetadata struct { Method string; FieldPath string; LimitProfile string }\n\n")
 	b.WriteString("type MethodMetadata struct { Method string; Visibility string; ParamsType string; ResponseType string; ParamsSchemaRef string; ResponseSchemaRef string; SchemaExcludedReason string; InspectParams bool; ManualPayloadConversion string; Experimental bool; Retry string; BoundedModelContextFields []BoundedModelContextFieldMetadata; ExperimentalFields []ExperimentalFieldMetadata }\n\n")
@@ -119,6 +123,7 @@ func renderServerRequestMetadata(manifest *Manifest) string {
 func renderServerNotificationMetadata(manifest *Manifest, stableServerNotifications map[string]protocolSchemaVariant) string {
 	var b strings.Builder
 	b.WriteString("package protocol\n\n")
+	b.WriteString("import \"encoding/json\"\n\n")
 	b.WriteString("type ServerNotificationIdentityExtractor struct { FieldPath string; IdentityName string; Optional bool; TerminalPredicateJSON string }\n\n")
 	b.WriteString("type ServerNotificationRouteMetadata struct { ResourceDomain string; WireIdentitySource string; IdentityExtractors []ServerNotificationIdentityExtractor }\n\n")
 	b.WriteString("type ServerNotificationRoutingMetadata struct { Method string; PayloadType string; PayloadSchemaRef string; Visibility string; SchemaExcludedReason string; ManualPayloadConversion string; RoutingKind string; Routes []ServerNotificationRouteMetadata; Experimental bool }\n\n")
@@ -142,6 +147,21 @@ func renderServerNotificationMetadata(manifest *Manifest, stableServerNotificati
 		}
 		b.WriteString("}},\n")
 	}
+	b.WriteString("}\n")
+	b.WriteString("\nfunc DecodeServerNotificationPayload(method string, params json.RawMessage) any {\n")
+	b.WriteString("\tswitch method {\n")
+	for _, entry := range manifest.Experimental.ServerNotifications {
+		if entry.PayloadType == "" {
+			continue
+		}
+		b.WriteString(fmt.Sprintf("\tcase %q:\n", entry.Method))
+		b.WriteString(fmt.Sprintf("\t\tvar payload %s\n", entry.PayloadType))
+		b.WriteString("\t\tif json.Unmarshal(params, &payload) == nil {\n")
+		b.WriteString("\t\t\treturn payload\n")
+		b.WriteString("\t\t}\n")
+	}
+	b.WriteString("\t}\n")
+	b.WriteString("\treturn append(json.RawMessage(nil), params...)\n")
 	b.WriteString("}\n")
 	b.WriteString("\nvar RoutingLifecycleByStartMethod = map[string]RoutingLifecycleMetadata{\n")
 	for _, entry := range manifest.Experimental.RoutingLifecycle {

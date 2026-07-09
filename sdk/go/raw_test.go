@@ -120,6 +120,56 @@ func TestDirectClientCallUsesAuthoritativeMetadataForAdditionalContextBounds(t *
 	}
 }
 
+func TestRawClientUsesProtocolAdditionalContextCapsWhenLimitsAreRaised(t *testing.T) {
+	transport := newScriptedInitializedTransport(t, nil)
+	client, err := NewClient(context.Background(), ClientConfig{
+		Transport: transport,
+		Limits: ClientLimits{
+			MaxAdditionalContextEntries:    protocol.MaxAdditionalContextEntries + 1,
+			MaxAdditionalContextKeyBytes:   protocol.MaxAdditionalContextKeyBytes + 1,
+			MaxAdditionalContextValueBytes: protocol.MaxAdditionalContextValueBytes + 1,
+			MaxAdditionalContextTotalBytes: protocol.MaxAdditionalContextTotalBytes + 1,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	additionalContext := protocol.Some(map[string]protocol.AdditionalContextEntry{
+		"note": {
+			Kind:  protocol.AdditionalContextKindUntrusted,
+			Value: strings.Repeat("x", protocol.MaxAdditionalContextValueBytes+1),
+		},
+	})
+
+	beforeTurnStart := len(transport.sentFrames())
+	_, err = client.Raw().TurnStart(context.Background(), protocol.TurnStartParams{
+		ThreadID:          "thread-1",
+		AdditionalContext: additionalContext,
+	})
+	var configErr *ConfigError
+	if !errors.As(err, &configErr) || !strings.Contains(configErr.Reason, "value") {
+		t.Fatalf("turn/start err = %T %v, want additionalContext value ConfigError", err, err)
+	}
+	if len(transport.sentFrames()) != beforeTurnStart {
+		t.Fatal("over-protocol-cap raw turn/start additionalContext reached transport")
+	}
+
+	beforeTurnSteer := len(transport.sentFrames())
+	_, err = client.Raw().TurnSteer(context.Background(), protocol.TurnSteerParams{
+		ThreadID:          "thread-1",
+		ExpectedTurnID:    "turn-1",
+		Input:             []protocol.UserInput{{TypeValue: "text", Text: protocol.SomeNonNull("continue")}},
+		AdditionalContext: additionalContext,
+	})
+	if !errors.As(err, &configErr) || !strings.Contains(configErr.Reason, "value") {
+		t.Fatalf("turn/steer err = %T %v, want additionalContext value ConfigError", err, err)
+	}
+	if len(transport.sentFrames()) != beforeTurnSteer {
+		t.Fatal("over-protocol-cap raw turn/steer additionalContext reached transport")
+	}
+}
+
 func TestDirectClientCallRejectsMismatchedMetadataBeforeWrite(t *testing.T) {
 	transport := newScriptedInitializedTransport(t, nil)
 	client, err := NewClient(context.Background(), ClientConfig{Transport: transport})
@@ -252,7 +302,7 @@ func TestRawInitializeIsNotExposedButTypesExist(t *testing.T) {
 	_ = protocol.InitializeResponse{}
 }
 
-func TestRawTurnStartAdditionalContextLimits(t *testing.T) {
+func TestRawTurnAdditionalContextLimits(t *testing.T) {
 	tests := []struct {
 		name    string
 		limits  ClientLimits
@@ -341,43 +391,61 @@ func TestRawTurnStartAdditionalContextLimits(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			transport := newScriptedInitializedTransport(t, nil)
-			client, err := NewClient(context.Background(), ClientConfig{
-				Transport: transport,
-				Limits:    tt.limits,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = client.Close() })
-
-			before := len(transport.sentFrames())
-			params := protocol.TurnStartParams{
-				ThreadID:          "thread-1",
-				AdditionalContext: protocol.Some(tt.context),
-			}
-			err = client.Call(context.Background(), "turn/start", params, nil, protocol.MethodMetadataByMethod["turn/start"])
-			if tt.wantErr == "" {
+		for _, method := range []string{"turn/start", "turn/steer"} {
+			t.Run(tt.name+"/"+method, func(t *testing.T) {
+				transport := newScriptedInitializedTransport(t, nil)
+				client, err := NewClient(context.Background(), ClientConfig{
+					Transport: transport,
+					Limits:    tt.limits,
+				})
 				if err != nil {
 					t.Fatal(err)
 				}
-				if len(transport.sentFrames()) != before+1 {
-					t.Fatal("bounded additionalContext call did not reach transport")
+				t.Cleanup(func() { _ = client.Close() })
+
+				before := len(transport.sentFrames())
+				err = client.Call(context.Background(), method, rawTurnParams(method, tt.context), nil, protocol.MethodMetadataByMethod[method])
+				if tt.wantErr == "" {
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(transport.sentFrames()) != before+1 {
+						t.Fatal("bounded additionalContext call did not reach transport")
+					}
+					return
 				}
-				return
-			}
-			var configErr *ConfigError
-			if !errors.As(err, &configErr) {
-				t.Fatalf("err = %T, want *ConfigError", err)
-			}
-			if !strings.Contains(configErr.Reason, tt.wantErr) {
-				t.Fatalf("reason = %q, want containing %q", configErr.Reason, tt.wantErr)
-			}
-			if len(transport.sentFrames()) != before {
-				t.Fatal("over-limit additionalContext reached transport")
-			}
-		})
+				var configErr *ConfigError
+				if !errors.As(err, &configErr) {
+					t.Fatalf("err = %T, want *ConfigError", err)
+				}
+				if !strings.Contains(configErr.Reason, tt.wantErr) {
+					t.Fatalf("reason = %q, want containing %q", configErr.Reason, tt.wantErr)
+				}
+				if len(transport.sentFrames()) != before {
+					t.Fatal("over-limit additionalContext reached transport")
+				}
+			})
+		}
+	}
+}
+
+func rawTurnParams(method string, additionalContext map[string]protocol.AdditionalContextEntry) any {
+	switch method {
+	case "turn/start":
+		return protocol.TurnStartParams{
+			ThreadID:          "thread-1",
+			Input:             []protocol.UserInput{},
+			AdditionalContext: protocol.Some(additionalContext),
+		}
+	case "turn/steer":
+		return protocol.TurnSteerParams{
+			ThreadID:          "thread-1",
+			ExpectedTurnID:    "turn-1",
+			Input:             []protocol.UserInput{},
+			AdditionalContext: protocol.Some(additionalContext),
+		}
+	default:
+		panic("unsupported raw turn method")
 	}
 }
 
