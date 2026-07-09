@@ -16,10 +16,10 @@ func TestMacosReleaseWorkflowRunnerShape(t *testing.T) {
 		"runs-on: ${{ matrix.runs_on }}",
 		"Verify macOS x64 runner",
 		`test "$(uname -m)" = "x86_64"`,
-		"target: x86_64-apple-darwin\n            bundle: primary\n            artifact_name: x86_64-apple-darwin\n            binaries: \"codex codex-responses-api-proxy\"\n            build_dmg: \"true\"\n            runs_on: macos-15-large",
-		"target: x86_64-apple-darwin\n            bundle: app-server\n            artifact_name: x86_64-apple-darwin-app-server\n            binaries: \"codex-app-server\"\n            build_dmg: \"false\"\n            runs_on: macos-15-large",
-		"target: x86_64-apple-darwin\n            bundle: primary\n            artifact_name: x86_64-apple-darwin\n            binaries: \"codex codex-responses-api-proxy\"\n            verify_dmg: \"true\"\n            runs_on: macos-15-large",
-		"target: x86_64-apple-darwin\n            bundle: app-server\n            artifact_name: x86_64-apple-darwin-app-server\n            binaries: \"codex-app-server\"\n            verify_dmg: \"false\"\n            runs_on: macos-15-large",
+		"target: x86_64-apple-darwin\n            bundle: primary\n            artifact_name: x86_64-apple-darwin\n            binaries: \"codex codex-code-mode-host codex-responses-api-proxy\"\n            build_dmg: \"true\"\n            runs_on: macos-15-large",
+		"target: x86_64-apple-darwin\n            bundle: app-server\n            artifact_name: x86_64-apple-darwin-app-server\n            binaries: \"codex-app-server codex-code-mode-host\"\n            build_dmg: \"false\"\n            runs_on: macos-15-large",
+		"target: x86_64-apple-darwin\n            bundle: primary\n            artifact_name: x86_64-apple-darwin\n            binaries: \"codex codex-code-mode-host codex-responses-api-proxy\"\n            verify_dmg: \"true\"\n            runs_on: macos-15-large",
+		"target: x86_64-apple-darwin\n            bundle: app-server\n            artifact_name: x86_64-apple-darwin-app-server\n            binaries: \"codex-app-server codex-code-mode-host\"\n            verify_dmg: \"false\"\n            runs_on: macos-15-large",
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Fatalf("rust-release.yml missing %q", required)

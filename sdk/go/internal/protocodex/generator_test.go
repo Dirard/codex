@@ -823,20 +823,33 @@ func loadAppendixMappingRows(t *testing.T) appendixMappingRows {
 		notifications: map[string][]string{},
 	}
 	section := ""
+	inResourceSeed := false
 	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSuffix(line, "\r")
 		switch line {
+		case "## Reviewed Go Resource API Mapping Seed":
+			section = "resource"
+			inResourceSeed = true
+			continue
 		case "### Stable Client-To-Server Methods", "### Experimental Client-To-Server Methods", "### Client-To-Server Non-Public Exceptions":
 			section = "resource"
 			continue
 		case "## Reviewed Server Handler Mapping Seed":
 			section = "handlers"
+			inResourceSeed = false
 			continue
 		case "## Server Notification Routing Review Seed":
 			section = "notifications"
+			inResourceSeed = false
 			continue
 		}
-		if strings.HasPrefix(line, "## ") && line != "## Reviewed Server Handler Mapping Seed" && line != "## Server Notification Routing Review Seed" {
+		if inResourceSeed && strings.HasPrefix(line, "### ") {
+			section = "resource"
+			continue
+		}
+		if strings.HasPrefix(line, "## ") {
 			section = ""
+			inResourceSeed = false
 		}
 		if section == "" || !strings.HasPrefix(line, "|") || strings.Contains(line, "---") || strings.Contains(line, "Wire method") {
 			continue
