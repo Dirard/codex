@@ -65,8 +65,8 @@ serverHandlers=
 serverNotifications=
 serverHandlers=
 
-- `experimentalFeature/list` status=planned-stage5 raw=ExperimentalFeatureList wrapper=ExperimentalFeatures.List file=experimental_features.go signature= convention=thin callsite=client.ExperimentalFeatures.List(ctx, protocol.ExperimentalFeatureListParams{}) unitTest=experimental_features_test.go safeIntegration=integration_app_server_test.go docs=examples/resources exception= review=SDK-public thin wrapper
-- `experimentalFeature/enablement/set` status=planned-stage5 raw=ExperimentalFeatureEnablementSet wrapper=ExperimentalFeatures.SetEnablement file=experimental_features.go signature= convention=thin callsite=client.ExperimentalFeatures.SetEnablement(ctx, protocol.ExperimentalFeatureEnablementSetParams{}) unitTest=experimental_features_test.go safeIntegration=integration_app_server_test.go docs=examples/resources exception= review=SDK-public thin wrapper
+- `experimentalFeature/list` status=implemented-stage5f raw=ExperimentalFeatureList wrapper=ExperimentalFeatures.List file=experimental_features.go signature= convention=thin callsite=client.ExperimentalFeatures.List(ctx, protocol.ExperimentalFeatureListParams{ThreadID: protocol.Some("thread-1")}) unitTest=experimental_features_test.go safeIntegration=Stage 7 live app-server integration proof pending; current Stage 5F has package tests only docs=examples/resources exception= review=SDK-public thin wrapper
+- `experimentalFeature/enablement/set` status=implemented-stage5f raw=ExperimentalFeatureEnablementSet wrapper=ExperimentalFeatures.SetEnablement file=experimental_features.go signature= convention=thin callsite=client.ExperimentalFeatures.SetEnablement(ctx, protocol.ExperimentalFeatureEnablementSetParams{Enablement: map[string]bool{"feature": true}}) unitTest=experimental_features_test.go safeIntegration=Stage 7 live app-server integration proof pending; current Stage 5F has package tests only docs=examples/resources exception= review=SDK-public thin wrapper
 
 ### ExternalAgents
 
@@ -82,7 +82,7 @@ serverHandlers=
 serverNotifications=
 serverHandlers=
 
-- `feedback/upload` status=planned-stage5 raw=FeedbackUpload wrapper=Feedback.Upload file=feedback.go signature= convention=thin callsite=client.Feedback.Upload(ctx, protocol.FeedbackUploadParams{}) unitTest=feedback_test.go safeIntegration=upload/auth-bound; mocked service coverage only docs=examples/resources exception= review=SDK-public thin wrapper
+- `feedback/upload` status=implemented-stage5f raw=FeedbackUpload wrapper=Feedback.Upload file=feedback.go signature= convention=thin callsite=client.Feedback.Upload(ctx, protocol.FeedbackUploadParams{Classification: "bug", ThreadID: protocol.Some("thread-1")}) unitTest=feedback_test.go safeIntegration=feedback upload is side-effecting/auth-bound; current Stage 5F has mocked package tests only and live proof deferred to Stage 7 docs=examples/resources exception= review=SDK-public thin wrapper; upload uses generated neverRetryAfterWrite metadata
 
 ### FileSystem
 
@@ -104,10 +104,10 @@ serverHandlers=
 serverNotifications=fuzzyFileSearch/sessionCompleted,fuzzyFileSearch/sessionUpdated
 serverHandlers=
 
-- `fuzzyFileSearch` status=planned-stage5 raw=FuzzyFileSearch wrapper=FuzzyFileSearch.Search file=fuzzy_file_search.go signature= convention=thin callsite=client.FuzzyFileSearch.Search(ctx, protocol.FuzzyFileSearchParams{}) unitTest=fuzzy_file_search_test.go safeIntegration=integration_app_server_test.go docs=examples/resources exception= review=SDK-public thin wrapper
-- `fuzzyFileSearch/sessionStart` status=planned-stage5 raw=FuzzyFileSearchSessionStart wrapper=FuzzyFileSearch.StartSession file=fuzzy_file_search.go signature= convention=handle-start callsite=session, err := client.FuzzyFileSearch.StartSession(ctx, codex.FuzzySearchSessionOptions{Roots: []string{"."}}) unitTest=fuzzy_file_search_test.go safeIntegration=integration_app_server_test.go docs=examples/resources exception= review=typed handle workflow; SDK generates/injects session identity; raw params only through generated raw protocol APIs
-- `fuzzyFileSearch/sessionUpdate` status=planned-stage5 raw=FuzzyFileSearchSessionUpdate wrapper=FuzzySearchSession.Update file=fuzzy_file_search.go signature= convention=handle-followup callsite=session.Update(ctx, codex.FuzzySearchUpdate{Query: "main.go"}) unitTest=fuzzy_file_search_test.go safeIntegration=integration_app_server_test.go docs=examples/resources exception= review=typed handle workflow; handle injects session identity
-- `fuzzyFileSearch/sessionStop` status=planned-stage5 raw=FuzzyFileSearchSessionStop wrapper=FuzzySearchSession.Close file=fuzzy_file_search.go signature= convention=handle-followup callsite=session.Close(ctx) unitTest=fuzzy_file_search_test.go safeIntegration=integration_app_server_test.go docs=examples/resources exception= review=typed handle workflow
+- `fuzzyFileSearch` status=implemented-stage5f raw=FuzzyFileSearch wrapper=FuzzyFileSearch.Search file=fuzzy_file_search.go signature= convention=thin callsite=client.FuzzyFileSearch.Search(ctx, protocol.FuzzyFileSearchParams{Query: "main.go", Roots: []string{"/repo"}}) unitTest=fuzzy_file_search_test.go safeIntegration=Stage 7 live app-server integration proof pending; current Stage 5F has package tests only docs=examples/resources exception= review=SDK-public thin wrapper
+- `fuzzyFileSearch/sessionStart` status=implemented-stage5f raw=FuzzyFileSearchSessionStart wrapper=FuzzyFileSearch.StartSession file=fuzzy_file_search.go signature= convention=handle-start callsite=session, err := client.FuzzyFileSearch.StartSession(ctx, codex.FuzzySearchSessionOptions{Roots: []string{"."}}) unitTest=fuzzy_file_search_test.go safeIntegration=Stage 7 live app-server integration proof pending; current Stage 5F has package tests only docs=examples/resources exception= review=typed handle workflow; SDK generates/injects session identity; raw params only through generated raw protocol APIs
+- `fuzzyFileSearch/sessionUpdate` status=implemented-stage5f raw=FuzzyFileSearchSessionUpdate wrapper=FuzzySearchSession.Update file=fuzzy_file_search.go signature= convention=handle-followup callsite=session.Update(ctx, codex.FuzzySearchUpdate{Query: "main.go"}) unitTest=fuzzy_file_search_test.go safeIntegration=Stage 7 live app-server integration proof pending; current Stage 5F has package tests only docs=examples/resources exception= review=typed handle workflow; handle injects session identity
+- `fuzzyFileSearch/sessionStop` status=implemented-stage5f raw=FuzzyFileSearchSessionStop wrapper=FuzzySearchSession.Close file=fuzzy_file_search.go signature= convention=handle-followup callsite=session.Close(ctx) unitTest=fuzzy_file_search_test.go safeIntegration=Stage 7 live app-server integration proof pending; current Stage 5F has package tests only docs=examples/resources exception= review=typed handle workflow
 
 ### Hooks
 
@@ -140,7 +140,7 @@ serverHandlers=
 serverNotifications=
 serverHandlers=
 
-- `memory/reset` status=planned-stage5 raw=MemoryReset wrapper=Memory.Reset file=memory.go signature= convention=thin callsite=client.Memory.Reset(ctx) unitTest=memory_test.go safeIntegration=integration_app_server_test.go docs=examples/resources exception= review=SDK-public thin wrapper
+- `memory/reset` status=implemented-stage5f raw=MemoryReset wrapper=Memory.Reset file=memory.go signature= convention=thin callsite=client.Memory.Reset(ctx) unitTest=memory_test.go safeIntegration=Stage 7 live app-server integration proof pending; current Stage 5F has package tests only docs=examples/resources exception= review=SDK-public thin wrapper
 
 ### Models
 
@@ -155,7 +155,7 @@ serverHandlers=
 serverNotifications=
 serverHandlers=
 
-- `permissionProfile/list` status=planned-stage5 raw=PermissionProfileList wrapper=PermissionProfiles.List file=permission_profiles.go signature= convention=thin callsite=client.PermissionProfiles.List(ctx, protocol.PermissionProfileListParams{}) unitTest=permission_profiles_test.go safeIntegration=integration_app_server_test.go docs=examples/resources exception= review=SDK-public thin wrapper
+- `permissionProfile/list` status=implemented-stage5f raw=PermissionProfileList wrapper=PermissionProfiles.List file=permission_profiles.go signature= convention=thin callsite=client.PermissionProfiles.List(ctx, protocol.PermissionProfileListParams{Cwd: protocol.Some("/repo")}) unitTest=permission_profiles_test.go safeIntegration=Stage 7 live app-server integration proof pending; current Stage 5F has package tests only docs=examples/resources exception= review=SDK-public thin wrapper
 
 ### Plugins
 
@@ -275,8 +275,8 @@ serverHandlers=item/commandExecution/requestApproval(command-execution-approval)
 serverNotifications=windows/worldWritableWarning,windowsSandbox/setupCompleted
 serverHandlers=
 
-- `windowsSandbox/setupStart` status=planned-stage5 raw=WindowsSandboxSetupStart wrapper=WindowsSandbox.SetupStart file=windows_sandbox.go signature= convention=thin callsite=client.WindowsSandbox.SetupStart(ctx, protocol.WindowsSandboxSetupStartParams{}) unitTest=windows_sandbox_test.go safeIntegration=Windows-only CI matrix coverage docs=examples/resources exception= review=public wrapper, Windows-only integration
-- `windowsSandbox/readiness` status=planned-stage5 raw=WindowsSandboxReadiness wrapper=WindowsSandbox.Readiness file=windows_sandbox.go signature= convention=thin callsite=client.WindowsSandbox.Readiness(ctx) unitTest=windows_sandbox_test.go safeIntegration=Windows-only CI matrix coverage docs=examples/resources exception= review=public wrapper, Windows-only integration
+- `windowsSandbox/setupStart` status=implemented-stage5f raw=WindowsSandboxSetupStart wrapper=WindowsSandbox.SetupStart file=windows_sandbox.go signature= convention=thin callsite=client.WindowsSandbox.SetupStart(ctx, protocol.WindowsSandboxSetupStartParams{Mode: protocol.WindowsSandboxSetupModeUnelevated}) unitTest=windows_sandbox_test.go safeIntegration=Windows sandbox is Windows-runtime-bound; current Stage 5F has package tests for unsupported runtimes and mocked Windows-runtime JSON-RPC only docs=examples/resources exception= review=public wrapper with typed unsupported-platform error on non-Windows app-server runtimes
+- `windowsSandbox/readiness` status=implemented-stage5f raw=WindowsSandboxReadiness wrapper=WindowsSandbox.Readiness file=windows_sandbox.go signature= convention=thin callsite=client.WindowsSandbox.Readiness(ctx) unitTest=windows_sandbox_test.go safeIntegration=Windows sandbox is Windows-runtime-bound; current Stage 5F has package tests for unsupported runtimes and mocked Windows-runtime JSON-RPC only docs=examples/resources exception= review=public wrapper with typed unsupported-platform readiness status on non-Windows app-server runtimes
 
 ### compatibility
 

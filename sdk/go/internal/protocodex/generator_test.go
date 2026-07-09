@@ -177,7 +177,7 @@ func TestGenerateWritesProtocolAndInventory(t *testing.T) {
 		"SafeIntegrationReason",
 		"ImplementationStatus",
 		`Method: "app/list"`,
-		`ImplementationStatus: "planned-stage5"`,
+		`ImplementationStatus: "implemented-stage5f"`,
 		`Method: "thread/start"`,
 		`ImplementationStatus: "implemented-stage4"`,
 	} {

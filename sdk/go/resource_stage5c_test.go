@@ -144,3 +144,25 @@ func assertMethodOrder(t *testing.T, transport *scriptedTransport, before string
 		t.Fatalf("%s sent at index %d after %s at index %d", before, beforeIndex, after, afterIndex)
 	}
 }
+
+func paramsFromFrame(t *testing.T, frame json.RawMessage) json.RawMessage {
+	t.Helper()
+	var object struct {
+		Params json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal(frame, &object); err != nil {
+		t.Fatal(err)
+	}
+	return object.Params
+}
+
+func methodFrameCount(t *testing.T, transport *scriptedTransport, method string) int {
+	t.Helper()
+	count := 0
+	for _, frame := range transport.sentFrames() {
+		if methodFromFrame(t, frame) == method {
+			count++
+		}
+	}
+	return count
+}
