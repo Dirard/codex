@@ -876,7 +876,7 @@ func assertResourceMappingMatchesAppendixRow(t *testing.T, mapping ResourceAPIMa
 		if mapping.SignatureConventionID != "internal-test-only" {
 			assertEqualAppendixValue(t, mapping.WrapperName, row[4], "wrapper name")
 		}
-		assertEqualAppendixValue(t, mapping.SignatureConventionID, row[5], "signature convention")
+		assertSignatureConventionMatchesAppendix(t, mapping, row[5])
 		assertEqualAppendixValue(t, mapping.CompileCallsite, row[6], "compile callsite")
 		assertEqualAppendixValue(t, mapping.UnitTestOwner, row[7], "unit test owner")
 		assertSafeIntegrationMatchesAppendix(t, mapping, row[8])
@@ -954,6 +954,25 @@ func assertSafeIntegrationMatchesAppendix(t *testing.T, mapping ResourceAPIMappi
 		return
 	}
 	assertEqualAppendixValue(t, mapping.SafeIntegrationOwner, value, "safe integration owner")
+}
+
+func assertSignatureConventionMatchesAppendix(t *testing.T, mapping ResourceAPIMapping, value string) {
+	t.Helper()
+	convention := value
+	publicSignature := ""
+	if before, after, ok := strings.Cut(value, ";"); ok {
+		convention = strings.TrimSpace(before)
+		for _, part := range strings.Split(after, ";") {
+			part = strings.TrimSpace(part)
+			signature, ok := strings.CutPrefix(part, "public signature:")
+			if !ok {
+				t.Fatalf("unknown signature convention appendix suffix for %q: %q", mapping.Method, part)
+			}
+			publicSignature = strings.TrimSpace(signature)
+		}
+	}
+	assertEqualAppendixValue(t, mapping.SignatureConventionID, convention, "signature convention")
+	assertEqualAppendixValue(t, mapping.PublicSignature, publicSignature, "public signature")
 }
 
 func assertEqualAppendixValue(t *testing.T, got, want, label string) {
