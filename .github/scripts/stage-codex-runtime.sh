@@ -378,8 +378,29 @@ stage_from_seed() {
   rm -rf "$out"
   mkdir -p "$out"
   cp -R "$seed_root"/. "$out"/
+  materialize_staged_entrypoint "$seed_root" "$out"
   merge_verified_helpers "$out"
   write_metadata "bazelLayout" "[]"
+}
+
+materialize_staged_entrypoint() {
+  local seed_root="$1"
+  local out_root="$2"
+  local relative_entrypoint="bin/$(entrypoint_name)"
+  local seed_entrypoint="$seed_root/$relative_entrypoint"
+  local staged_entrypoint="$out_root/$relative_entrypoint"
+
+  if [[ ! -x "$seed_entrypoint" ]]; then
+    echo "Bazel runtime seed entrypoint is not executable: $seed_entrypoint" >&2
+    exit 1
+  fi
+  rm -f "$staged_entrypoint"
+  cp -L "$seed_entrypoint" "$staged_entrypoint"
+  chmod +x "$staged_entrypoint"
+  if [[ -L "$staged_entrypoint" ]]; then
+    echo "Staged runtime entrypoint must be a real executable, not a symlink: $staged_entrypoint" >&2
+    exit 1
+  fi
 }
 
 stage_from_archive() {
