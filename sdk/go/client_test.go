@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/openai/codex/sdk/go/protocol"
 )
 
 func TestClientConfigDefaults(t *testing.T) {
@@ -30,5 +32,29 @@ func TestClientConfigRejectsNegativeLimits(t *testing.T) {
 	var configErr *ConfigError
 	if !errors.As(err, &configErr) {
 		t.Fatalf("error = %T, want *ConfigError", err)
+	}
+}
+
+func TestClientConfigCapsAdditionalContextLimitOverrides(t *testing.T) {
+	limits, err := normalizeLimits(ClientLimits{
+		MaxAdditionalContextEntries:    protocol.MaxAdditionalContextEntries + 1,
+		MaxAdditionalContextKeyBytes:   protocol.MaxAdditionalContextKeyBytes + 1,
+		MaxAdditionalContextValueBytes: protocol.MaxAdditionalContextValueBytes + 1,
+		MaxAdditionalContextTotalBytes: protocol.MaxAdditionalContextTotalBytes + 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if limits.MaxAdditionalContextEntries != protocol.MaxAdditionalContextEntries {
+		t.Fatalf("MaxAdditionalContextEntries = %d, want protocol cap %d", limits.MaxAdditionalContextEntries, protocol.MaxAdditionalContextEntries)
+	}
+	if limits.MaxAdditionalContextKeyBytes != protocol.MaxAdditionalContextKeyBytes {
+		t.Fatalf("MaxAdditionalContextKeyBytes = %d, want protocol cap %d", limits.MaxAdditionalContextKeyBytes, protocol.MaxAdditionalContextKeyBytes)
+	}
+	if limits.MaxAdditionalContextValueBytes != protocol.MaxAdditionalContextValueBytes {
+		t.Fatalf("MaxAdditionalContextValueBytes = %d, want protocol cap %d", limits.MaxAdditionalContextValueBytes, protocol.MaxAdditionalContextValueBytes)
+	}
+	if limits.MaxAdditionalContextTotalBytes != protocol.MaxAdditionalContextTotalBytes {
+		t.Fatalf("MaxAdditionalContextTotalBytes = %d, want protocol cap %d", limits.MaxAdditionalContextTotalBytes, protocol.MaxAdditionalContextTotalBytes)
 	}
 }
