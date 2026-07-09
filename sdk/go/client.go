@@ -166,6 +166,7 @@ func (c *Client) HandleServerNotification(ctx context.Context, method string, pa
 		return
 	}
 	c.router.route(ctx, method, params, trace)
+	c.observeRealtimeLifecycle(method, params)
 }
 
 func (c *Client) serverHandlers() ServerHandlers {
