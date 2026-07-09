@@ -88,6 +88,172 @@ var compiledResourceCallsites = map[string]compiledResourceCallsite{
 			_, _ = result, err
 		},
 	},
+	"app/list": {
+		wrapperName: "Apps.List",
+		convention:  "thin",
+		callsite:    `client.Apps.List(ctx, protocol.AppsListParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Apps.List(ctx, protocol.AppsListParams{})
+			_, _ = response, err
+		},
+	},
+	"marketplace/add": {
+		wrapperName: "Marketplace.Add",
+		convention:  "thin",
+		callsite:    `client.Marketplace.Add(ctx, protocol.MarketplaceAddParams{Source: "https://example.test/marketplace.git"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Marketplace.Add(ctx, protocol.MarketplaceAddParams{Source: "https://example.test/marketplace.git"})
+			_, _ = response, err
+		},
+	},
+	"marketplace/remove": {
+		wrapperName: "Marketplace.Remove",
+		convention:  "thin",
+		callsite:    `client.Marketplace.Remove(ctx, protocol.MarketplaceRemoveParams{MarketplaceName: "default"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Marketplace.Remove(ctx, protocol.MarketplaceRemoveParams{MarketplaceName: "default"})
+			_, _ = response, err
+		},
+	},
+	"marketplace/upgrade": {
+		wrapperName: "Marketplace.Upgrade",
+		convention:  "thin",
+		callsite:    `client.Marketplace.Upgrade(ctx, protocol.MarketplaceUpgradeParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Marketplace.Upgrade(ctx, protocol.MarketplaceUpgradeParams{})
+			_, _ = response, err
+		},
+	},
+	"mcpServer/resource/read": {
+		wrapperName: "MCP.ReadResource",
+		convention:  "thin",
+		callsite:    `client.MCP.ReadResource(ctx, protocol.McpResourceReadParams{Server: "github", Uri: "file:///README.md"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.MCP.ReadResource(ctx, protocol.McpResourceReadParams{Server: "github", Uri: "file:///README.md"})
+			_, _ = response, err
+		},
+	},
+	"mcpServer/tool/call": {
+		wrapperName: "MCP.CallTool",
+		convention:  "thin",
+		callsite:    `client.MCP.CallTool(ctx, protocol.McpServerToolCallParams{Server: "github", ThreadID: "thread-id", Tool: "search"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.MCP.CallTool(ctx, protocol.McpServerToolCallParams{Server: "github", ThreadID: "thread-id", Tool: "search"})
+			_, _ = response, err
+		},
+	},
+	"mcpServerStatus/list": {
+		wrapperName: "MCP.ListStatus",
+		convention:  "thin",
+		callsite:    `client.MCP.ListStatus(ctx, protocol.ListMcpServerStatusParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.MCP.ListStatus(ctx, protocol.ListMcpServerStatusParams{})
+			_, _ = response, err
+		},
+	},
+	"plugin/list": {
+		wrapperName: "Plugins.List",
+		convention:  "thin",
+		callsite:    `client.Plugins.List(ctx, protocol.PluginListParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Plugins.List(ctx, protocol.PluginListParams{})
+			_, _ = response, err
+		},
+	},
+	"plugin/installed": {
+		wrapperName: "Plugins.Installed",
+		convention:  "thin",
+		callsite:    `client.Plugins.Installed(ctx, protocol.PluginInstalledParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Plugins.Installed(ctx, protocol.PluginInstalledParams{})
+			_, _ = response, err
+		},
+	},
+	"plugin/read": {
+		wrapperName: "Plugins.Read",
+		convention:  "thin",
+		callsite:    `client.Plugins.Read(ctx, protocol.PluginReadParams{PluginName: "plugin"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Plugins.Read(ctx, protocol.PluginReadParams{PluginName: "plugin"})
+			_, _ = response, err
+		},
+	},
+	"plugin/skill/read": {
+		wrapperName: "Plugins.ReadSkill",
+		convention:  "thin",
+		callsite:    `client.Plugins.ReadSkill(ctx, protocol.PluginSkillReadParams{RemoteMarketplaceName: "marketplace", RemotePluginID: "plugin-id", SkillName: "skill"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Plugins.ReadSkill(ctx, protocol.PluginSkillReadParams{RemoteMarketplaceName: "marketplace", RemotePluginID: "plugin-id", SkillName: "skill"})
+			_, _ = response, err
+		},
+	},
+	"plugin/share/save": {
+		wrapperName: "Plugins.SaveShare",
+		convention:  "thin",
+		callsite:    `client.Plugins.SaveShare(ctx, protocol.PluginShareSaveParams{PluginPath: "/repo/plugin"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Plugins.SaveShare(ctx, protocol.PluginShareSaveParams{PluginPath: "/repo/plugin"})
+			_, _ = response, err
+		},
+	},
+	"plugin/share/updateTargets": {
+		wrapperName: "Plugins.UpdateShareTargets",
+		convention:  "thin",
+		callsite:    `client.Plugins.UpdateShareTargets(ctx, protocol.PluginShareUpdateTargetsParams{Discoverability: protocol.PluginShareUpdateDiscoverabilityPrivate, RemotePluginID: "plugin-id", ShareTargets: []protocol.PluginShareTarget{}})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Plugins.UpdateShareTargets(ctx, protocol.PluginShareUpdateTargetsParams{
+				Discoverability: protocol.PluginShareUpdateDiscoverabilityPrivate,
+				RemotePluginID:  "plugin-id",
+				ShareTargets:    []protocol.PluginShareTarget{},
+			})
+			_, _ = response, err
+		},
+	},
+	"plugin/share/list": {
+		wrapperName: "Plugins.ListShares",
+		convention:  "thin",
+		callsite:    `client.Plugins.ListShares(ctx, protocol.PluginShareListParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Plugins.ListShares(ctx, protocol.PluginShareListParams{})
+			_, _ = response, err
+		},
+	},
+	"plugin/share/checkout": {
+		wrapperName: "Plugins.CheckoutShare",
+		convention:  "thin",
+		callsite:    `client.Plugins.CheckoutShare(ctx, protocol.PluginShareCheckoutParams{RemotePluginID: "plugin-id"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Plugins.CheckoutShare(ctx, protocol.PluginShareCheckoutParams{RemotePluginID: "plugin-id"})
+			_, _ = response, err
+		},
+	},
+	"plugin/share/delete": {
+		wrapperName: "Plugins.DeleteShare",
+		convention:  "thin",
+		callsite:    `client.Plugins.DeleteShare(ctx, protocol.PluginShareDeleteParams{RemotePluginID: "plugin-id"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Plugins.DeleteShare(ctx, protocol.PluginShareDeleteParams{RemotePluginID: "plugin-id"})
+			_, _ = response, err
+		},
+	},
+	"plugin/install": {
+		wrapperName: "Plugins.Install",
+		convention:  "thin",
+		callsite:    `client.Plugins.Install(ctx, protocol.PluginInstallParams{PluginName: "plugin"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Plugins.Install(ctx, protocol.PluginInstallParams{PluginName: "plugin"})
+			_, _ = response, err
+		},
+	},
+	"plugin/uninstall": {
+		wrapperName: "Plugins.Uninstall",
+		convention:  "thin",
+		callsite:    `client.Plugins.Uninstall(ctx, protocol.PluginUninstallParams{PluginID: "plugin-id"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Plugins.Uninstall(ctx, protocol.PluginUninstallParams{PluginID: "plugin-id"})
+			_, _ = response, err
+		},
+	},
 	"review/start": {
 		wrapperName: "Reviews.Start / ReviewHandle",
 		convention:  "handle-start",
