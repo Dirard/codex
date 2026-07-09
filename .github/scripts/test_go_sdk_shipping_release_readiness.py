@@ -67,6 +67,19 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
                 self.assertTrue(log_path.is_file())
                 self.assertLessEqual(log_path.stat().st_size, log["maxBytes"])
 
+    def test_collect_artifacts_blocks_implicit_real_mode(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with self.assertRaisesRegex(
+                SystemExit,
+                "releaseArtifactEvidence mode requires explicit downloaded real release workflow evidence",
+            ):
+                go_sdk_shipping_release_readiness.collect_artifacts(
+                    root / "artifacts",
+                    root / "shipping-release-readiness-metadata",
+                    fixture_substitutions=[],
+                )
+
     def test_collect_artifacts_writes_stage7_target_metadata(self) -> None:
         if shutil.which("tar") is None or shutil.which("zstd") is None:
             self.skipTest("tar and zstd are required for package archive fixtures")
