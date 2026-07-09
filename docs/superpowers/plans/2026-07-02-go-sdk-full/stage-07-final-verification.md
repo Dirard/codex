@@ -449,14 +449,15 @@ go test ./... -run 'TestResourceCoverage|TestResourceDocsCoverage|TestServerHand
 go test ./... -run TestReleaseReadiness
 ```
 
-- [ ] Re-run the Stage 5G package-source hermeticity owner tests before accepting release-readiness. If Stage 5G placed these tests outside `sdk/go`, replace this command with the exact owning package command from the Stage 5G review notes and keep the same test semantics:
+- [ ] Re-run the Stage 5G package-source hermeticity owner tests before accepting release-readiness. Stage 5G owns these checks under `scripts/codex_package`; do not replace them with a `go test -run ...` placeholder unless matching Go tests are actually implemented and reviewed:
 
 ```bash
-cd /home/dirard/dev/ai-apps/codex/.worktrees/codex-go-sdk-full/sdk/go
-go test ./... -run 'TestPackageSourceHermeticity|TestRuntimePackageLayoutParity|TestReleaseWorkflowPackageSourcesHermetic|TestArchiveZstdHermeticity|TestDotSlashReleaseArchiveConfigParity|TestMacosReleaseWorkflowRunnerShape|TestWindowsReleaseZipIncludesSandboxHelpers'
+cd /home/dirard/dev/ai-apps/codex/.worktrees/codex-go-sdk-full
+python3 -m unittest scripts.codex_package.test_package_sources
+python3 -m unittest discover scripts/codex_package
 ```
 
-Expected: the test command proves no-network/empty-cache resolution for managed `rg`, zsh, and archive `zstd`; release-workflow assertions reject ad hoc zsh `curl`, `facebook/install-dotslash`, package-assembly DotSlash resolution, `.github/workflows/zstd`, and package-builder PATH fallback; archive validation records a `tar.zst` path rather than only a `.tar.gz` path; `TestDotSlashReleaseArchiveConfigParity` proves `.github/dotslash-config.json` and `publish-dotslash` still match the shipping packageArchive names and in-archive paths; `TestMacosReleaseWorkflowRunnerShape` parses `.github/workflows/rust-release.yml` job-by-job and fails unless `build`, `sign-macos-binaries`, `package-macos`, and later macOS finalize/notarize x64 rows use `macos-15-large` or an explicit `arch -x86_64` command path; and `TestWindowsReleaseZipIncludesSandboxHelpers` builds or unpacks both Windows MSVC published zip payloads and asserts `codex-command-runner.exe` and `codex-windows-sandbox-setup.exe` are present with their runtime names.
+Expected: `scripts.codex_package.test_package_sources` proves strict package-source resolution for managed `rg`, zsh, Linux `bwrap`, Windows helpers, and archive `zstd`; release-workflow assertions reject ad hoc zsh `curl`, `facebook/install-dotslash`, package-assembly DotSlash resolution, `.github/workflows/zstd`, package-builder PATH fallback, missing helper producers, helper-root bypass, and bwrap digest drift; DotSlash parity proves `.github/dotslash-config.json` and `publish-dotslash` still match the shipping packageArchive names, helper artifact names, and in-archive paths; package-layout parity proves helper placement matches runtime lookup paths. The broader `discover` command must also pass so adjacent package builder tests remain green.
 
 - [ ] Verify the non-publishing Go SDK release workflow exists and validates tag-shaped checkouts:
 
@@ -562,7 +563,7 @@ grep -F 'codex-command-runner.exe' .github/workflows/rust-release-windows.yml
 grep -F 'codex-windows-sandbox-setup.exe' .github/workflows/rust-release-windows.yml
 grep -F 'publish-dotslash:' .github/workflows/rust-release.yml
 grep -F 'config: .github/dotslash-config.json' .github/workflows/rust-release.yml
-grep -F 'TestDotSlashReleaseArchiveConfigParity' -R sdk/go scripts .github
+grep -F 'def test_dotslash_release_archive_config_parity' scripts/codex_package/test_package_sources.py
 grep -F 'go-sdk-shipping-release-readiness' .github/workflows/go-sdk-shipping-release-readiness.yml
 grep -F '.github/workflows/rust-release.yml' .github/workflows/go-sdk-shipping-release-readiness.yml
 grep -F '.github/workflows/rust-release-windows.yml' .github/workflows/go-sdk-shipping-release-readiness.yml
@@ -1108,7 +1109,7 @@ grep -R 'TestReleaseReadiness' .verification/github-actions-"${CODEX_GO_SDK_RELE
 grep -R 'package-macos\|finalize-macos\|DMG\|dmg' .verification/github-actions-"${CODEX_GO_SDK_SHIPPING_RELEASE_RUN_ID}".log
 grep -R 'codex-command-runner.exe\|codex-windows-sandbox-setup.exe' .verification/github-actions-"${CODEX_GO_SDK_SHIPPING_RELEASE_RUN_ID}".log
 grep -R 'sha256\|SHA256\|tar.zst\|codex-package_SHA256SUMS' .verification/github-actions-"${CODEX_GO_SDK_SHIPPING_RELEASE_RUN_ID}".log
-grep -R 'publish-dotslash\|dotslash-config.json\|TestDotSlashReleaseArchiveConfigParity\|codex-responses-api-proxy\|bwrap\|codex-command-runner\|codex-windows-sandbox-setup' .verification/github-actions-"${CODEX_GO_SDK_SHIPPING_RELEASE_RUN_ID}".log
+grep -R 'publish-dotslash\|dotslash-config.json\|test_dotslash_release_archive_config_parity\|codex-responses-api-proxy\|bwrap\|codex-command-runner\|codex-windows-sandbox-setup' .verification/github-actions-"${CODEX_GO_SDK_SHIPPING_RELEASE_RUN_ID}".log
 rm -rf .verification
 ```
 
