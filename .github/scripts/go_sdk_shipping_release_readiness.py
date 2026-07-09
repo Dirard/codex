@@ -263,6 +263,9 @@ def fixture_entrypoint_dir(work_dir: Path, target: str, bundle: str) -> Path:
     entrypoint = "codex-app-server" if bundle == "app-server" else "codex"
     entrypoint_dir = work_dir / "entrypoints" / target / bundle
     write_executable(entrypoint_dir / f"{entrypoint}{executable_suffix(target)}")
+    write_executable(
+        entrypoint_dir / f"codex-code-mode-host{executable_suffix(target)}"
+    )
     return entrypoint_dir
 
 
@@ -349,6 +352,7 @@ def write_windows_zip_fixture(artifacts_dir: Path, target: str) -> None:
     with zipfile.ZipFile(zip_path, "w") as zip_file:
         for member in [
             f"codex-{target}.exe",
+            "codex-code-mode-host.exe",
             "codex-command-runner.exe",
             "codex-windows-sandbox-setup.exe",
         ]:
@@ -412,6 +416,58 @@ def checksum_record(
     }
 
 
+def target_exe_suffix(target: str) -> str:
+    return ".exe" if is_windows_target(target) else ""
+
+
+def required_codex_package_paths(target: str) -> list[str]:
+    exe = target_exe_suffix(target)
+    paths = [
+        "codex-package.json",
+        f"bin/codex{exe}",
+        f"bin/codex-code-mode-host{exe}",
+        f"codex-path/rg{exe}",
+    ]
+    if is_windows_target(target):
+        paths.extend(
+            [
+                "codex-resources/codex-command-runner.exe",
+                "codex-resources/codex-windows-sandbox-setup.exe",
+            ]
+        )
+    else:
+        paths.append("codex-resources/zsh/bin/zsh")
+        if is_linux_target(target):
+            paths.append("codex-resources/bwrap")
+    return paths
+
+
+def required_app_server_package_paths(target: str) -> list[str]:
+    exe = target_exe_suffix(target)
+    return [
+        f"bin/codex-app-server{exe}",
+        f"bin/codex-code-mode-host{exe}",
+    ]
+
+
+def required_windows_zip_members(target: str) -> list[str]:
+    return [
+        f"codex-{target}.exe",
+        "codex-code-mode-host.exe",
+        "codex-command-runner.exe",
+        "codex-windows-sandbox-setup.exe",
+    ]
+
+
+def require_members(paths: list[str], required_paths: list[str], artifact_name: str) -> None:
+    missing = sorted(set(required_paths) - set(paths))
+    if missing:
+        raise RuntimeError(
+            f"{artifact_name} is missing required runtime members: "
+            + ", ".join(missing)
+        )
+
+
 def target_metadata(target: str, artifacts_dir: Path, out_dir: Path) -> dict[str, object]:
     codex_archive_name = f"codex-package-{target}.tar.zst"
     app_server_archive_name = f"codex-app-server-package-{target}.tar.zst"
@@ -421,10 +477,16 @@ def target_metadata(target: str, artifacts_dir: Path, out_dir: Path) -> dict[str
     manifest_dir = out_dir / "checksums"
 
     codex_paths = list_tar_zst(codex_archive)
+    require_members(codex_paths, required_codex_package_paths(target), codex_archive_name)
     codex_inventory = inventory_dir / f"{target}-codex-package.txt"
     write_inventory(codex_inventory, codex_paths)
 
     app_server_paths = list_tar_zst(app_server_archive)
+    require_members(
+        app_server_paths,
+        required_app_server_package_paths(target),
+        app_server_archive_name,
+    )
     app_server_inventory = inventory_dir / f"{target}-app-server-package.txt"
     write_inventory(app_server_inventory, app_server_paths)
 
@@ -482,6 +544,7 @@ def target_metadata(target: str, artifacts_dir: Path, out_dir: Path) -> dict[str
         zip_name = f"codex-{target}.exe.zip"
         zip_path = required_artifact(artifacts_dir, zip_name)
         zip_members = list_zip(zip_path)
+        require_members(zip_members, required_windows_zip_members(target), zip_name)
         zip_inventory = inventory_dir / f"{target}-published-zip.txt"
         write_inventory(zip_inventory, zip_members)
         metadata["publishedZipMembers"] = zip_members
