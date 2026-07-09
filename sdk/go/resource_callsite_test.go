@@ -314,6 +314,110 @@ var compiledResourceCallsites = map[string]compiledResourceCallsite{
 			_, _ = result, err
 		},
 	},
+	"experimentalFeature/list": {
+		wrapperName: "ExperimentalFeatures.List",
+		convention:  "thin",
+		callsite:    `client.ExperimentalFeatures.List(ctx, protocol.ExperimentalFeatureListParams{ThreadID: protocol.Some("thread-1")})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.ExperimentalFeatures.List(ctx, protocol.ExperimentalFeatureListParams{ThreadID: protocol.Some("thread-1")})
+			_, _ = response, err
+		},
+	},
+	"experimentalFeature/enablement/set": {
+		wrapperName: "ExperimentalFeatures.SetEnablement",
+		convention:  "thin",
+		callsite:    `client.ExperimentalFeatures.SetEnablement(ctx, protocol.ExperimentalFeatureEnablementSetParams{Enablement: map[string]bool{"feature": true}})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.ExperimentalFeatures.SetEnablement(ctx, protocol.ExperimentalFeatureEnablementSetParams{Enablement: map[string]bool{"feature": true}})
+			_, _ = response, err
+		},
+	},
+	"feedback/upload": {
+		wrapperName: "Feedback.Upload",
+		convention:  "thin",
+		callsite:    `client.Feedback.Upload(ctx, protocol.FeedbackUploadParams{Classification: "bug", ThreadID: protocol.Some("thread-1")})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Feedback.Upload(ctx, protocol.FeedbackUploadParams{
+				Classification: "bug",
+				ThreadID:       protocol.Some("thread-1"),
+			})
+			_, _ = response, err
+		},
+	},
+	"fuzzyFileSearch": {
+		wrapperName: "FuzzyFileSearch.Search",
+		convention:  "thin",
+		callsite:    `client.FuzzyFileSearch.Search(ctx, protocol.FuzzyFileSearchParams{Query: "main.go", Roots: []string{"/repo"}})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.FuzzyFileSearch.Search(ctx, protocol.FuzzyFileSearchParams{Query: "main.go", Roots: []string{"/repo"}})
+			_, _ = response, err
+		},
+	},
+	"fuzzyFileSearch/sessionStart": {
+		wrapperName: "FuzzyFileSearch.StartSession",
+		convention:  "handle-start",
+		callsite:    `session, err := client.FuzzyFileSearch.StartSession(ctx, codex.FuzzySearchSessionOptions{Roots: []string{"."}})`,
+		compile: func(ctx context.Context, client *Client) {
+			session, err := client.FuzzyFileSearch.StartSession(ctx, FuzzySearchSessionOptions{Roots: []string{"."}})
+			_, _ = session, err
+		},
+	},
+	"fuzzyFileSearch/sessionUpdate": {
+		wrapperName: "FuzzySearchSession.Update",
+		convention:  "handle-followup",
+		callsite:    `session.Update(ctx, codex.FuzzySearchUpdate{Query: "main.go"})`,
+		compile: func(ctx context.Context, _ *Client) {
+			var session *FuzzySearchSession
+			err := session.Update(ctx, FuzzySearchUpdate{Query: "main.go"})
+			_ = err
+		},
+	},
+	"fuzzyFileSearch/sessionStop": {
+		wrapperName: "FuzzySearchSession.Close",
+		convention:  "handle-followup",
+		callsite:    `session.Close(ctx)`,
+		compile: func(ctx context.Context, _ *Client) {
+			var session *FuzzySearchSession
+			err := session.Close(ctx)
+			_ = err
+		},
+	},
+	"memory/reset": {
+		wrapperName: "Memory.Reset",
+		convention:  "thin",
+		callsite:    `client.Memory.Reset(ctx)`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Memory.Reset(ctx)
+			_, _ = response, err
+		},
+	},
+	"permissionProfile/list": {
+		wrapperName: "PermissionProfiles.List",
+		convention:  "thin",
+		callsite:    `client.PermissionProfiles.List(ctx, protocol.PermissionProfileListParams{Cwd: protocol.Some("/repo")})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.PermissionProfiles.List(ctx, protocol.PermissionProfileListParams{Cwd: protocol.Some("/repo")})
+			_, _ = response, err
+		},
+	},
+	"windowsSandbox/setupStart": {
+		wrapperName: "WindowsSandbox.SetupStart",
+		convention:  "thin",
+		callsite:    `client.WindowsSandbox.SetupStart(ctx, protocol.WindowsSandboxSetupStartParams{Mode: protocol.WindowsSandboxSetupModeUnelevated})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.WindowsSandbox.SetupStart(ctx, protocol.WindowsSandboxSetupStartParams{Mode: protocol.WindowsSandboxSetupModeUnelevated})
+			_, _ = response, err
+		},
+	},
+	"windowsSandbox/readiness": {
+		wrapperName: "WindowsSandbox.Readiness",
+		convention:  "thin",
+		callsite:    `client.WindowsSandbox.Readiness(ctx)`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.WindowsSandbox.Readiness(ctx)
+			_, _ = response, err
+		},
+	},
 	"thread/start": {
 		wrapperName: "Threads.Start",
 		convention:  "high-level",
