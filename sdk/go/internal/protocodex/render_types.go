@@ -111,6 +111,11 @@ func renderDefinitionType(name, key string, schema Schema, names map[string]stri
 	if enumValues, ok := stringEnumValues(schema); ok {
 		return renderStringEnum(name, enumValues, serdeShape)
 	}
+	if name == "MultiAgentMode" {
+		if rendered, ok := renderMultiAgentMode(schema); ok {
+			return rendered
+		}
+	}
 	if mapType, ok := namedObjectMapGoType(schema, names); ok {
 		return renderNamedMapType(name, mapType)
 	}
@@ -549,6 +554,126 @@ func sortedAliasValues(aliases map[string]string) []string {
 	}
 	sort.Strings(values)
 	return values
+}
+
+func renderMultiAgentMode(schema Schema) (string, bool) {
+	values, ok := multiAgentModeStringValues(schema)
+	if !ok || !multiAgentModeHasCustomObjectVariant(schema) {
+		return "", false
+	}
+	caseList := quotedStringCaseList(values)
+
+	var b strings.Builder
+	b.WriteString("type MultiAgentMode struct {\n")
+	b.WriteString("\tMode string `json:\"-\"`\n")
+	b.WriteString("\tCustom OptionalNonNull[string] `json:\"custom,omitempty\"`\n")
+	b.WriteString("\tRawJSON json.RawMessage `json:\"-\"`\n")
+	b.WriteString("}\n\n")
+	b.WriteString("var (\n")
+	for _, value := range values {
+		b.WriteString(fmt.Sprintf("\t%s = MultiAgentMode{Mode: %q}\n", EnumConstName("MultiAgentMode", value), value))
+	}
+	b.WriteString(")\n\n")
+	b.WriteString("func CustomMultiAgentMode(custom string) MultiAgentMode {\n")
+	b.WriteString("\treturn MultiAgentMode{Custom: SomeNonNull(custom)}\n")
+	b.WriteString("}\n\n")
+	b.WriteString("func (v MultiAgentMode) IsSet() bool {\n")
+	b.WriteString("\treturn v.Mode != \"\" || v.Custom.IsSet() || len(bytes.TrimSpace(v.RawJSON)) > 0\n")
+	b.WriteString("}\n\n")
+	b.WriteString("func (v MultiAgentMode) MarshalJSON() ([]byte, error) {\n")
+	b.WriteString("\tmodeSet := v.Mode != \"\"\n")
+	b.WriteString("\tcustomSet := v.Custom.IsSet()\n")
+	b.WriteString("\trawSet := len(bytes.TrimSpace(v.RawJSON)) > 0\n")
+	b.WriteString("\tmatches := 0\n")
+	b.WriteString("\tif modeSet { matches++ }\n")
+	b.WriteString("\tif customSet { matches++ }\n")
+	b.WriteString("\tif rawSet { matches++ }\n")
+	b.WriteString("\tif matches == 0 { return nil, DecodeError{Field: \"\", Reason: \"does not match any oneOf variant\"} }\n")
+	b.WriteString("\tif matches > 1 { return nil, DecodeError{Field: \"\", Reason: \"matches multiple oneOf variants\"} }\n")
+	b.WriteString("\tif modeSet {\n")
+	b.WriteString("\t\tswitch v.Mode {\n")
+	b.WriteString(fmt.Sprintf("\t\tcase %s:\n", caseList))
+	b.WriteString("\t\t\treturn json.Marshal(v.Mode)\n")
+	b.WriteString("\t\tdefault:\n")
+	b.WriteString("\t\t\treturn nil, DecodeError{Field: \"\", Reason: fmt.Sprintf(\"unsupported multiAgentMode value %q\", v.Mode)}\n")
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\tif customSet { return json.Marshal(map[string]any{\"custom\": v.Custom}) }\n")
+	b.WriteString("\tif !json.Valid(v.RawJSON) { return nil, fmt.Errorf(\"invalid MultiAgentMode raw fallback\") }\n")
+	b.WriteString("\treturn append([]byte(nil), v.RawJSON...), nil\n")
+	b.WriteString("}\n\n")
+	b.WriteString("func (v *MultiAgentMode) UnmarshalJSON(data []byte) error {\n")
+	b.WriteString("\ttrimmed := bytes.TrimSpace(data)\n")
+	b.WriteString("\tif bytes.Equal(trimmed, []byte(\"null\")) { return DecodeError{Field: \"\", Reason: \"cannot be null\"} }\n")
+	b.WriteString("\tvar mode string\n")
+	b.WriteString("\tif err := json.Unmarshal(trimmed, &mode); err == nil {\n")
+	b.WriteString("\t\tswitch mode {\n")
+	b.WriteString(fmt.Sprintf("\t\tcase %s:\n", caseList))
+	b.WriteString("\t\t\t*v = MultiAgentMode{Mode: mode}\n")
+	b.WriteString("\t\tdefault:\n")
+	b.WriteString("\t\t\tv.Mode = \"\"\n")
+	b.WriteString("\t\t\tv.Custom = OptionalNonNull[string]{}\n")
+	b.WriteString("\t\t\tv.RawJSON = append(v.RawJSON[:0], data...)\n")
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t\treturn nil\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\tvar raw map[string]json.RawMessage\n")
+	b.WriteString("\tif err := json.Unmarshal(trimmed, &raw); err != nil { return err }\n")
+	b.WriteString("\trawCustom, ok := raw[\"custom\"]\n")
+	b.WriteString("\tif !ok {\n")
+	b.WriteString("\t\tv.Mode = \"\"\n")
+	b.WriteString("\t\tv.Custom = OptionalNonNull[string]{}\n")
+	b.WriteString("\t\tv.RawJSON = append(v.RawJSON[:0], data...)\n")
+	b.WriteString("\t\treturn nil\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\tvar custom OptionalNonNull[string]\n")
+	b.WriteString("\tif err := json.Unmarshal(rawCustom, &custom); err != nil { return fmt.Errorf(\"field custom: %w\", err) }\n")
+	b.WriteString("\t*v = MultiAgentMode{Custom: custom}\n")
+	b.WriteString("\treturn nil\n")
+	b.WriteString("}\n")
+	return b.String(), true
+}
+
+func quotedStringCaseList(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, fmt.Sprintf("%q", value))
+	}
+	return strings.Join(quoted, ", ")
+}
+
+func multiAgentModeStringValues(schema Schema) ([]string, bool) {
+	var values []string
+	for _, variant := range schema.OneOf {
+		if variant.Type != "string" || len(variant.Enum) == 0 {
+			continue
+		}
+		for _, raw := range variant.Enum {
+			var value string
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return nil, false
+			}
+			values = append(values, value)
+		}
+	}
+	return values, len(values) > 0
+}
+
+func multiAgentModeHasCustomObjectVariant(schema Schema) bool {
+	for _, variant := range schema.OneOf {
+		if variant.Type != "object" && len(variant.Properties) == 0 {
+			continue
+		}
+		if _, ok := variant.Properties["custom"]; !ok {
+			continue
+		}
+		for _, required := range variant.Required {
+			if required == "custom" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type renderedField struct {
