@@ -202,10 +202,33 @@ function Copy-Helper([string]$Source, [string]$Destination) {
     Copy-Item -Path $Source -Destination $Destination -Force
 }
 
+function Copy-SeedBinary([string]$RelativePath, [string]$Description) {
+    $Source = Join-Path $SeedRoot $RelativePath
+    $Destination = Join-Path $Out $RelativePath
+    if (-not (Test-Path $Source -PathType Leaf)) {
+        throw "Bazel runtime seed $Description is missing: $Source"
+    }
+    $CopySource = $Source
+    $SourceItem = Get-Item -LiteralPath $Source
+    if ($SourceItem.LinkType) {
+        $CopySource = $SourceItem.Target
+        if (-not [System.IO.Path]::IsPathRooted($CopySource)) {
+            $CopySource = Join-Path (Split-Path $Source) $CopySource
+        }
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path $Destination -Parent) | Out-Null
+    Copy-Item -LiteralPath $CopySource -Destination $Destination -Force
+    $StagedItem = Get-Item -LiteralPath $Destination
+    if ($StagedItem.LinkType) {
+        throw "Staged runtime $Description must be a real executable, not a symlink: $Destination"
+    }
+}
+
 function Test-StagedLayout([string]$Root) {
     foreach ($Required in @(
         'codex-package.json',
         'bin/codex.exe',
+        'bin/codex-code-mode-host.exe',
         'codex-path/rg.exe',
         'codex-resources/codex-command-runner.exe',
         'codex-resources/codex-windows-sandbox-setup.exe'
@@ -213,6 +236,12 @@ function Test-StagedLayout([string]$Root) {
         $Path = Join-Path $Root $Required
         if (-not (Test-Path $Path -PathType Leaf)) {
             throw "Missing staged runtime file: $Path"
+        }
+    }
+    foreach ($RuntimeBinary in @('bin/codex.exe', 'bin/codex-code-mode-host.exe')) {
+        $Path = Join-Path $Root $RuntimeBinary
+        if ((Get-Item -LiteralPath $Path).LinkType) {
+            throw "Staged runtime binary must be a real executable, not a symlink: $Path"
         }
     }
 }
@@ -263,6 +292,8 @@ if (Test-Path $Out) {
 }
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 Copy-Item -Recurse -Force (Join-Path $SeedRoot '*') $Out
+Copy-SeedBinary 'bin/codex.exe' 'entrypoint'
+Copy-SeedBinary 'bin/codex-code-mode-host.exe' 'code-mode host'
 New-Item -ItemType Directory -Force -Path (Join-Path $Out 'codex-resources') | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Out 'codex-path') | Out-Null
 
