@@ -40,7 +40,10 @@ var rawOnlyHighLevelWorkflows = []rawOnlyHighLevelWorkflow{
 	{name: "account/browser-login", startMethod: "account/login/start"},
 	{name: "account/device-code-login", startMethod: "account/login/start"},
 	{name: "mcpServer/oauth/login", startMethod: "mcpServer/oauth/login"},
+	{name: "realtime/start", startMethod: "thread/realtime/start"},
 	{name: "review/start", startMethod: "review/start"},
+	{name: "thread/fork", startMethod: "thread/fork"},
+	{name: "thread/resume", startMethod: "thread/resume"},
 	{name: "thread/start", startMethod: "thread/start"},
 	{name: "turn/start", startMethod: "turn/start"},
 }
