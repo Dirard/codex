@@ -143,6 +143,217 @@ var compiledResourceCallsites = map[string]compiledResourceCallsite{
 			_ = err
 		},
 	},
+	"command/exec": {
+		wrapperName: "Commands.Exec",
+		convention:  "handle-start",
+		callsite:    `cmd, err := client.Commands.Exec(ctx, codex.CommandExecOptions{Command: []string{"echo", "ok"}}); stream, err := cmd.Stream(ctx); result, err := cmd.Wait(ctx)`,
+		compile: func(ctx context.Context, client *Client) {
+			cmd, err := client.Commands.Exec(ctx, CommandExecOptions{Command: []string{"echo", "ok"}})
+			_ = err
+			stream, err := cmd.Stream(ctx)
+			_, _ = stream, err
+			result, err := cmd.Wait(ctx)
+			_, _ = result, err
+		},
+	},
+	"command/exec/write": {
+		wrapperName: "CommandHandle.Write / CloseStdin",
+		convention:  "handle-followup",
+		callsite:    `cmd.Write(ctx, []byte("input")); cmd.CloseStdin(ctx)`,
+		compile: func(ctx context.Context, _ *Client) {
+			var cmd *CommandHandle
+			err := cmd.Write(ctx, []byte("input"))
+			closeErr := cmd.CloseStdin(ctx)
+			_, _ = err, closeErr
+		},
+	},
+	"command/exec/terminate": {
+		wrapperName: "CommandHandle.Terminate",
+		convention:  "handle-followup",
+		callsite:    `cmd.Terminate(ctx)`,
+		compile: func(ctx context.Context, _ *Client) {
+			var cmd *CommandHandle
+			err := cmd.Terminate(ctx)
+			_ = err
+		},
+	},
+	"command/exec/resize": {
+		wrapperName: "CommandHandle.Resize",
+		convention:  "handle-followup",
+		callsite:    `cmd.Resize(ctx, codex.TerminalSize{Rows: 24, Cols: 80})`,
+		compile: func(ctx context.Context, _ *Client) {
+			var cmd *CommandHandle
+			err := cmd.Resize(ctx, TerminalSize{Rows: 24, Cols: 80})
+			_ = err
+		},
+	},
+	"config/mcpServer/reload": {
+		wrapperName: "Config.ReloadMCPServers",
+		convention:  "thin",
+		callsite:    `client.Config.ReloadMCPServers(ctx)`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Config.ReloadMCPServers(ctx)
+			_, _ = response, err
+		},
+	},
+	"config/read": {
+		wrapperName: "Config.Read",
+		convention:  "thin",
+		callsite:    `client.Config.Read(ctx, protocol.ConfigReadParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Config.Read(ctx, protocol.ConfigReadParams{})
+			_, _ = response, err
+		},
+	},
+	"config/value/write": {
+		wrapperName: "Config.WriteValue",
+		convention:  "thin",
+		callsite:    `client.Config.WriteValue(ctx, protocol.ConfigValueWriteParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Config.WriteValue(ctx, protocol.ConfigValueWriteParams{})
+			_, _ = response, err
+		},
+	},
+	"config/batchWrite": {
+		wrapperName: "Config.BatchWrite",
+		convention:  "thin",
+		callsite:    `client.Config.BatchWrite(ctx, protocol.ConfigBatchWriteParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Config.BatchWrite(ctx, protocol.ConfigBatchWriteParams{})
+			_, _ = response, err
+		},
+	},
+	"configRequirements/read": {
+		wrapperName: "Config.ReadRequirements",
+		convention:  "thin",
+		callsite:    `client.Config.ReadRequirements(ctx)`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Config.ReadRequirements(ctx)
+			_, _ = response, err
+		},
+	},
+	"fs/readFile": {
+		wrapperName: "FileSystem.ReadFile",
+		convention:  "thin",
+		callsite:    `client.FileSystem.ReadFile(ctx, protocol.FsReadFileParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.FileSystem.ReadFile(ctx, protocol.FsReadFileParams{})
+			_, _ = response, err
+		},
+	},
+	"fs/writeFile": {
+		wrapperName: "FileSystem.WriteFile",
+		convention:  "thin",
+		callsite:    `client.FileSystem.WriteFile(ctx, protocol.FsWriteFileParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.FileSystem.WriteFile(ctx, protocol.FsWriteFileParams{})
+			_, _ = response, err
+		},
+	},
+	"fs/createDirectory": {
+		wrapperName: "FileSystem.CreateDirectory",
+		convention:  "thin",
+		callsite:    `client.FileSystem.CreateDirectory(ctx, protocol.FsCreateDirectoryParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.FileSystem.CreateDirectory(ctx, protocol.FsCreateDirectoryParams{})
+			_, _ = response, err
+		},
+	},
+	"fs/getMetadata": {
+		wrapperName: "FileSystem.GetMetadata",
+		convention:  "thin",
+		callsite:    `client.FileSystem.GetMetadata(ctx, protocol.FsGetMetadataParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.FileSystem.GetMetadata(ctx, protocol.FsGetMetadataParams{})
+			_, _ = response, err
+		},
+	},
+	"fs/readDirectory": {
+		wrapperName: "FileSystem.ReadDirectory",
+		convention:  "thin",
+		callsite:    `client.FileSystem.ReadDirectory(ctx, protocol.FsReadDirectoryParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.FileSystem.ReadDirectory(ctx, protocol.FsReadDirectoryParams{})
+			_, _ = response, err
+		},
+	},
+	"fs/remove": {
+		wrapperName: "FileSystem.Remove",
+		convention:  "thin",
+		callsite:    `client.FileSystem.Remove(ctx, protocol.FsRemoveParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.FileSystem.Remove(ctx, protocol.FsRemoveParams{})
+			_, _ = response, err
+		},
+	},
+	"fs/copy": {
+		wrapperName: "FileSystem.Copy",
+		convention:  "thin",
+		callsite:    `client.FileSystem.Copy(ctx, protocol.FsCopyParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.FileSystem.Copy(ctx, protocol.FsCopyParams{})
+			_, _ = response, err
+		},
+	},
+	"fs/watch": {
+		wrapperName: "FileSystem.Watch",
+		convention:  "handle-start",
+		callsite:    `watch, start, err := client.FileSystem.Watch(ctx, codex.FileSystemWatchOptions{Path: "/repo"})`,
+		compile: func(ctx context.Context, client *Client) {
+			watch, start, err := client.FileSystem.Watch(ctx, FileSystemWatchOptions{Path: "/repo"})
+			_, _, _ = watch, start, err
+		},
+	},
+	"fs/unwatch": {
+		wrapperName: "FileSystemWatchHandle.Close",
+		convention:  "handle-followup",
+		callsite:    `watch.Close(ctx)`,
+		compile: func(ctx context.Context, _ *Client) {
+			var watch *FileSystemWatchHandle
+			err := watch.Close(ctx)
+			_ = err
+		},
+	},
+	"process/spawn": {
+		wrapperName: "Processes.Spawn / process handle",
+		convention:  "handle-start",
+		callsite:    `proc, start, err := client.Processes.Spawn(ctx, codex.ProcessSpawnOptions{Command: []string{"echo", "ok"}, CWD: "/repo"})`,
+		compile: func(ctx context.Context, client *Client) {
+			proc, start, err := client.Processes.Spawn(ctx, ProcessSpawnOptions{Command: []string{"echo", "ok"}, CWD: "/repo"})
+			_, _, _ = proc, start, err
+		},
+	},
+	"process/writeStdin": {
+		wrapperName: "ProcessHandle.WriteStdin / CloseStdin",
+		convention:  "handle-followup",
+		callsite:    `proc.WriteStdin(ctx, []byte("input")); proc.CloseStdin(ctx)`,
+		compile: func(ctx context.Context, _ *Client) {
+			var proc *ProcessHandle
+			err := proc.WriteStdin(ctx, []byte("input"))
+			closeErr := proc.CloseStdin(ctx)
+			_, _ = err, closeErr
+		},
+	},
+	"process/kill": {
+		wrapperName: "ProcessHandle.Kill",
+		convention:  "handle-followup",
+		callsite:    `proc.Kill(ctx)`,
+		compile: func(ctx context.Context, _ *Client) {
+			var proc *ProcessHandle
+			err := proc.Kill(ctx)
+			_ = err
+		},
+	},
+	"process/resizePty": {
+		wrapperName: "ProcessHandle.ResizePTY",
+		convention:  "handle-followup",
+		callsite:    `proc.ResizePTY(ctx, codex.TerminalSize{Rows: 24, Cols: 80})`,
+		compile: func(ctx context.Context, _ *Client) {
+			var proc *ProcessHandle
+			err := proc.ResizePTY(ctx, TerminalSize{Rows: 24, Cols: 80})
+			_ = err
+		},
+	},
 	"hooks/list": {
 		wrapperName: "Hooks.List",
 		convention:  "thin",
