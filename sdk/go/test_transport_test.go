@@ -21,8 +21,9 @@ type scriptedTransport struct {
 	mu   sync.Mutex
 	once sync.Once
 
-	responses map[string]json.RawMessage
-	errors    map[string]*jsonrpc.RPCError
+	responses     map[string]json.RawMessage
+	errors        map[string]*jsonrpc.RPCError
+	responseGates map[string]chan struct{}
 
 	initializedWasGenerated bool
 }
@@ -33,11 +34,12 @@ func newScriptedInitializedTransport(t *testing.T, initializePayload json.RawMes
 		initializePayload = currentInitializePayload()
 	}
 	tr := &scriptedTransport{
-		t:         t,
-		recv:      make(chan json.RawMessage, 64),
-		done:      make(chan struct{}),
-		responses: map[string]json.RawMessage{"initialize": initializePayload},
-		errors:    map[string]*jsonrpc.RPCError{},
+		t:             t,
+		recv:          make(chan json.RawMessage, 64),
+		done:          make(chan struct{}),
+		responses:     map[string]json.RawMessage{"initialize": initializePayload},
+		errors:        map[string]*jsonrpc.RPCError{},
+		responseGates: map[string]chan struct{}{},
 	}
 	return tr
 }
@@ -72,29 +74,44 @@ func (t *scriptedTransport) Send(ctx context.Context, frame json.RawMessage) err
 	if env.ID == nil {
 		return nil
 	}
-	if rpcErr, ok := t.errors[env.Method]; ok {
+	t.mu.Lock()
+	rpcErr, hasRPCError := t.errors[env.Method]
+	result, hasResponse := t.responses[env.Method]
+	gate := t.responseGates[env.Method]
+	t.mu.Unlock()
+	if hasRPCError {
 		reply := jsonrpc.Envelope{ID: env.ID, Error: rpcErr}
 		data, err := json.Marshal(reply)
 		if err != nil {
 			return err
 		}
-		select {
-		case t.recv <- data:
-			return nil
-		case <-t.done:
-			return &ClosedError{}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		return t.deliverReply(ctx, data, gate)
 	}
-	result, ok := t.responses[env.Method]
-	if !ok {
+	if !hasResponse {
 		result = json.RawMessage(`{}`)
 	}
 	reply := jsonrpc.Envelope{ID: env.ID, Result: result}
 	data, err := json.Marshal(reply)
 	if err != nil {
 		return err
+	}
+	return t.deliverReply(ctx, data, gate)
+}
+
+func (t *scriptedTransport) deliverReply(ctx context.Context, data json.RawMessage, gate <-chan struct{}) error {
+	if gate != nil {
+		go func() {
+			select {
+			case <-gate:
+			case <-t.done:
+				return
+			}
+			select {
+			case t.recv <- data:
+			case <-t.done:
+			}
+		}()
+		return nil
 	}
 	select {
 	case t.recv <- data:
@@ -109,6 +126,22 @@ func (t *scriptedTransport) Send(ctx context.Context, frame json.RawMessage) err
 func (t *scriptedTransport) Close() error {
 	t.once.Do(func() { close(t.done) })
 	return nil
+}
+
+func (t *scriptedTransport) deferResponse(method string, result json.RawMessage) func() {
+	t.t.Helper()
+	gate := make(chan struct{})
+	t.mu.Lock()
+	t.responses[method] = result
+	t.responseGates[method] = gate
+	t.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(gate)
+		})
+	}
 }
 
 func optionalRawJSONEqual(actual json.RawMessage, expected json.RawMessage) bool {
