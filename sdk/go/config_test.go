@@ -242,12 +242,43 @@ func TestNotificationOptOutValidation(t *testing.T) {
 		"account/browser-login disabled in raw-only mode",
 		"account/device-code-login disabled in raw-only mode",
 		"mcpServer/oauth/login disabled in raw-only mode",
+		"realtime/start disabled in raw-only mode",
 		"review/start requires turn/completed",
+		"thread/fork disabled in raw-only mode",
+		"thread/resume disabled in raw-only mode",
 		"thread/start disabled in raw-only mode",
 		"turn/start requires turn/completed",
 	}
 	if got := rawOnlyClient.Metadata().DisabledHighLevelWorkflows; !reflect.DeepEqual(got, wantDisabled) {
 		t.Fatalf("raw-only disabled workflows = %#v, want %#v", got, wantDisabled)
+	}
+}
+
+func TestRealtimeNotificationOptOutDisablesHighLevelWorkflow(t *testing.T) {
+	transport := newScriptedInitializedTransport(t, nil)
+	_, err := NewClient(context.Background(), ClientConfig{
+		Transport:           transport,
+		NotificationOptOuts: NotificationOptOuts{Methods: []string{"thread/realtime/closed"}},
+	})
+	var configErr *ConfigError
+	if !errors.As(err, &configErr) {
+		t.Fatalf("err = %T, want *ConfigError", err)
+	}
+	if len(transport.sentFrames()) != 0 {
+		t.Fatal("initialize was sent after realtime notification opt-out conflict")
+	}
+
+	rawOnlyClient, err := NewClient(context.Background(), ClientConfig{
+		Transport:           newScriptedInitializedTransport(t, nil),
+		Mode:                ClientModeRawOnly,
+		NotificationOptOuts: NotificationOptOuts{Methods: []string{"thread/realtime/closed"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rawOnlyClient.Close() })
+	if !containsString(rawOnlyClient.Metadata().DisabledHighLevelWorkflows, "realtime/start requires thread/realtime/closed") {
+		t.Fatalf("raw-only disabled workflows = %#v, want realtime dependency", rawOnlyClient.Metadata().DisabledHighLevelWorkflows)
 	}
 }
 
@@ -278,6 +309,15 @@ func TestDefaultModeAllowsUnimplementedWorkflowNotificationOptOut(t *testing.T) 
 	if len(client.Metadata().DisabledHighLevelWorkflows) != 0 {
 		t.Fatalf("disabled workflows = %#v, want none", client.Metadata().DisabledHighLevelWorkflows)
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func writeFakeRuntime(t *testing.T, recordDir string) string {
