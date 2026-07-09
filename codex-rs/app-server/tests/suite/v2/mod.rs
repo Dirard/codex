@@ -2,6 +2,7 @@ mod account;
 #[path = "account_system_proxy_tests.rs"]
 mod account_system_proxy;
 mod account_thread_usage;
+mod additional_context_limits;
 mod agent_message_board;
 mod analytics;
 mod app_installed;
