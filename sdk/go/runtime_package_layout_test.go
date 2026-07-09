@@ -3,7 +3,6 @@ package codex
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -103,10 +102,136 @@ func TestRuntimeLayoutPlanRequiresManifestMerge(t *testing.T) {
 	}
 }
 
-func TestRuntimeLayoutStagingScopeDoesNotAddWorkflowWiring(t *testing.T) {
+func TestRuntimeLayoutGoSDKWorkflowWiring(t *testing.T) {
 	workflow := readRepoText(t, ".github/workflows/sdk.yml")
-	if regexp.MustCompile(`(?m)^\s*go-sdk:`).FindString(workflow) != "" {
-		t.Fatalf("runtime layout source slice must not wire the go-sdk CI job before staging scripts and integration tests are reviewed")
+
+	for _, required := range []string{
+		"  go-sdk:",
+		`name: Go SDK - ${{ matrix.name }}`,
+		"runs-on: ${{ matrix.runs_on }}",
+		"fail-fast: false",
+		"linux-musl",
+		"x86_64-unknown-linux-musl",
+		"linux-arm64-musl",
+		"aarch64-unknown-linux-musl",
+		"macos-arm64",
+		"aarch64-apple-darwin",
+		"macos-x64",
+		"x86_64-apple-darwin",
+		"windows",
+		"x86_64-pc-windows-msvc",
+		"windows-arm64",
+		"aarch64-pc-windows-msvc",
+		"${{ github.event.repository.name }}-linux-x64-xl",
+		"${{ github.event.repository.name }}-linux-arm64",
+		"macos-15-xlarge",
+		"macos-15-large",
+		"${{ github.event.repository.name }}-windows-x64",
+		"${{ github.event.repository.name }}-windows-arm64",
+		"actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2",
+		"./.github/actions/setup-bazel-ci",
+		"actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6",
+		`go-version: "1.25"`,
+		"dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0",
+		`toolchain: "1.95.0"`,
+		"./.github/actions/setup-msvc-env",
+		"taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49",
+		"tool: just,nextest@0.9.103",
+		"bubblewrap pkg-config libcap-dev",
+		"Assert macOS x64 runner architecture",
+		`test "$(uname -m)" = "x86_64"`,
+		"Materialize package helper root",
+		"CODEX_PACKAGE_HELPER_ROOT",
+		"python3 -m codex_package.materialize_helpers",
+		"--verify-only",
+		"--bwrap-bin",
+		"--codex-command-runner-bin",
+		"--codex-windows-sandbox-setup-bin",
+		".github/scripts/stage-codex-runtime.sh",
+		`--bazel-target "${{ matrix.bazel_target }}"`,
+		"--cargo-profile dev",
+		"--build-metadata-job go-sdk",
+		`--github-env "${GITHUB_ENV}"`,
+		"--windows-release-shaped-msvc",
+		"--windows-msvc-host-platform",
+		`CODEX_GO_SDK_REQUIRE_REAL_APP_SERVER: "1"`,
+		"TestRealAppServerInitializeStrictDigest",
+		"TestRealAppServerRejectsDebugHookEnv",
+		"TestRealAppServerDigestMismatch",
+		"TestRealAppServerCompatibilityOverridePolicy",
+		"TestRealAppServerThreadRunHappyPath",
+		"TestRealAppServerConfigReadWrite",
+		"TestRealAppServerFilesystemWatch",
+		"TestRealAppServerCommandExecStreaming",
+		"TestRealAppServerProcessLifecycle",
+		"TestRealAppServerSafeResourceWorkflows",
+		"TestRealAppServerRemoteControlWorkflow",
+		"TestRealAppServerModelList",
+		"TestRealAppServerProtocolModeExperimentalGate",
+		"TestRealAppServerUnauthenticatedAccountRead",
+		"go test -race ./...",
+		"--release-package-archive",
+		"--cargo-profile release",
+		"--build-metadata-job go-sdk-release-archive",
+		"CODEX_GO_SDK_ZSTD_SOURCE",
+		"--zstd-source",
+		"DotSlash fallback is not accepted",
+		"release_shape_args+=(--windows-release-shaped-msvc --windows-msvc-host-platform)",
+		`metadata.get("runtimeSource") != "packageArchive"`,
+		`metadata.get("cargoProfile") != "release"`,
+		"windowsReleaseShapedMsvc",
+		"just write-app-server-schema --check",
+		"write_schema_fixtures",
+		"just test -p codex-app-server-protocol",
+		"//codex-rs/app-server-protocol:app-server-protocol",
+		"go run ./internal/cmd/protocodex --check --mode stable",
+		"go run ./internal/cmd/protocodex --check --mode experimental",
+		"go run ./internal/cmd/protocodex --check --mode both",
+		"TestResourceCoverage|TestResourceDocsCoverage|TestServerHandlerDocsCoverage",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("sdk.yml go-sdk job missing %q", required)
+		}
+	}
+
+	stepOrder := []string{
+		"  go-sdk:",
+		"Checkout repository",
+		"Set up Bazel CI",
+		"Setup Go",
+		"Setup Rust",
+		"Materialize package helper root",
+		"Stage Go SDK runtime",
+		"Test Go SDK against real app-server",
+		"Test Go SDK release archive runtime",
+		"Check Rust protocol schema drift",
+		"Check Go SDK generated protocol drift",
+		"Check for a clean worktree",
+	}
+	previous := -1
+	for _, marker := range stepOrder {
+		next := strings.Index(workflow[previous+1:], marker)
+		if next == -1 {
+			t.Fatalf("sdk.yml go-sdk job missing ordered marker %q", marker)
+		}
+		current := previous + 1 + next
+		if current <= previous {
+			t.Fatalf("sdk.yml go-sdk marker %q appears out of order", marker)
+		}
+		previous = current
+	}
+
+	for _, forbidden := range []string{
+		`echo "CODEX_HOME=`,
+		"CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG=",
+		"CODEX_APP_SERVER_MANAGED_CONFIG_PATH=",
+		"CODEX_APP_SERVER_LOGIN_ISSUER=",
+		"CODEX_APP_SERVER_AUTH_BASE_URL_FOR_TESTS=",
+		"CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE=",
+	} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("sdk.yml go-sdk job must not globally export SDK-test app-server hooks; found %q", forbidden)
+		}
 	}
 }
 
