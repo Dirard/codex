@@ -28,6 +28,7 @@ func renderHandlersGenerated(manifest *Manifest) string {
 	for _, field := range fieldNames {
 		b.WriteString(fmt.Sprintf("\t%s %s\n", field, field+"Handler"))
 	}
+	b.WriteString("\tUnknown UnknownServerRequestHandler\n")
 	b.WriteString("}\n\n")
 	for _, field := range fieldNames {
 		b.WriteString(fmt.Sprintf("type %s interface {\n", field+"Handler"))
@@ -112,10 +113,10 @@ func renderHandlersGenerated(manifest *Manifest) string {
 		b.WriteString(fmt.Sprintf("\t\tdecoded, err := decode%sServerRequest(params)\n", RawMethodName(mapping.Method)))
 		b.WriteString("\t\tif err != nil { return nil, err }\n")
 		field := strings.TrimPrefix(mapping.HandlerOwner, "ServerHandlers.")
-		b.WriteString(fmt.Sprintf("\t\tif h.%s == nil { return nil, fmt.Errorf(\"server handler %%q is not configured\", method) }\n", field))
+		b.WriteString(fmt.Sprintf("\t\tif h.%s == nil { return nil, &UnsupportedError{Reason: fmt.Sprintf(\"server handler %%q is not configured\", method)} }\n", field))
 		b.WriteString(fmt.Sprintf("\t\treturn h.%s.Handle%s(ctx, decoded)\n", field, RawMethodName(mapping.Method)))
 	}
-	b.WriteString("\tdefault:\n\t\treturn nil, fmt.Errorf(\"unsupported server request method %q\", method)\n\t}\n}\n\n")
+	b.WriteString("\tdefault:\n\t\tif h.Unknown != nil { return h.Unknown.HandleUnknownServerRequest(ctx, UnknownServerRequest{Method: method, Params: append(json.RawMessage(nil), params...)}) }\n\t\treturn nil, &UnsupportedError{Reason: fmt.Sprintf(\"unsupported server request method %q\", method)}\n\t}\n}\n\n")
 	for _, mapping := range serverHandlerMappings {
 		entry := serverRequests[mapping.Method]
 		params := typeNameForDefinition(entry.PayloadType)
@@ -159,7 +160,7 @@ func qualifiedProtocolType(name string) string {
 func renderResourceCoverageGenerated(manifest *Manifest) string {
 	var b strings.Builder
 	b.WriteString("package codex\n\n")
-	b.WriteString("type generatedResourceCoverageRow struct { Method string; SDKVisibility string; ResourceOwner string; RawMethodName string; WrapperName string; WrapperFile string; PublicSignature string; SignatureConventionID string; CompileCallsite string; UnitTestOwner string; SafeIntegrationOwner string; SafeIntegrationReason string; DocsExampleOwner string; ServerNotificationMethods []string; ServerHandlerCapabilities []string; GeneratedOnlyException string; ReviewNote string }\n\n")
+	b.WriteString("type generatedResourceCoverageRow struct { Method string; SDKVisibility string; ImplementationStatus string; ResourceOwner string; RawMethodName string; WrapperName string; WrapperFile string; PublicSignature string; SignatureConventionID string; CompileCallsite string; UnitTestOwner string; SafeIntegrationOwner string; SafeIntegrationReason string; DocsExampleOwner string; ServerNotificationMethods []string; ServerHandlerCapabilities []string; GeneratedOnlyException string; ReviewNote string }\n\n")
 	b.WriteString("var generatedResourceCoverage = []generatedResourceCoverageRow{\n")
 	visibility := map[string]string{}
 	for _, entry := range manifest.Experimental.ClientRequests {
@@ -168,10 +169,35 @@ func renderResourceCoverageGenerated(manifest *Manifest) string {
 	notificationsByOwner := serverNotificationMethodsByOwner(manifest)
 	handlersByOwner := serverHandlerCapabilitiesByOwner()
 	for _, mapping := range resourceAPIMappings {
-		b.WriteString(fmt.Sprintf("\t{Method: %q, SDKVisibility: %q, ResourceOwner: %q, RawMethodName: %q, WrapperName: %q, WrapperFile: %q, PublicSignature: %q, SignatureConventionID: %q, CompileCallsite: %q, UnitTestOwner: %q, SafeIntegrationOwner: %q, SafeIntegrationReason: %q, DocsExampleOwner: %q, ServerNotificationMethods: %#v, ServerHandlerCapabilities: %#v, GeneratedOnlyException: %q, ReviewNote: %q},\n", mapping.Method, visibility[mapping.Method], mapping.ResourceOwner, RawMethodName(mapping.Method), mapping.WrapperName, mapping.WrapperFile, mapping.PublicSignature, mapping.SignatureConventionID, mapping.CompileCallsite, mapping.UnitTestOwner, mapping.SafeIntegrationOwner, mapping.SafeIntegrationReason, mapping.DocsExampleOwner, notificationsByOwner[mapping.ResourceOwner], handlersByOwner[mapping.ResourceOwner], mapping.GeneratedOnlyException, mapping.ReviewNote))
+		b.WriteString(fmt.Sprintf("\t{Method: %q, SDKVisibility: %q, ImplementationStatus: %q, ResourceOwner: %q, RawMethodName: %q, WrapperName: %q, WrapperFile: %q, PublicSignature: %q, SignatureConventionID: %q, CompileCallsite: %q, UnitTestOwner: %q, SafeIntegrationOwner: %q, SafeIntegrationReason: %q, DocsExampleOwner: %q, ServerNotificationMethods: %#v, ServerHandlerCapabilities: %#v, GeneratedOnlyException: %q, ReviewNote: %q},\n", mapping.Method, visibility[mapping.Method], resourceImplementationStatus(mapping), mapping.ResourceOwner, RawMethodName(mapping.Method), mapping.WrapperName, mapping.WrapperFile, mapping.PublicSignature, mapping.SignatureConventionID, mapping.CompileCallsite, mapping.UnitTestOwner, mapping.SafeIntegrationOwner, mapping.SafeIntegrationReason, mapping.DocsExampleOwner, notificationsByOwner[mapping.ResourceOwner], handlersByOwner[mapping.ResourceOwner], mapping.GeneratedOnlyException, mapping.ReviewNote))
 	}
 	b.WriteString("}\n")
 	return b.String()
+}
+
+func resourceImplementationStatus(mapping ResourceAPIMapping) string {
+	if mapping.GeneratedOnlyException != "" {
+		return "generated-only"
+	}
+	if stage4ImplementedResourceMethods[mapping.Method] {
+		return "implemented-stage4"
+	}
+	return "planned-stage5"
+}
+
+var stage4ImplementedResourceMethods = map[string]bool{
+	"account/login/start":     true,
+	"account/login/cancel":    true,
+	"account/logout":          true,
+	"account/rateLimits/read": true,
+	"account/usage/read":      true,
+	"account/read":            true,
+	"mcpServer/oauth/login":   true,
+	"review/start":            true,
+	"thread/start":            true,
+	"turn/start":              true,
+	"turn/steer":              true,
+	"turn/interrupt":          true,
 }
 
 func renderInventory(manifest *Manifest) string {
@@ -194,7 +220,7 @@ func renderInventory(manifest *Manifest) string {
 		b.WriteString(fmt.Sprintf("serverNotifications=%s\n", ownerNotifications))
 		b.WriteString(fmt.Sprintf("serverHandlers=%s\n\n", ownerHandlers))
 		for _, mapping := range mappingsByOwner[owner] {
-			b.WriteString(fmt.Sprintf("- `%s` raw=%s wrapper=%s file=%s signature=%s convention=%s callsite=%s unitTest=%s safeIntegration=%s%s docs=%s exception=%s review=%s\n", mapping.Method, RawMethodName(mapping.Method), mapping.WrapperName, mapping.WrapperFile, mapping.PublicSignature, mapping.SignatureConventionID, mapping.CompileCallsite, mapping.UnitTestOwner, mapping.SafeIntegrationOwner, mapping.SafeIntegrationReason, mapping.DocsExampleOwner, mapping.GeneratedOnlyException, mapping.ReviewNote))
+			b.WriteString(fmt.Sprintf("- `%s` status=%s raw=%s wrapper=%s file=%s signature=%s convention=%s callsite=%s unitTest=%s safeIntegration=%s%s docs=%s exception=%s review=%s\n", mapping.Method, resourceImplementationStatus(mapping), RawMethodName(mapping.Method), mapping.WrapperName, mapping.WrapperFile, mapping.PublicSignature, mapping.SignatureConventionID, mapping.CompileCallsite, mapping.UnitTestOwner, mapping.SafeIntegrationOwner, mapping.SafeIntegrationReason, mapping.DocsExampleOwner, mapping.GeneratedOnlyException, mapping.ReviewNote))
 		}
 		b.WriteByte('\n')
 	}
