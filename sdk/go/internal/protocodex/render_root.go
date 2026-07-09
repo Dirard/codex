@@ -191,6 +191,9 @@ func resourceImplementationStatus(mapping ResourceAPIMapping) string {
 	if stage5DImplementedResourceMethods[mapping.Method] {
 		return "implemented-stage5d"
 	}
+	if stage5EImplementedResourceMethods[mapping.Method] {
+		return "implemented-stage5e"
+	}
 	return "planned-stage5"
 }
 
@@ -295,6 +298,27 @@ var stage5DImplementedResourceMethods = map[string]bool{
 	"plugin/share/delete":        true,
 	"plugin/install":             true,
 	"plugin/uninstall":           true,
+}
+
+var stage5EImplementedResourceMethods = map[string]bool{
+	"account/rateLimitResetCredit/consume":     true,
+	"account/sendAddCreditsNudgeEmail":         true,
+	"account/workspaceMessages/read":           true,
+	"collaborationMode/list":                   true,
+	"environment/add":                          true,
+	"environment/info":                         true,
+	"externalAgentConfig/detect":               true,
+	"externalAgentConfig/import":               true,
+	"externalAgentConfig/import/readHistories": true,
+	"model/list":                               true,
+	"modelProvider/capabilities/read":          true,
+	"remoteControl/client/list":                true,
+	"remoteControl/client/revoke":              true,
+	"remoteControl/disable":                    true,
+	"remoteControl/enable":                     true,
+	"remoteControl/pairing/start":              true,
+	"remoteControl/pairing/status":             true,
+	"remoteControl/status/read":                true,
 }
 
 func renderInventory(manifest *Manifest) string {
