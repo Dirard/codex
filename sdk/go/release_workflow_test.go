@@ -76,6 +76,26 @@ func TestWindowsReleaseZipIncludesSandboxHelpers(t *testing.T) {
 	}
 }
 
+func TestReleaseChecksumManifestCoversZstdPackageArchives(t *testing.T) {
+	workflow := readRepoText(t, ".github/workflows/rust-release.yml")
+	releaseJob := workflowJobSection(t, workflow, "release")
+
+	for _, required := range []string{
+		"Add Codex package checksum manifest",
+		"codex-package_SHA256SUMS",
+		"-name 'codex-package-*.tar.gz'",
+		"-name 'codex-package-*.tar.zst'",
+		"-name 'codex-app-server-package-*.tar.gz'",
+		"-name 'codex-app-server-package-*.tar.zst'",
+		`sha256sum "$archive"`,
+		`awk -v name="$(basename "$archive")"`,
+	} {
+		if !strings.Contains(releaseJob, required) {
+			t.Fatalf("rust-release.yml release job checksum manifest missing %q", required)
+		}
+	}
+}
+
 func TestShippingReleaseReadinessWorkflowSourcePreflight(t *testing.T) {
 	workflow := readRepoText(t, ".github/workflows/go-sdk-shipping-release-readiness.yml")
 
