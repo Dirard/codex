@@ -6,9 +6,12 @@ param(
     [string]$CargoProfile = 'dev',
     [string]$GithubEnv,
     [switch]$PrintShellEnv,
+    [switch]$ExportEnvironment,
+    [switch]$BootstrapOnly,
     [switch]$VerifySandbox,
     [string]$ExecPath,
     [switch]$ReleasePackageArchive,
+    [string]$ZstdSource,
     [switch]$WindowsReleaseShapedMsvc,
     [switch]$WindowsMsvcHostPlatform,
     [string]$BuildMetadataJob
@@ -16,8 +19,32 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+if ($PrintShellEnv) {
+    # -ExportEnvironment is the supported PowerShell env handoff;
+    # -PrintShellEnv remains as a legacy alias for parity with the shell script.
+    $ExportEnvironment = $true
+}
+
 if ($ReleasePackageArchive) {
-    throw '-ReleasePackageArchive is implemented in the release-readiness slice, not the Bazel seed staging path.'
+    if ($CargoProfile -ne 'release') {
+        throw '-ReleasePackageArchive requires -CargoProfile release.'
+    }
+    if ([string]::IsNullOrWhiteSpace($ZstdSource)) {
+        $Zstd = Get-Command zstd -ErrorAction SilentlyContinue
+        if (-not $Zstd) {
+            throw 'zstd is required for -ReleasePackageArchive unless -ZstdSource points at a materialized executable.'
+        }
+    } elseif (-not (Test-Path $ZstdSource -PathType Leaf)) {
+        throw "-ZstdSource must point at a materialized executable: $ZstdSource"
+    }
+    throw '-ReleasePackageArchive packageArchive staging is blocked until the native Windows app-server package archive lane is implemented.'
+}
+
+if ($BootstrapOnly) {
+    if ($ExportEnvironment) {
+        throw '-BootstrapOnly cannot be combined with -ExportEnvironment.'
+    }
+    exit 0
 }
 
 $RepoRoot = if ($env:GITHUB_WORKSPACE) {
@@ -176,7 +203,7 @@ New-Item -ItemType Directory -Force -Path $CodeHome | Out-Null
 if ($GithubEnv) {
     "CODEX_EXEC_PATH=$CodeExecPath" | Out-File -FilePath $GithubEnv -Encoding utf8 -Append
 }
-if ($PrintShellEnv) {
+if ($ExportEnvironment) {
     "Set-Item -Path Env:CODEX_EXEC_PATH -Value $(ConvertTo-PowerShellSingleQuoted $CodeExecPath)"
     "Set-Item -Path Env:CODEX_HOME -Value $(ConvertTo-PowerShellSingleQuoted $CodeHome)"
     "Set-Item -Path Env:CODEX_GO_SDK_RUNTIME_ROOT -Value $(ConvertTo-PowerShellSingleQuoted $Out)"
