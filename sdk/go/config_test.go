@@ -246,6 +246,7 @@ func TestNotificationOptOutValidation(t *testing.T) {
 		"mcpServer/oauth/login disabled in raw-only mode",
 		"process/spawn disabled in raw-only mode",
 		"realtime/start disabled in raw-only mode",
+		"remoteControl/pairing/start disabled in raw-only mode",
 		"review/start requires turn/completed",
 		"thread/fork disabled in raw-only mode",
 		"thread/resume disabled in raw-only mode",
