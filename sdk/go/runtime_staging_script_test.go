@@ -52,6 +52,7 @@ esac
 		}
 	}
 	assertNotSymlink(t, filepath.Join(fixture.out, "bin", "codex"))
+	assertNotSymlink(t, filepath.Join(fixture.out, "bin", "codex-code-mode-host"))
 
 	metadata := readRuntimeStagingMetadata(t, fixture.out)
 	if metadata.RuntimeSource != "bazelLayout" {
@@ -88,15 +89,24 @@ esac
 	}
 }
 
-func TestStageCodexRuntimeScriptMaterializesSymlinkEntrypoint(t *testing.T) {
+func TestStageCodexRuntimeScriptMaterializesSymlinkRuntimeBinaries(t *testing.T) {
 	fixture := newLinuxStagingFixture(t, "symlink out")
 	realEntrypoint := filepath.Join(fixture.root, "bazel-out", "codex-real")
+	realCodeModeHost := filepath.Join(fixture.root, "bazel-out", "codex-code-mode-host-real")
 	writeExecutable(t, realEntrypoint, "#!/usr/bin/env sh\nexit 0\n")
+	writeExecutable(t, realCodeModeHost, "#!/usr/bin/env sh\nexit 0\n")
 	seedEntrypoint := filepath.Join(fixture.seedRoot, "bin", "codex")
+	seedCodeModeHost := filepath.Join(fixture.seedRoot, "bin", "codex-code-mode-host")
 	if err := os.Remove(seedEntrypoint); err != nil {
 		t.Fatalf("remove seed entrypoint: %v", err)
 	}
+	if err := os.Remove(seedCodeModeHost); err != nil {
+		t.Fatalf("remove seed code-mode host: %v", err)
+	}
 	if err := os.Symlink(realEntrypoint, seedEntrypoint); err != nil {
+		t.Skipf("symlink fixture is not available on this platform: %v", err)
+	}
+	if err := os.Symlink(realCodeModeHost, seedCodeModeHost); err != nil {
 		t.Skipf("symlink fixture is not available on this platform: %v", err)
 	}
 
@@ -122,6 +132,7 @@ func TestStageCodexRuntimeScriptMaterializesSymlinkEntrypoint(t *testing.T) {
 
 	stagedEntrypoint := filepath.Join(fixture.out, "bin", "codex")
 	assertNotSymlink(t, stagedEntrypoint)
+	assertNotSymlink(t, filepath.Join(fixture.out, "bin", "codex-code-mode-host"))
 	verifyCmd := exec.Command(
 		"bash",
 		fixture.script,
@@ -370,6 +381,9 @@ func TestStageCodexRuntimeScriptsUseVerifiedHelpersOnly(t *testing.T) {
 			if !strings.Contains(content, required) {
 				t.Fatalf("%s missing %q", path, required)
 			}
+		}
+		if !strings.Contains(content, "codex-code-mode-host") {
+			t.Fatalf("%s must stage and verify codex-code-mode-host", path)
 		}
 		for _, forbidden := range []string{
 			".github/workflows/zstd",
