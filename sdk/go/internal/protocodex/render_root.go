@@ -185,6 +185,9 @@ func resourceImplementationStatus(mapping ResourceAPIMapping) string {
 	if stage5BImplementedResourceMethods[mapping.Method] {
 		return "implemented-stage5b"
 	}
+	if stage5CImplementedResourceMethods[mapping.Method] {
+		return "implemented-stage5c"
+	}
 	return "planned-stage5"
 }
 
@@ -243,6 +246,31 @@ var stage5BImplementedResourceMethods = map[string]bool{
 	"thread/search":                        true,
 	"thread/turns/list":                    true,
 	"thread/items/list":                    true,
+}
+
+var stage5CImplementedResourceMethods = map[string]bool{
+	"command/exec":            true,
+	"command/exec/write":      true,
+	"command/exec/terminate":  true,
+	"command/exec/resize":     true,
+	"config/mcpServer/reload": true,
+	"config/read":             true,
+	"config/value/write":      true,
+	"config/batchWrite":       true,
+	"configRequirements/read": true,
+	"fs/readFile":             true,
+	"fs/writeFile":            true,
+	"fs/createDirectory":      true,
+	"fs/getMetadata":          true,
+	"fs/readDirectory":        true,
+	"fs/remove":               true,
+	"fs/copy":                 true,
+	"fs/watch":                true,
+	"fs/unwatch":              true,
+	"process/spawn":           true,
+	"process/writeStdin":      true,
+	"process/kill":            true,
+	"process/resizePty":       true,
 }
 
 func renderInventory(manifest *Manifest) string {
