@@ -24,6 +24,7 @@ jobs:
 
           grep -F '.github/scripts/build-codex-package-archive.sh' .github/workflows/rust-release.yml
           grep -F '.github/scripts/build-codex-package-archive.sh' .github/workflows/rust-release-windows.yml
+          grep -F '.github/scripts/write-codex-package-checksums.sh' .github/workflows/rust-release.yml
           grep -F 'package-macos:' .github/workflows/rust-release.yml
           grep -F 'finalize-macos:' .github/workflows/rust-release.yml
           grep -F 'Build Codex package archive' .github/workflows/rust-release.yml
@@ -56,6 +57,7 @@ jobs:
           - Build Codex package archives
           reusedScripts:
           - .github/scripts/build-codex-package-archive.sh
+          - .github/scripts/write-codex-package-checksums.sh
           - scripts/codex_package/test_package_sources.py::test_dotslash_release_archive_config_parity
           releaseWorkflowReferences:
           - package-macos
@@ -124,6 +126,7 @@ jobs:
               ],
               "reusedScripts": [
                   ".github/scripts/build-codex-package-archive.sh",
+                  ".github/scripts/write-codex-package-checksums.sh",
                   "scripts/codex_package/test_package_sources.py::test_dotslash_release_archive_config_parity",
               ],
               "workflowReuseProofPath": "workflow-reuse-proof.txt",
