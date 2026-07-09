@@ -243,6 +243,7 @@ func TestNotificationOptOutValidation(t *testing.T) {
 		"account/device-code-login disabled in raw-only mode",
 		"command/exec disabled in raw-only mode",
 		"fs/watch disabled in raw-only mode",
+		"fuzzyFileSearch/sessionStart disabled in raw-only mode",
 		"mcpServer/oauth/login disabled in raw-only mode",
 		"process/spawn disabled in raw-only mode",
 		"realtime/start disabled in raw-only mode",
@@ -286,7 +287,7 @@ func TestRealtimeNotificationOptOutDisablesHighLevelWorkflow(t *testing.T) {
 	}
 }
 
-func TestStage5CNotificationOptOutsDisableHighLevelWorkflows(t *testing.T) {
+func TestNotificationOptOutsDisableHighLevelWorkflows(t *testing.T) {
 	tests := []struct {
 		name     string
 		optOut   string
@@ -306,6 +307,16 @@ func TestStage5CNotificationOptOutsDisableHighLevelWorkflows(t *testing.T) {
 			name:     "process",
 			optOut:   "process/exited",
 			workflow: "process/spawn requires process/exited",
+		},
+		{
+			name:     "fuzzy search updates",
+			optOut:   "fuzzyFileSearch/sessionUpdated",
+			workflow: "fuzzyFileSearch/sessionStart requires fuzzyFileSearch/sessionUpdated",
+		},
+		{
+			name:     "fuzzy search completed",
+			optOut:   "fuzzyFileSearch/sessionCompleted",
+			workflow: "fuzzyFileSearch/sessionStart requires fuzzyFileSearch/sessionCompleted",
 		},
 	}
 
@@ -352,20 +363,6 @@ func TestNotificationOptOutsRejectUnknownMethodBeforeInitialize(t *testing.T) {
 	}
 	if len(transport.sentFrames()) != 0 {
 		t.Fatal("initialize was sent after unknown notification opt-out")
-	}
-}
-
-func TestDefaultModeAllowsUnimplementedWorkflowNotificationOptOut(t *testing.T) {
-	client, err := NewClient(context.Background(), ClientConfig{
-		Transport:           newScriptedInitializedTransport(t, nil),
-		NotificationOptOuts: NotificationOptOuts{Methods: []string{"fuzzyFileSearch/sessionUpdated"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-	if len(client.Metadata().DisabledHighLevelWorkflows) != 0 {
-		t.Fatalf("disabled workflows = %#v, want none", client.Metadata().DisabledHighLevelWorkflows)
 	}
 }
 

@@ -5,6 +5,8 @@ type Metadata struct {
 	RuntimePath                 string
 	RuntimeVersion              string
 	UserAgent                   string
+	PlatformFamily              string
+	PlatformOS                  string
 	ProtocolMode                ProtocolMode
 	Compatibility               CompatibilityPolicy
 	CompatibilityOverrideActive bool
