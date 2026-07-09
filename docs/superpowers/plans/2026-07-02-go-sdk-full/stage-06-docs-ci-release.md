@@ -761,11 +761,18 @@ cd /home/dirard/dev/ai-apps/codex/.worktrees/codex-go-sdk-full
 bazel build //codex-rs/cli:codex_go_sdk_runtime_layout
 ```
 
-Native Windows PowerShell local verification must not run a bare Bazel command before bootstrap. Use the Stage 6 Windows-local script contract first:
+Native Windows PowerShell local verification must not run a bare Bazel command before bootstrap. Until the native PowerShell packageArchive lane is implemented, record that `-ReleasePackageArchive` fails closed, then use the supported non-archive Stage 6 Windows-local script contract for bootstrap/local checks. Do not treat the blocked packageArchive call as Windows release-readiness evidence; Windows packageArchive readiness must come from downloaded target-bound SDK CI and shipping artifacts:
 
 ```powershell
 Set-Location C:\path\to\codex-go-sdk-full
-& .github\scripts\stage-codex-runtime.ps1 -Out "$env:TEMP\codex-go-sdk-runtime-stage6" -CargoProfile release -ReleasePackageArchive -WindowsReleaseShapedMsvc -ExportEnvironment | Invoke-Expression
+$expectedBazelTarget = if ($env:CODEX_GO_SDK_WINDOWS_TARGET) { $env:CODEX_GO_SDK_WINDOWS_TARGET } else { "x86_64-pc-windows-msvc" }
+try {
+  & .github\scripts\stage-codex-runtime.ps1 -Out "$env:TEMP\codex-go-sdk-runtime-stage6-blocked" -BazelTarget $expectedBazelTarget -CargoProfile release -ReleasePackageArchive -WindowsReleaseShapedMsvc -ExportEnvironment | Invoke-Expression
+  throw "native Windows packageArchive verifier unexpectedly succeeded; update Stage 6/7 to validate implemented packageArchive evidence before using it"
+} catch {
+  if ($_.Exception.Message -notmatch "packageArchive staging is blocked until the native Windows app-server package archive lane is implemented") { throw }
+}
+& .github\scripts\stage-codex-runtime.ps1 -Out "$env:TEMP\codex-go-sdk-runtime-stage6" -BazelTarget $expectedBazelTarget -ExportEnvironment | Invoke-Expression
 bazel build //codex-rs/cli:codex_go_sdk_runtime_layout
 ```
 
