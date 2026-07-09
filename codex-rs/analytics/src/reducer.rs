@@ -402,7 +402,7 @@ impl TurnToolCounts {
             ThreadItem::CollabAgentToolCall { .. } | ThreadItem::SubAgentActivity { .. } => {
                 self.subagent_tool_call += 1;
             }
-            ThreadItem::WebSearch { .. } => self.web_search += 1,
+            ThreadItem::WebSearch(_) => self.web_search += 1,
             ThreadItem::ImageGeneration(_) => self.image_generation += 1,
             ThreadItem::UserMessage { .. }
             | ThreadItem::HookPrompt { .. }
@@ -837,12 +837,17 @@ impl AnalyticsReducer {
         input: PluginInstallFailedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let PluginInstallFailedInput { plugin, error_type } = input;
+        let PluginInstallFailedInput {
+            plugin,
+            source,
+            error_type,
+        } = input;
         out.push(TrackEventRequest::PluginInstallFailed(
             CodexPluginInstallFailedEventRequest {
                 event_type: "codex_plugin_install_failed",
                 event_params: CodexPluginInstallFailedMetadata {
                     plugin: codex_plugin_metadata(plugin),
+                    source,
                     error_type,
                 },
             },
@@ -1732,8 +1737,8 @@ fn tracked_tool_item_id(item: &ThreadItem) -> Option<&str> {
         | ThreadItem::FileChange { id, .. }
         | ThreadItem::McpToolCall { id, .. }
         | ThreadItem::DynamicToolCall { id, .. }
-        | ThreadItem::CollabAgentToolCall { id, .. }
-        | ThreadItem::WebSearch { id, .. } => Some(id),
+        | ThreadItem::CollabAgentToolCall { id, .. } => Some(id),
+        ThreadItem::WebSearch(item) => Some(&item.id),
         ThreadItem::ImageGeneration(item) => Some(&item.id),
         ThreadItem::UserMessage { .. }
         | ThreadItem::HookPrompt { .. }
@@ -2027,11 +2032,11 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                 },
             ))
         }
-        ThreadItem::WebSearch { id, query, action } => {
+        ThreadItem::WebSearch(item) => {
             let base = tool_item_base(
                 thread_id,
                 turn_id,
-                id.clone(),
+                item.id.clone(),
                 "web_search".to_string(),
                 ToolItemOutcome {
                     terminal_status: ToolItemTerminalStatus::Completed,
@@ -2051,9 +2056,9 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                 event_type: "codex_web_search_event",
                 event_params: CodexWebSearchEventParams {
                     base,
-                    web_search_action: action.as_ref().map(web_search_action_kind),
-                    query_present: !query.trim().is_empty(),
-                    query_count: web_search_query_count(query, action.as_ref()),
+                    web_search_action: item.action.as_ref().map(web_search_action_kind),
+                    query_present: !item.query.trim().is_empty(),
+                    query_count: web_search_query_count(&item.query, item.action.as_ref()),
                 },
             }))
         }
