@@ -20,17 +20,23 @@ PLATFORM_TARGETS = {
     "windows_arm64": "aarch64-pc-windows-msvc",
 }
 
-def multiplatform_binaries(name, platforms = PLATFORMS):
+def multiplatform_binaries(
+        name,
+        target = None,
+        filegroup_name = "release_binaries",
+        platforms = PLATFORMS):
+    binary_target = target or name
     for platform in platforms:
         platform_data(
             name = name + "_" + platform,
             platform = "@llvm//platforms:" + platform,
-            target = name,
+            target = binary_target,
             tags = ["manual"],
         )
 
-    native.filegroup(
-        name = "release_binaries",
-        srcs = [name + "_" + platform for platform in platforms],
-        tags = ["manual"],
-    )
+    if filegroup_name:
+        native.filegroup(
+            name = filegroup_name,
+            srcs = [name + "_" + platform for platform in platforms],
+            tags = ["manual"],
+        )
