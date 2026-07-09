@@ -59,6 +59,15 @@ var compiledResourceCallsites = map[string]compiledResourceCallsite{
 			_, _ = rateLimits, err
 		},
 	},
+	"account/rateLimitResetCredit/consume": {
+		wrapperName: "Accounts.ConsumeRateLimitResetCredit",
+		convention:  "thin",
+		callsite:    `client.Accounts.ConsumeRateLimitResetCredit(ctx, protocol.ConsumeAccountRateLimitResetCreditParams{IDempotencyKey: "reset-credit-idempotency-key"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Accounts.ConsumeRateLimitResetCredit(ctx, protocol.ConsumeAccountRateLimitResetCreditParams{IDempotencyKey: "reset-credit-idempotency-key"})
+			_, _ = response, err
+		},
+	},
 	"account/usage/read": {
 		wrapperName: "Accounts.Usage",
 		convention:  "thin",
@@ -75,6 +84,24 @@ var compiledResourceCallsites = map[string]compiledResourceCallsite{
 		compile: func(ctx context.Context, client *Client) {
 			account, err := client.Accounts.Read(ctx, false)
 			_, _ = account, err
+		},
+	},
+	"account/workspaceMessages/read": {
+		wrapperName: "Accounts.ReadWorkspaceMessages",
+		convention:  "thin",
+		callsite:    `client.Accounts.ReadWorkspaceMessages(ctx)`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Accounts.ReadWorkspaceMessages(ctx)
+			_, _ = response, err
+		},
+	},
+	"account/sendAddCreditsNudgeEmail": {
+		wrapperName: "Accounts.SendAddCreditsNudgeEmail",
+		convention:  "thin",
+		callsite:    `client.Accounts.SendAddCreditsNudgeEmail(ctx, protocol.SendAddCreditsNudgeEmailParams{CreditType: protocol.AddCreditsNudgeCreditTypeCredits})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Accounts.SendAddCreditsNudgeEmail(ctx, protocol.SendAddCreditsNudgeEmailParams{CreditType: protocol.AddCreditsNudgeCreditTypeCredits})
+			_, _ = response, err
 		},
 	},
 	"mcpServer/oauth/login": {
@@ -254,13 +281,34 @@ var compiledResourceCallsites = map[string]compiledResourceCallsite{
 			_, _ = response, err
 		},
 	},
+	"model/list": {
+		wrapperName: "Models.List",
+		convention:  "thin",
+		callsite:    `client.Models.List(ctx, protocol.ModelListParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Models.List(ctx, protocol.ModelListParams{})
+			_, _ = response, err
+		},
+	},
+	"modelProvider/capabilities/read": {
+		wrapperName: "Models.ReadProviderCapabilities",
+		convention:  "thin",
+		callsite:    `client.Models.ReadProviderCapabilities(ctx, protocol.ModelProviderCapabilitiesReadParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Models.ReadProviderCapabilities(ctx, protocol.ModelProviderCapabilitiesReadParams{})
+			_, _ = response, err
+		},
+	},
 	"review/start": {
 		wrapperName: "Reviews.Start / ReviewHandle",
 		convention:  "handle-start",
-		callsite:    `review, err := client.Reviews.Start(ctx, codex.ReviewStartOptions{ThreadID: thread.ID()}); result, err := review.Wait(ctx)`,
+		callsite:    `review, err := client.Reviews.Start(ctx, codex.ReviewStartOptions{ThreadID: thread.ID(), Target: codex.UncommittedChangesReviewTarget()}); result, err := review.Wait(ctx)`,
 		compile: func(ctx context.Context, client *Client) {
 			var thread *Thread
-			review, err := client.Reviews.Start(ctx, ReviewStartOptions{ThreadID: thread.ID()})
+			review, err := client.Reviews.Start(ctx, ReviewStartOptions{
+				ThreadID: thread.ID(),
+				Target:   UncommittedChangesReviewTarget(),
+			})
 			_ = err
 			result, err := review.Wait(ctx)
 			_, _ = result, err
@@ -487,6 +535,125 @@ var compiledResourceCallsites = map[string]compiledResourceCallsite{
 		compile: func(ctx context.Context, client *Client) {
 			proc, start, err := client.Processes.Spawn(ctx, ProcessSpawnOptions{Command: []string{"echo", "ok"}, CWD: "/repo"})
 			_, _, _ = proc, start, err
+		},
+	},
+	"collaborationMode/list": {
+		wrapperName: "CollaborationModes.List",
+		convention:  "thin",
+		callsite:    `client.CollaborationModes.List(ctx, protocol.CollaborationModeListParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.CollaborationModes.List(ctx, protocol.CollaborationModeListParams{})
+			_, _ = response, err
+		},
+	},
+	"remoteControl/enable": {
+		wrapperName: "RemoteControl.Enable",
+		convention:  "thin",
+		callsite:    `client.RemoteControl.Enable(ctx, protocol.NullableRemoteControlEnableParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.RemoteControl.Enable(ctx, protocol.NullableRemoteControlEnableParams{})
+			_, _ = response, err
+		},
+	},
+	"remoteControl/disable": {
+		wrapperName: "RemoteControl.Disable",
+		convention:  "thin",
+		callsite:    `client.RemoteControl.Disable(ctx, protocol.NullableRemoteControlDisableParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.RemoteControl.Disable(ctx, protocol.NullableRemoteControlDisableParams{})
+			_, _ = response, err
+		},
+	},
+	"remoteControl/status/read": {
+		wrapperName: "RemoteControl.ReadStatus",
+		convention:  "thin",
+		callsite:    `client.RemoteControl.ReadStatus(ctx)`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.RemoteControl.ReadStatus(ctx)
+			_, _ = response, err
+		},
+	},
+	"remoteControl/pairing/start": {
+		wrapperName: "RemoteControl.StartPairing / RemoteControlPairingHandle",
+		convention:  "handle-start",
+		callsite:    `pairing, start, err := client.RemoteControl.StartPairing(ctx, codex.RemoteControlPairingOptions{ManualCode: true})`,
+		compile: func(ctx context.Context, client *Client) {
+			pairing, start, err := client.RemoteControl.StartPairing(ctx, RemoteControlPairingOptions{ManualCode: true})
+			_, _, _ = pairing, start, err
+		},
+	},
+	"remoteControl/pairing/status": {
+		wrapperName: "RemoteControlPairingHandle.Status / RemoteControl.PairingStatus",
+		convention:  "handle-followup",
+		callsite:    `status, err := pairing.Status(ctx); status, err = client.RemoteControl.PairingStatus(ctx, pairing.ID())`,
+		compile: func(ctx context.Context, client *Client) {
+			var pairing *RemoteControlPairingHandle
+			status, err := pairing.Status(ctx)
+			status, err = client.RemoteControl.PairingStatus(ctx, pairing.ID())
+			_, _ = status, err
+		},
+	},
+	"remoteControl/client/list": {
+		wrapperName: "RemoteControl.ListClients",
+		convention:  "thin",
+		callsite:    `client.RemoteControl.ListClients(ctx, protocol.RemoteControlClientsListParams{EnvironmentID: "env-1"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.RemoteControl.ListClients(ctx, protocol.RemoteControlClientsListParams{EnvironmentID: "env-1"})
+			_, _ = response, err
+		},
+	},
+	"remoteControl/client/revoke": {
+		wrapperName: "RemoteControl.RevokeClient",
+		convention:  "thin",
+		callsite:    `client.RemoteControl.RevokeClient(ctx, protocol.RemoteControlClientsRevokeParams{ClientID: "client-1", EnvironmentID: "env-1"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.RemoteControl.RevokeClient(ctx, protocol.RemoteControlClientsRevokeParams{ClientID: "client-1", EnvironmentID: "env-1"})
+			_, _ = response, err
+		},
+	},
+	"environment/add": {
+		wrapperName: "Environments.Add",
+		convention:  "thin",
+		callsite:    `client.Environments.Add(ctx, protocol.EnvironmentAddParams{EnvironmentID: "env-1", ExecServerURL: "http://127.0.0.1:9876"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Environments.Add(ctx, protocol.EnvironmentAddParams{EnvironmentID: "env-1", ExecServerURL: "http://127.0.0.1:9876"})
+			_, _ = response, err
+		},
+	},
+	"environment/info": {
+		wrapperName: "Environments.Info",
+		convention:  "thin",
+		callsite:    `client.Environments.Info(ctx, protocol.EnvironmentInfoParams{EnvironmentID: "env-1"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Environments.Info(ctx, protocol.EnvironmentInfoParams{EnvironmentID: "env-1"})
+			_, _ = response, err
+		},
+	},
+	"externalAgentConfig/detect": {
+		wrapperName: "ExternalAgents.DetectConfig",
+		convention:  "thin",
+		callsite:    `client.ExternalAgents.DetectConfig(ctx, protocol.ExternalAgentConfigDetectParams{Cwds: protocol.Some([]string{"/repo"}), IncludeHome: protocol.SomeNonNull(true)})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.ExternalAgents.DetectConfig(ctx, protocol.ExternalAgentConfigDetectParams{Cwds: protocol.Some([]string{"/repo"}), IncludeHome: protocol.SomeNonNull(true)})
+			_, _ = response, err
+		},
+	},
+	"externalAgentConfig/import": {
+		wrapperName: "ExternalAgents.ImportConfig",
+		convention:  "thin",
+		callsite:    `client.ExternalAgents.ImportConfig(ctx, protocol.ExternalAgentConfigImportParams{MigrationItems: []protocol.ExternalAgentConfigMigrationItem{}, Source: protocol.Some("codex")})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.ExternalAgents.ImportConfig(ctx, protocol.ExternalAgentConfigImportParams{MigrationItems: []protocol.ExternalAgentConfigMigrationItem{}, Source: protocol.Some("codex")})
+			_, _ = response, err
+		},
+	},
+	"externalAgentConfig/import/readHistories": {
+		wrapperName: "ExternalAgents.ReadImportHistories",
+		convention:  "thin",
+		callsite:    `client.ExternalAgents.ReadImportHistories(ctx)`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.ExternalAgents.ReadImportHistories(ctx)
+			_, _ = response, err
 		},
 	},
 	"process/writeStdin": {

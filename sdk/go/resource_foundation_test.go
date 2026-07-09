@@ -59,8 +59,6 @@ var expectedResourceSignalsByOwner = map[string]expectedResourceSignals{
 			"error",
 			"guardianWarning",
 			"item/agentMessage/delta",
-			"item/autoApprovalReview/completed",
-			"item/autoApprovalReview/started",
 			"item/commandExecution/outputDelta",
 			"item/commandExecution/terminalInteraction",
 			"item/completed",
