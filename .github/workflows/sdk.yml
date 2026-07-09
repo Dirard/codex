@@ -185,6 +185,7 @@ jobs:
             runs_on:
               group: ${{ github.event.repository.name }}-runners
               labels: ${{ github.event.repository.name }}-linux-x64-xl
+            runner_label: ${{ github.event.repository.name }}-linux-x64-xl
             sandbox: true
             package_archive: true
           - name: linux-arm64-musl
@@ -192,21 +193,25 @@ jobs:
             runs_on:
               group: ${{ github.event.repository.name }}-runners
               labels: ${{ github.event.repository.name }}-linux-arm64
+            runner_label: ${{ github.event.repository.name }}-linux-arm64
             sandbox: true
             package_archive: true
           - name: macos-arm64
             bazel_target: aarch64-apple-darwin
             runs_on: macos-15-xlarge
+            runner_label: macos-15-xlarge
             package_archive: true
           - name: macos-x64
             bazel_target: x86_64-apple-darwin
             runs_on: macos-15-large
+            runner_label: macos-15-large
             package_archive: true
           - name: windows
             bazel_target: x86_64-pc-windows-msvc
             runs_on:
               group: ${{ github.event.repository.name }}-runners
               labels: ${{ github.event.repository.name }}-windows-x64
+            runner_label: ${{ github.event.repository.name }}-windows-x64
             package_archive: true
             release_shape: true
           - name: windows-arm64
@@ -214,6 +219,7 @@ jobs:
             runs_on:
               group: ${{ github.event.repository.name }}-runners
               labels: ${{ github.event.repository.name }}-windows-arm64
+            runner_label: ${{ github.event.repository.name }}-windows-arm64
             package_archive: true
             release_shape: true
 
@@ -463,11 +469,17 @@ jobs:
               raise SystemExit(f"unexpected package archive target: {archive.get('target')!r}")
           if not str(archive.get("path", "")).endswith((".tar.zst", ".zip", ".dmg")):
               raise SystemExit(f"unexpected package archive path: {archive.get('path')!r}")
+          if metadata.get("bazelTarget") != "${{ matrix.bazel_target }}":
+              raise SystemExit(f"unexpected metadata bazelTarget: {metadata.get('bazelTarget')!r}")
+          if "tar.zst" not in metadata.get("archiveFormats", []):
+              raise SystemExit(f"metadata archiveFormats missing tar.zst: {metadata.get('archiveFormats')!r}")
           helper_files = set((metadata.get("helperManifest") or {}).get("files") or [])
           required_helpers = {"rg"}
           target = "${{ matrix.bazel_target }}"
+          if "windows" not in target:
+              required_helpers.add("zsh")
           if "linux" in target:
-              required_helpers.add("codex-resources/bwrap")
+              required_helpers.add("bwrap")
           if "windows" in target:
               required_helpers.update({"codex-command-runner.exe", "codex-windows-sandbox-setup.exe"})
           missing = sorted(required_helpers - helper_files)
@@ -477,16 +489,86 @@ jobs:
               raise SystemExit("Windows package archive did not record release-shaped MSVC layout")
           PY
           cd sdk/go
-          for test_name in \
-            TestRealAppServerInitializeStrictDigest \
-            TestRealAppServerRejectsDebugHookEnv \
-            TestRealAppServerThreadRunHappyPath \
-            TestRealAppServerCommandExecStreaming \
-            TestRealAppServerProcessLifecycle \
+          smoke_tests=(
+            TestRealAppServerInitializeStrictDigest
+            TestRealAppServerRejectsDebugHookEnv
+            TestRealAppServerThreadRunHappyPath
+            TestRealAppServerCommandExecStreaming
+            TestRealAppServerProcessLifecycle
             TestRealAppServerFilesystemWatch
+          )
+          for test_name in "${smoke_tests[@]}"
           do
             go test ./... -run "^${test_name}$"
           done
+
+          evidence_dir="${RUNNER_TEMP}/go-sdk-ci-release-evidence-${{ matrix.bazel_target }}"
+          mkdir -p "$evidence_dir"
+          cp "${CODEX_RUNTIME_METADATA_PATH:?}" "$evidence_dir/staging-metadata.json"
+          printf '%s\n' "${smoke_tests[@]}" > "$evidence_dir/package-archive-smoke-tests.txt"
+          uname -m > "$evidence_dir/uname-machine.txt" 2>/dev/null || printf 'unknown\n' > "$evidence_dir/uname-machine.txt"
+          export GO_SDK_EVIDENCE_DIR="$evidence_dir"
+          export GO_SDK_MATRIX_NAME="${{ matrix.name }}"
+          export GO_SDK_RELEASE_SHAPE="${{ matrix.release_shape || false }}"
+          export GO_SDK_RUNNER_LABEL="${{ matrix.runner_label }}"
+          export GO_SDK_TARGET="${{ matrix.bazel_target }}"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          evidence_dir = Path(os.environ["GO_SDK_EVIDENCE_DIR"])
+          target = os.environ["GO_SDK_TARGET"]
+          runner_label = os.environ["GO_SDK_RUNNER_LABEL"]
+          metadata_path = evidence_dir / "staging-metadata.json"
+          metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+          smoke_tests = (evidence_dir / "package-archive-smoke-tests.txt").read_text(encoding="utf-8").splitlines()
+          architecture_proof_path = evidence_dir / "architecture-proof.json"
+          architecture_proof = {
+              "command": "uname -m",
+              "runnerLabel": runner_label,
+              "unameMachine": (evidence_dir / "uname-machine.txt").read_text(encoding="utf-8").strip(),
+          }
+          architecture_proof_path.write_text(json.dumps(architecture_proof, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+          package_archive = metadata.get("packageArchive") or {}
+          evidence = {
+              "architectureProof": architecture_proof,
+              "architectureProofPath": architecture_proof_path.name,
+              "bazelTarget": target,
+              "boundedLogReferences": ["Test Go SDK release archive runtime"],
+              "cargoProfile": metadata.get("cargoProfile"),
+              "exactPackageArchiveSmokeTests": smoke_tests,
+              "jobConclusion": "success",
+              "jobName": f"Go SDK - {os.environ['GO_SDK_MATRIX_NAME']}",
+              "packageArchiveVerifier": {
+                  "metadataPath": metadata_path.name,
+                  "status": "passed",
+              },
+              "runnerLabel": runner_label,
+              "runtimeSource": metadata.get("runtimeSource"),
+              "sanitizedStagingMetadata": metadata,
+          }
+          if "windows" in target:
+              windows_host_proof = {
+                  "target": target,
+                  "windowsMsvcHostPlatform": bool(package_archive.get("windowsMsvcHostPlatform")),
+                  "windowsReleaseShapedMsvc": bool(package_archive.get("windowsReleaseShapedMsvc")),
+              }
+              windows_host_proof_path = evidence_dir / "windows-host-proof.json"
+              windows_host_proof_path.write_text(json.dumps(windows_host_proof, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+              evidence["windowsHostProofPath"] = windows_host_proof_path.name
+              evidence.update(windows_host_proof)
+          (evidence_dir / "target-evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload Go SDK CI target release evidence
+        if: ${{ matrix.package_archive }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: go-sdk-ci-release-evidence-${{ matrix.bazel_target }}
+          path: ${{ runner.temp }}/go-sdk-ci-release-evidence-${{ matrix.bazel_target }}/*
+          if-no-files-found: error
 
       - name: Check Rust protocol schema drift
         shell: bash
@@ -531,9 +613,69 @@ jobs:
         if: always() && !cancelled()
         uses: ./.github/actions/check-clean-worktree
 
+  go-sdk-ci-release-evidence:
+    needs:
+      - go-sdk
+    runs-on:
+      group: ${{ github.event.repository.name }}-runners
+      labels: ${{ github.event.repository.name }}-linux-x64
+    permissions:
+      contents: read
+    steps:
+      - name: Download Go SDK target evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: go-sdk-ci-release-evidence-*
+          path: downloaded-go-sdk-ci-release-evidence
+
+      - name: Aggregate Go SDK CI release evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          expected_targets = {
+              "x86_64-unknown-linux-musl",
+              "aarch64-unknown-linux-musl",
+              "aarch64-apple-darwin",
+              "x86_64-apple-darwin",
+              "x86_64-pc-windows-msvc",
+              "aarch64-pc-windows-msvc",
+          }
+          targets = {}
+          for evidence_path in Path("downloaded-go-sdk-ci-release-evidence").glob("**/target-evidence.json"):
+              evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+              target = evidence.get("bazelTarget")
+              if target in targets:
+                  raise SystemExit(f"duplicate Go SDK CI evidence for {target}")
+              if evidence.get("jobConclusion") != "success":
+                  raise SystemExit(f"Go SDK CI evidence for {target} did not record success")
+              if "skipped" in evidence or "notReleaseReady" in evidence:
+                  raise SystemExit(f"Go SDK CI evidence for {target} must not contain skipped/notReleaseReady markers")
+              targets[target] = evidence
+          if set(targets) != expected_targets:
+              raise SystemExit(f"Go SDK CI evidence targets {sorted(targets)} did not match {sorted(expected_targets)}")
+          output_dir = Path("go-sdk-ci-release-evidence")
+          output_dir.mkdir(exist_ok=True)
+          (output_dir / "go-sdk-ci-release-evidence.json").write_text(
+              json.dumps({"targets": targets}, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload Go SDK CI release evidence
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: go-sdk-ci-release-evidence
+          path: go-sdk-ci-release-evidence/go-sdk-ci-release-evidence.json
+          if-no-files-found: error
+
   go-sdk-release-readiness:
     needs:
       - go-sdk
+      - go-sdk-ci-release-evidence
     uses: ./.github/workflows/go-sdk-release-readiness.yml
     with:
       checkout_ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
