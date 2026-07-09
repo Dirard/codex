@@ -12,8 +12,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  shipping-release-readiness:
-    name: Shipping release-readiness evidence
+  shipping-source-preflight:
+    name: Shipping release source preflight
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -42,6 +42,29 @@ jobs:
           grep -F 'codex-windows-sandbox-setup.exe' .github/workflows/rust-release-windows.yml
           grep -F 'def test_dotslash_release_archive_config_parity' scripts/codex_package/test_package_sources.py
 
+  shipping-package-archives:
+    name: Shipping package archive - ${{ matrix.target }}
+    needs: shipping-source-preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+          - x86_64-pc-windows-msvc
+          - aarch64-pc-windows-msvc
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
       - name: Build non-publishing shipping artifact fixtures
         shell: bash
         run: |
@@ -49,8 +72,116 @@ jobs:
           command -v zstd >/dev/null
           python3 .github/scripts/go_sdk_shipping_release_readiness.py \
             build-fixture-artifacts \
+            --target "${{ matrix.target }}" \
             --artifacts-dir shipping-release-readiness-artifacts \
             --work-dir "${RUNNER_TEMP}/go-sdk-shipping-release-readiness"
+
+      - name: Upload target shipping artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: shipping-target-${{ matrix.target }}
+          path: shipping-release-readiness-artifacts/
+          if-no-files-found: error
+
+  package-macos:
+    name: Package macOS artifacts - ${{ matrix.target }}
+    needs: shipping-package-archives
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+
+    steps:
+      - name: Download target shipping artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: shipping-target-${{ matrix.target }}
+          path: shipping-release-readiness-artifacts
+
+      - name: Verify package-macos fixture artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "shipping-release-readiness-artifacts/codex-${{ matrix.target }}.dmg"
+          test -f "shipping-release-readiness-artifacts/codex-${{ matrix.target }}"
+          test -f "shipping-release-readiness-artifacts/codex-app-server-${{ matrix.target }}"
+
+  finalize-macos:
+    name: Verify macOS artifacts - ${{ matrix.target }}
+    needs: package-macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+
+    steps:
+      - name: Download target shipping artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: shipping-target-${{ matrix.target }}
+          path: shipping-release-readiness-artifacts
+
+      - name: Verify finalize-macos fixture artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "shipping-release-readiness-artifacts/codex-${{ matrix.target }}.dmg"
+          test -s "shipping-release-readiness-artifacts/codex-${{ matrix.target }}"
+          test -s "shipping-release-readiness-artifacts/codex-app-server-${{ matrix.target }}"
+
+  shipping-dotslash-parity:
+    name: Shipping DotSlash parity
+    needs: shipping-package-archives
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Verify DotSlash parity source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'config: .github/dotslash-config.json' .github/workflows/rust-release.yml
+          grep -F 'def test_dotslash_release_archive_config_parity' scripts/codex_package/test_package_sources.py
+
+  shipping-release-readiness:
+    name: Shipping release-readiness evidence
+    needs:
+      - shipping-package-archives
+      - package-macos
+      - finalize-macos
+      - shipping-dotslash-parity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download target shipping artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: shipping-target-*
+          path: shipping-release-readiness-artifacts
+          merge-multiple: true
 
       - name: Collect artifact-level shipping readiness metadata
         shell: bash
