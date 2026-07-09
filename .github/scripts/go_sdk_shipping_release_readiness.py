@@ -337,9 +337,18 @@ def write_windows_zip_fixture(artifacts_dir: Path, target: str) -> None:
             zip_file.writestr(member, f"fixture member for {member}\n")
 
 
-def build_fixture_artifacts(repo_root: Path, artifacts_dir: Path, work_dir: Path) -> None:
+def build_fixture_artifacts(
+    repo_root: Path,
+    artifacts_dir: Path,
+    work_dir: Path,
+    targets: list[str] | None = None,
+) -> None:
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-    for target in EXPECTED_TARGETS:
+    selected_targets = targets or EXPECTED_TARGETS
+    unknown_targets = sorted(set(selected_targets) - set(EXPECTED_TARGETS))
+    if unknown_targets:
+        raise ValueError(f"unknown fixture target(s): {unknown_targets}")
+    for target in selected_targets:
         build_fixture_package_archive(
             repo_root=repo_root,
             artifacts_dir=artifacts_dir,
@@ -518,6 +527,12 @@ def main() -> None:
         type=Path,
         default=Path(__file__).resolve().parents[2],
     )
+    fixtures.add_argument(
+        "--target",
+        action="append",
+        choices=EXPECTED_TARGETS,
+        help="Build only this target; repeat to build multiple targets. Defaults to all targets.",
+    )
     fixtures.add_argument("--work-dir", type=Path, required=True)
     collect = subparsers.add_parser("collect-artifacts")
     collect.add_argument("--artifacts-dir", type=Path, required=True)
@@ -536,6 +551,7 @@ def main() -> None:
             args.repo_root.resolve(),
             args.artifacts_dir.resolve(),
             args.work_dir.resolve(),
+            targets=args.target,
         )
     elif args.command == "collect-artifacts":
         fixture_substitutions = (
