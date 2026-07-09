@@ -42,6 +42,7 @@ esac
 	for _, required := range []string{
 		"codex-package.json",
 		"bin/codex",
+		"bin/codex-code-mode-host",
 		"codex-path/rg",
 		"codex-resources/zsh/bin/zsh",
 		"codex-resources/bwrap",
@@ -449,6 +450,7 @@ func newLinuxStagingFixture(t *testing.T, outName string) linuxStagingFixture {
 func writeLinuxSeed(t *testing.T, seedRoot string, target string) {
 	t.Helper()
 	writeExecutable(t, filepath.Join(seedRoot, "bin", "codex"), "#!/usr/bin/env sh\nexit 0\n")
+	writeExecutable(t, filepath.Join(seedRoot, "bin", "codex-code-mode-host"), "#!/usr/bin/env sh\nexit 0\n")
 	writeText(t, filepath.Join(seedRoot, "codex-package.json"), `{
   "entrypoint": "bin/codex",
   "layoutVersion": 1,

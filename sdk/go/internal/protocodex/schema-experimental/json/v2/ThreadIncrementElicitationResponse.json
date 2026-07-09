@@ -4,8 +4,7 @@
   "properties": {
     "count": {
       "description": "Current out-of-band elicitation count after the increment.",
-      "format": "uint64",
-      "minimum": 0.0,
+      "format": "int64",
       "type": "integer"
     },
     "paused": {
