@@ -497,6 +497,12 @@ def collect_artifacts(
     *,
     fixture_substitutions: list[dict[str, str]] | None = None,
 ) -> None:
+    if not fixture_substitutions:
+        raise SystemExit(
+            "collect-artifacts releaseArtifactEvidence mode requires explicit "
+            "downloaded real release workflow evidence; the current wrapper only "
+            "supports --fixture-substitutions non-publishing"
+        )
     fixture_mode = bool(fixture_substitutions)
     evidence_kind = (
         "nonPublishingFixtureEvidence" if fixture_mode else "releaseArtifactEvidence"
@@ -572,8 +578,8 @@ def main() -> None:
     collect.add_argument("--out", type=Path, required=True)
     collect.add_argument(
         "--fixture-substitutions",
-        choices=["none", "non-publishing"],
-        default="none",
+        choices=["non-publishing"],
+        required=True,
     )
     args = parser.parse_args()
 
@@ -587,15 +593,10 @@ def main() -> None:
             targets=args.target,
         )
     elif args.command == "collect-artifacts":
-        fixture_substitutions = (
-            fixture_substitution_records()
-            if args.fixture_substitutions == "non-publishing"
-            else []
-        )
         collect_artifacts(
             args.artifacts_dir,
             args.out,
-            fixture_substitutions=fixture_substitutions,
+            fixture_substitutions=fixture_substitution_records(),
         )
 
 
