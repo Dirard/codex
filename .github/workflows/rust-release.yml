@@ -1287,7 +1287,10 @@ jobs:
           manifest="dist/codex-package_SHA256SUMS"
           tmp_manifest="$(mktemp)"
           find dist -type f \
-            \( -name 'codex-package-*.tar.gz' -o -name 'codex-app-server-package-*.tar.gz' \) \
+            \( -name 'codex-package-*.tar.gz' \
+              -o -name 'codex-package-*.tar.zst' \
+              -o -name 'codex-app-server-package-*.tar.gz' \
+              -o -name 'codex-app-server-package-*.tar.zst' \) \
             -print |
             sort |
             while IFS= read -r archive; do
