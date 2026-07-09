@@ -174,6 +174,8 @@ func TestRuntimeLayoutGoSDKWorkflowWiring(t *testing.T) {
 		"--release-package-archive",
 		"--cargo-profile release",
 		"--build-metadata-job go-sdk-release-archive",
+		"--verify-sandbox",
+		`--exec-path "${CODEX_EXEC_PATH:?}"`,
 		"CODEX_RUNTIME_METADATA_PATH",
 		"CODEX_GO_SDK_ZSTD_SOURCE",
 		"--zstd-source",
@@ -248,6 +250,7 @@ func TestRuntimeLayoutGoSDKWorkflowWiring(t *testing.T) {
 		"CODEX_APP_SERVER_AUTH_BASE_URL_FOR_TESTS=",
 		"CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE=",
 		".github/workflows/zstd",
+		"TestSandboxPolicy",
 	} {
 		if strings.Contains(workflow, forbidden) {
 			t.Fatalf("sdk.yml go-sdk job contains forbidden runtime staging source %q", forbidden)
