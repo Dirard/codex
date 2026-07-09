@@ -16,11 +16,13 @@ type scriptedTransport struct {
 	t *testing.T
 
 	recv chan json.RawMessage
+	done chan struct{}
 	sent []json.RawMessage
 	mu   sync.Mutex
 	once sync.Once
 
 	responses map[string]json.RawMessage
+	errors    map[string]*jsonrpc.RPCError
 
 	initializedWasGenerated bool
 }
@@ -33,7 +35,9 @@ func newScriptedInitializedTransport(t *testing.T, initializePayload json.RawMes
 	tr := &scriptedTransport{
 		t:         t,
 		recv:      make(chan json.RawMessage, 64),
+		done:      make(chan struct{}),
 		responses: map[string]json.RawMessage{"initialize": initializePayload},
+		errors:    map[string]*jsonrpc.RPCError{},
 	}
 	return tr
 }
@@ -45,6 +49,8 @@ func (t *scriptedTransport) Receive(ctx context.Context) (json.RawMessage, error
 			return nil, &ClosedError{}
 		}
 		return frame, nil
+	case <-t.done:
+		return nil, &ClosedError{}
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -66,6 +72,21 @@ func (t *scriptedTransport) Send(ctx context.Context, frame json.RawMessage) err
 	if env.ID == nil {
 		return nil
 	}
+	if rpcErr, ok := t.errors[env.Method]; ok {
+		reply := jsonrpc.Envelope{ID: env.ID, Error: rpcErr}
+		data, err := json.Marshal(reply)
+		if err != nil {
+			return err
+		}
+		select {
+		case t.recv <- data:
+			return nil
+		case <-t.done:
+			return &ClosedError{}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	result, ok := t.responses[env.Method]
 	if !ok {
 		result = json.RawMessage(`{}`)
@@ -78,13 +99,15 @@ func (t *scriptedTransport) Send(ctx context.Context, frame json.RawMessage) err
 	select {
 	case t.recv <- data:
 		return nil
+	case <-t.done:
+		return &ClosedError{}
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
 func (t *scriptedTransport) Close() error {
-	t.once.Do(func() { close(t.recv) })
+	t.once.Do(func() { close(t.done) })
 	return nil
 }
 
@@ -122,6 +145,15 @@ func (t *scriptedTransport) lastFrame(tb testing.TB) json.RawMessage {
 func (t *scriptedTransport) deliverServerRequest(method string, params json.RawMessage, trace json.RawMessage) {
 	id := protocol.IntRequestID(99)
 	env := jsonrpc.Envelope{ID: &id, Method: method, Params: params, Trace: trace}
+	data, err := json.Marshal(env)
+	if err != nil {
+		t.t.Fatal(err)
+	}
+	t.recv <- data
+}
+
+func (t *scriptedTransport) deliverNotification(method string, params json.RawMessage, trace json.RawMessage) {
+	env := jsonrpc.Envelope{Method: method, Params: params, Trace: trace}
 	data, err := json.Marshal(env)
 	if err != nil {
 		t.t.Fatal(err)

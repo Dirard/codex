@@ -17,6 +17,8 @@ use codex_skills::system_cache_root_dir;
 use crate::image_url::REMOTE_IMAGE_URL_ERROR;
 use crate::image_url::is_remote_image_url;
 
+const ADDITIONAL_CONTEXT_TOO_LARGE_ERROR_CODE: &str = "additional_context_too_large";
+
 pub(super) fn validate_user_input_image_urls(
     input: &[V2UserInput],
 ) -> Result<(), JSONRPCErrorError> {
@@ -111,6 +113,70 @@ fn map_additional_context(
             )
         })
         .collect()
+}
+
+fn validate_additional_context_limits(
+    additional_context: &Option<HashMap<String, AdditionalContextEntry>>,
+) -> Result<(), JSONRPCErrorError> {
+    let Some(additional_context) = additional_context else {
+        return Ok(());
+    };
+    if additional_context.len() > MAX_ADDITIONAL_CONTEXT_ENTRIES {
+        return Err(additional_context_too_large_error(
+            "additionalContext entries",
+            MAX_ADDITIONAL_CONTEXT_ENTRIES,
+            additional_context.len(),
+        ));
+    }
+
+    let mut total_bytes = 0usize;
+    for (key, entry) in additional_context {
+        let key_bytes = key.len();
+        if key_bytes > MAX_ADDITIONAL_CONTEXT_KEY_BYTES {
+            return Err(additional_context_too_large_error(
+                "additionalContext key bytes",
+                MAX_ADDITIONAL_CONTEXT_KEY_BYTES,
+                key_bytes,
+            ));
+        }
+
+        let value_bytes = entry.value.len();
+        if value_bytes > MAX_ADDITIONAL_CONTEXT_VALUE_BYTES {
+            return Err(additional_context_too_large_error(
+                "additionalContext value bytes",
+                MAX_ADDITIONAL_CONTEXT_VALUE_BYTES,
+                value_bytes,
+            ));
+        }
+
+        total_bytes = total_bytes
+            .saturating_add(key_bytes)
+            .saturating_add(value_bytes);
+        if total_bytes > MAX_ADDITIONAL_CONTEXT_TOTAL_BYTES {
+            return Err(additional_context_too_large_error(
+                "additionalContext total bytes",
+                MAX_ADDITIONAL_CONTEXT_TOTAL_BYTES,
+                total_bytes,
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn additional_context_too_large_error(
+    field: &'static str,
+    limit: usize,
+    actual: usize,
+) -> JSONRPCErrorError {
+    let mut error = invalid_params(format!("{field} exceeds the maximum of {limit}."));
+    error.data = Some(serde_json::json!({
+        "input_error_code": ADDITIONAL_CONTEXT_TOO_LARGE_ERROR_CODE,
+        "field": field,
+        "limit": limit,
+        "actual": actual,
+    }));
+    error
 }
 
 struct ThreadSettingsBuildParams {
@@ -558,6 +624,14 @@ impl TurnRequestProcessor {
                 });
         if actual_chars > MAX_USER_INPUT_TEXT_CHARS {
             let error = Self::input_too_large_error(actual_chars);
+            self.track_error_response(
+                &request_id,
+                &error,
+                Some(AnalyticsJsonRpcError::Input(InputError::TooLarge)),
+            );
+            return Err(error);
+        }
+        if let Err(error) = validate_additional_context_limits(&params.additional_context) {
             self.track_error_response(
                 &request_id,
                 &error,
@@ -1024,6 +1098,14 @@ impl TurnRequestProcessor {
             .record_request_turn_id(request_id, &params.expected_turn_id)
             .await;
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
+            self.track_error_response(
+                request_id,
+                &error,
+                Some(AnalyticsJsonRpcError::Input(InputError::TooLarge)),
+            );
+            return Err(error);
+        }
+        if let Err(error) = validate_additional_context_limits(&params.additional_context) {
             self.track_error_response(
                 request_id,
                 &error,
@@ -1659,6 +1741,10 @@ impl TurnRequestProcessor {
         .await
     }
 }
+
+#[cfg(test)]
+#[path = "turn_processor_additional_context_tests.rs"]
+mod additional_context_tests;
 
 fn xcode_26_4_mcp_elicitations_auto_deny(
     client_name: Option<&str>,
