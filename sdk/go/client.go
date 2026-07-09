@@ -137,6 +137,28 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 	return c.rpc.Call(ctx, method, params, result, trace)
 }
 
+func (c *Client) callAsync(ctx context.Context, method string, params any, result any, metadata protocol.MethodMetadata) (<-chan error, error) {
+	if c == nil || c.rpc == nil {
+		return nil, &ClosedError{}
+	}
+	metadata, err := authoritativeMethodMetadata(method, metadata)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.validateMethodCall(metadata, params); err != nil {
+		return nil, err
+	}
+	var trace json.RawMessage
+	if traceContext, ok := TraceFromContext(ctx); ok {
+		data, err := json.Marshal(traceContext)
+		if err != nil {
+			return nil, err
+		}
+		trace = data
+	}
+	return c.rpc.CallAsync(ctx, method, params, result, trace)
+}
+
 func authoritativeMethodMetadata(method string, supplied protocol.MethodMetadata) (protocol.MethodMetadata, error) {
 	metadata, ok := protocol.MethodMetadataByMethod[method]
 	if !ok {
@@ -167,6 +189,7 @@ func (c *Client) HandleServerNotification(ctx context.Context, method string, pa
 	}
 	c.router.route(ctx, method, params, trace)
 	c.observeRealtimeLifecycle(method, params)
+	c.observeProcessLifecycle(method, params)
 }
 
 func (c *Client) serverHandlers() ServerHandlers {

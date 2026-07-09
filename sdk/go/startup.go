@@ -39,7 +39,10 @@ type rawOnlyHighLevelWorkflow struct {
 var rawOnlyHighLevelWorkflows = []rawOnlyHighLevelWorkflow{
 	{name: "account/browser-login", startMethod: "account/login/start"},
 	{name: "account/device-code-login", startMethod: "account/login/start"},
+	{name: "command/exec", startMethod: "command/exec"},
+	{name: "fs/watch", startMethod: "fs/watch"},
 	{name: "mcpServer/oauth/login", startMethod: "mcpServer/oauth/login"},
+	{name: "process/spawn", startMethod: "process/spawn"},
 	{name: "realtime/start", startMethod: "thread/realtime/start"},
 	{name: "review/start", startMethod: "review/start"},
 	{name: "thread/fork", startMethod: "thread/fork"},
