@@ -176,9 +176,7 @@ fn mcp_tool_output_response_item_uses_general_line_limit_without_override() {
             assert_eq!(output.success, Some(true));
             assert_eq!(
                 output.body.to_text().as_deref(),
-                Some(
-                    "Total output lines: 6\n\nWall time: 1.2500 seconds\nOutput:\n... 2 lines truncated ...\nline3\nline4"
-                )
+                Some("Wall time: 1.2500 seconds\nOutput:\n... 2 lines truncated ...\nline3\nline4")
             );
         }
         other => panic!("expected FunctionCallOutput, got {other:?}"),
@@ -586,7 +584,7 @@ fn exec_command_tool_output_applies_line_limit_once_when_recorded() {
         panic!("expected one function call output");
     };
     assert_eq!(
-        output.text_content().as_deref(),
+        output.text_content(),
         Some("Wall time: 1.2500 seconds\nOutput:\nline1\n... 4 lines truncated ...\nline6\nline7")
     );
 }

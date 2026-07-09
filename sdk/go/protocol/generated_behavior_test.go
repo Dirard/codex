@@ -134,6 +134,54 @@ func TestGeneratedUntaggedObjectUnionPreservesUnknownVariant(t *testing.T) {
 	}
 }
 
+func TestGeneratedMultiAgentModeSupportsBuiltInAndCustomUnion(t *testing.T) {
+	encoded, err := json.Marshal(MultiAgentModeProactive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `"proactive"` {
+		t.Fatalf("encoded proactive mode = %s, want proactive string", encoded)
+	}
+
+	var explicit MultiAgentMode
+	if err := json.Unmarshal([]byte(`"explicitRequestOnly"`), &explicit); err != nil {
+		t.Fatal(err)
+	}
+	if explicit.Mode != "explicitRequestOnly" {
+		t.Fatalf("Mode = %q, want explicitRequestOnly", explicit.Mode)
+	}
+
+	custom := CustomMultiAgentMode("review-only")
+	encoded, err = json.Marshal(custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{"custom":"review-only"}` {
+		t.Fatalf("encoded custom mode = %s, want custom object", encoded)
+	}
+
+	var decodedCustom MultiAgentMode
+	if err := json.Unmarshal([]byte(`{"custom":"review-only"}`), &decodedCustom); err != nil {
+		t.Fatal(err)
+	}
+	customValue, ok := decodedCustom.Custom.Value()
+	if !ok || customValue != "review-only" {
+		t.Fatalf("Custom = %q, %v; want review-only, true", customValue, ok)
+	}
+
+	var future MultiAgentMode
+	if err := json.Unmarshal([]byte(`"futureMode"`), &future); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err = json.Marshal(future)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `"futureMode"` {
+		t.Fatalf("encoded future mode = %s, want raw string", encoded)
+	}
+}
+
 func TestGeneratedObjectStructRejectsTopLevelNull(t *testing.T) {
 	var empty AttestationGenerateParams
 	err := json.Unmarshal([]byte(`null`), &empty)
