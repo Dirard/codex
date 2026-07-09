@@ -25,6 +25,8 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
 
             self.assertEqual(metadata["workflowShape"], "thinWrapper")
             self.assertTrue(metadata["notReleaseReady"])
+            self.assertFalse(metadata["artifactEvidenceShapeComplete"])
+            self.assertEqual(metadata["evidenceKind"], "sourcePreflightOnly")
             self.assertFalse(metadata["workflowLocalDuplicateCommands"])
             self.assertEqual(metadata["targets"], {})
             self.assertEqual(
@@ -142,7 +144,10 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
                     encoding="utf-8"
                 )
             )
-            self.assertFalse(metadata["notReleaseReady"])
+            self.assertTrue(metadata["notReleaseReady"])
+            self.assertTrue(metadata["artifactEvidenceShapeComplete"])
+            self.assertEqual(metadata["evidenceKind"], "nonPublishingFixtureEvidence")
+            self.assertIn("blocked", metadata["releaseReadinessImpact"])
             self.assertEqual(
                 metadata["fixtureSubstitutions"],
                 go_sdk_shipping_release_readiness.fixture_substitution_records(),
@@ -154,7 +159,7 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
                 ),
             )
             self.assertIn(
-                "notReleaseReady=false",
+                "notReleaseReady=true",
                 (out_dir / "logs" / "source-preflight.log").read_text(
                     encoding="utf-8"
                 ),
@@ -259,7 +264,9 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
                     encoding="utf-8"
                 )
             )
-            self.assertFalse(metadata["notReleaseReady"])
+            self.assertTrue(metadata["notReleaseReady"])
+            self.assertTrue(metadata["artifactEvidenceShapeComplete"])
+            self.assertEqual(metadata["evidenceKind"], "nonPublishingFixtureEvidence")
             self.assertIn(
                 "nonPublishingFixtureBinaries",
                 {record["name"] for record in metadata["fixtureSubstitutions"]},
