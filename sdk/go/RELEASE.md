@@ -18,7 +18,10 @@ import (
 Future v2 and later releases must use the matching semantic import path:
 
 ```go
-import codex "github.com/openai/codex/sdk/go/v2"
+import (
+    codex "github.com/openai/codex/sdk/go/v2"
+    _ "github.com/openai/codex/sdk/go/v2/protocol"
+)
 ```
 
 ## Tags
