@@ -32,6 +32,17 @@ func assertRequestStringParam(t *testing.T, params json.RawMessage, field string
 	}
 }
 
+func assertRequestParamAbsent(t *testing.T, params json.RawMessage, field string) {
+	t.Helper()
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(params, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw[field]; ok {
+		t.Fatalf("%s present in params %s", field, params)
+	}
+}
+
 func assertRequestStringSliceParam(t *testing.T, params json.RawMessage, field string, want []string) {
 	t.Helper()
 	var raw map[string]json.RawMessage
