@@ -33,7 +33,7 @@ client, err := codex.NewClient(ctx, codex.ClientConfig{
 })
 ```
 
-Runtime mismatch errors are actionable: point `ClientConfig.CodexPath` at a same-checkout runtime, update the runtime to the SDK commit, or pin the SDK to the runtime's matching commit or `sdk/go/vX.Y.Z` tag. Pre-release consumers should pin an exact commit or a reviewed prerelease tag, not a moving branch. Future `v2+` module imports will use semantic import paths such as `github.com/openai/codex/sdk/go/v2`; `v0` and `v1` keep `github.com/openai/codex/sdk/go`.
+Runtime mismatch errors are actionable: point `ClientConfig.CodexPath` at a same-checkout runtime, update the runtime to the SDK commit, or pin the SDK to the runtime's matching commit or `sdk/go/vX.Y.Z` tag. Pre-release consumers should pin an exact commit or a reviewed prerelease tag, not a moving branch. Future `v2+` module imports will use semantic import paths such as `github.com/openai/codex/sdk/go/v2` and `github.com/openai/codex/sdk/go/v2/protocol`; `v0` and `v1` keep `github.com/openai/codex/sdk/go` and `github.com/openai/codex/sdk/go/protocol`.
 
 ## Configuration
 
