@@ -71,6 +71,19 @@ esac
 	if metadata.PackageArchive != nil {
 		t.Fatalf("packageArchive = %#v, want nil for bazel layout staging", metadata.PackageArchive)
 	}
+
+	verifyCmd := exec.Command(
+		"bash",
+		fixture.script,
+		"--verify-sandbox",
+		"--exec-path",
+		filepath.Join(fixture.out, "bin", "codex"),
+	)
+	verifyCmd.Env = append(os.Environ(), "GITHUB_WORKSPACE="+fixture.repoRoot)
+	verifyOutput, err := verifyCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage-codex-runtime.sh sandbox verification failed: %v\n%s", err, verifyOutput)
+	}
 }
 
 func TestStageCodexRuntimeScriptRejectsMissingHelperManifest(t *testing.T) {
@@ -143,6 +156,21 @@ func TestStageCodexRuntimePowerShellReleaseArchiveMarkers(t *testing.T) {
 	} {
 		if !strings.Contains(content, required) {
 			t.Fatalf("stage-codex-runtime.ps1 missing %q", required)
+		}
+	}
+}
+
+func TestStageCodexRuntimeScriptThreadsWindowsMsvcHostPlatform(t *testing.T) {
+	content := readRepoText(t, ".github/scripts/stage-codex-runtime.sh")
+	for _, required := range []string{
+		"bazel_host_platform_args+=(--host_platform=//:local_windows_msvc)",
+		`-- build "${bazel_host_platform_args[@]}" -- "$label"`,
+		`bazel build "${bazel_host_platform_args[@]}" "$label"`,
+		`bazel cquery "${bazel_host_platform_args[@]}" --output=files "$label"`,
+		"--windows-msvc-host-platform requires a Windows target",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("stage-codex-runtime.sh missing MSVC host-platform wiring %q", required)
 		}
 	}
 }
