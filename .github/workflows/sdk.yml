@@ -342,6 +342,7 @@ jobs:
             --target "$TARGET" \
             --output-root "$CODEX_PACKAGE_HELPER_ROOT" \
             --verify-only
+          echo "CODEX_GO_SDK_HELPER_ROOT_SOURCE=producer-mode-blocked" >> "$GITHUB_ENV"
           echo "CODEX_PACKAGE_HELPER_ROOT=$CODEX_PACKAGE_HELPER_ROOT" >> "$GITHUB_ENV"
 
       - name: Stage Go SDK runtime
@@ -456,6 +457,12 @@ jobs:
               "${release_shape_args[@]}"
           )"
           eval "$stage_output"
+          unset CODEX_HOME
+          unset CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG
+          unset CODEX_APP_SERVER_MANAGED_CONFIG_PATH
+          unset CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE
+          unset CODEX_APP_SERVER_AUTH_BASE_URL_FOR_TESTS
+          unset CODEX_APP_SERVER_LOGIN_ISSUER
           python3 - <<'PY'
           import json
           import os
@@ -500,15 +507,18 @@ jobs:
             TestRealAppServerProcessLifecycle
             TestRealAppServerFilesystemWatch
           )
+          ran_smoke_tests=()
           for test_name in "${smoke_tests[@]}"
           do
+            go test ./... -list "^${test_name}$" | grep -Fx "$test_name"
             go test ./... -run "^${test_name}$"
+            ran_smoke_tests+=("$test_name")
           done
 
           evidence_dir="${RUNNER_TEMP}/go-sdk-ci-release-evidence-${{ matrix.bazel_target }}"
           mkdir -p "$evidence_dir"
           cp "${CODEX_RUNTIME_METADATA_PATH:?}" "$evidence_dir/staging-metadata.json"
-          printf '%s\n' "${smoke_tests[@]}" > "$evidence_dir/package-archive-smoke-tests.txt"
+          printf '%s\n' "${ran_smoke_tests[@]}" > "$evidence_dir/package-archive-smoke-tests.txt"
           {
             printf 'step=Test Go SDK release archive runtime\n'
             printf 'bounded=true\n'
@@ -530,6 +540,7 @@ jobs:
           evidence_dir = Path(os.environ["GO_SDK_EVIDENCE_DIR"])
           target = os.environ["GO_SDK_TARGET"]
           runner_label = os.environ["GO_SDK_RUNNER_LABEL"]
+          helper_root_source = os.environ.get("CODEX_GO_SDK_HELPER_ROOT_SOURCE", "")
           metadata_path = evidence_dir / "staging-metadata.json"
           metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
           smoke_tests = (evidence_dir / "package-archive-smoke-tests.txt").read_text(encoding="utf-8").splitlines()
@@ -563,6 +574,17 @@ jobs:
               "runtimeSource": metadata.get("runtimeSource"),
               "stagingMetadata": metadata,
           }
+          if helper_root_source == "producer-mode-blocked":
+              evidence["helperRootEvidence"] = {
+                  "source": "producerModeMaterializeHelpers",
+                  "releaseReadinessImpact": (
+                      "release readiness is blocked until Go SDK CI consumes a "
+                      "pre-produced Stage 5G helper-root artifact and runs "
+                      "materialize_helpers --verify-only on that artifact"
+                  ),
+              }
+              evidence["notReleaseReady"] = True
+              evidence["releaseReadinessImpact"] = evidence["helperRootEvidence"]["releaseReadinessImpact"]
           if "windows" in target:
               windows_host_proof = {
                   "target": target,
