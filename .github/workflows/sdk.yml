@@ -431,7 +431,8 @@ jobs:
               exit 1
             fi
             zstd_realpath="$(cd "$(dirname "$zstd_bin")" && pwd -P)/$(basename "$zstd_bin")"
-            repo_zstd="${GITHUB_WORKSPACE}/.github/workflows/zstd"
+            repo_zstd_dir="${GITHUB_WORKSPACE}/.github/workflows"
+            repo_zstd="${repo_zstd_dir}/zstd"
             if [[ "$zstd_realpath" == "$repo_zstd" ]]; then
               echo "Repo DotSlash zstd is not accepted for Go SDK package archive validation: $zstd_realpath" >&2
               exit 1
