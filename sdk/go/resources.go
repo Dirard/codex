@@ -1,9 +1,17 @@
 package codex
 
+import "sync"
+
 type AccountsClient struct{ client *Client }
 type ThreadsClient struct{ client *Client }
 type TurnsClient struct{ client *Client }
-type RealtimeClient struct{ client *Client }
+type RealtimeClient struct {
+	client *Client
+
+	mu             sync.Mutex
+	activeByThread map[string]*RealtimeSession
+	nextSessionID  uint64
+}
 type ReviewsClient struct{ client *Client }
 type ModelsClient struct{ client *Client }
 type ConfigClient struct{ client *Client }

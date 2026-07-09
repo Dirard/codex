@@ -34,6 +34,10 @@ func (e *UnsupportedError) Error() string { return "codex sdk unsupported: " + e
 
 func (e *UnsupportedError) SafeJSONRPCMessage() string { return e.Error() }
 
+type ConflictError struct{ Reason string }
+
+func (e *ConflictError) Error() string { return "codex sdk conflict: " + e.Reason }
+
 type OverflowError struct{ Reason string }
 
 func (e *OverflowError) Error() string { return "codex sdk overflow: " + e.Reason }
