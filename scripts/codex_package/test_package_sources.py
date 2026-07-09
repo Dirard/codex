@@ -16,6 +16,9 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from codex_package.archive import write_archive
+from codex_package.helper_manifest import HELPER_MANIFEST_NAME
+from codex_package.helper_manifest import verify_helper_manifest
+from codex_package.helper_manifest import write_helper_manifest
 from codex_package.layout import build_package_dir
 from codex_package.layout import ZSH_RESOURCE_PATH
 from codex_package.materialize_helpers import materialize_manifest_helper
@@ -531,6 +534,65 @@ class Stage5GPackageSourceContractTest(unittest.TestCase):
             self.assertEqual(materialized, root / "helpers" / "rg")
             self.assertTrue(materialized.is_file())
             self.assertTrue(os.access(materialized, os.X_OK))
+
+    def test_helper_manifest_verifies_target_bound_payloads(self) -> None:
+        spec = TARGET_SPECS["x86_64-unknown-linux-musl"]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target_root = Path(temp_dir) / spec.target
+            target_root.mkdir()
+            touch_executable(target_root / "rg", "#!/usr/bin/env sh\necho rg\n")
+            touch_executable(target_root / "zsh", "#!/usr/bin/env sh\necho zsh\n")
+            touch_executable(target_root / "bwrap", "#!/usr/bin/env sh\necho bwrap\n")
+
+            manifest_path = write_helper_manifest(spec, target_root)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(manifest_path.name, HELPER_MANIFEST_NAME)
+            self.assertEqual(manifest["target"], spec.target)
+            self.assertEqual(set(manifest["helpers"]), {"rg", "zsh", "bwrap"})
+            self.assertEqual(verify_helper_manifest(spec, target_root), manifest)
+
+            (target_root / "rg").write_text(
+                "#!/usr/bin/env sh\necho rx\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "sha256"):
+                verify_helper_manifest(spec, target_root)
+
+    def test_materialize_helpers_verify_only_consumes_existing_manifest(self) -> None:
+        spec = TARGET_SPECS["x86_64-pc-windows-msvc"]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target_root = root / spec.target
+            target_root.mkdir()
+            touch_executable(target_root / "rg.exe")
+            touch_executable(target_root / "codex-command-runner.exe")
+            touch_executable(target_root / "codex-windows-sandbox-setup.exe")
+            write_helper_manifest(spec, target_root)
+
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(REPO_ROOT / "scripts")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "codex_package.materialize_helpers",
+                    "--target",
+                    spec.target,
+                    "--output-root",
+                    str(root),
+                    "--verify-only",
+                ],
+                cwd=REPO_ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Verified materialized package helpers", result.stdout)
 
     def test_dotslash_release_archive_config_parity(self) -> None:
         config = json.loads(read_text(".github/dotslash-config.json"))
