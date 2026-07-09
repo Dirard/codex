@@ -212,6 +212,28 @@ verify_layout() {
   fi
 }
 
+verify_linux_sandbox() {
+  local root="$1"
+  local bwrap="$root/codex-resources/bwrap"
+  if ! is_linux_target; then
+    return 0
+  fi
+  if [[ ! -x "$bwrap" ]]; then
+    echo "Linux sandbox smoke requires executable staged bwrap helper: $bwrap" >&2
+    return 1
+  fi
+  "$bwrap" \
+    --unshare-user \
+    --unshare-ipc \
+    --unshare-pid \
+    --proc /proc \
+    --dev /dev \
+    --ro-bind / / \
+    --tmpfs /tmp \
+    --die-with-parent \
+    /bin/sh -c 'test -d /proc/self && test -w /tmp' >/dev/null
+}
+
 if [[ "$verify_sandbox" -eq 1 ]]; then
   if [[ -z "$exec_path" ]]; then
     echo "--verify-sandbox requires --exec-path" >&2
@@ -226,6 +248,7 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 PY
 )"
   verify_layout "$exec_dir/.."
+  verify_linux_sandbox "$exec_dir/.."
   exit 0
 fi
 
@@ -270,19 +293,27 @@ seed_root_from_bazel() {
   local platform
   local label
   local metadata
+  local bazel_host_platform_args=()
   platform="$(target_platform "$target")"
   label="//codex-rs/cli:codex_go_sdk_runtime_layout_${platform}"
+  if [[ "$windows_msvc_host_platform" -eq 1 ]]; then
+    if ! is_windows_target; then
+      echo "--windows-msvc-host-platform requires a Windows target." >&2
+      exit 1
+    fi
+    bazel_host_platform_args+=(--host_platform=//:local_windows_msvc)
+  fi
 
   if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
     "$repo_root/.github/scripts/run-bazel-ci.sh" \
       --remote-download-toplevel \
-      -- build -- "$label"
+      -- build "${bazel_host_platform_args[@]}" -- "$label"
   else
-    bazel build "$label"
+    bazel build "${bazel_host_platform_args[@]}" "$label"
   fi
 
   metadata="$(
-    bazel cquery --output=files "$label" \
+    bazel cquery "${bazel_host_platform_args[@]}" --output=files "$label" \
       | grep '/codex-package.json$' \
       | head -n 1
   )"
