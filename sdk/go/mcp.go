@@ -50,6 +50,27 @@ func (c *MCPClient) OAuthLogin(ctx context.Context, opts MCPOAuthLoginOptions) (
 	return &MCPOAuthHandle{client: c.client, name: opts.Name, threadID: opts.ThreadID, authorizationURL: response.AuthorizationURL}, nil
 }
 
+func (c *MCPClient) ListStatus(ctx context.Context, params protocol.ListMcpServerStatusParams) (protocol.ListMcpServerStatusResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.ListMcpServerStatusResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().McpServerStatusList(ctx, params)
+}
+
+func (c *MCPClient) ReadResource(ctx context.Context, params protocol.McpResourceReadParams) (protocol.McpResourceReadResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.McpResourceReadResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().McpServerResourceRead(ctx, params)
+}
+
+func (c *MCPClient) CallTool(ctx context.Context, params protocol.McpServerToolCallParams) (protocol.McpServerToolCallResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.McpServerToolCallResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().McpServerToolCall(ctx, params)
+}
+
 func (h *MCPOAuthHandle) AuthorizationURL() string {
 	if h == nil {
 		return ""
