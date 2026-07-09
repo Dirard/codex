@@ -44,6 +44,7 @@ var rawOnlyHighLevelWorkflows = []rawOnlyHighLevelWorkflow{
 	{name: "mcpServer/oauth/login", startMethod: "mcpServer/oauth/login"},
 	{name: "process/spawn", startMethod: "process/spawn"},
 	{name: "realtime/start", startMethod: "thread/realtime/start"},
+	{name: "remoteControl/pairing/start", startMethod: "remoteControl/pairing/start"},
 	{name: "review/start", startMethod: "review/start"},
 	{name: "thread/fork", startMethod: "thread/fork"},
 	{name: "thread/resume", startMethod: "thread/resume"},
