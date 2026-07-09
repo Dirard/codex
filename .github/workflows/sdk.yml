@@ -530,3 +530,11 @@ jobs:
       - name: Check for a clean worktree
         if: always() && !cancelled()
         uses: ./.github/actions/check-clean-worktree
+
+  go-sdk-release-readiness:
+    needs:
+      - go-sdk
+    uses: ./.github/workflows/go-sdk-release-readiness.yml
+    with:
+      checkout_ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      validate_synthetic_tags: true
