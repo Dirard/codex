@@ -17,6 +17,7 @@ type ServerHandlers struct {
 	MCPElicitation      MCPElicitationHandler
 	Permissions         PermissionsHandler
 	UserInput           UserInputHandler
+	Unknown             UnknownServerRequestHandler
 }
 
 type ApprovalsHandler interface {
@@ -135,7 +136,7 @@ func (h ServerHandlers) DispatchServerRequest(ctx context.Context, method string
 			return nil, err
 		}
 		if h.ChatGPTTokenRefresh == nil {
-			return nil, fmt.Errorf("server handler %q is not configured", method)
+			return nil, &UnsupportedError{Reason: fmt.Sprintf("server handler %q is not configured", method)}
 		}
 		return h.ChatGPTTokenRefresh.HandleAccountChatgptAuthTokensRefresh(ctx, decoded)
 	case "applyPatchApproval":
@@ -149,7 +150,7 @@ func (h ServerHandlers) DispatchServerRequest(ctx context.Context, method string
 			return nil, err
 		}
 		if h.Attestation == nil {
-			return nil, fmt.Errorf("server handler %q is not configured", method)
+			return nil, &UnsupportedError{Reason: fmt.Sprintf("server handler %q is not configured", method)}
 		}
 		return h.Attestation.HandleAttestationGenerate(ctx, decoded)
 	case "execCommandApproval":
@@ -163,7 +164,7 @@ func (h ServerHandlers) DispatchServerRequest(ctx context.Context, method string
 			return nil, err
 		}
 		if h.Approvals == nil {
-			return nil, fmt.Errorf("server handler %q is not configured", method)
+			return nil, &UnsupportedError{Reason: fmt.Sprintf("server handler %q is not configured", method)}
 		}
 		return h.Approvals.HandleItemCommandExecutionRequestApproval(ctx, decoded)
 	case "item/fileChange/requestApproval":
@@ -172,7 +173,7 @@ func (h ServerHandlers) DispatchServerRequest(ctx context.Context, method string
 			return nil, err
 		}
 		if h.Approvals == nil {
-			return nil, fmt.Errorf("server handler %q is not configured", method)
+			return nil, &UnsupportedError{Reason: fmt.Sprintf("server handler %q is not configured", method)}
 		}
 		return h.Approvals.HandleItemFileChangeRequestApproval(ctx, decoded)
 	case "item/tool/requestUserInput":
@@ -181,7 +182,7 @@ func (h ServerHandlers) DispatchServerRequest(ctx context.Context, method string
 			return nil, err
 		}
 		if h.UserInput == nil {
-			return nil, fmt.Errorf("server handler %q is not configured", method)
+			return nil, &UnsupportedError{Reason: fmt.Sprintf("server handler %q is not configured", method)}
 		}
 		return h.UserInput.HandleItemToolRequestUserInput(ctx, decoded)
 	case "item/permissions/requestApproval":
@@ -190,7 +191,7 @@ func (h ServerHandlers) DispatchServerRequest(ctx context.Context, method string
 			return nil, err
 		}
 		if h.Permissions == nil {
-			return nil, fmt.Errorf("server handler %q is not configured", method)
+			return nil, &UnsupportedError{Reason: fmt.Sprintf("server handler %q is not configured", method)}
 		}
 		return h.Permissions.HandleItemPermissionsRequestApproval(ctx, decoded)
 	case "item/tool/call":
@@ -199,7 +200,7 @@ func (h ServerHandlers) DispatchServerRequest(ctx context.Context, method string
 			return nil, err
 		}
 		if h.DynamicTools == nil {
-			return nil, fmt.Errorf("server handler %q is not configured", method)
+			return nil, &UnsupportedError{Reason: fmt.Sprintf("server handler %q is not configured", method)}
 		}
 		return h.DynamicTools.HandleItemToolCall(ctx, decoded)
 	case "mcpServer/elicitation/request":
@@ -208,7 +209,7 @@ func (h ServerHandlers) DispatchServerRequest(ctx context.Context, method string
 			return nil, err
 		}
 		if h.MCPElicitation == nil {
-			return nil, fmt.Errorf("server handler %q is not configured", method)
+			return nil, &UnsupportedError{Reason: fmt.Sprintf("server handler %q is not configured", method)}
 		}
 		return h.MCPElicitation.HandleMcpServerElicitationRequest(ctx, decoded)
 	case "currentTime/read":
@@ -217,11 +218,14 @@ func (h ServerHandlers) DispatchServerRequest(ctx context.Context, method string
 			return nil, err
 		}
 		if h.CurrentTime == nil {
-			return nil, fmt.Errorf("server handler %q is not configured", method)
+			return nil, &UnsupportedError{Reason: fmt.Sprintf("server handler %q is not configured", method)}
 		}
 		return h.CurrentTime.HandleCurrentTimeRead(ctx, decoded)
 	default:
-		return nil, fmt.Errorf("unsupported server request method %q", method)
+		if h.Unknown != nil {
+			return h.Unknown.HandleUnknownServerRequest(ctx, UnknownServerRequest{Method: method, Params: append(json.RawMessage(nil), params...)})
+		}
+		return nil, &UnsupportedError{Reason: fmt.Sprintf("unsupported server request method %q", method)}
 	}
 }
 
