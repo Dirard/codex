@@ -12,8 +12,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  shipping-source-preflight:
-    name: Shipping release source preflight
+  shipping-release-readiness:
+    name: Shipping release-readiness evidence
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -42,13 +42,25 @@ jobs:
           grep -F 'codex-windows-sandbox-setup.exe' .github/workflows/rust-release-windows.yml
           grep -F 'def test_dotslash_release_archive_config_parity' scripts/codex_package/test_package_sources.py
 
-      - name: Write source-level shipping readiness metadata
+      - name: Build non-publishing shipping artifact fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v zstd >/dev/null
+          python3 .github/scripts/go_sdk_shipping_release_readiness.py \
+            build-fixture-artifacts \
+            --artifacts-dir shipping-release-readiness-artifacts \
+            --work-dir "${RUNNER_TEMP}/go-sdk-shipping-release-readiness"
+
+      - name: Collect artifact-level shipping readiness metadata
         shell: bash
         run: |
           set -euo pipefail
           python3 .github/scripts/go_sdk_shipping_release_readiness.py \
-            source-preflight \
-            --out shipping-release-readiness-metadata
+            collect-artifacts \
+            --artifacts-dir shipping-release-readiness-artifacts \
+            --out shipping-release-readiness-metadata \
+            --fixture-substitutions non-publishing
 
       - name: Upload shipping release-readiness metadata
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
