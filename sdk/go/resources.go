@@ -15,9 +15,26 @@ type RealtimeClient struct {
 type ReviewsClient struct{ client *Client }
 type ModelsClient struct{ client *Client }
 type ConfigClient struct{ client *Client }
-type FileSystemClient struct{ client *Client }
-type CommandsClient struct{ client *Client }
-type ProcessesClient struct{ client *Client }
+type FileSystemClient struct {
+	client *Client
+
+	mu            sync.Mutex
+	activeWatches map[string]*FileSystemWatchHandle
+	nextWatchID   uint64
+}
+type CommandsClient struct {
+	client *Client
+
+	mu            sync.Mutex
+	nextProcessID uint64
+}
+type ProcessesClient struct {
+	client *Client
+
+	mu              sync.Mutex
+	activeProcesses map[string]*ProcessHandle
+	nextHandleID    uint64
+}
 type EnvironmentsClient struct{ client *Client }
 type SkillsClient struct{ client *Client }
 type HooksClient struct{ client *Client }
