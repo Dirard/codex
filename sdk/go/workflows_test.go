@@ -637,10 +637,48 @@ func TestHighLevelWorkflowsRejectRawOnlyMode(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	_, err = client.Threads.Start(context.Background(), ThreadStartOptions{})
-	var configErr *ConfigError
-	if !errors.As(err, &configErr) {
-		t.Fatalf("err = %T, want *ConfigError", err)
+	ctx := context.Background()
+	tests := []struct {
+		name   string
+		method string
+		call   func() error
+	}{
+		{
+			name:   "thread start",
+			method: "thread/start",
+			call: func() error {
+				_, err := client.Threads.Start(ctx, ThreadStartOptions{})
+				return err
+			},
+		},
+		{
+			name:   "thread resume",
+			method: "thread/resume",
+			call: func() error {
+				_, err := client.Threads.Resume(ctx, ThreadResumeOptions{ThreadID: "thread-1"})
+				return err
+			},
+		},
+		{
+			name:   "thread fork",
+			method: "thread/fork",
+			call: func() error {
+				_, err := client.Threads.Fork(ctx, ThreadForkOptions{ThreadID: "thread-1"})
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.call()
+			var configErr *ConfigError
+			if !errors.As(err, &configErr) {
+				t.Fatalf("err = %T, want *ConfigError", err)
+			}
+			if methodWasSent(t, transport, tt.method) {
+				t.Fatalf("%s was sent in raw-only mode", tt.method)
+			}
+		})
 	}
 }
 

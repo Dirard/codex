@@ -182,6 +182,9 @@ func resourceImplementationStatus(mapping ResourceAPIMapping) string {
 	if stage4ImplementedResourceMethods[mapping.Method] {
 		return "implemented-stage4"
 	}
+	if stage5BImplementedResourceMethods[mapping.Method] {
+		return "implemented-stage5b"
+	}
 	return "planned-stage5"
 }
 
@@ -198,6 +201,48 @@ var stage4ImplementedResourceMethods = map[string]bool{
 	"turn/start":              true,
 	"turn/steer":              true,
 	"turn/interrupt":          true,
+}
+
+var stage5BImplementedResourceMethods = map[string]bool{
+	"hooks/list":                           true,
+	"skills/list":                          true,
+	"skills/extraRoots/set":                true,
+	"skills/config/write":                  true,
+	"thread/resume":                        true,
+	"thread/fork":                          true,
+	"thread/archive":                       true,
+	"thread/delete":                        true,
+	"thread/unsubscribe":                   true,
+	"thread/name/set":                      true,
+	"thread/goal/set":                      true,
+	"thread/goal/get":                      true,
+	"thread/goal/clear":                    true,
+	"thread/metadata/update":               true,
+	"thread/unarchive":                     true,
+	"thread/compact/start":                 true,
+	"thread/shellCommand":                  true,
+	"thread/approveGuardianDeniedAction":   true,
+	"thread/rollback":                      true,
+	"thread/list":                          true,
+	"thread/loaded/list":                   true,
+	"thread/read":                          true,
+	"thread/inject_items":                  true,
+	"thread/realtime/start":                true,
+	"thread/realtime/appendAudio":          true,
+	"thread/realtime/appendText":           true,
+	"thread/realtime/appendSpeech":         true,
+	"thread/realtime/stop":                 true,
+	"thread/realtime/listVoices":           true,
+	"thread/increment_elicitation":         true,
+	"thread/decrement_elicitation":         true,
+	"thread/settings/update":               true,
+	"thread/memoryMode/set":                true,
+	"thread/backgroundTerminals/clean":     true,
+	"thread/backgroundTerminals/list":      true,
+	"thread/backgroundTerminals/terminate": true,
+	"thread/search":                        true,
+	"thread/turns/list":                    true,
+	"thread/items/list":                    true,
 }
 
 func renderInventory(manifest *Manifest) string {
