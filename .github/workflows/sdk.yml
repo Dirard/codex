@@ -398,7 +398,9 @@ jobs:
             go test ./... -run "^${test_name}$"
           done
           if [[ "${{ matrix.sandbox || false }}" == "true" ]]; then
-            go test ./... -run '^TestSandboxPolicy'
+            "${GITHUB_WORKSPACE}/.github/scripts/stage-codex-runtime.sh" \
+              --verify-sandbox \
+              --exec-path "${CODEX_EXEC_PATH:?}"
           fi
           go test ./...
 
