@@ -70,6 +70,27 @@ func (c *AccountsClient) RateLimits(ctx context.Context) (protocol.GetAccountRat
 	return c.client.Raw().AccountRateLimitsRead(ctx)
 }
 
+func (c *AccountsClient) ConsumeRateLimitResetCredit(ctx context.Context, params protocol.ConsumeAccountRateLimitResetCreditParams) (protocol.ConsumeAccountRateLimitResetCreditResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.ConsumeAccountRateLimitResetCreditResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().AccountRateLimitResetCreditConsume(ctx, params)
+}
+
+func (c *AccountsClient) ReadWorkspaceMessages(ctx context.Context) (protocol.GetWorkspaceMessagesResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.GetWorkspaceMessagesResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().AccountWorkspaceMessagesRead(ctx)
+}
+
+func (c *AccountsClient) SendAddCreditsNudgeEmail(ctx context.Context, params protocol.SendAddCreditsNudgeEmailParams) (protocol.SendAddCreditsNudgeEmailResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.SendAddCreditsNudgeEmailResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().AccountSendAddCreditsNudgeEmail(ctx, params)
+}
+
 func (c *AccountsClient) startLogin(ctx context.Context, params protocol.LoginAccountParams) (*LoginHandle, error) {
 	if c == nil || c.client == nil {
 		return nil, &ClosedError{}
@@ -86,7 +107,15 @@ func (c *AccountsClient) startLogin(ctx context.Context, params protocol.LoginAc
 		return nil, &UnsupportedError{Reason: "login response did not include loginId"}
 	}
 	authURL, _ := response.AuthURL.Value()
-	return &LoginHandle{client: c.client, id: loginID, authURL: authURL}, nil
+	verificationURL, _ := response.VerificationURL.Value()
+	userCode, _ := response.UserCode.Value()
+	return &LoginHandle{
+		client:          c.client,
+		id:              loginID,
+		authURL:         authURL,
+		verificationURL: verificationURL,
+		userCode:        userCode,
+	}, nil
 }
 
 type redactedAPIKeyError struct {
