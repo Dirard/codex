@@ -325,7 +325,7 @@ Stage 6 must execute as reviewed substages with separate review/commit boundarie
           fi
           cd sdk/go
           go test -race ./...
-      - name: Test Go SDK against package-builder archive
+      - name: Test Go SDK release archive runtime
         shell: bash
         run: |
           set -euo pipefail
