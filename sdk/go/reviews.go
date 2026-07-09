@@ -8,9 +8,17 @@ import (
 
 type ReviewStartOptions struct {
 	ThreadID string
-	Target   protocol.ReviewTarget
-	Delivery protocol.ReviewDelivery
+	Target   ReviewTarget
+	Delivery ReviewDelivery
 }
+
+type ReviewTarget = protocol.ReviewTarget
+type ReviewDelivery = protocol.ReviewDelivery
+
+const (
+	ReviewDeliveryInline   ReviewDelivery = protocol.ReviewDeliveryInline
+	ReviewDeliveryDetached ReviewDelivery = protocol.ReviewDeliveryDetached
+)
 
 type ReviewHandle struct {
 	client         *Client
@@ -20,6 +28,10 @@ type ReviewHandle struct {
 
 type ReviewResult = RunResult
 type ReviewStream = NotificationStream
+
+func UncommittedChangesReviewTarget() ReviewTarget {
+	return ReviewTarget{TypeValue: "uncommittedChanges"}
+}
 
 func (c *ReviewsClient) Start(ctx context.Context, opts ReviewStartOptions) (*ReviewHandle, error) {
 	if c == nil || c.client == nil {
@@ -35,6 +47,12 @@ func (c *ReviewsClient) Start(ctx context.Context, opts ReviewStartOptions) (*Re
 	response, err := c.client.Raw().ReviewStart(ctx, params)
 	if err != nil {
 		return nil, err
+	}
+	if response.ReviewThreadID == "" {
+		return nil, &UnsupportedError{Reason: "review start response did not include reviewThreadId"}
+	}
+	if response.Turn.ID == "" {
+		return nil, &UnsupportedError{Reason: "review start response did not include turn.id"}
 	}
 	return &ReviewHandle{client: c.client, reviewThreadID: response.ReviewThreadID, turnID: response.Turn.ID}, nil
 }
