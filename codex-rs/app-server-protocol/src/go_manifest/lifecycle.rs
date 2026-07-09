@@ -99,7 +99,7 @@ pub(super) fn go_sdk_routing_lifecycle_entries() -> Vec<RoutingLifecycleEntry> {
             notification_opt_out_dependencies: vec!["process/outputDelta", "process/exited"],
         },
         RoutingLifecycleEntry {
-            resource_domain: "fsWatch",
+            resource_domain: "fs",
             wire_identity_source: "watchId",
             start_method: "fs/watch",
             start_completion: WireCompletion::JsonRpcResponse { method: "fs/watch" },
@@ -109,7 +109,7 @@ pub(super) fn go_sdk_routing_lifecycle_entries() -> Vec<RoutingLifecycleEntry> {
             notification_opt_out_dependencies: vec!["fs/changed"],
         },
         RoutingLifecycleEntry {
-            resource_domain: "mcpOauth",
+            resource_domain: "mcpServer",
             wire_identity_source: "name",
             start_method: "mcpServer/oauth/login",
             start_completion: WireCompletion::JsonRpcResponse {

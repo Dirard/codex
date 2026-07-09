@@ -24,6 +24,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use ts_rs::TS;
 
+pub const MAX_ADDITIONAL_CONTEXT_ENTRIES: usize = 8;
+pub const MAX_ADDITIONAL_CONTEXT_KEY_BYTES: usize = 128;
+pub const MAX_ADDITIONAL_CONTEXT_VALUE_BYTES: usize = 1000;
+pub const MAX_ADDITIONAL_CONTEXT_TOTAL_BYTES: usize = 4096;
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

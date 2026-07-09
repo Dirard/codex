@@ -1013,8 +1013,8 @@ fn serde_shapes_and_lifecycle_entries_cover_stage_one_seed_rows() {
         "remoteControlPairing",
         "commandExec",
         "process",
-        "fsWatch",
-        "mcpOauth",
+        "fs",
+        "mcpServer",
         "fuzzyFileSearch",
         "realtime",
     ] {

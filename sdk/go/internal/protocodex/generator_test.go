@@ -70,6 +70,16 @@ func TestGenerateWritesProtocolAndInventory(t *testing.T) {
 		t.Fatal("metadata missing digest constants")
 	}
 	for _, required := range []string{
+		"MaxAdditionalContextEntries",
+		"MaxAdditionalContextKeyBytes",
+		"MaxAdditionalContextValueBytes",
+		"MaxAdditionalContextTotalBytes",
+	} {
+		if !strings.Contains(metadata, required) {
+			t.Fatalf("metadata.go missing %q", required)
+		}
+	}
+	for _, required := range []string{
 		"Retry: \"neverRetryAfterWrite\"",
 		"ExperimentalFields: []ExperimentalFieldMetadata",
 		"thread/start.allowProviderModelFallback",
@@ -98,6 +108,9 @@ func TestGenerateWritesProtocolAndInventory(t *testing.T) {
 	for _, required := range []string{
 		"type ServerNotificationRoutingMetadata struct",
 		"ServerNotificationRoutingByMethod",
+		"DecodeServerNotificationPayload",
+		"case \"item/plan/delta\":",
+		"var payload PlanDeltaNotification",
 		"type RoutingLifecycleMetadata struct",
 		"RoutingLifecycleByStartMethod",
 		"RoutingKind: \"routed\"",
@@ -112,7 +125,7 @@ func TestGenerateWritesProtocolAndInventory(t *testing.T) {
 		"ResourceDomain: \"process\"",
 		"Method: \"process/exited\"",
 		"\"fs/watch\"",
-		"ResourceDomain: \"fsWatch\"",
+		"ResourceDomain: \"fs\"",
 		"Method: \"fs/unwatch\"",
 		"NotificationOptOutDependencies: []string{\"fs/changed\"}",
 	} {
@@ -162,6 +175,11 @@ func TestGenerateWritesProtocolAndInventory(t *testing.T) {
 		"PublicSignature",
 		"CompileCallsite",
 		"SafeIntegrationReason",
+		"ImplementationStatus",
+		`Method: "app/list"`,
+		`ImplementationStatus: "planned-stage5"`,
+		`Method: "thread/start"`,
+		`ImplementationStatus: "implemented-stage4"`,
 	} {
 		if !strings.Contains(coverage, required) {
 			t.Fatalf("resource_coverage_generated.go missing %q", required)
@@ -690,6 +708,10 @@ func TestRoutingLifecycleMetadataIsFailClosed(t *testing.T) {
 
 func TestGoMappingRowsMatchReviewedAppendixSeed(t *testing.T) {
 	rows := loadAppendixMappingRows(t)
+	manifest, err := LoadManifest(testManifestPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, mapping := range resourceAPIMappings {
 		row, ok := rows.resource[mapping.Method]
 		if !ok {
@@ -703,6 +725,20 @@ func TestGoMappingRowsMatchReviewedAppendixSeed(t *testing.T) {
 			t.Fatalf("appendix server handler seed missing %q", mapping.Method)
 		}
 		assertServerHandlerMappingMatchesAppendixRow(t, mapping, row)
+	}
+	seenNotifications := map[string]struct{}{}
+	for _, entry := range manifest.Experimental.ServerNotifications {
+		row, ok := rows.notifications[entry.Method]
+		if !ok {
+			t.Fatalf("appendix server notification routing seed missing %q", entry.Method)
+		}
+		assertServerNotificationRoutingMatchesAppendixRow(t, entry, row)
+		seenNotifications[entry.Method] = struct{}{}
+	}
+	for method := range rows.notifications {
+		if _, ok := seenNotifications[method]; !ok {
+			t.Fatalf("appendix server notification routing seed has stale method %q", method)
+		}
 	}
 }
 
@@ -732,9 +768,47 @@ func TestGlobalNotificationsMappedToResourceOwners(t *testing.T) {
 	}
 }
 
+func TestStage4ImplementedResourceCoverageUsesCurrentAPINames(t *testing.T) {
+	for _, mapping := range resourceAPIMappings {
+		if resourceImplementationStatus(mapping) != "implemented-stage4" {
+			continue
+		}
+		text := mapping.WrapperName + " " + mapping.CompileCallsite
+		for _, forbidden := range []string{
+			"Accounts.LoginStart",
+			"DeviceCodeLoginOptions",
+			"ReadRateLimits",
+			"ReadUsage",
+			"Turns.Start",
+			"PermissionProfile(",
+			"ServerName:",
+		} {
+			if strings.Contains(text, forbidden) {
+				t.Fatalf("%s implemented-stage4 mapping uses stale API name %q: %s", mapping.Method, forbidden, text)
+			}
+		}
+	}
+}
+
+func TestStage4ImplementedResourceCoverageUsesExistingTestOwners(t *testing.T) {
+	for _, mapping := range resourceAPIMappings {
+		if resourceImplementationStatus(mapping) != "implemented-stage4" {
+			continue
+		}
+		if mapping.UnitTestOwner == "" {
+			t.Fatalf("%s implemented-stage4 mapping has empty unitTest owner", mapping.Method)
+		}
+		path := filepath.Join("..", "..", mapping.UnitTestOwner)
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("%s implemented-stage4 unitTest owner %q does not exist: %v", mapping.Method, mapping.UnitTestOwner, err)
+		}
+	}
+}
+
 type appendixMappingRows struct {
-	resource map[string][]string
-	handlers map[string][]string
+	resource      map[string][]string
+	handlers      map[string][]string
+	notifications map[string][]string
 }
 
 func loadAppendixMappingRows(t *testing.T) appendixMappingRows {
@@ -744,8 +818,9 @@ func loadAppendixMappingRows(t *testing.T) appendixMappingRows {
 		t.Fatal(err)
 	}
 	rows := appendixMappingRows{
-		resource: map[string][]string{},
-		handlers: map[string][]string{},
+		resource:      map[string][]string{},
+		handlers:      map[string][]string{},
+		notifications: map[string][]string{},
 	}
 	section := ""
 	for _, line := range strings.Split(string(data), "\n") {
@@ -756,8 +831,11 @@ func loadAppendixMappingRows(t *testing.T) appendixMappingRows {
 		case "## Reviewed Server Handler Mapping Seed":
 			section = "handlers"
 			continue
+		case "## Server Notification Routing Review Seed":
+			section = "notifications"
+			continue
 		}
-		if strings.HasPrefix(line, "## ") && line != "## Reviewed Server Handler Mapping Seed" {
+		if strings.HasPrefix(line, "## ") && line != "## Reviewed Server Handler Mapping Seed" && line != "## Server Notification Routing Review Seed" {
 			section = ""
 		}
 		if section == "" || !strings.HasPrefix(line, "|") || strings.Contains(line, "---") || strings.Contains(line, "Wire method") {
@@ -778,6 +856,11 @@ func loadAppendixMappingRows(t *testing.T) appendixMappingRows {
 				t.Fatalf("unexpected appendix handler row shape for %q: %#v", cells[0], cells)
 			}
 			rows.handlers[cells[0]] = cells
+		case "notifications":
+			if len(cells) != 3 {
+				t.Fatalf("unexpected appendix server notification row shape for %q: %#v", cells[0], cells)
+			}
+			rows.notifications[cells[0]] = cells
 		}
 	}
 	return rows
@@ -821,6 +904,47 @@ func assertServerHandlerMappingMatchesAppendixRow(t *testing.T, mapping ServerHa
 	assertEqualAppendixValue(t, mapping.UnitTestOwner, row[5], "unit test owner")
 	assertEqualAppendixValue(t, mapping.DocsExampleOwner, row[6], "docs/example owner")
 	assertEqualAppendixValue(t, mapping.ReviewNote, row[7], "review note")
+}
+
+func assertServerNotificationRoutingMatchesAppendixRow(t *testing.T, entry NotificationEntry, row []string) {
+	t.Helper()
+	assertEqualAppendixValue(t, entry.Method, row[0], "method")
+	want := row[1]
+	if before, _, ok := strings.Cut(want, ";"); ok {
+		want = before
+	}
+	assertEqualAppendixValue(t, appendixRoutingStrategy(entry), want, "routing strategy")
+}
+
+func appendixRoutingStrategy(entry NotificationEntry) string {
+	prefix := ""
+	if entry.SDKVisibility != "public" && entry.SDKVisibility != "experimental-public" {
+		prefix = "internal "
+	}
+	switch entry.RoutingStrategy.Kind {
+	case "globalOnly":
+		return prefix + "global"
+	case "routed", "routedWithGlobalFallback":
+		routeName := "route"
+		if entry.RoutingStrategy.Kind == "routedWithGlobalFallback" {
+			routeName = "routeWithGlobalFallback"
+		}
+		var routes []string
+		for _, route := range entry.RoutingStrategy.Routes {
+			var fields []string
+			for _, extractor := range route.IdentityExtractors {
+				field := extractor.FieldPath
+				if extractor.Optional {
+					field += "?"
+				}
+				fields = append(fields, field)
+			}
+			routes = append(routes, routeName+"("+strings.Join(fields, ", ")+")")
+		}
+		return prefix + strings.Join(routes, "; ")
+	default:
+		return prefix + entry.RoutingStrategy.Kind
+	}
 }
 
 func assertSafeIntegrationMatchesAppendix(t *testing.T, mapping ResourceAPIMapping, value string) {

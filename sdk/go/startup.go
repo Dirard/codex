@@ -31,6 +31,20 @@ var reservedRuntimeEnv = map[string]struct{}{
 	"CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE": {},
 }
 
+type rawOnlyHighLevelWorkflow struct {
+	name        string
+	startMethod string
+}
+
+var rawOnlyHighLevelWorkflows = []rawOnlyHighLevelWorkflow{
+	{name: "account/browser-login", startMethod: "account/login/start"},
+	{name: "account/device-code-login", startMethod: "account/login/start"},
+	{name: "mcpServer/oauth/login", startMethod: "mcpServer/oauth/login"},
+	{name: "review/start", startMethod: "review/start"},
+	{name: "thread/start", startMethod: "thread/start"},
+	{name: "turn/start", startMethod: "turn/start"},
+}
+
 func validateClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	if cfg.ProtocolMode != ProtocolModeExperimental && cfg.ProtocolMode != ProtocolModeStable {
 		return cfg, &ConfigError{Reason: "unknown protocol mode"}
@@ -40,11 +54,24 @@ func validateClientConfig(cfg ClientConfig) (ClientConfig, error) {
 		cfg.Compatibility != CompatibilityAllowProtocolDigestUnavailable {
 		return cfg, &ConfigError{Reason: "unknown compatibility policy"}
 	}
+	if cfg.Mode != ClientModeHighLevel && cfg.Mode != ClientModeRawOnly {
+		return cfg, &ConfigError{Reason: "unknown client mode"}
+	}
 	limits, err := normalizeLimits(cfg.Limits)
 	if err != nil {
 		return cfg, err
 	}
 	cfg.Limits = limits
+	if err := validateNotificationOptOuts(cfg.NotificationOptOuts); err != nil {
+		return cfg, err
+	}
+	if cfg.Mode == ClientModeHighLevel {
+		disabled := disabledImplementedHighLevelStartMethods(cfg.NotificationOptOuts)
+		if len(disabled) > 0 {
+			workflows := disabledHighLevelWorkflowMetadata(disabled)
+			return cfg, &ConfigError{Reason: "notification opt-outs disable high-level workflows: " + strings.Join(workflows, "; ")}
+		}
+	}
 	if cfg.ClientName == "" {
 		cfg.ClientName = "codex_go_sdk"
 	}
@@ -57,9 +84,6 @@ func validateClientConfig(cfg ClientConfig) (ClientConfig, error) {
 			return cfg, &ConfigError{Reason: "Transport cannot be combined with process launch fields"}
 		}
 	}
-	if err := validateNotificationOptOuts(cfg); err != nil {
-		return cfg, err
-	}
 	if err := validateConfigOverrides(cfg.ConfigOverrides); err != nil {
 		return cfg, err
 	}
@@ -71,22 +95,79 @@ func validateClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	return cfg, nil
 }
 
-func validateNotificationOptOuts(cfg ClientConfig) error {
-	if cfg.Mode == ClientModeRawOnly {
-		return nil
-	}
-	optedOut := map[string]struct{}{}
-	for _, method := range cfg.NotificationOptOuts.Methods {
-		optedOut[method] = struct{}{}
-	}
-	for _, lifecycle := range protocol.RoutingLifecycleByStartMethod {
-		for _, method := range lifecycle.NotificationOptOutDependencies {
-			if _, ok := optedOut[method]; ok {
-				return &ConfigError{Reason: "notification opt-out disables high-level workflow cleanup: " + method}
-			}
+func validateNotificationOptOuts(optOuts NotificationOptOuts) error {
+	for _, method := range optOuts.Methods {
+		if _, ok := protocol.ServerNotificationRoutingByMethod[method]; !ok {
+			return &ConfigError{Reason: "unknown notification opt-out method: " + method}
 		}
 	}
 	return nil
+}
+
+func disabledHighLevelStartMethods(optOuts NotificationOptOuts) map[string]string {
+	optedOut := map[string]struct{}{}
+	for _, method := range optOuts.Methods {
+		optedOut[method] = struct{}{}
+	}
+	if len(optedOut) == 0 {
+		return nil
+	}
+	disabled := map[string]string{}
+	for startMethod, lifecycle := range protocol.RoutingLifecycleByStartMethod {
+		var dependencies []string
+		for _, method := range lifecycle.NotificationOptOutDependencies {
+			if _, ok := optedOut[method]; ok {
+				dependencies = append(dependencies, method)
+			}
+		}
+		if len(dependencies) > 0 {
+			sort.Strings(dependencies)
+			disabled[startMethod] = strings.Join(dependencies, ", ")
+		}
+	}
+	return disabled
+}
+
+func disabledImplementedHighLevelStartMethods(optOuts NotificationOptOuts) map[string]string {
+	disabled := disabledHighLevelStartMethods(optOuts)
+	if len(disabled) == 0 {
+		return nil
+	}
+	implemented := map[string]string{}
+	for _, workflow := range rawOnlyHighLevelWorkflows {
+		if dependency, ok := disabled[workflow.startMethod]; ok {
+			implemented[workflow.startMethod] = dependency
+		}
+	}
+	return implemented
+}
+
+func disabledHighLevelWorkflowMetadata(disabled map[string]string) []string {
+	if len(disabled) == 0 {
+		return nil
+	}
+	startMethods := make([]string, 0, len(disabled))
+	for startMethod := range disabled {
+		startMethods = append(startMethods, startMethod)
+	}
+	sort.Strings(startMethods)
+	workflows := make([]string, 0, len(startMethods))
+	for _, startMethod := range startMethods {
+		workflows = append(workflows, startMethod+" requires "+disabled[startMethod])
+	}
+	return workflows
+}
+
+func rawOnlyDisabledHighLevelWorkflowMetadata(disabled map[string]string) []string {
+	workflows := make([]string, 0, len(rawOnlyHighLevelWorkflows))
+	for _, workflow := range rawOnlyHighLevelWorkflows {
+		if dependency, ok := disabled[workflow.startMethod]; ok {
+			workflows = append(workflows, workflow.name+" requires "+dependency)
+		} else {
+			workflows = append(workflows, workflow.name+" disabled in raw-only mode")
+		}
+	}
+	return workflows
 }
 
 func validateConfigOverrides(overrides map[string]string) error {
@@ -268,7 +349,9 @@ func (c *Client) initialize(ctx context.Context, cfg ClientConfig, source runtim
 	c.metadata.CompatibilityOverrideActive = override
 	c.metadata.CompatibilityNote = note
 	if cfg.Mode == ClientModeRawOnly {
-		c.metadata.DisabledHighLevelWorkflows = []string{"notification-dependent high-level workflows"}
+		c.metadata.DisabledHighLevelWorkflows = rawOnlyDisabledHighLevelWorkflowMetadata(c.disabledStart)
+	} else if disabled := disabledHighLevelWorkflowMetadata(c.disabledStart); len(disabled) > 0 {
+		c.metadata.DisabledHighLevelWorkflows = disabled
 	}
 	if current != nil {
 		c.metadata.UserAgent = current.UserAgent
@@ -536,6 +619,14 @@ func (c *Client) validateAdditionalContext(raw json.RawMessage) error {
 		keyBytes := int64(len([]byte(key)))
 		if keyBytes > c.limits.MaxAdditionalContextKeyBytes {
 			return &ConfigError{Reason: "additionalContext key exceeds configured byte limit"}
+		}
+		var rawEntryObject map[string]json.RawMessage
+		if err := json.Unmarshal(rawEntry, &rawEntryObject); err != nil {
+			return &ConfigError{Reason: "additionalContext entry must be an object with a string value"}
+		}
+		rawValue, ok := rawEntryObject["value"]
+		if !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+			return &ConfigError{Reason: "additionalContext entry must include a string value"}
 		}
 		var entry struct {
 			Value string `json:"value"`
