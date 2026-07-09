@@ -17,7 +17,17 @@ class ResolveZstdCommandTest(unittest.TestCase):
 
         self.assertEqual(resolve_zstd_command(which=which), ["/usr/bin/zstd"])
 
-    def test_falls_back_to_dotslash_manifest(self) -> None:
+    def test_rejects_repo_dotslash_zstd_from_path(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        repo_zstd_manifest = repo_root / ".github/workflows/zstd"
+
+        def which(name: str) -> str | None:
+            return {"zstd": str(repo_zstd_manifest)}.get(name)
+
+        with self.assertRaisesRegex(RuntimeError, "DotSlash"):
+            resolve_zstd_command(which=which)
+
+    def test_does_not_fall_back_to_dotslash_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             manifest = Path(temp_dir) / "zstd"
             manifest.write_text("#!/usr/bin/env dotslash\n{}\n", encoding="utf-8")
@@ -25,10 +35,8 @@ class ResolveZstdCommandTest(unittest.TestCase):
             def which(name: str) -> str | None:
                 return {"dotslash": "/usr/bin/dotslash"}.get(name)
 
-            self.assertEqual(
-                resolve_zstd_command(dotslash_manifest=manifest, which=which),
-                ["/usr/bin/dotslash", str(manifest)],
-            )
+            with self.assertRaisesRegex(RuntimeError, "Install zstd"):
+                resolve_zstd_command(dotslash_manifest=manifest, which=which)
 
     def test_errors_when_no_zstd_or_dotslash_manifest_is_available(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

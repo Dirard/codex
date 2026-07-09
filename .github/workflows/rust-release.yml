@@ -14,9 +14,6 @@ on:
     tags:
       - "rust-v*.*.*"
 
-env:
-  CODEX_ZSH_RELEASE_TAG: codex-zsh-v0.1.0
-
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
@@ -114,7 +111,7 @@ jobs:
             target: x86_64-unknown-linux-musl
             bundle: app-server
             artifact_name: x86_64-unknown-linux-musl-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host bwrap"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-arm64
             target: aarch64-unknown-linux-musl
@@ -126,7 +123,7 @@ jobs:
             target: aarch64-unknown-linux-musl
             bundle: app-server
             artifact_name: aarch64-unknown-linux-musl-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host bwrap"
             build_dmg: "false"
 
     steps:
@@ -366,14 +363,59 @@ jobs:
             cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
           fi
 
-      - name: Download packaged zsh manifest
+      - name: Materialize package helpers
         if: ${{ runner.os != 'macOS' }}
         shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          curl -fsSL \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
-            -o "${RUNNER_TEMP}/codex-zsh"
+          CODEX_PACKAGE_HELPER_ROOT="${RUNNER_TEMP}/codex-package-helpers"
+          rm -rf "${CODEX_PACKAGE_HELPER_ROOT}/${TARGET}"
+          PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 -m codex_package.materialize_helpers \
+            --target "$TARGET" \
+            --output-root "$CODEX_PACKAGE_HELPER_ROOT" \
+            --bwrap-bin "target/${TARGET}/release/bwrap"
+          echo "CODEX_PACKAGE_HELPER_ROOT=$CODEX_PACKAGE_HELPER_ROOT" >> "$GITHUB_ENV"
+
+      - name: Resolve materialized package helpers
+        if: ${{ runner.os != 'macOS' }}
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          # Stage 5G: package archive assembly must fail before helper
+          # resolution if a prior release-owned step did not materialize these
+          # payloads. Do not replace this preflight with DotSlash, package-cache,
+          # PATH, or network fallback; Go SDK release-readiness remains blocked
+          # until a reviewed producer supplies CODEX_PACKAGE_HELPER_ROOT.
+          : "${CODEX_PACKAGE_HELPER_ROOT:?CODEX_PACKAGE_HELPER_ROOT must point to Stage 5G materialized helper sources}"
+          helper_root="${CODEX_PACKAGE_HELPER_ROOT%/}/${TARGET}"
+          rg_bin="${helper_root}/rg"
+          zsh_bin="${helper_root}/zsh"
+          bwrap_bin="${helper_root}/bwrap"
+          if [[ ! -x "$rg_bin" ]]; then
+            echo "Materialized ripgrep helper is missing or not executable: $rg_bin" >&2
+            exit 1
+          fi
+          if [[ ! -x "$zsh_bin" ]]; then
+            echo "Materialized patched shell helper is missing or not executable: $zsh_bin" >&2
+            exit 1
+          fi
+          if [[ ! -x "$bwrap_bin" ]]; then
+            echo "Materialized bwrap helper is missing or not executable: $bwrap_bin" >&2
+            exit 1
+          fi
+          : "${CODEX_BWRAP_SHA256:?CODEX_BWRAP_SHA256 must be exported before package bwrap verification}"
+          package_bwrap_digest="$(sha256sum "$bwrap_bin" | awk '{print $1}')"
+          if [[ "$package_bwrap_digest" != "$CODEX_BWRAP_SHA256" ]]; then
+            echo "Materialized bwrap helper $bwrap_bin has sha256:${package_bwrap_digest}, expected sha256:${CODEX_BWRAP_SHA256}" >&2
+            exit 1
+          fi
+          echo "CODEX_PACKAGE_RG_BIN=$rg_bin" >> "$GITHUB_ENV"
+          echo "CODEX_PACKAGE_ZSH_BIN=$zsh_bin" >> "$GITHUB_ENV"
+          echo "CODEX_PACKAGE_BWRAP_BIN=$bwrap_bin" >> "$GITHUB_ENV"
 
       - name: Build Codex package archive
         if: ${{ runner.os != 'macOS' }}
@@ -388,7 +430,10 @@ jobs:
             --bundle "$BUNDLE" \
             --entrypoint-dir "target/${TARGET}/release" \
             --archive-dir "dist/${TARGET}" \
-            --zsh-manifest "${RUNNER_TEMP}/codex-zsh"
+            --require-materialized-helper-sources \
+            --rg-bin "$CODEX_PACKAGE_RG_BIN" \
+            --zsh-bin "$CODEX_PACKAGE_ZSH_BIN" \
+            --bwrap-bin "$CODEX_PACKAGE_BWRAP_BIN"
 
       - name: Build Python runtime wheel
         if: ${{ matrix.bundle == 'primary' && runner.os != 'macOS' }}
@@ -730,13 +775,44 @@ jobs:
             cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
           done
 
-      - name: Download packaged zsh manifest
+      - name: Materialize package helpers
         shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          curl -fsSL \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
-            -o "${RUNNER_TEMP}/codex-zsh"
+          CODEX_PACKAGE_HELPER_ROOT="${RUNNER_TEMP}/codex-package-helpers"
+          rm -rf "${CODEX_PACKAGE_HELPER_ROOT}/${TARGET}"
+          PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 -m codex_package.materialize_helpers \
+            --target "$TARGET" \
+            --output-root "$CODEX_PACKAGE_HELPER_ROOT"
+          echo "CODEX_PACKAGE_HELPER_ROOT=$CODEX_PACKAGE_HELPER_ROOT" >> "$GITHUB_ENV"
+
+      - name: Resolve materialized package helpers
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          # Stage 5G: package archive assembly must fail before helper
+          # resolution if a prior release-owned step did not materialize these
+          # payloads. Do not replace this preflight with DotSlash, package-cache,
+          # PATH, or network fallback; Go SDK release-readiness remains blocked
+          # until a reviewed producer supplies CODEX_PACKAGE_HELPER_ROOT.
+          : "${CODEX_PACKAGE_HELPER_ROOT:?CODEX_PACKAGE_HELPER_ROOT must point to Stage 5G materialized helper sources}"
+          helper_root="${CODEX_PACKAGE_HELPER_ROOT%/}/${TARGET}"
+          rg_bin="${helper_root}/rg"
+          zsh_bin="${helper_root}/zsh"
+          if [[ ! -x "$rg_bin" ]]; then
+            echo "Materialized ripgrep helper is missing or not executable: $rg_bin" >&2
+            exit 1
+          fi
+          if [[ ! -x "$zsh_bin" ]]; then
+            echo "Materialized patched shell helper is missing or not executable: $zsh_bin" >&2
+            exit 1
+          fi
+          echo "CODEX_PACKAGE_RG_BIN=$rg_bin" >> "$GITHUB_ENV"
+          echo "CODEX_PACKAGE_ZSH_BIN=$zsh_bin" >> "$GITHUB_ENV"
 
       - name: Build Codex package archive
         shell: bash
@@ -750,7 +826,9 @@ jobs:
             --bundle "$BUNDLE" \
             --entrypoint-dir "target/${TARGET}/release" \
             --archive-dir "dist/${TARGET}" \
-            --zsh-manifest "${RUNNER_TEMP}/codex-zsh"
+            --require-materialized-helper-sources \
+            --rg-bin "$CODEX_PACKAGE_RG_BIN" \
+            --zsh-bin "$CODEX_PACKAGE_ZSH_BIN"
 
       - name: Build Python runtime wheel
         if: ${{ matrix.bundle == 'primary' }}

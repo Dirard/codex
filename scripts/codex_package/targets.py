@@ -152,6 +152,29 @@ def resolve_input_path(
     raise RuntimeError(f"Must specify {flag_name} for {description}.")
 
 
+def resolve_materialized_input_path(
+    explicit_path: Path | None,
+    description: str,
+    flag_name: str,
+) -> Path:
+    path = resolve_input_path(explicit_path, description, flag_name)
+    if is_dotslash_wrapper(path):
+        raise RuntimeError(
+            f"{flag_name} must point to a materialized {description}; "
+            f"DotSlash manifests are not allowed in strict package assembly: {path}"
+        )
+    return path
+
+
+def is_dotslash_wrapper(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            first_line = handle.readline(512)
+    except OSError:
+        return False
+    return b"dotslash" in first_line.lower()
+
+
 def is_executable(path: Path) -> bool:
     return bool(path.stat().st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
 

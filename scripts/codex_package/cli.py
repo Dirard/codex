@@ -4,17 +4,19 @@ import argparse
 import tempfile
 from pathlib import Path
 
+from .archive import preflight_archive_outputs
 from .archive import write_archive
 from .cargo import build_source_binaries
 from .layout import build_package_dir
 from .layout import prepare_package_dir
 from .layout import validate_package_dir
-from .ripgrep import resolve_rg_bin
+from .ripgrep import resolve_rg_source
 from .targets import PACKAGE_VARIANTS
 from .targets import TARGET_SPECS
 from .targets import PackageInputs
 from .targets import default_target
 from .targets import resolve_input_path
+from .targets import resolve_materialized_input_path
 from .zsh import resolve_zsh_bin
 from .version import read_workspace_version
 
@@ -132,6 +134,24 @@ def parse_args() -> argparse.Namespace:
             "scripts/codex_package/rg."
         ),
     )
+    parser.add_argument(
+        "--zsh-bin",
+        type=Path,
+        help=(
+            "Optional local patched zsh executable override instead of fetching "
+            "from scripts/codex_package/codex-zsh."
+        ),
+    )
+    parser.add_argument(
+        "--require-materialized-helper-sources",
+        action="store_true",
+        help=(
+            "Require explicit no-network helper source inputs for package assembly. "
+            "This disables DotSlash, package-cache, PATH, and network fallback for "
+            "managed rg, patched zsh, bwrap, Windows helpers, and .tar.zst zstd "
+            "resolution."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -140,52 +160,91 @@ def main() -> int:
     spec = TARGET_SPECS[getattr(args, "target", None) or default_target()]
     variant = PACKAGE_VARIANTS[args.variant]
     package_dir_arg = getattr(args, "package_dir", None)
-    package_dir = (
-        package_dir_arg.resolve()
-        if package_dir_arg is not None
-        else Path(tempfile.mkdtemp(prefix="codex-package-")).resolve()
+    preflight_archive_outputs(args.archive_output)
+    entrypoint_bin = resolve_optional_input_path(
+        args.entrypoint_bin,
+        "prebuilt entrypoint executable",
+        "--entrypoint-bin",
     )
+    code_mode_host_bin = resolve_optional_input_path(
+        args.code_mode_host_bin,
+        "prebuilt code-mode host executable",
+        "--code-mode-host-bin",
+    )
+    bwrap_bin = resolve_optional_input_path(
+        args.bwrap_bin,
+        "prebuilt Linux bwrap executable",
+        "--bwrap-bin",
+        require_materialized=args.require_materialized_helper_sources,
+    )
+    codex_command_runner_bin = resolve_optional_input_path(
+        args.codex_command_runner_bin,
+        "prebuilt Windows codex-command-runner.exe executable",
+        "--codex-command-runner-bin",
+        require_materialized=args.require_materialized_helper_sources,
+    )
+    codex_windows_sandbox_setup_bin = resolve_optional_input_path(
+        args.codex_windows_sandbox_setup_bin,
+        "prebuilt Windows codex-windows-sandbox-setup.exe executable",
+        "--codex-windows-sandbox-setup-bin",
+        require_materialized=args.require_materialized_helper_sources,
+    )
+    validate_materialized_source_helpers(
+        spec,
+        require_materialized=args.require_materialized_helper_sources,
+        bwrap_bin=bwrap_bin,
+        codex_command_runner_bin=codex_command_runner_bin,
+        codex_windows_sandbox_setup_bin=codex_windows_sandbox_setup_bin,
+    )
+    preflight_rg_bin = None
+    preflight_zsh_bin = None
+    if args.require_materialized_helper_sources:
+        preflight_rg_bin = resolve_rg_source(
+            spec,
+            args.rg_bin,
+            require_materialized=True,
+        )
+        preflight_zsh_bin = resolve_zsh_bin(
+            spec,
+            args.zsh_manifest,
+            args.zsh_bin,
+            require_materialized=True,
+        )
 
     source_outputs = build_source_binaries(
         spec,
         variant,
         cargo=args.cargo,
         profile=args.cargo_profile,
-        entrypoint_bin=resolve_optional_input_path(
-            args.entrypoint_bin,
-            "prebuilt entrypoint executable",
-            "--entrypoint-bin",
-        ),
-        code_mode_host_bin=resolve_optional_input_path(
-            args.code_mode_host_bin,
-            "prebuilt code-mode host executable",
-            "--code-mode-host-bin",
-        ),
-        bwrap_bin=resolve_optional_input_path(
-            args.bwrap_bin,
-            "prebuilt Linux bwrap executable",
-            "--bwrap-bin",
-        ),
-        codex_command_runner_bin=resolve_optional_input_path(
-            args.codex_command_runner_bin,
-            "prebuilt Windows codex-command-runner.exe executable",
-            "--codex-command-runner-bin",
-        ),
-        codex_windows_sandbox_setup_bin=resolve_optional_input_path(
-            args.codex_windows_sandbox_setup_bin,
-            "prebuilt Windows codex-windows-sandbox-setup.exe executable",
-            "--codex-windows-sandbox-setup-bin",
-        ),
+        entrypoint_bin=entrypoint_bin,
+        code_mode_host_bin=code_mode_host_bin,
+        bwrap_bin=bwrap_bin,
+        codex_command_runner_bin=codex_command_runner_bin,
+        codex_windows_sandbox_setup_bin=codex_windows_sandbox_setup_bin,
     )
     version = read_workspace_version()
     inputs = PackageInputs(
         entrypoint_bin=source_outputs.entrypoint_bin,
         code_mode_host_bin=source_outputs.code_mode_host_bin,
-        rg_bin=resolve_rg_bin(spec, args.rg_bin),
-        zsh_bin=resolve_zsh_bin(spec, args.zsh_manifest),
+        rg_bin=preflight_rg_bin
+        or resolve_rg_source(
+            spec,
+            args.rg_bin,
+            require_materialized=False,
+        ),
+        zsh_bin=(
+            preflight_zsh_bin
+            if args.require_materialized_helper_sources
+            else resolve_zsh_bin(spec, args.zsh_manifest, args.zsh_bin)
+        ),
         bwrap_bin=source_outputs.bwrap_bin,
         codex_command_runner_bin=source_outputs.codex_command_runner_bin,
         codex_windows_sandbox_setup_bin=source_outputs.codex_windows_sandbox_setup_bin,
+    )
+    package_dir = (
+        package_dir_arg.resolve()
+        if package_dir_arg is not None
+        else Path(tempfile.mkdtemp(prefix="codex-package-")).resolve()
     )
     prepare_package_dir(package_dir, force=args.force)
     build_package_dir(package_dir, version, variant, spec, inputs)
@@ -206,8 +265,41 @@ def resolve_optional_input_path(
     explicit_path: Path | None,
     description: str,
     flag_name: str,
+    *,
+    require_materialized: bool = False,
 ) -> Path | None:
     if explicit_path is None:
         return None
 
+    if require_materialized:
+        return resolve_materialized_input_path(explicit_path, description, flag_name)
+
     return resolve_input_path(explicit_path, description, flag_name)
+
+
+def validate_materialized_source_helpers(
+    spec,
+    *,
+    require_materialized: bool,
+    bwrap_bin: Path | None,
+    codex_command_runner_bin: Path | None,
+    codex_windows_sandbox_setup_bin: Path | None,
+) -> None:
+    if not require_materialized:
+        return
+
+    if spec.is_linux and bwrap_bin is None:
+        raise RuntimeError(
+            "Stage 5G package source hermeticity requires --bwrap-bin "
+            f"for {spec.target}."
+        )
+    if spec.is_windows and codex_command_runner_bin is None:
+        raise RuntimeError(
+            "Stage 5G package source hermeticity requires "
+            f"--codex-command-runner-bin for {spec.target}."
+        )
+    if spec.is_windows and codex_windows_sandbox_setup_bin is None:
+        raise RuntimeError(
+            "Stage 5G package source hermeticity requires "
+            f"--codex-windows-sandbox-setup-bin for {spec.target}."
+        )
