@@ -6,14 +6,37 @@ from .dotslash import fetch_dotslash_executable
 from .targets import REPO_ROOT
 from .targets import TargetSpec
 from .targets import resolve_input_path
+from .targets import resolve_materialized_input_path
 
 
 RG_MANIFEST = REPO_ROOT / "scripts" / "codex_package" / "rg"
 
 
 def resolve_rg_bin(spec: TargetSpec, rg_bin: Path | None) -> Path:
+    return resolve_rg_source(spec, rg_bin, require_materialized=False)
+
+
+def resolve_rg_source(
+    spec: TargetSpec,
+    rg_bin: Path | None,
+    *,
+    require_materialized: bool,
+) -> Path:
     if rg_bin is not None:
+        if require_materialized:
+            return resolve_materialized_input_path(
+                rg_bin,
+                "ripgrep executable",
+                "--rg-bin",
+            )
         return resolve_input_path(rg_bin, "ripgrep executable", "--rg-bin")
+
+    if require_materialized:
+        raise RuntimeError(
+            "Stage 5G package source hermeticity requires --rg-bin for "
+            f"{spec.target}; DotSlash, package-cache, PATH, and network fallback "
+            "are not allowed during package assembly."
+        )
 
     return fetch_rg(spec)
 
