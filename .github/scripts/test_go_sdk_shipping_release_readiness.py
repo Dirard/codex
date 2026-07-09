@@ -131,7 +131,11 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
                         ]:
                             zip_file.writestr(member, member)
 
-            go_sdk_shipping_release_readiness.collect_artifacts(artifacts_dir, out_dir)
+            go_sdk_shipping_release_readiness.collect_artifacts(
+                artifacts_dir,
+                out_dir,
+                fixture_substitutions=go_sdk_shipping_release_readiness.fixture_substitution_records(),
+            )
 
             metadata = json.loads(
                 (out_dir / "shipping-release-readiness.json").read_text(
@@ -139,6 +143,10 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
                 )
             )
             self.assertFalse(metadata["notReleaseReady"])
+            self.assertEqual(
+                metadata["fixtureSubstitutions"],
+                go_sdk_shipping_release_readiness.fixture_substitution_records(),
+            )
             self.assertIn(
                 "targetEvidenceAttached=true",
                 (out_dir / metadata["duplicateCommandAuditPath"]).read_text(
@@ -190,6 +198,55 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
                 (out_dir / metadata["dotslash"]["archiveParityReportPath"]).read_text(
                     encoding="utf-8"
                 ),
+            )
+
+    def test_build_fixture_artifacts_uses_shared_package_archive_script(self) -> None:
+        if shutil.which("tar") is None or shutil.which("zstd") is None:
+            self.skipTest("tar and zstd are required for package archive fixtures")
+
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            artifacts_dir = root / "artifacts"
+            work_dir = root / "work"
+            out_dir = root / "shipping-release-readiness-metadata"
+            repo_root = Path(__file__).resolve().parents[2]
+
+            go_sdk_shipping_release_readiness.build_fixture_artifacts(
+                repo_root,
+                artifacts_dir,
+                work_dir,
+            )
+            self.assertTrue(
+                (
+                    artifacts_dir
+                    / "codex-package-x86_64-unknown-linux-musl.tar.zst"
+                ).is_file()
+            )
+            self.assertTrue(
+                (
+                    artifacts_dir
+                    / "codex-app-server-package-x86_64-pc-windows-msvc.tar.zst"
+                ).is_file()
+            )
+            self.assertTrue(
+                (artifacts_dir / "codex-x86_64-pc-windows-msvc.exe.zip").is_file()
+            )
+            self.assertTrue((artifacts_dir / "codex-x86_64-apple-darwin.dmg").is_file())
+
+            go_sdk_shipping_release_readiness.collect_artifacts(
+                artifacts_dir,
+                out_dir,
+                fixture_substitutions=go_sdk_shipping_release_readiness.fixture_substitution_records(),
+            )
+            metadata = json.loads(
+                (out_dir / "shipping-release-readiness.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertFalse(metadata["notReleaseReady"])
+            self.assertIn(
+                "nonPublishingFixtureBinaries",
+                {record["name"] for record in metadata["fixtureSubstitutions"]},
             )
 
     def write_tar_zst(self, archive_path: Path, temp_root: Path, entries: list[str]) -> None:
