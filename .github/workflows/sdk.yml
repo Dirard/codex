@@ -166,3 +166,367 @@ jobs:
       - name: Check for a clean worktree
         if: always() && !cancelled()
         uses: ./.github/actions/check-clean-worktree
+
+  go-sdk:
+    name: Go SDK - ${{ matrix.name }}
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 90
+    environment:
+      name: bazel
+      deployment: false
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-musl
+            bazel_target: x86_64-unknown-linux-musl
+            runs_on:
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-linux-x64-xl
+            sandbox: true
+            package_archive: true
+          - name: linux-arm64-musl
+            bazel_target: aarch64-unknown-linux-musl
+            runs_on:
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-linux-arm64
+            sandbox: true
+            package_archive: true
+          - name: macos-arm64
+            bazel_target: aarch64-apple-darwin
+            runs_on: macos-15-xlarge
+            package_archive: true
+          - name: macos-x64
+            bazel_target: x86_64-apple-darwin
+            runs_on: macos-15-large
+            package_archive: true
+          - name: windows
+            bazel_target: x86_64-pc-windows-msvc
+            runs_on:
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-x64
+            package_archive: true
+            release_shape: true
+          - name: windows-arm64
+            bazel_target: aarch64-pc-windows-msvc
+            runs_on:
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-arm64
+            package_archive: true
+            release_shape: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Bazel CI
+        id: setup_bazel
+        uses: ./.github/actions/setup-bazel-ci
+        with:
+          target: ${{ matrix.bazel_target }}
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.25"
+          cache-dependency-path: |
+            sdk/go/go.mod
+            sdk/go/go.sum
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          toolchain: "1.95.0"
+          targets: ${{ matrix.bazel_target }}
+
+      - name: Configure LLVM linker
+        if: ${{ runner.os == 'Windows' }}
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ matrix.bazel_target }}
+
+      - name: Install Rust helpers
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: just,nextest@0.9.103
+
+      - name: Install Linux bwrap build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bubblewrap pkg-config libcap-dev
+
+      - name: Install Zig
+        if: ${{ runner.os == 'Linux' }}
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+
+      - name: Install musl build tools
+        if: ${{ runner.os == 'Linux' }}
+        env:
+          TARGET: ${{ matrix.bazel_target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - name: Disable aws-lc jitter entropy (musl)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
+          target_no_jitter="AWS_LC_SYS_NO_JITTER_ENTROPY_${{ matrix.bazel_target }}"
+          target_no_jitter="${target_no_jitter//-/_}"
+          echo "${target_no_jitter}=1" >> "$GITHUB_ENV"
+
+      - name: Assert macOS x64 runner architecture
+        if: ${{ matrix.bazel_target == 'x86_64-apple-darwin' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "x86_64"
+
+      - name: Configure rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.bazel_target }}
+
+      - name: Materialize package helper root
+        shell: bash
+        env:
+          TARGET: ${{ matrix.bazel_target }}
+        run: |
+          set -euo pipefail
+          cd "${GITHUB_WORKSPACE}/codex-rs"
+          helper_args=(
+            --target "$TARGET"
+            --output-root "${RUNNER_TEMP}/codex-package-helpers"
+          )
+          case "$TARGET" in
+            *linux*)
+              cargo build --target "$TARGET" --release --timings --bin bwrap
+              bwrap_path="target/${TARGET}/release/bwrap"
+              if [[ ! -f "$bwrap_path" ]]; then
+                echo "bwrap binary ${bwrap_path} not found" >&2
+                exit 1
+              fi
+              strip --strip-debug --strip-unneeded "$bwrap_path"
+              helper_args+=(--bwrap-bin "$bwrap_path")
+              ;;
+            *windows*)
+              cargo build --target "$TARGET" --release --timings --bin codex-command-runner --bin codex-windows-sandbox-setup
+              helper_args+=(
+                --codex-command-runner-bin "target/${TARGET}/release/codex-command-runner.exe"
+                --codex-windows-sandbox-setup-bin "target/${TARGET}/release/codex-windows-sandbox-setup.exe"
+              )
+              ;;
+          esac
+
+          CODEX_PACKAGE_HELPER_ROOT="${RUNNER_TEMP}/codex-package-helpers"
+          rm -rf "${CODEX_PACKAGE_HELPER_ROOT}/${TARGET}"
+          PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 -m codex_package.materialize_helpers "${helper_args[@]}"
+          PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 -m codex_package.materialize_helpers \
+            --target "$TARGET" \
+            --output-root "$CODEX_PACKAGE_HELPER_ROOT" \
+            --verify-only
+          echo "CODEX_PACKAGE_HELPER_ROOT=$CODEX_PACKAGE_HELPER_ROOT" >> "$GITHUB_ENV"
+
+      - name: Stage Go SDK runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage_args=(
+            --out "${RUNNER_TEMP}/codex-go-sdk-runtime"
+            --bazel-target "${{ matrix.bazel_target }}"
+            --cargo-profile dev
+            --build-metadata-job go-sdk
+            --github-env "${GITHUB_ENV}"
+          )
+          if [[ "${{ matrix.release_shape || false }}" == "true" ]]; then
+            stage_args+=(--windows-release-shaped-msvc --windows-msvc-host-platform)
+          fi
+          .github/scripts/stage-codex-runtime.sh "${stage_args[@]}"
+
+      - name: Warm up staged runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${CODEX_EXEC_PATH:?}" --version
+
+      - name: Test Go SDK against real app-server
+        shell: bash
+        env:
+          CODEX_GO_SDK_REQUIRE_REAL_APP_SERVER: "1"
+        run: |
+          set -euo pipefail
+          cd sdk/go
+          required_tests=(
+            TestRealAppServerInitializeStrictDigest
+            TestRealAppServerRejectsDebugHookEnv
+            TestRealAppServerDigestMismatch
+            TestRealAppServerCompatibilityOverridePolicy
+            TestRealAppServerThreadRunHappyPath
+            TestRealAppServerConfigReadWrite
+            TestRealAppServerFilesystemWatch
+            TestRealAppServerCommandExecStreaming
+            TestRealAppServerProcessLifecycle
+            TestRealAppServerSafeResourceWorkflows
+            TestRealAppServerRemoteControlWorkflow
+            TestRealAppServerModelList
+            TestRealAppServerProtocolModeExperimentalGate
+            TestRealAppServerUnauthenticatedAccountRead
+          )
+          go test ./... -list 'TestRealAppServer|TestDigestMismatch|TestCompatibilityOverridePolicy' | tee "${RUNNER_TEMP}/go-sdk-real-tests.txt"
+          for test_name in "${required_tests[@]}"; do
+            if ! grep -qx "$test_name" "${RUNNER_TEMP}/go-sdk-real-tests.txt"; then
+              echo "Missing required Go SDK real app-server test: ${test_name}" >&2
+              exit 1
+            fi
+            go test ./... -run "^${test_name}$"
+          done
+          if [[ "${{ matrix.sandbox || false }}" == "true" ]]; then
+            go test ./... -run '^TestSandboxPolicy'
+          fi
+          go test ./...
+
+      - name: Race-test Go SDK
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd sdk/go
+          go test -race ./...
+
+      - name: Test Go SDK release archive runtime
+        if: ${{ matrix.package_archive }}
+        shell: bash
+        env:
+          CODEX_GO_SDK_REQUIRE_REAL_APP_SERVER: "1"
+        run: |
+          set -euo pipefail
+          zstd_args=()
+          if [[ -n "${CODEX_GO_SDK_ZSTD_SOURCE:-}" ]]; then
+            if [[ ! -x "${CODEX_GO_SDK_ZSTD_SOURCE}" ]]; then
+              echo "CODEX_GO_SDK_ZSTD_SOURCE must point at the Stage 5G materialized zstd executable" >&2
+              exit 1
+            fi
+            zstd_args+=(--zstd-source "${CODEX_GO_SDK_ZSTD_SOURCE}")
+          else
+            zstd_bin="$(command -v zstd || true)"
+            if [[ -z "$zstd_bin" ]]; then
+              echo "zstd is required for Go SDK release-archive validation unless CODEX_GO_SDK_ZSTD_SOURCE points at the Stage 5G no-network source; DotSlash fallback is not accepted" >&2
+              exit 1
+            fi
+            zstd_realpath="$(cd "$(dirname "$zstd_bin")" && pwd -P)/$(basename "$zstd_bin")"
+            repo_zstd="${GITHUB_WORKSPACE}/.github/workflows/zstd"
+            if [[ "$zstd_realpath" == "$repo_zstd" ]]; then
+              echo "Repo DotSlash zstd is not accepted for Go SDK package archive validation: $zstd_realpath" >&2
+              exit 1
+            fi
+          fi
+          release_shape_args=()
+          if [[ "${{ matrix.release_shape || false }}" == "true" ]]; then
+            release_shape_args+=(--windows-release-shaped-msvc --windows-msvc-host-platform)
+          fi
+          stage_output="$(
+            .github/scripts/stage-codex-runtime.sh \
+              --out "${RUNNER_TEMP}/codex-go-sdk-release-runtime" \
+              --bazel-target "${{ matrix.bazel_target }}" \
+              --cargo-profile release \
+              --build-metadata-job go-sdk-release-archive \
+              --release-package-archive \
+              --print-shell-env \
+              "${zstd_args[@]}" \
+              "${release_shape_args[@]}"
+          )"
+          eval "$stage_output"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          metadata_path = Path(os.environ["CODEX_RUNTIME_METADATA_PATH"])
+          metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+          if metadata.get("runtimeSource") != "packageArchive":
+              raise SystemExit(f"expected packageArchive runtime, got {metadata.get('runtimeSource')!r}")
+          if metadata.get("cargoProfile") != "release":
+              raise SystemExit(f"expected release cargoProfile, got {metadata.get('cargoProfile')!r}")
+          archive = metadata.get("packageArchive") or {}
+          if archive.get("target") != "${{ matrix.bazel_target }}":
+              raise SystemExit(f"unexpected package archive target: {archive.get('target')!r}")
+          if not str(archive.get("path", "")).endswith((".tar.zst", ".zip", ".dmg")):
+              raise SystemExit(f"unexpected package archive path: {archive.get('path')!r}")
+          helper_files = set((metadata.get("helperManifest") or {}).get("files") or [])
+          required_helpers = {"rg"}
+          target = "${{ matrix.bazel_target }}"
+          if "linux" in target:
+              required_helpers.add("codex-resources/bwrap")
+          if "windows" in target:
+              required_helpers.update({"codex-command-runner.exe", "codex-windows-sandbox-setup.exe"})
+          missing = sorted(required_helpers - helper_files)
+          if missing:
+              raise SystemExit(f"helper manifest missing {missing}")
+          if "${{ matrix.release_shape || false }}" == "true" and not archive.get("windowsReleaseShapedMsvc"):
+              raise SystemExit("Windows package archive did not record release-shaped MSVC layout")
+          PY
+          cd sdk/go
+          for test_name in \
+            TestRealAppServerInitializeStrictDigest \
+            TestRealAppServerRejectsDebugHookEnv \
+            TestRealAppServerThreadRunHappyPath \
+            TestRealAppServerCommandExecStreaming \
+            TestRealAppServerProcessLifecycle \
+            TestRealAppServerFilesystemWatch
+          do
+            go test ./... -run "^${test_name}$"
+          done
+
+      - name: Check Rust protocol schema drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd codex-rs
+          just write-app-server-schema --check
+          cargo run --manifest-path Cargo.toml -p codex-app-server-protocol --bin write_schema_fixtures -- \
+            --experimental \
+            --check \
+            --schema-root ../sdk/go/internal/protocodex/schema-experimental
+          just test -p codex-app-server-protocol
+          "${GITHUB_WORKSPACE}/.github/scripts/run-bazel-ci.sh" -- test //codex-rs/app-server-protocol:app-server-protocol
+
+      - name: Check Go SDK generated protocol drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd sdk/go
+          go run ./internal/cmd/protocodex --check --mode stable \
+            --schema-root internal/protocodex/schema \
+            --manifest internal/protocodex/manifest/app_server_protocol_manifest.json
+          go run ./internal/cmd/protocodex --check --mode experimental \
+            --schema-root internal/protocodex/schema-experimental \
+            --manifest internal/protocodex/manifest/app_server_protocol_manifest.json
+          go run ./internal/cmd/protocodex --check --mode both \
+            --schema-root internal/protocodex/schema \
+            --experimental-schema-root internal/protocodex/schema-experimental \
+            --manifest internal/protocodex/manifest/app_server_protocol_manifest.json
+          go test ./... -run 'TestResourceCoverage|TestResourceDocsCoverage|TestServerHandlerDocsCoverage'
+
+      - name: Save bazel repository cache
+        if: always() && !cancelled() && steps.setup_bazel.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cache/bazel-repo-cache
+          key: bazel-cache-${{ matrix.bazel_target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
