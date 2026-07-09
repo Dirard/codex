@@ -194,6 +194,8 @@ func TestRuntimeLayoutGoSDKWorkflowWiring(t *testing.T) {
 		"ran_smoke_tests",
 		"helperRootEvidence",
 		"producerModeMaterializeHelpers",
+		"notReleaseReadyTargets",
+		"SDK CI target evidence is uploaded for audit only",
 		"windowsReleaseShapedMsvc",
 		"go-sdk-ci-release-evidence",
 		"target-evidence.json",
