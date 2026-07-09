@@ -319,7 +319,8 @@ preflight_zstd() {
     echo "zstd is required for --release-package-archive unless --zstd-source points at a materialized executable." >&2
     exit 1
   fi
-  repo_zstd="${repo_root%/}/.github/workflows/zstd"
+  repo_zstd_dir="${repo_root%/}/.github/workflows"
+  repo_zstd="$repo_zstd_dir/zstd"
   if [[ "$zstd_bin" == "$repo_zstd" ]]; then
     echo "Repo DotSlash zstd manifest is not allowed for package archives: $zstd_bin" >&2
     exit 1
