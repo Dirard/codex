@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -212,16 +213,20 @@ func TestStartupContextCancellationAfterNewClientDoesNotKillRuntime(t *testing.T
 }
 
 func TestNotificationOptOutValidation(t *testing.T) {
+	transport := newScriptedInitializedTransport(t, nil)
 	_, err := NewClient(context.Background(), ClientConfig{
-		Transport:           newScriptedInitializedTransport(t, nil),
+		Transport:           transport,
 		NotificationOptOuts: NotificationOptOuts{Methods: []string{"turn/completed"}},
 	})
 	var configErr *ConfigError
 	if !errors.As(err, &configErr) {
 		t.Fatalf("err = %T, want *ConfigError", err)
 	}
+	if len(transport.sentFrames()) != 0 {
+		t.Fatal("initialize was sent after default-mode notification opt-out conflict")
+	}
 
-	client, err := NewClient(context.Background(), ClientConfig{
+	rawOnlyClient, err := NewClient(context.Background(), ClientConfig{
 		Transport:           newScriptedInitializedTransport(t, nil),
 		Mode:                ClientModeRawOnly,
 		NotificationOptOuts: NotificationOptOuts{Methods: []string{"turn/completed"}},
@@ -229,9 +234,49 @@ func TestNotificationOptOutValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = client.Close() })
-	if len(client.Metadata().DisabledHighLevelWorkflows) == 0 {
+	t.Cleanup(func() { _ = rawOnlyClient.Close() })
+	if len(rawOnlyClient.Metadata().DisabledHighLevelWorkflows) == 0 {
 		t.Fatal("raw-only metadata did not expose disabled workflows")
+	}
+	wantDisabled := []string{
+		"account/browser-login disabled in raw-only mode",
+		"account/device-code-login disabled in raw-only mode",
+		"mcpServer/oauth/login disabled in raw-only mode",
+		"review/start requires turn/completed",
+		"thread/start disabled in raw-only mode",
+		"turn/start requires turn/completed",
+	}
+	if got := rawOnlyClient.Metadata().DisabledHighLevelWorkflows; !reflect.DeepEqual(got, wantDisabled) {
+		t.Fatalf("raw-only disabled workflows = %#v, want %#v", got, wantDisabled)
+	}
+}
+
+func TestNotificationOptOutsRejectUnknownMethodBeforeInitialize(t *testing.T) {
+	transport := newScriptedInitializedTransport(t, nil)
+	_, err := NewClient(context.Background(), ClientConfig{
+		Transport:           transport,
+		NotificationOptOuts: NotificationOptOuts{Methods: []string{"future/typo"}},
+	})
+	var configErr *ConfigError
+	if !errors.As(err, &configErr) {
+		t.Fatalf("err = %T, want *ConfigError", err)
+	}
+	if len(transport.sentFrames()) != 0 {
+		t.Fatal("initialize was sent after unknown notification opt-out")
+	}
+}
+
+func TestDefaultModeAllowsUnimplementedWorkflowNotificationOptOut(t *testing.T) {
+	client, err := NewClient(context.Background(), ClientConfig{
+		Transport:           newScriptedInitializedTransport(t, nil),
+		NotificationOptOuts: NotificationOptOuts{Methods: []string{"fs/changed"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if len(client.Metadata().DisabledHighLevelWorkflows) != 0 {
+		t.Fatalf("disabled workflows = %#v, want none", client.Metadata().DisabledHighLevelWorkflows)
 	}
 }
 
