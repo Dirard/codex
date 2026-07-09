@@ -51,7 +51,8 @@ class ResolveZshBinTest(unittest.TestCase):
                 return_value=root / "cache",
             ):
                 zsh_bin = resolve_zsh_bin(
-                    TARGET_SPECS["x86_64-unknown-linux-musl"], manifest
+                    TARGET_SPECS["x86_64-unknown-linux-musl"],
+                    manifest_path=manifest,
                 )
 
             self.assertIsNotNone(zsh_bin)

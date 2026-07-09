@@ -68,16 +68,57 @@ build. Windows targets keep Cargo's release-build MSVC artifact path. Explicit
 overrides remain authoritative when both variables are already set. Set
 `V8_FROM_SOURCE=1` to leave the build with the `v8` crate source-build path.
 
-`rg` is not built from this repository, so the builder fetches it from the
-DotSlash manifest at `scripts/codex_package/rg`. Downloaded archives are cached
-under `$TMPDIR/codex-package/<target>-rg` and are reused only after the recorded
-size and SHA-256 digest have been verified. Pass `--rg-bin` to use a local
-ripgrep executable instead.
+`rg` is not built from this repository, so the default local builder path can
+fetch it from the DotSlash manifest at `scripts/codex_package/rg`. Downloaded
+archives are cached under `$TMPDIR/codex-package/<target>-rg` and are reused only
+after the recorded size and SHA-256 digest have been verified. Pass `--rg-bin`
+to use a local ripgrep executable instead.
 
 The patched zsh fork used by `shell_zsh_fork` is fetched from the DotSlash
-manifest at `scripts/codex_package/codex-zsh` when the selected target has a
-matching prebuilt artifact. Downloaded archives are cached under
-`$TMPDIR/codex-package/<target>-zsh` and installed at
-`codex-resources/zsh/bin/zsh`. Pass `--zsh-manifest` to use a different
-DotSlash manifest, such as the manifest published with a standalone zsh
-artifact release.
+manifest at `scripts/codex_package/codex-zsh` in that default local path when
+the selected target has a matching prebuilt artifact. Downloaded archives are
+cached under `$TMPDIR/codex-package/<target>-zsh` and installed at
+`codex-resources/zsh/bin/zsh`. Pass `--zsh-manifest` to use a different DotSlash
+manifest, such as the manifest published with a standalone zsh artifact release,
+or pass `--zsh-bin` to use an already materialized patched zsh executable.
+
+## Stage 5G hermetic package-source contract
+
+Release-shaped package assembly and Go SDK runtime staging must use
+`--require-materialized-helper-sources`. In that mode the builder requires
+explicit `--rg-bin` and, for non-Windows targets, explicit `--zsh-bin` inputs.
+Linux targets also require explicit `--bwrap-bin`, and Windows targets require
+explicit `--codex-command-runner-bin` and `--codex-windows-sandbox-setup-bin`.
+It does not call DotSlash, read the package cache, discover helpers from `PATH`,
+source-build helper payloads, or fetch helper archives from the network.
+
+The release wrapper `.github/scripts/build-codex-package-archive.sh` always uses
+that strict mode. The shipping release workflows run
+`python3 -m codex_package.materialize_helpers` before package assembly, set
+`CODEX_PACKAGE_HELPER_ROOT`, and then consume only already materialized helper
+payloads:
+
+```text
+${CODEX_PACKAGE_HELPER_ROOT}/<target>/rg[.exe]
+${CODEX_PACKAGE_HELPER_ROOT}/<target>/zsh       # non-Windows targets
+${CODEX_PACKAGE_HELPER_ROOT}/<target>/bwrap     # Linux targets
+${CODEX_PACKAGE_HELPER_ROOT}/<target>/codex-command-runner.exe
+${CODEX_PACKAGE_HELPER_ROOT}/<target>/codex-windows-sandbox-setup.exe
+```
+
+The workflow-owned materializer uses the pinned manifest metadata for managed
+`rg` and patched zsh, downloads those provider archives into the helper root,
+verifies their declared size and SHA-256 digest, and extracts the configured
+payload path. Linux `bwrap` and Windows sandbox helper executables are copied
+from the same release binaries that the workflow already builds, signs, and
+verifies.
+
+`zstd` is a fail-fast prerequisite for `.tar.zst` archive creation and release
+artifact compression. The package builder no longer falls back to
+`.github/workflows/zstd` or DotSlash for archive validation.
+
+This makes the shipping package assembly path reviewed and explicit instead of
+depending on an out-of-band environment variable. Stage 6 runtime staging and
+release-readiness claims still remain blocked until the same helper payloads are
+available before Go SDK CI and release-readiness runs begin with network
+disabled.
