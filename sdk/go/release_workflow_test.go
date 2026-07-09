@@ -109,6 +109,20 @@ func TestReleaseChecksumManifestCoversZstdPackageArchives(t *testing.T) {
 
 func TestShippingReleaseReadinessWorkflowSourcePreflight(t *testing.T) {
 	workflow := readRepoText(t, ".github/workflows/go-sdk-shipping-release-readiness.yml")
+	collector := readRepoText(t, ".github/scripts/go_sdk_shipping_release_readiness.py")
+	shippingSources := workflow + "\n" + collector
+
+	for _, required := range []string{
+		"shipping-release-readiness.json",
+		"reusedWorkflows",
+		"reusedJobs",
+		"reusedScripts",
+		"workflowLocalDuplicateCommands=false",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("go-sdk-shipping-release-readiness workflow source anchors missing %q", required)
+		}
+	}
 
 	for _, required := range []string{
 		"name: go-sdk-shipping-release-readiness",
@@ -118,6 +132,8 @@ func TestShippingReleaseReadinessWorkflowSourcePreflight(t *testing.T) {
 		"actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2",
 		"persist-credentials: false",
 		"shipping-release-readiness-metadata",
+		"go_sdk_shipping_release_readiness.py",
+		"source-preflight",
 		"shipping-release-readiness.json",
 		"workflowShape",
 		"thinWrapper",
@@ -160,8 +176,8 @@ func TestShippingReleaseReadinessWorkflowSourcePreflight(t *testing.T) {
 		"codex-windows-sandbox-setup.exe",
 		"test_dotslash_release_archive_config_parity",
 	} {
-		if !strings.Contains(workflow, required) {
-			t.Fatalf("go-sdk-shipping-release-readiness workflow missing %q", required)
+		if !strings.Contains(shippingSources, required) {
+			t.Fatalf("go-sdk-shipping-release-readiness sources missing %q", required)
 		}
 	}
 
