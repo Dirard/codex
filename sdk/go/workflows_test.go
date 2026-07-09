@@ -172,6 +172,7 @@ func TestClientNotificationsReceivesUnknownAndKnownRoutedNotifications(t *testin
 
 func TestLoginWithAPIKeyRedactsReturnedErrors(t *testing.T) {
 	const secret = "sk-test-secret-value"
+	isolateTestCodexHome(t)
 	transport := newWorkflowTransport(t)
 	transport.errors["account/login/start"] = &jsonrpc.RPCError{
 		Code:    -32000,
@@ -203,6 +204,49 @@ func TestLoginWithAPIKeyRedactsReturnedErrors(t *testing.T) {
 	}
 	if strings.Contains(rpcErr.Message, secret) || strings.Contains(string(rpcErr.Data), secret) {
 		t.Fatalf("RPCError leaked secret after redaction: %#v", rpcErr)
+	}
+}
+
+func TestDeviceCodeLoginHandleExposesUserPromptFields(t *testing.T) {
+	isolateTestCodexHome(t)
+	transport := newWorkflowTransport(t)
+	transport.responses["account/login/start"] = mustJSON(t, protocol.LoginAccountResponse{
+		TypeValue:       "chatgptDeviceCode",
+		LoginID:         protocol.SomeNonNull("login-1"),
+		VerificationURL: protocol.SomeNonNull("https://example.com/device"),
+		UserCode:        protocol.SomeNonNull("ABCD-EFGH"),
+	})
+	client, err := NewClient(context.Background(), ClientConfig{Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	login, err := client.Accounts.StartDeviceCodeLogin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertMethod(t, transport.lastFrame(t), "account/login/start")
+	if got := login.ID(); got != "login-1" {
+		t.Fatalf("login ID = %q, want login-1", got)
+	}
+	if got := login.VerificationURL(); got != "https://example.com/device" {
+		t.Fatalf("verification URL = %q, want https://example.com/device", got)
+	}
+	if got := login.UserCode(); got != "ABCD-EFGH" {
+		t.Fatalf("user code = %q, want ABCD-EFGH", got)
+	}
+
+	transport.deliverNotification("account/login/completed", mustJSON(t, protocol.AccountLoginCompletedNotification{
+		LoginID: protocol.Some("login-1"),
+		Success: true,
+	}), nil)
+	result, err := login.Wait(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.LoginID != "login-1" || !result.Success {
+		t.Fatalf("result = %#v", result)
 	}
 }
 
@@ -381,6 +425,7 @@ func TestHighLevelAdditionalContextUsesProtocolCapsWhenLimitsAreRaised(t *testin
 }
 
 func TestAccountLoginHandleWaitsForCompletion(t *testing.T) {
+	isolateTestCodexHome(t)
 	transport := newWorkflowTransport(t)
 	transport.responses["account/login/start"] = mustJSON(t, protocol.LoginAccountResponse{
 		TypeValue: "chatgpt",
@@ -431,6 +476,7 @@ func TestAccountLoginHandleWaitsForCompletion(t *testing.T) {
 }
 
 func TestAccountLoginHandleMissingLoginIDCompletionFailsClosed(t *testing.T) {
+	isolateTestCodexHome(t)
 	transport := newWorkflowTransport(t)
 	transport.responses["account/login/start"] = mustJSON(t, protocol.LoginAccountResponse{
 		TypeValue: "chatgpt",
@@ -581,7 +627,7 @@ func TestReviewHandleWaitsForTurnCompletion(t *testing.T) {
 
 	handle, err := client.Reviews.Start(context.Background(), ReviewStartOptions{
 		ThreadID: "thread-1",
-		Target:   protocol.ReviewTarget{TypeValue: "uncommittedChanges"},
+		Target:   UncommittedChangesReviewTarget(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -629,8 +675,63 @@ func TestReviewHandleWaitsForTurnCompletion(t *testing.T) {
 	}
 }
 
+func TestReviewStartRejectsMalformedHandleIDs(t *testing.T) {
+	tests := []struct {
+		name          string
+		response      protocol.ReviewStartResponse
+		reasonSnippet string
+	}{
+		{
+			name: "missing-review-thread-id",
+			response: protocol.ReviewStartResponse{
+				Turn: protocol.Turn{
+					ID:     "review-turn-1",
+					Items:  []protocol.ThreadItem{},
+					Status: protocol.TurnStatusInProgress,
+				},
+			},
+			reasonSnippet: "reviewThreadId",
+		},
+		{
+			name: "missing-turn-id",
+			response: protocol.ReviewStartResponse{
+				ReviewThreadID: "review-thread-1",
+				Turn: protocol.Turn{
+					Items:  []protocol.ThreadItem{},
+					Status: protocol.TurnStatusInProgress,
+				},
+			},
+			reasonSnippet: "turn.id",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			transport := newWorkflowTransport(t)
+			transport.responses["review/start"] = mustJSON(t, tt.response)
+			client, err := NewClient(context.Background(), ClientConfig{Transport: transport})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = client.Close() })
+
+			handle, err := client.Reviews.Start(context.Background(), ReviewStartOptions{
+				ThreadID: "thread-1",
+				Target:   UncommittedChangesReviewTarget(),
+			})
+			if handle != nil {
+				t.Fatalf("handle = %#v, want nil", handle)
+			}
+			var unsupported *UnsupportedError
+			if !errors.As(err, &unsupported) || !strings.Contains(unsupported.Reason, tt.reasonSnippet) {
+				t.Fatalf("err = %T(%v), want *UnsupportedError containing %q", err, err, tt.reasonSnippet)
+			}
+		})
+	}
+}
+
 func TestHighLevelWorkflowsRejectRawOnlyMode(t *testing.T) {
 	transport := newWorkflowTransport(t)
+	transport.responses["remoteControl/pairing/status"] = mustJSON(t, protocol.RemoteControlPairingStatusResponse{Claimed: true})
 	client, err := NewClient(context.Background(), ClientConfig{Transport: transport, Mode: ClientModeRawOnly})
 	if err != nil {
 		t.Fatal(err)
@@ -667,6 +768,22 @@ func TestHighLevelWorkflowsRejectRawOnlyMode(t *testing.T) {
 				return err
 			},
 		},
+		{
+			name:   "remote control pairing",
+			method: "remoteControl/pairing/start",
+			call: func() error {
+				_, _, err := client.RemoteControl.StartPairing(ctx, RemoteControlPairingOptions{ManualCode: true})
+				return err
+			},
+		},
+		{
+			name:   "remote control pairing status",
+			method: "remoteControl/pairing/status",
+			call: func() error {
+				_, err := client.RemoteControl.PairingStatus(ctx, "pair-code")
+				return err
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -680,9 +797,19 @@ func TestHighLevelWorkflowsRejectRawOnlyMode(t *testing.T) {
 			}
 		})
 	}
+	_, err = client.Raw().RemoteControlPairingStatus(ctx, protocol.RemoteControlPairingStatusParams{
+		PairingCode: protocol.Some("pair-code"),
+	})
+	if err != nil {
+		t.Fatalf("raw remoteControl/pairing/status err = %v", err)
+	}
+	if !methodWasSent(t, transport, "remoteControl/pairing/status") {
+		t.Fatal("raw remoteControl/pairing/status was not sent in raw-only mode")
+	}
 }
 
 func TestRawOnlyModeAllowsSafeAccountWrappers(t *testing.T) {
+	isolateTestCodexHome(t)
 	transport := newWorkflowTransport(t)
 	transport.responses["account/read"] = json.RawMessage(`{"requiresOpenaiAuth":false}`)
 	transport.responses["account/login/start"] = json.RawMessage(`{"type":"apiKey"}`)
@@ -747,6 +874,7 @@ func TestRawOnlyNotificationOptOutBlocksDependentWorkflowButAllowsRaw(t *testing
 }
 
 func TestAccountsThinWrappersUseHighLevelClient(t *testing.T) {
+	isolateTestCodexHome(t)
 	transport := newWorkflowTransport(t)
 	transport.responses["account/read"] = json.RawMessage(`{"requiresOpenaiAuth":false}`)
 	transport.responses["account/usage/read"] = json.RawMessage(`{"summary":{}}`)
