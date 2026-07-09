@@ -240,7 +240,9 @@ func TestStageCodexRuntimeScriptStagesReleasePackageArchive(t *testing.T) {
 		t.Skip("zstd is not installed")
 	}
 	fixture := newLinuxStagingFixture(t, "archive out with spaces")
-	zstdSource := filepath.Join(fixture.root, "tools", "zstd")
+	ambientDir := filepath.Join(fixture.root, "ambient")
+	writeExecutable(t, filepath.Join(ambientDir, "zstd"), "#!/usr/bin/env sh\nexit 42\n")
+	zstdSource := filepath.Join(fixture.root, "tools", "reviewed-zstd")
 	writeExecutable(t, zstdSource, "#!/bin/sh\nexec \""+zstdBin+"\" \"$@\"\n")
 
 	cmd := exec.Command(
@@ -262,6 +264,7 @@ func TestStageCodexRuntimeScriptStagesReleasePackageArchive(t *testing.T) {
 		os.Environ(),
 		"CODEX_GO_SDK_TEST_LAYOUT_ROOT="+fixture.seedRoot,
 		"GITHUB_WORKSPACE="+fixture.repoRoot,
+		"PATH="+ambientDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -316,6 +319,40 @@ func TestStageCodexRuntimeScriptStagesReleasePackageArchive(t *testing.T) {
 		t.Fatalf("packageArchive archiveFormats = %v, want tar.gz and tar.zst", metadata.PackageArchive.ArchiveFormats)
 	}
 	assertRuntimeHelperManifest(t, metadata, fixture.target, []string{"bwrap", "rg", "zsh"})
+}
+
+func TestStageCodexRuntimeScriptRejectsDotSlashZstdSource(t *testing.T) {
+	fixture := newLinuxStagingFixture(t, "archive out")
+	zstdSource := filepath.Join(fixture.root, "outside", "zstd")
+	writeExecutable(t, zstdSource, "#!/usr/bin/env dotslash\n{}\n")
+
+	cmd := exec.Command(
+		"bash",
+		fixture.script,
+		"--out",
+		fixture.out,
+		"--bazel-target",
+		fixture.target,
+		"--helper-root",
+		fixture.helperRoot,
+		"--cargo-profile",
+		"release",
+		"--release-package-archive",
+		"--zstd-source",
+		zstdSource,
+	)
+	cmd.Env = append(
+		os.Environ(),
+		"CODEX_GO_SDK_TEST_LAYOUT_ROOT="+fixture.seedRoot,
+		"GITHUB_WORKSPACE="+fixture.repoRoot,
+	)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("stage-codex-runtime.sh accepted DotSlash zstd source\n%s", output)
+	}
+	if !strings.Contains(string(output), "DotSlash-backed zstd wrapper is not allowed") {
+		t.Fatalf("stage-codex-runtime.sh output missing DotSlash rejection:\n%s", output)
+	}
 }
 
 func TestStageCodexRuntimeScriptsUseVerifiedHelpersOnly(t *testing.T) {
