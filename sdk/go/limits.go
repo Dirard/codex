@@ -1,14 +1,18 @@
 package codex
 
-import "time"
+import (
+	"time"
+
+	"github.com/openai/codex/sdk/go/protocol"
+)
 
 const (
 	DefaultMaxFrameBytes                  int64 = 16 * 1024 * 1024
 	DefaultMaxLocalInputBytes             int64 = 16 * 1024 * 1024
-	DefaultMaxAdditionalContextEntries          = 16
-	DefaultMaxAdditionalContextKeyBytes   int64 = 256
-	DefaultMaxAdditionalContextValueBytes int64 = 8 * 1024
-	DefaultMaxAdditionalContextTotalBytes int64 = 64 * 1024
+	DefaultMaxAdditionalContextEntries          = protocol.MaxAdditionalContextEntries
+	DefaultMaxAdditionalContextKeyBytes   int64 = protocol.MaxAdditionalContextKeyBytes
+	DefaultMaxAdditionalContextValueBytes int64 = protocol.MaxAdditionalContextValueBytes
+	DefaultMaxAdditionalContextTotalBytes int64 = protocol.MaxAdditionalContextTotalBytes
 	DefaultResourceStreamQueue                  = 256
 	DefaultPendingTurnQueue                     = 512
 	DefaultPendingTurnMap                       = 128
@@ -57,6 +61,18 @@ func normalizeLimits(l ClientLimits) (ClientLimits, error) {
 		l.MaxAdditionalContextValueBytes = DefaultMaxAdditionalContextValueBytes
 	}
 	if l.MaxAdditionalContextTotalBytes == 0 {
+		l.MaxAdditionalContextTotalBytes = DefaultMaxAdditionalContextTotalBytes
+	}
+	if l.MaxAdditionalContextEntries > DefaultMaxAdditionalContextEntries {
+		l.MaxAdditionalContextEntries = DefaultMaxAdditionalContextEntries
+	}
+	if l.MaxAdditionalContextKeyBytes > DefaultMaxAdditionalContextKeyBytes {
+		l.MaxAdditionalContextKeyBytes = DefaultMaxAdditionalContextKeyBytes
+	}
+	if l.MaxAdditionalContextValueBytes > DefaultMaxAdditionalContextValueBytes {
+		l.MaxAdditionalContextValueBytes = DefaultMaxAdditionalContextValueBytes
+	}
+	if l.MaxAdditionalContextTotalBytes > DefaultMaxAdditionalContextTotalBytes {
 		l.MaxAdditionalContextTotalBytes = DefaultMaxAdditionalContextTotalBytes
 	}
 	if l.ResourceStreamQueue == 0 {

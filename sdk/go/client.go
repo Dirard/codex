@@ -12,9 +12,12 @@ import (
 type Client struct {
 	rpc                *jsonrpc.Client
 	raw                *protocol.RawClient
+	router             *notificationRouter
 	metadata           Metadata
 	configuredHandlers ServerHandlers
 	limits             ClientLimits
+	disabledStart      map[string]string
+	rawOnly            bool
 
 	Accounts             *AccountsClient
 	Threads              *ThreadsClient
@@ -66,7 +69,10 @@ func newClient(ctx context.Context, cfg ClientConfig) (*Client, error) {
 		},
 		configuredHandlers: normalized.Handlers,
 		limits:             normalized.Limits,
+		disabledStart:      disabledImplementedHighLevelStartMethods(normalized.NotificationOptOuts),
+		rawOnly:            normalized.Mode == ClientModeRawOnly,
 	}
+	client.router = newNotificationRouter(normalized.Limits)
 	rpc := jsonrpc.NewClientWithOptions(transport, client, jsonrpc.ClientOptions{
 		HandlerConcurrency: normalized.Limits.HandlerConcurrency,
 		HandlerQueue:       normalized.Limits.HandlerQueue,
@@ -79,12 +85,16 @@ func newClient(ctx context.Context, cfg ClientConfig) (*Client, error) {
 	}
 	raw := protocol.NewRawClient(client)
 	client.raw = &raw
+	client.initResourceClients()
 	return client, nil
 }
 
 func (c *Client) Close() error {
 	if c == nil || c.rpc == nil {
 		return nil
+	}
+	if c.router != nil {
+		c.router.close()
 	}
 	return c.rpc.Close()
 }
@@ -94,6 +104,15 @@ func (c *Client) Metadata() Metadata {
 		return Metadata{}
 	}
 	return c.metadata
+}
+
+func (c *Client) Notifications(ctx context.Context) (*NotificationStream, error) {
+	if c == nil || c.router == nil {
+		return nil, &ClosedError{}
+	}
+	stream := c.router.subscribeGlobal()
+	closeStreamOnContext(ctx, stream)
+	return stream, nil
 }
 
 func (c *Client) Call(ctx context.Context, method string, params any, result any, metadata protocol.MethodMetadata) error {
@@ -142,9 +161,65 @@ func (c *Client) HandleServerRequest(ctx context.Context, method string, params 
 	return c.serverHandlers().DispatchServerRequest(ctx, method, params)
 }
 
+func (c *Client) HandleServerNotification(ctx context.Context, method string, params json.RawMessage, trace json.RawMessage) {
+	if c == nil || c.router == nil {
+		return
+	}
+	c.router.route(ctx, method, params, trace)
+}
+
 func (c *Client) serverHandlers() ServerHandlers {
 	if c == nil {
 		return ServerHandlers{}
 	}
 	return c.configuredHandlers
+}
+
+func (c *Client) initResourceClients() {
+	c.Accounts = &AccountsClient{client: c}
+	c.Threads = &ThreadsClient{client: c}
+	c.Turns = &TurnsClient{client: c}
+	c.Realtime = &RealtimeClient{client: c}
+	c.Reviews = &ReviewsClient{client: c}
+	c.Models = &ModelsClient{client: c}
+	c.Config = &ConfigClient{client: c}
+	c.FileSystem = &FileSystemClient{client: c}
+	c.Commands = &CommandsClient{client: c}
+	c.Processes = &ProcessesClient{client: c}
+	c.Environments = &EnvironmentsClient{client: c}
+	c.Skills = &SkillsClient{client: c}
+	c.Hooks = &HooksClient{client: c}
+	c.Plugins = &PluginsClient{client: c}
+	c.Marketplace = &MarketplaceClient{client: c}
+	c.Apps = &AppsClient{client: c}
+	c.MCP = &MCPClient{client: c}
+	c.RemoteControl = &RemoteControlClient{client: c}
+	c.CollaborationModes = &CollaborationModesClient{client: c}
+	c.ExternalAgents = &ExternalAgentsClient{client: c}
+	c.FuzzyFileSearch = &FuzzyFileSearchClient{client: c}
+	c.Memory = &MemoryClient{client: c}
+	c.Feedback = &FeedbackClient{client: c}
+	c.WindowsSandbox = &WindowsSandboxClient{client: c}
+	c.ExperimentalFeatures = &ExperimentalFeaturesClient{client: c}
+	c.PermissionProfiles = &PermissionProfilesClient{client: c}
+}
+
+func (c *Client) ensureHighLevelEnabled(workflow string) error {
+	if c == nil {
+		return &ClosedError{}
+	}
+	if c.rawOnly {
+		return &ConfigError{Reason: workflow + " is disabled in raw-only client mode"}
+	}
+	return nil
+}
+
+func (c *Client) ensureHighLevelWorkflowEnabled(workflow string, startMethod string) error {
+	if err := c.ensureHighLevelEnabled(workflow); err != nil {
+		return err
+	}
+	if dependency, ok := c.disabledStart[startMethod]; ok {
+		return &ConfigError{Reason: workflow + " requires opted-out notifications: " + dependency}
+	}
+	return nil
 }
