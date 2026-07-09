@@ -79,9 +79,20 @@ func TestWindowsReleaseZipIncludesSandboxHelpers(t *testing.T) {
 func TestReleaseChecksumManifestCoversZstdPackageArchives(t *testing.T) {
 	workflow := readRepoText(t, ".github/workflows/rust-release.yml")
 	releaseJob := workflowJobSection(t, workflow, "release")
+	checksumScript := readRepoText(t, ".github/scripts/write-codex-package-checksums.sh")
 
 	for _, required := range []string{
 		"Add Codex package checksum manifest",
+		"bash .github/scripts/write-codex-package-checksums.sh",
+		"--dist dist",
+		"--manifest dist/codex-package_SHA256SUMS",
+	} {
+		if !strings.Contains(releaseJob, required) {
+			t.Fatalf("rust-release.yml release job checksum manifest missing %q", required)
+		}
+	}
+
+	for _, required := range []string{
 		"codex-package_SHA256SUMS",
 		"-name 'codex-package-*.tar.gz'",
 		"-name 'codex-package-*.tar.zst'",
@@ -90,8 +101,8 @@ func TestReleaseChecksumManifestCoversZstdPackageArchives(t *testing.T) {
 		`sha256sum "$archive"`,
 		`awk -v name="$(basename "$archive")"`,
 	} {
-		if !strings.Contains(releaseJob, required) {
-			t.Fatalf("rust-release.yml release job checksum manifest missing %q", required)
+		if !strings.Contains(checksumScript, required) {
+			t.Fatalf("write-codex-package-checksums.sh missing %q", required)
 		}
 	}
 }
@@ -123,6 +134,7 @@ func TestShippingReleaseReadinessWorkflowSourcePreflight(t *testing.T) {
 		"publish-dotslash",
 		"reusedScripts",
 		".github/scripts/build-codex-package-archive.sh",
+		".github/scripts/write-codex-package-checksums.sh",
 		"workflowReuseProofPath",
 		"duplicateCommandAuditPath",
 		"workflowLocalDuplicateCommands=false",
