@@ -662,11 +662,11 @@ jobs:
             # Must run from inside the dest dir so 7z does not embed the
             # directory path inside the zip.
             if [[ "$base" == "codex-${target}.exe" ]]; then
-            # Preserve WinGet executable paths while including the signed
-            # runtime, resources, and package metadata from the canonical tar.
-            bundle_dir="$(mktemp -d)"
-            tar -xzf "$dest/codex-package-${target}.tar.gz" -C "$bundle_dir"
-            python "${GITHUB_WORKSPACE}/scripts/build_winget_package.py" "$(cygpath -w "$bundle_dir")"
+              # Preserve WinGet executable paths while including the signed
+              # runtime, resources, and package metadata from the canonical tar.
+              bundle_dir="$(mktemp -d)"
+              tar -xzf "$dest/codex-package-${target}.tar.gz" -C "$bundle_dir"
+              python "${GITHUB_WORKSPACE}/scripts/build_winget_package.py" "$(cygpath -w "$bundle_dir")"
               (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)
               rm -rf "$bundle_dir"
             else
