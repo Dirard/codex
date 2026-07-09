@@ -13,6 +13,15 @@ _PLATFORM_TRIPLES = {
 
 PLATFORMS = _PLATFORM_TRIPLES.keys()
 
+PLATFORM_TARGETS = {
+    "linux_arm64_musl": "aarch64-unknown-linux-musl",
+    "linux_amd64_musl": "x86_64-unknown-linux-musl",
+    "macos_amd64": "x86_64-apple-darwin",
+    "macos_arm64": "aarch64-apple-darwin",
+    "windows_amd64": "x86_64-pc-windows-msvc",
+    "windows_arm64": "aarch64-pc-windows-msvc",
+}
+
 def multiplatform_binaries(name, platforms = PLATFORMS):
     """Build a binary for a subset of the declared release platforms."""
     for platform in platforms:
