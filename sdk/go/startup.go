@@ -41,6 +41,7 @@ var rawOnlyHighLevelWorkflows = []rawOnlyHighLevelWorkflow{
 	{name: "account/device-code-login", startMethod: "account/login/start"},
 	{name: "command/exec", startMethod: "command/exec"},
 	{name: "fs/watch", startMethod: "fs/watch"},
+	{name: "fuzzyFileSearch/sessionStart", startMethod: "fuzzyFileSearch/sessionStart"},
 	{name: "mcpServer/oauth/login", startMethod: "mcpServer/oauth/login"},
 	{name: "process/spawn", startMethod: "process/spawn"},
 	{name: "realtime/start", startMethod: "thread/realtime/start"},
@@ -352,6 +353,8 @@ func (c *Client) initialize(ctx context.Context, cfg ClientConfig, source runtim
 		return err
 	}
 	c.metadata.UserAgent = envelope.UserAgent
+	c.metadata.PlatformFamily = envelope.PlatformFamily
+	c.metadata.PlatformOS = envelope.PlatformOS
 	c.metadata.RuntimeVersion = runtimeVersionFromUserAgent(envelope.UserAgent)
 	c.metadata.CompatibilityOverrideActive = override
 	c.metadata.CompatibilityNote = note
