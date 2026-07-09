@@ -73,10 +73,21 @@ pub fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -> Strin
 }
 
 pub fn formatted_truncate_text_with_config(content: &str, config: OutputTruncation) -> String {
-    let total_lines = content.lines().count();
-    let result = truncate_text_with_config(content, config);
+    let line_limited = match config.max_lines {
+        Some(max_lines) => truncate_middle_lines(content, max_lines),
+        None => content.to_string(),
+    };
+    let result = truncate_text(&line_limited, config.policy);
     if result == content {
         return content.to_string();
+    }
+
+    let total_lines = content.lines().count();
+    if result != line_limited {
+        let original_token_count = approx_token_count(content);
+        return format!(
+            "Warning: truncated output (original token count: {original_token_count})\nTotal output lines: {total_lines}\n\n{result}"
+        );
     }
 
     format!("Total output lines: {total_lines}\n\n{result}")

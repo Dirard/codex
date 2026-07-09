@@ -96,7 +96,7 @@ pub fn format_exec_output_for_model(
 
     sections.push(format!("Exit code: {}", exec_output.exit_code));
     sections.push(format!("Wall time: {duration_seconds} seconds"));
-    if formatted_output != content {
+    if total_lines != formatted_output.lines().count() {
         sections.push(format!("Total output lines: {total_lines}"));
     }
 
