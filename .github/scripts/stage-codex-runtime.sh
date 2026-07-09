@@ -312,11 +312,20 @@ seed_root_from_bazel() {
     bazel build "${bazel_host_platform_args[@]}" "$label"
   fi
 
-  metadata="$(
-    bazel cquery "${bazel_host_platform_args[@]}" --output=files "$label" \
-      | grep '/codex-package.json$' \
-      | head -n 1
-  )"
+  if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    metadata="$(
+      "$repo_root/.github/scripts/run-bazel-ci.sh" \
+        -- cquery "${bazel_host_platform_args[@]}" --output=files "$label" \
+        | grep '/codex-package.json$' \
+        | head -n 1
+    )"
+  else
+    metadata="$(
+      bazel cquery "${bazel_host_platform_args[@]}" --output=files "$label" \
+        | grep '/codex-package.json$' \
+        | head -n 1
+    )"
+  fi
   if [[ -z "$metadata" ]]; then
     echo "Unable to locate codex-package.json from Bazel target $label" >&2
     exit 1
@@ -458,7 +467,7 @@ stage_from_archive() {
 
   rm -rf "$out"
   mkdir -p "$out"
-  tar -xzf "$gzip_archive" -C "$out"
+  zstd -dc "$zstd_archive" | tar -xf - -C "$out"
   verify_layout "$out"
   write_metadata "packageArchive" '["tar.gz","tar.zst"]'
 }
