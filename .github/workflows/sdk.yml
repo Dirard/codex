@@ -476,9 +476,9 @@ jobs:
               raise SystemExit(f"unexpected metadata bazelTarget: {metadata.get('bazelTarget')!r}")
           if "tar.zst" not in metadata.get("archiveFormats", []):
               raise SystemExit(f"metadata archiveFormats missing tar.zst: {metadata.get('archiveFormats')!r}")
-          helper_files = set((metadata.get("helperManifest") or {}).get("files") or [])
-          required_helpers = {"rg"}
           target = "${{ matrix.bazel_target }}"
+          helper_files = set((metadata.get("helperManifest") or {}).get("files") or [])
+          required_helpers = {"rg.exe" if "windows" in target else "rg"}
           if "windows" not in target:
               required_helpers.add("zsh")
           if "linux" in target:
@@ -613,15 +613,19 @@ jobs:
           set -euo pipefail
           cd sdk/go
           go run ./internal/cmd/protocodex --check --mode stable \
-            --schema-root internal/protocodex/schema \
-            --manifest internal/protocodex/manifest/app_server_protocol_manifest.json
-          go run ./internal/cmd/protocodex --check --mode experimental \
-            --schema-root internal/protocodex/schema-experimental \
-            --manifest internal/protocodex/manifest/app_server_protocol_manifest.json
-          go run ./internal/cmd/protocodex --check --mode both \
-            --schema-root internal/protocodex/schema \
+            --stable-schema-root ../../codex-rs/app-server-protocol/schema \
             --experimental-schema-root internal/protocodex/schema-experimental \
             --manifest internal/protocodex/manifest/app_server_protocol_manifest.json
+          go run ./internal/cmd/protocodex --check --mode experimental \
+            --stable-schema-root ../../codex-rs/app-server-protocol/schema \
+            --experimental-schema-root internal/protocodex/schema-experimental \
+            --manifest internal/protocodex/manifest/app_server_protocol_manifest.json
+          go run ./internal/cmd/protocodex --check --mode both \
+            --stable-schema-root ../../codex-rs/app-server-protocol/schema \
+            --experimental-schema-root internal/protocodex/schema-experimental \
+            --manifest internal/protocodex/manifest/app_server_protocol_manifest.json \
+            --out protocol \
+            --root-out .
           go test ./... -run 'TestResourceCoverage|TestResourceDocsCoverage|TestServerHandlerDocsCoverage'
 
       - name: Save bazel repository cache
