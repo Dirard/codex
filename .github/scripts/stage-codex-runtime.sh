@@ -341,15 +341,53 @@ python_bin() {
   fi
 }
 
+reject_dotslash_zstd() {
+  local candidate="$1"
+  local candidate_dir
+  local candidate_real
+  local repo_zstd_dir
+  local repo_zstd
+
+  candidate_dir="$(cd "$(dirname "$candidate")" && pwd -P)"
+  candidate_real="$candidate_dir/$(basename "$candidate")"
+  repo_zstd_dir="${repo_root%/}/.github/workflows"
+  repo_zstd="$repo_zstd_dir/zstd"
+  if [[ "$candidate_real" == "$repo_zstd" ]]; then
+    echo "Repo DotSlash zstd manifest is not allowed for package archives: $candidate_real" >&2
+    exit 1
+  fi
+  if head -n 1 "$candidate_real" 2>/dev/null | grep -qi "dotslash"; then
+    echo "DotSlash-backed zstd wrapper is not allowed for package archives: $candidate_real" >&2
+    exit 1
+  fi
+}
+
 preflight_zstd() {
   if [[ -n "$zstd_source" ]]; then
+    local zstd_bind_dir
+    local zstd_resolved
+    local zstd_source_dir
+    local zstd_source_real
+
     if [[ ! -x "$zstd_source" ]]; then
       echo "--zstd-source must point at an executable zstd binary: $zstd_source" >&2
       exit 1
     fi
-    zstd_dir="$(cd "$(dirname "$zstd_source")" && pwd -P)"
-    PATH="$zstd_dir:$PATH"
+    zstd_source_dir="$(cd "$(dirname "$zstd_source")" && pwd -P)"
+    zstd_source_real="$zstd_source_dir/$(basename "$zstd_source")"
+    reject_dotslash_zstd "$zstd_source_real"
+    zstd_bind_dir="$(mktemp -d "${TMPDIR:-/tmp}/codex-go-sdk-zstd-source.XXXXXX")"
+    if ! ln -s "$zstd_source_real" "$zstd_bind_dir/zstd" 2>/dev/null; then
+      cp "$zstd_source_real" "$zstd_bind_dir/zstd"
+      chmod +x "$zstd_bind_dir/zstd"
+    fi
+    PATH="$zstd_bind_dir:$PATH"
     export PATH
+    zstd_resolved="$(command -v zstd || true)"
+    if [[ "$zstd_resolved" != "$zstd_bind_dir/zstd" ]]; then
+      echo "--zstd-source did not bind the executable zstd command: $zstd_resolved" >&2
+      exit 1
+    fi
     zstd_source_kind="stage5gMaterialized"
     return
   fi
@@ -361,16 +399,7 @@ preflight_zstd() {
   fi
   zstd_dir="$(cd "$(dirname "$zstd_bin")" && pwd -P)"
   zstd_real="$zstd_dir/$(basename "$zstd_bin")"
-  repo_zstd_dir="${repo_root%/}/.github/workflows"
-  repo_zstd="$repo_zstd_dir/zstd"
-  if [[ "$zstd_real" == "$repo_zstd" ]]; then
-    echo "Repo DotSlash zstd manifest is not allowed for package archives: $zstd_real" >&2
-    exit 1
-  fi
-  if [[ "$zstd_real" == "${repo_root%/}/"* ]] && head -n 1 "$zstd_real" 2>/dev/null | grep -qi "dotslash"; then
-    echo "Repo DotSlash-backed zstd wrapper is not allowed for package archives: $zstd_real" >&2
-    exit 1
-  fi
+  reject_dotslash_zstd "$zstd_real"
   zstd_source_kind="preinstalled"
 }
 
