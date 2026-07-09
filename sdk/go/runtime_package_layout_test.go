@@ -26,6 +26,10 @@ func TestRuntimeLayoutBazelSeedTargets(t *testing.T) {
 		`go_sdk_runtime_layouts(`,
 		`name = "codex_go_sdk_runtime_layout"`,
 		`binary = "codex"`,
+		`filegroup_name = "codex_code_mode_host_release_binaries"`,
+		`name = "codex_code_mode_host"`,
+		`target = "//codex-rs/code-mode-host:codex-code-mode-host"`,
+		`code_mode_host_binary = "codex_code_mode_host"`,
 	} {
 		if !strings.Contains(build, required) {
 			t.Fatalf("codex-rs/cli/BUILD.bazel missing %q", required)
@@ -41,6 +45,13 @@ func TestRuntimeLayoutBazelSeedTargets(t *testing.T) {
 	for _, required := range []string{
 		`target = PLATFORM_TARGETS[platform]`,
 		`codex = ":" + binary + "_" + platform`,
+		`code_mode_host = ":" + code_mode_host_binary + "_" + platform`,
+		`code_mode_host_name = "codex-code-mode-host"`,
+		`code_mode_host_name = "codex-code-mode-host.exe"`,
+		`ctx.label.name + "/bin/" + ctx.attr.code_mode_host_name`,
+		`target_file = ctx.executable.code_mode_host`,
+		`files = depset([entrypoint, code_mode_host, metadata])`,
+		`runfiles = ctx.runfiles(files = [entrypoint, code_mode_host, metadata])`,
 		`ctx.actions.symlink(`,
 		`ctx.actions.write(`,
 		`"entrypoint": "bin/%s"`,
