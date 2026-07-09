@@ -7,9 +7,11 @@ import (
 )
 
 type LoginHandle struct {
-	client  *Client
-	id      string
-	authURL string
+	client          *Client
+	id              string
+	authURL         string
+	verificationURL string
+	userCode        string
 }
 
 type LoginResult struct {
@@ -30,6 +32,20 @@ func (h *LoginHandle) AuthURL() string {
 		return ""
 	}
 	return h.authURL
+}
+
+func (h *LoginHandle) VerificationURL() string {
+	if h == nil {
+		return ""
+	}
+	return h.verificationURL
+}
+
+func (h *LoginHandle) UserCode() string {
+	if h == nil {
+		return ""
+	}
+	return h.userCode
 }
 
 func (h *LoginHandle) Wait(ctx context.Context) (*LoginResult, error) {
