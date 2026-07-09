@@ -7,6 +7,10 @@ use super::lifecycle::go_sdk_routing_lifecycle_entries;
 use super::serde_shape_fields::append_schema_sufficient_serde_shapes;
 use super::serde_shapes::go_sdk_serde_shapes;
 use super::*;
+use crate::protocol::v2::MAX_ADDITIONAL_CONTEXT_ENTRIES;
+use crate::protocol::v2::MAX_ADDITIONAL_CONTEXT_KEY_BYTES;
+use crate::protocol::v2::MAX_ADDITIONAL_CONTEXT_TOTAL_BYTES;
+use crate::protocol::v2::MAX_ADDITIONAL_CONTEXT_VALUE_BYTES;
 
 pub fn go_sdk_manifest() -> GoSdkManifest {
     let mut experimental = ProtocolModeManifest {
@@ -29,10 +33,10 @@ pub fn go_sdk_manifest() -> GoSdkManifest {
         stable,
         experimental,
         model_context_limits: ModelContextLimits {
-            max_additional_context_entries: 8,
-            max_additional_context_key_bytes: 128,
-            max_additional_context_value_bytes: 1000,
-            max_additional_context_total_bytes: 4096,
+            max_additional_context_entries: MAX_ADDITIONAL_CONTEXT_ENTRIES as u32,
+            max_additional_context_key_bytes: MAX_ADDITIONAL_CONTEXT_KEY_BYTES as u32,
+            max_additional_context_value_bytes: MAX_ADDITIONAL_CONTEXT_VALUE_BYTES as u32,
+            max_additional_context_total_bytes: MAX_ADDITIONAL_CONTEXT_TOTAL_BYTES as u32,
         },
     };
     manifest.experimental.digests =

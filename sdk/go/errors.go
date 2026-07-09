@@ -32,6 +32,8 @@ type UnsupportedError struct{ Reason string }
 
 func (e *UnsupportedError) Error() string { return "codex sdk unsupported: " + e.Reason }
 
+func (e *UnsupportedError) SafeJSONRPCMessage() string { return e.Error() }
+
 type OverflowError struct{ Reason string }
 
 func (e *OverflowError) Error() string { return "codex sdk overflow: " + e.Reason }
