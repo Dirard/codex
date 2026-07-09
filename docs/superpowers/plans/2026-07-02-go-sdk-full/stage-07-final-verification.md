@@ -112,7 +112,7 @@ for test_name in "${required_tests[@]}"; do
 done
 ```
 
-- [ ] On native Windows PowerShell, use the supported Windows-local verifier instead of relying on Git Bash:
+- [ ] On native Windows PowerShell, use the supported Windows-local verifier instead of relying on Git Bash, and explicitly record that the local PowerShell packageArchive path remains blocked until implemented:
 
 ```powershell
 # Run from the native Windows checkout root for this worktree.
@@ -128,7 +128,17 @@ if ($env:CODEX_GO_SDK_ZSTD_SOURCE) {
 } elseif (-not (Get-Command zstd -ErrorAction SilentlyContinue)) {
   throw "zstd must be installed unless CODEX_GO_SDK_ZSTD_SOURCE points at the Stage 5G no-network source; DotSlash fallback is not accepted"
 }
-& .github\scripts\stage-codex-runtime.ps1 -Out $runtimeDir -BazelTarget $expectedBazelTarget -CargoProfile release -ReleasePackageArchive @zstdArgs -WindowsReleaseShapedMsvc -ExportEnvironment | Invoke-Expression
+try {
+  & .github\scripts\stage-codex-runtime.ps1 -Out $runtimeDir -BazelTarget $expectedBazelTarget -CargoProfile release -ReleasePackageArchive @zstdArgs -WindowsReleaseShapedMsvc -ExportEnvironment | Invoke-Expression
+  throw "native Windows packageArchive verifier unexpectedly succeeded; update this Stage 7 gate to validate the implemented packageArchive evidence before using it"
+} catch {
+  if ($_.Exception.Message -notmatch "packageArchive staging is blocked until the native Windows app-server package archive lane is implemented") {
+    throw
+  }
+}
+Remove-Item -Recurse -Force $runtimeDir -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $runtimeDir | Out-Null
+& .github\scripts\stage-codex-runtime.ps1 -Out $runtimeDir -BazelTarget $expectedBazelTarget -ExportEnvironment | Invoke-Expression
 if (-not $env:CODEX_EXEC_PATH) { throw "CODEX_EXEC_PATH was not exported" }
 if ($env:CODEX_EXEC_PATH -notmatch '[\\/]bin[\\/]codex\.exe$') { throw "CODEX_EXEC_PATH must point inside the staged package bin directory: $env:CODEX_EXEC_PATH" }
 if (-not (Test-Path (Join-Path $runtimeDir 'codex-package.json'))) { throw "missing codex-package.json" }
@@ -139,13 +149,9 @@ if (-not (Test-Path (Join-Path $runtimeDir 'codex-path\rg.exe'))) { throw "missi
 if (-not (Test-Path (Join-Path $runtimeDir 'codex-resources\codex-windows-sandbox-setup.exe'))) { throw "missing staged Windows sandbox setup helper" }
 if (-not (Test-Path (Join-Path $runtimeDir 'codex-resources\codex-command-runner.exe'))) { throw "missing staged command runner helper" }
 $stagingMetadata = Get-Content (Join-Path $runtimeDir 'codex-go-sdk-runtime-staging.json') | ConvertFrom-Json
-if ($stagingMetadata.runtimeSource -ne "packageArchive") { throw "native Windows verifier did not stage packageArchive runtime" }
-if ($stagingMetadata.cargoProfile -ne "release") { throw "native Windows verifier did not record release cargoProfile" }
+if ($stagingMetadata.runtimeSource -ne "bazelLayout") { throw "native Windows verifier did not stage Bazel layout runtime" }
+if ($stagingMetadata.cargoProfile -ne "dev") { throw "native Windows verifier did not record dev cargoProfile for the supported local path" }
 if ($stagingMetadata.bazelTarget -ne $expectedBazelTarget) { throw "staged runtime did not use the expected MSVC Bazel target $expectedBazelTarget" }
-if ($stagingMetadata.windowsReleaseShapedMsvc -ne $true) { throw "staged runtime was not marked Windows release-shaped MSVC" }
-if ($stagingMetadata.windowsMsvcHostPlatform -ne $true) { throw "staged runtime did not use the Windows MSVC host platform override" }
-if ($stagingMetadata.zstdSource -notin @("preinstalled", "stage5gMaterialized")) { throw "native Windows verifier did not record the hermetic zstd source contract" }
-if ($stagingMetadata.archiveFormats -notcontains "tar.zst") { throw "native Windows verifier did not record tar.zst archive validation" }
 Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
 Remove-Item Env:CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG -ErrorAction SilentlyContinue
 Remove-Item Env:CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE -ErrorAction SilentlyContinue
@@ -176,7 +182,7 @@ foreach ($testName in $requiredTests) {
 }
 ```
 
-Expected: every required test name exists and executes instead of skipping against the complete staged Bazel-built `codex` package layout produced by the stage-codex-runtime script family: `CODEX_EXEC_PATH` points at `bin/codex[.exe]`, package root contains `codex-package.json`, `codex-resources/`, and `codex-path/`, and `InstallContext::from_exe` can discover the package layout. Any missing `CODEX_EXEC_PATH`, missing package-root runtime resource such as bundled `codex-resources/*` or `codex-path/*`, missing mock Responses harness, accepted release-runtime auth/config/plugin test hook, skipped real-runtime test, or skipped `Thread.Run`/`turn/start` same-checkout runtime test is a failure when `CODEX_GO_SDK_REQUIRE_REAL_APP_SERVER=1`. On Linux, sandbox readiness must be proven by `.github/scripts/stage-codex-runtime.sh --verify-sandbox --exec-path "${CODEX_EXEC_PATH}" using the same system/bundled bubblewrap capability semantics as the runtime, not by PATH presence alone. On Windows, native local verification must use `.github/scripts/stage-codex-runtime.ps1` without Git Bash assumptions, and Windows helper binaries must be discovered from `codex-resources/` under the staged package root, not from Cargo env vars.
+Expected: every required test name exists and executes instead of skipping against the complete staged Bazel-built `codex` package layout produced by the stage-codex-runtime script family: `CODEX_EXEC_PATH` points at `bin/codex[.exe]`, package root contains `codex-package.json`, `codex-resources/`, and `codex-path/`, and `InstallContext::from_exe` can discover the package layout. Any missing `CODEX_EXEC_PATH`, missing package-root runtime resource such as bundled `codex-resources/*` or `codex-path/*`, missing mock Responses harness, accepted release-runtime auth/config/plugin test hook, skipped real-runtime test, or skipped `Thread.Run`/`turn/start` same-checkout runtime test is a failure when `CODEX_GO_SDK_REQUIRE_REAL_APP_SERVER=1`. On Linux, sandbox readiness must be proven by `.github/scripts/stage-codex-runtime.sh --verify-sandbox --exec-path "${CODEX_EXEC_PATH}" using the same system/bundled bubblewrap capability semantics as the runtime, not by PATH presence alone. On Windows, native local verification must use `.github/scripts/stage-codex-runtime.ps1` without Git Bash assumptions, Windows helper binaries must be discovered from `codex-resources/` under the staged package root, and the local PowerShell `-ReleasePackageArchive` path must be treated as an explicit blocked gap until implemented rather than as Windows packageArchive release-readiness evidence.
 
 - [ ] Run the release-package archive real app-server smoke in non-skip mode once per claimed target, on the matching release runner/host shape for that target. Do not use an OS-family target loop as release evidence: each invocation must set exactly one `CODEX_GO_SDK_ARCHIVE_TARGET`, and the command must fail if the current machine cannot execute that target's staged runtime. Required invocations are:
   - `CODEX_GO_SDK_ARCHIVE_TARGET=x86_64-unknown-linux-musl` on `${repo}-linux-x64-xl`, with `uname -m` proving x86_64.
