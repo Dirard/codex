@@ -239,9 +239,10 @@ func TestRuntimeLayoutGoSDKWorkflowWiring(t *testing.T) {
 		"CODEX_APP_SERVER_LOGIN_ISSUER=",
 		"CODEX_APP_SERVER_AUTH_BASE_URL_FOR_TESTS=",
 		"CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE=",
+		".github/workflows/zstd",
 	} {
 		if strings.Contains(workflow, forbidden) {
-			t.Fatalf("sdk.yml go-sdk job must not globally export SDK-test app-server hooks; found %q", forbidden)
+			t.Fatalf("sdk.yml go-sdk job contains forbidden runtime staging source %q", forbidden)
 		}
 	}
 }
