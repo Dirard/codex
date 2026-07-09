@@ -87,6 +87,8 @@ def source_preflight_metadata() -> dict[str, object]:
         "schemaVersion": 1,
         "workflowShape": "thinWrapper",
         "notReleaseReady": True,
+        "artifactEvidenceShapeComplete": False,
+        "evidenceKind": "sourcePreflightOnly",
         "releaseReadinessImpact": (
             "source-preflight only; final shipping readiness is blocked until "
             "all target artifacts and downloaded evidence files are attached"
@@ -118,16 +120,26 @@ def source_preflight_metadata() -> dict[str, object]:
     }
 
 
-def write_common_proofs(out_dir: Path, *, source_preflight_only: bool) -> None:
+def write_common_proofs(
+    out_dir: Path,
+    *,
+    source_preflight_only: bool,
+    not_release_ready: bool | None = None,
+    evidence_kind: str | None = None,
+) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "logs").mkdir(parents=True, exist_ok=True)
 
-    readiness_line = "notReleaseReady=true" if source_preflight_only else "notReleaseReady=false"
+    if not_release_ready is None:
+        not_release_ready = source_preflight_only
+    readiness_line = f"notReleaseReady={str(not_release_ready).lower()}"
+    evidence_kind_line = f"evidenceKind={evidence_kind}" if evidence_kind else None
     (out_dir / "workflow-reuse-proof.txt").write_text(
         "\n".join(
             [
                 "workflowShape=thinWrapper",
                 readiness_line,
+                *([evidence_kind_line] if evidence_kind_line else []),
                 "reusedWorkflows:",
                 *[f"- {workflow}" for workflow in REUSED_WORKFLOWS],
                 "reusedJobs:",
@@ -168,6 +180,7 @@ def write_common_proofs(out_dir: Path, *, source_preflight_only: bool) -> None:
                 "redaction=none-required",
                 "retention=artifact",
                 readiness_line,
+                *([evidence_kind_line] if evidence_kind_line else []),
                 "",
             ]
         ),
@@ -176,7 +189,12 @@ def write_common_proofs(out_dir: Path, *, source_preflight_only: bool) -> None:
 
 
 def write_source_preflight(out_dir: Path) -> None:
-    write_common_proofs(out_dir, source_preflight_only=True)
+    write_common_proofs(
+        out_dir,
+        source_preflight_only=True,
+        not_release_ready=True,
+        evidence_kind="sourcePreflightOnly",
+    )
     (out_dir / "shipping-release-readiness.json").write_text(
         json.dumps(source_preflight_metadata(), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -479,7 +497,16 @@ def collect_artifacts(
     *,
     fixture_substitutions: list[dict[str, str]] | None = None,
 ) -> None:
-    write_common_proofs(out_dir, source_preflight_only=False)
+    fixture_mode = bool(fixture_substitutions)
+    evidence_kind = (
+        "nonPublishingFixtureEvidence" if fixture_mode else "releaseArtifactEvidence"
+    )
+    write_common_proofs(
+        out_dir,
+        source_preflight_only=False,
+        not_release_ready=fixture_mode,
+        evidence_kind=evidence_kind,
+    )
     target_records = {
         target: target_metadata(target, artifacts_dir, out_dir)
         for target in EXPECTED_TARGETS
@@ -491,12 +518,18 @@ def collect_artifacts(
     )
 
     metadata = source_preflight_metadata()
-    metadata["notReleaseReady"] = False
-    metadata["releaseReadinessImpact"] = "all required target artifact evidence is attached"
-    if fixture_substitutions:
+    metadata["artifactEvidenceShapeComplete"] = True
+    metadata["evidenceKind"] = evidence_kind
+    metadata["notReleaseReady"] = fixture_mode
+    if fixture_mode:
         metadata["releaseReadinessImpact"] = (
-            "all required target artifact evidence is attached with declared "
-            "non-publishing fixture substitutions"
+            "artifact evidence shape is complete with declared non-publishing "
+            "fixture substitutions; final release readiness is blocked until "
+            "real non-fixture shipping evidence is attached"
+        )
+    else:
+        metadata["releaseReadinessImpact"] = (
+            "all required target artifact evidence is attached"
         )
     metadata["fixtureSubstitutions"] = fixture_substitutions or []
     metadata["targets"] = target_records
