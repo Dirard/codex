@@ -701,6 +701,7 @@ jobs:
           target_output_root = output_dir / "targets"
           target_output_root.mkdir(parents=True)
           targets = {}
+          not_release_ready_targets = []
           for evidence_path in Path("downloaded-go-sdk-ci-release-evidence").glob("**/target-evidence.json"):
               evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
               target = evidence.get("bazelTarget")
@@ -710,8 +711,8 @@ jobs:
                   raise SystemExit(f"duplicate Go SDK CI evidence for {target}")
               if evidence.get("jobConclusion") != "success":
                   raise SystemExit(f"Go SDK CI evidence for {target} did not record success")
-              if "skipped" in evidence or "notReleaseReady" in evidence:
-                  raise SystemExit(f"Go SDK CI evidence for {target} must not contain skipped/notReleaseReady markers")
+              if evidence.get("skipped") or evidence.get("notReleaseReady"):
+                  not_release_ready_targets.append(target)
               target_dir = target_output_root / target
               target_dir.mkdir()
               for source in evidence_path.parent.iterdir():
@@ -725,8 +726,16 @@ jobs:
               targets[target] = evidence
           if set(targets) != expected_targets:
               raise SystemExit(f"Go SDK CI evidence targets {sorted(targets)} did not match {sorted(expected_targets)}")
+          aggregate = {"targets": targets}
+          if not_release_ready_targets:
+              aggregate["notReleaseReady"] = True
+              aggregate["notReleaseReadyTargets"] = sorted(not_release_ready_targets)
+              aggregate["releaseReadinessImpact"] = (
+                  "SDK CI target evidence is uploaded for audit only; final release "
+                  "readiness remains blocked until every target lacks skipped/notReleaseReady markers"
+              )
           (output_dir / "go-sdk-ci-release-evidence.json").write_text(
-              json.dumps({"targets": targets}, indent=2, sort_keys=True) + "\n",
+              json.dumps(aggregate, indent=2, sort_keys=True) + "\n",
               encoding="utf-8",
           )
           PY
