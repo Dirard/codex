@@ -1262,7 +1262,7 @@ var resourceAPIMappings = []ResourceAPIMapping{
 		UnitTestOwner:         "realtime_test.go",
 		SafeIntegrationOwner:  "integration_app_server_test.go",
 		DocsExampleOwner:      "examples/resources",
-		ReviewNote:            "typed handle workflow; handle injects thread/session identity",
+		ReviewNote:            "typed handle workflow; handle injects thread identity while current protocol lacks follow-up session identity",
 	},
 	{
 		Method:                "thread/realtime/appendText",
@@ -1274,7 +1274,7 @@ var resourceAPIMappings = []ResourceAPIMapping{
 		UnitTestOwner:         "realtime_test.go",
 		SafeIntegrationOwner:  "integration_app_server_test.go",
 		DocsExampleOwner:      "examples/resources",
-		ReviewNote:            "typed handle workflow; handle injects thread/session identity",
+		ReviewNote:            "typed handle workflow; handle injects thread identity while current protocol lacks follow-up session identity",
 	},
 	{
 		Method:                "thread/realtime/appendSpeech",
@@ -1286,7 +1286,7 @@ var resourceAPIMappings = []ResourceAPIMapping{
 		UnitTestOwner:         "realtime_test.go",
 		SafeIntegrationOwner:  "integration_app_server_test.go",
 		DocsExampleOwner:      "examples/resources",
-		ReviewNote:            "typed handle workflow; handle injects thread/session identity",
+		ReviewNote:            "typed handle workflow; handle injects thread identity while current protocol lacks follow-up session identity",
 	},
 	{
 		Method:                "thread/realtime/stop",

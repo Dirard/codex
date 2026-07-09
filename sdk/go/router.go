@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/openai/codex/sdk/go/protocol"
 )
+
+const realtimeRouterDomain = "realtime"
 
 type routerKey struct {
 	domain   string
@@ -205,6 +208,7 @@ func (r *notificationRouter) route(ctx context.Context, method string, params js
 		}
 	}
 	keys := routingKeys(metadata, params)
+	keys = append(keys, realtimeRoutingKeys(method, params)...)
 	r.deliver(ctx, notification, keys, true)
 }
 
@@ -310,6 +314,39 @@ func (r *notificationRouter) appendPendingLocked(key routerKey, notification pen
 	r.ensurePendingTimerLocked(key)
 }
 
+func (r *notificationRouter) dropPendingNotifications(key routerKey, drop func(Notification) bool) {
+	if r == nil || drop == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	pending := r.pending[key]
+	if len(pending) == 0 {
+		delete(r.overflow, key)
+		if timer := r.timers[key]; timer != nil {
+			timer.Stop()
+			delete(r.timers, key)
+		}
+		return
+	}
+	kept := pending[:0]
+	for _, notification := range pending {
+		if !drop(notification.notification) {
+			kept = append(kept, notification)
+		}
+	}
+	if len(kept) > 0 {
+		r.pending[key] = kept
+		return
+	}
+	delete(r.pending, key)
+	delete(r.overflow, key)
+	if timer := r.timers[key]; timer != nil {
+		timer.Stop()
+		delete(r.timers, key)
+	}
+}
+
 func (r *notificationRouter) ensurePendingTimerLocked(key routerKey) {
 	if r.timers[key] != nil {
 		return
@@ -402,6 +439,21 @@ func routingKeys(metadata protocol.ServerNotificationRoutingMetadata, params jso
 	return keys
 }
 
+func realtimeRoutingKeys(method string, params json.RawMessage) []routerKey {
+	if !strings.HasPrefix(method, "thread/realtime/") {
+		return nil
+	}
+	var raw map[string]any
+	if len(params) > 0 {
+		_ = json.Unmarshal(params, &raw)
+	}
+	threadID, ok := stringAtJSONPath(raw, "threadId")
+	if !ok || threadID == "" {
+		return nil
+	}
+	return []routerKey{{domain: realtimeRouterDomain, identity: threadID}}
+}
+
 func notificationTurnFilter(threadID string, turnID string) func(Notification) bool {
 	return func(notification Notification) bool {
 		var raw map[string]any
@@ -461,13 +513,29 @@ func splitPath(path string) []string {
 
 func isTerminalNotification(method string, domain string) bool {
 	for _, lifecycle := range protocol.RoutingLifecycleByStartMethod {
-		if lifecycle.ResourceDomain != domain {
-			continue
-		}
 		for _, trigger := range lifecycle.CleanupTriggers {
-			if trigger.Kind == "terminalNotification" && trigger.Method == method {
+			if trigger.Kind == "terminalNotification" && trigger.Method == method && terminalRoutesThroughDomain(lifecycle, method, domain) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func terminalRoutesThroughDomain(lifecycle protocol.RoutingLifecycleMetadata, method string, domain string) bool {
+	if lifecycle.ResourceDomain == domain {
+		return true
+	}
+	if domain == realtimeRouterDomain && strings.HasPrefix(method, "thread/realtime/") {
+		return true
+	}
+	metadata, ok := protocol.ServerNotificationRoutingByMethod[method]
+	if !ok {
+		return false
+	}
+	for _, route := range metadata.Routes {
+		if route.ResourceDomain == domain {
+			return true
 		}
 	}
 	return false
