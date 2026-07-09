@@ -31,7 +31,7 @@ Establish release-owned, no-network package resource inputs before Stage 6 attem
 - [ ] The app-server test fixture `codex-rs/app-server/tests/suite/zsh` must not be used as the release-shaped zsh source. It may be cited only as a test-only fixture.
 - [ ] Add a no-network package-source test that starts with an empty DotSlash/package cache and fails if resolving `rg`, zsh, or archive `zstd` for the Go SDK runtime layout performs a fetch, reads from an ambient cache, prepends `.github/workflows` to `PATH`, or silently omits the helper.
 - [ ] Add release-workflow assertions proving `.github/workflows/rust-release.yml` and `.github/workflows/rust-release-windows.yml` consume the same materialized helper inputs used by Stage 6 and no longer use ad hoc zsh `curl`, `facebook/install-dotslash`, package-assembly DotSlash resolution for `rg` or zsh, or `.github/workflows/zstd`/DotSlash fallback for archive validation. Stage 7 must rerun these assertions directly or rerun the exact owning test command even if the tests do not live under `sdk/go`.
-- [ ] Add a DotSlash release-output parity assertion, for example `TestDotSlashReleaseArchiveConfigParity`, that reads `.github/dotslash-config.json`, the `publish-dotslash` job in `.github/workflows/rust-release.yml`, and the release artifact naming/layout contract for every entry published by that config. It must fail if any claimed Linux/macOS/Windows `codex`, `codex-app-server`, `codex-responses-api-proxy`, Linux `bwrap`, Windows `codex-command-runner`, or Windows `codex-windows-sandbox-setup` artifact filename no longer matches the configured regex, if the configured `path` is absent from the corresponding archive or compressed helper payload, or if `publish-dotslash` stops using `.github/dotslash-config.json`. Do not narrow the parity gate to only the package archives; helper-output regex/path drift is release-blocking because those helpers are part of the shipped runtime and DotSlash distribution story.
+- [ ] Add a DotSlash release-output parity assertion, for example `test_dotslash_release_archive_config_parity`, that reads `.github/dotslash-config.json`, the `publish-dotslash` job in `.github/workflows/rust-release.yml`, and the release artifact naming/layout contract for every entry published by that config. It must fail if any claimed Linux/macOS/Windows `codex`, `codex-app-server`, `codex-responses-api-proxy`, Linux `bwrap`, Windows `codex-command-runner`, or Windows `codex-windows-sandbox-setup` artifact filename no longer matches the configured regex, if the configured `path` is absent from the corresponding archive or compressed helper payload, or if `publish-dotslash` stops using `.github/dotslash-config.json`. Do not narrow the parity gate to only the package archives; helper-output regex/path drift is release-blocking because those helpers are part of the shipped runtime and DotSlash distribution story.
 - [ ] Add a package-layout parity test that compares helper placement with `scripts/codex_package/layout.py`: managed `rg` must land where `InstallContext::rg_command()` resolves it, and non-Windows zsh must land at `codex-resources/zsh/bin/zsh`.
 - [ ] If this stage cannot establish a release-owned no-network source or explicit fail-fast prerequisite for `rg`, zsh, and archive `zstd` across both Go SDK staging and the real release workflows, mark Stage 6 runtime staging and release-readiness claims blocked. Do not weaken Stage 6 by allowing hidden DotSlash fetches, ambient caches, placeholder directories, or release-parity claims against missing helper payloads.
 
@@ -39,22 +39,20 @@ Establish release-owned, no-network package resource inputs before Stage 6 attem
 
 ```bash
 cd /home/dirard/dev/ai-apps/codex/.worktrees/codex-go-sdk-full
-cd sdk/go
-go test ./... -run 'TestPackageSourceHermeticity|TestRuntimePackageLayoutParity|TestReleaseWorkflowPackageSourcesHermetic|TestArchiveZstdHermeticity|TestDotSlashReleaseArchiveConfigParity'
+python3 -m unittest scripts.codex_package.test_package_sources
+python3 -m unittest discover scripts/codex_package
 ```
 
-If the package-source tests live outside `sdk/go`, replace the command with the exact owning package test before implementation starts. The final stage review must quote the exact command that passed, including the release-workflow assertions that reject package-assembly `curl`, `facebook/install-dotslash`, DotSlash resolver use for managed `rg` or patched zsh, `.github/workflows/zstd` fallback for archive validation, and DotSlash config/archive regex or path drift.
+The final stage review must quote these exact owner commands and the passing output. `scripts.codex_package.test_package_sources` owns the Stage 5G hermeticity, workflow producer/consumer, `zstd`, DotSlash parity, and package-layout assertions; do not substitute a `go test -run ...` placeholder unless matching Go tests are actually implemented and reviewed.
 
 ## Commit
 
 ```bash
 git add scripts/codex_package .github/scripts/build-codex-package-archive.sh
 git add .github/workflows/rust-release.yml .github/workflows/rust-release-windows.yml
-git add .github/dotslash-config.json
-git add sdk/go/runtime_package_layout_test.go sdk/go/runtime_staging_script_test.go
 git commit -m "build(go-sdk): make package helper sources hermetic"
 ```
 
 ## Stage Review
 
-Fresh blind engineering and release/ops review are mandatory. Review must confirm this stage creates a real no-network helper source for Stage 6 and the shipping release workflows, or explicitly blocks Stage 6 runtime staging and release-readiness claims.
+Fresh blind engineering and product review are mandatory. Review must confirm this stage creates a real no-network helper source for Stage 6 and the shipping release workflows, or explicitly blocks Stage 6 runtime staging and release-readiness claims.
