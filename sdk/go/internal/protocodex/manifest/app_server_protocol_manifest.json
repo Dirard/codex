@@ -4318,9 +4318,9 @@
       }
     ],
     "digests": {
-      "manifestDigest": "5d73f060640df1e1d8bbd751dd9319445e38530bbd8713b1bd7f7cbd415a1041",
-      "protocolDigest": "3fd736fb41b4bd387d6d009917f3943103342a01cb8578cb5cf605de6ba9ceeb",
-      "schemaDigest": "b7646a75890b517468df186764bf20ca61bd43b718adfa45aa1b5f1a44a814ed"
+      "manifestDigest": "f58be93d7a8c84ef24c92ea81ac91f039373a298c0287f226bddfd53efdd77f6",
+      "protocolDigest": "9fbdd158386df6738618695f1a9b1a3b9d6c85c0fc8cb8f8b65025ce654b0411",
+      "schemaDigest": "baaf4ccb4e2d5edc35e37b82e81dc70a45604c28b45da4667876e1cf4c54c70f"
     },
     "protocolMode": "experimental",
     "routingLifecycle": [
@@ -9952,6 +9952,27 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "LoginAppBrand",
+        "schemaRef": "#/definitions/v2/LoginAppBrand",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "LogoutAccountResponse",
         "schemaRef": "#/definitions/v2/LogoutAccountResponse",
         "schemaSufficientProof": {
@@ -12583,6 +12604,27 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "PluginInstallPolicySource",
+        "schemaRef": "#/definitions/v2/PluginInstallPolicySource",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "PluginInstallResponse",
         "schemaRef": "#/definitions/v2/PluginInstallResponse",
         "schemaSufficientProof": {
@@ -13754,8 +13796,71 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "RateLimitResetCredit",
+        "schemaRef": "#/definitions/v2/RateLimitResetCredit",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "RateLimitResetCreditStatus",
+        "schemaRef": "#/definitions/v2/RateLimitResetCreditStatus",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "RateLimitResetCreditsSummary",
         "schemaRef": "#/definitions/v2/RateLimitResetCreditsSummary",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "RateLimitResetType",
+        "schemaRef": "#/definitions/v2/RateLimitResetType",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -25073,9 +25178,9 @@
       }
     ],
     "digests": {
-      "manifestDigest": "9ea3688d02036720df0d13f9218bdfae3d72d02c62ad00fbded61438718b02a2",
-      "protocolDigest": "2d755ab03c494734ddb9981f3a5e9658421a7dfa908042e5fe19da839de0a4ec",
-      "schemaDigest": "01d788c9c33d7ae40965fe65289bd47cb4142a438cb43ed3cf1b7254305238e7"
+      "manifestDigest": "719817dcb66aba5ddd92d85ca7072d4b8f57fd686623f0d5691eaa6b4ab4e3a2",
+      "protocolDigest": "565de9f5e7665568db8064d62381320811caf10f6b2513bd4cf90b22c2ddd77f",
+      "schemaDigest": "5d3f15758ba30dc4abee1c01b56268640135324fe2937b14a8649e51c04c7c5b"
     },
     "protocolMode": "stable",
     "routingLifecycle": [
@@ -29915,6 +30020,27 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "LoginAppBrand",
+        "schemaRef": "#/definitions/v2/LoginAppBrand",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "LogoutAccountResponse",
         "schemaRef": "#/definitions/v2/LogoutAccountResponse",
         "schemaSufficientProof": {
@@ -32294,6 +32420,27 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "PluginInstallPolicySource",
+        "schemaRef": "#/definitions/v2/PluginInstallPolicySource",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "PluginInstallResponse",
         "schemaRef": "#/definitions/v2/PluginInstallResponse",
         "schemaSufficientProof": {
@@ -33139,8 +33286,71 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "RateLimitResetCredit",
+        "schemaRef": "#/definitions/v2/RateLimitResetCredit",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "RateLimitResetCreditStatus",
+        "schemaRef": "#/definitions/v2/RateLimitResetCreditStatus",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "RateLimitResetCreditsSummary",
         "schemaRef": "#/definitions/v2/RateLimitResetCreditsSummary",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "RateLimitResetType",
+        "schemaRef": "#/definitions/v2/RateLimitResetType",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,

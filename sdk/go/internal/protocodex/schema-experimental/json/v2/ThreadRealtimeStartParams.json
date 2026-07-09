@@ -112,6 +112,13 @@
         "null"
       ]
     },
+    "flushTranscriptTailOnSessionEnd": {
+      "description": "Routes any transcript tail remaining at session end through Codex. Defaults to false. TODO: Remove this rollout knob once transcript-tail flushing is always enabled.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "includeStartupContext": {
       "description": "Set to false to start without Codex's startup context. Omitted or null includes it.",
       "type": [
