@@ -45,7 +45,14 @@ type MCPClient struct{ client *Client }
 type RemoteControlClient struct{ client *Client }
 type CollaborationModesClient struct{ client *Client }
 type ExternalAgentsClient struct{ client *Client }
-type FuzzyFileSearchClient struct{ client *Client }
+type FuzzyFileSearchClient struct {
+	client *Client
+
+	mu            sync.Mutex
+	sessions      map[string]*FuzzySearchSession
+	sessionPrefix string
+	nextSessionID uint64
+}
 type MemoryClient struct{ client *Client }
 type FeedbackClient struct{ client *Client }
 type WindowsSandboxClient struct{ client *Client }
