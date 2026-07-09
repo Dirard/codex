@@ -173,6 +173,14 @@ entrypoint_name() {
   fi
 }
 
+code_mode_host_name() {
+  if is_windows_target; then
+    echo "codex-code-mode-host.exe"
+  else
+    echo "codex-code-mode-host"
+  fi
+}
+
 rg_name() {
   if is_windows_target; then
     echo "rg.exe"
@@ -188,6 +196,7 @@ verify_layout() {
   for required in \
     "$root/codex-package.json" \
     "$root/bin/$entrypoint" \
+    "$root/bin/$(code_mode_host_name)" \
     "$root/codex-path/$(rg_name)"; do
     if [[ ! -f "$required" ]]; then
       echo "Missing staged runtime file: $required" >&2
@@ -458,6 +467,10 @@ stage_from_archive() {
     echo "Package archive staging requires executable seed entrypoint: $seed_root/bin/$(entrypoint_name)" >&2
     exit 1
   fi
+  if [[ ! -x "$seed_root/bin/$(code_mode_host_name)" ]]; then
+    echo "Package archive staging requires executable code-mode host: $seed_root/bin/$(code_mode_host_name)" >&2
+    exit 1
+  fi
 
   preflight_zstd
   archive_root="$(mktemp -d "${TMPDIR:-/tmp}/codex-go-sdk-package-archive.XXXXXX")"
@@ -486,6 +499,7 @@ stage_from_archive() {
     --target "$target" \
     --variant codex \
     --entrypoint-bin "$seed_root/bin/$(entrypoint_name)" \
+    --code-mode-host-bin "$seed_root/bin/$(code_mode_host_name)" \
     --cargo-profile release \
     --require-materialized-helper-sources \
     --package-dir "$package_dir" \

@@ -451,7 +451,7 @@ func threadStartParams(opts ThreadStartOptions) protocol.ThreadStartParams {
 	if opts.Personality != "" {
 		params.Personality = protocol.Some(opts.Personality)
 	}
-	if opts.MultiAgentMode != "" {
+	if opts.MultiAgentMode.IsSet() {
 		params.MultiAgentMode = protocol.Some(opts.MultiAgentMode)
 	}
 	if opts.Ephemeral != nil {
@@ -654,7 +654,7 @@ func applyTurnOptions(params *protocol.TurnStartParams, opts TurnOptions) {
 	if opts.CollaborationMode.Mode != "" {
 		params.CollaborationMode = protocol.Some(opts.CollaborationMode)
 	}
-	if opts.MultiAgentMode != "" {
+	if opts.MultiAgentMode.IsSet() {
 		params.MultiAgentMode = protocol.Some(opts.MultiAgentMode)
 	}
 }

@@ -567,6 +567,13 @@
     },
     "ConsumeAccountRateLimitResetCreditParams": {
       "properties": {
+        "creditId": {
+          "description": "Opaque reset-credit identifier to redeem. When omitted, the backend selects the next available credit.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "idempotencyKey": {
           "description": "Identifies one logical reset attempt. A UUID is recommended; reuse the same value when retrying that attempt.",
           "type": "string"
@@ -1546,6 +1553,17 @@
         },
         {
           "properties": {
+            "appBrand": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/LoginAppBrand"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "codexStreamlinedLogin": {
               "type": "boolean"
             },
@@ -1555,6 +1573,9 @@
               ],
               "title": "ChatgptLoginAccountParamsType",
               "type": "string"
+            },
+            "useHostedLoginSuccessPage": {
+              "type": "boolean"
             }
           },
           "required": [
@@ -1614,6 +1635,13 @@
           "type": "object"
         }
       ]
+    },
+    "LoginAppBrand": {
+      "enum": [
+        "codex",
+        "chatgpt"
+      ],
+      "type": "string"
     },
     "MarketplaceAddParams": {
       "properties": {
@@ -1888,13 +1916,29 @@
       "type": "object"
     },
     "MultiAgentMode": {
-      "description": "Controls whether the model receives multi-agent delegation instructions and, when it does, whether it should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help. `none` leaves the multi-agent tools available without injecting delegation instructions.",
-      "enum": [
-        "none",
-        "explicitRequestOnly",
-        "proactive"
-      ],
-      "type": "string"
+      "description": "Controls the effective multi-agent delegation instructions for a turn. `custom` means the configured mode hint defines the policy instead of a built-in policy.",
+      "oneOf": [
+        {
+          "enum": [
+            "explicitRequestOnly",
+            "proactive"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "custom": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "custom"
+          ],
+          "title": "CustomMultiAgentMode",
+          "type": "object"
+        }
+      ]
     },
     "NetworkAccess": {
       "enum": [
@@ -4612,6 +4656,13 @@
         },
         "codexResponsesAsItems": {
           "description": "Sends automatic Codex responses as realtime conversation items instead of handoff appends.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "flushTranscriptTailOnSessionEnd": {
+          "description": "Routes any transcript tail remaining at session end through Codex. Defaults to false. TODO: Remove this rollout knob once transcript-tail flushing is always enabled.",
           "type": [
             "boolean",
             "null"
