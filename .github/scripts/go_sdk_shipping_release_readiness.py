@@ -517,6 +517,13 @@ def collect_artifacts(
         target: target_metadata(target, artifacts_dir, out_dir)
         for target in EXPECTED_TARGETS
     }
+    if fixture_mode:
+        for target_record in target_records.values():
+            target_record["fixtureOnly"] = True
+            target_record["packageArchiveSmokeTestsRan"] = False
+            target_record["expectedPackageArchiveSmokeTests"] = target_record.pop(
+                "packageArchiveSmokeTests"
+            )
     dotslash_report = out_dir / "dotslash-parity-report.txt"
     dotslash_report.write_text(
         "\n".join(DOTSLASH_ENTRIES + EXPECTED_TARGETS) + "\n",
