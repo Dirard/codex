@@ -190,6 +190,7 @@ func (c *Client) HandleServerNotification(ctx context.Context, method string, pa
 	c.router.route(ctx, method, params, trace)
 	c.observeRealtimeLifecycle(method, params)
 	c.observeProcessLifecycle(method, params)
+	c.observeFuzzyFileSearchLifecycle(method, params)
 }
 
 func (c *Client) serverHandlers() ServerHandlers {

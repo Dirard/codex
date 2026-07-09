@@ -194,6 +194,9 @@ func resourceImplementationStatus(mapping ResourceAPIMapping) string {
 	if stage5EImplementedResourceMethods[mapping.Method] {
 		return "implemented-stage5e"
 	}
+	if stage5FImplementedResourceMethods[mapping.Method] {
+		return "implemented-stage5f"
+	}
 	return "planned-stage5"
 }
 
@@ -319,6 +322,20 @@ var stage5EImplementedResourceMethods = map[string]bool{
 	"remoteControl/pairing/start":              true,
 	"remoteControl/pairing/status":             true,
 	"remoteControl/status/read":                true,
+}
+
+var stage5FImplementedResourceMethods = map[string]bool{
+	"experimentalFeature/list":           true,
+	"experimentalFeature/enablement/set": true,
+	"feedback/upload":                    true,
+	"fuzzyFileSearch":                    true,
+	"fuzzyFileSearch/sessionStart":       true,
+	"fuzzyFileSearch/sessionUpdate":      true,
+	"fuzzyFileSearch/sessionStop":        true,
+	"memory/reset":                       true,
+	"permissionProfile/list":             true,
+	"windowsSandbox/readiness":           true,
+	"windowsSandbox/setupStart":          true,
 }
 
 func renderInventory(manifest *Manifest) string {
