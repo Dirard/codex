@@ -192,6 +192,10 @@ impl TestAppServer {
         .await
     }
 
+    pub async fn new_with_auto_env(codex_home: &Path) -> anyhow::Result<Self> {
+        Self::builder().with_codex_home(codex_home).build().await
+    }
+
     /// Returns the automatically selected test environment retained by this server.
     ///
     /// Tests can use the environment to arrange target-native filesystem fixtures before starting

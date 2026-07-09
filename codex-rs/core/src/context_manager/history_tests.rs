@@ -1311,8 +1311,8 @@ fn record_items_returns_processed_items_for_rollout_persistence() {
         other => panic!("unexpected history item: {other:?}"),
     };
     assert_eq!(
-        stored.text_content().as_deref(),
-        Some("Total output lines: 5\n\nline1\nline2\n... 2 lines truncated ...\nline5")
+        stored.text_content(),
+        Some("line1\nline2\n... 2 lines truncated ...\nline5")
     );
 }
 

@@ -22,9 +22,7 @@ def expected_helper_payloads(spec: TargetSpec) -> dict[str, str]:
         helpers["bwrap"] = "bwrap"
     if spec.is_windows:
         helpers["codex-command-runner"] = "codex-command-runner.exe"
-        helpers["codex-windows-sandbox-setup"] = (
-            "codex-windows-sandbox-setup.exe"
-        )
+        helpers["codex-windows-sandbox-setup"] = "codex-windows-sandbox-setup.exe"
     return helpers
 
 
@@ -104,9 +102,7 @@ def verify_helper_entry(
     expected_relative_path: str,
 ) -> None:
     if not isinstance(entry, dict):
-        raise RuntimeError(
-            f"{manifest_path} helper {helper_name!r} must be an object"
-        )
+        raise RuntimeError(f"{manifest_path} helper {helper_name!r} must be an object")
 
     relative_path = str(entry.get("relativePath", ""))
     if relative_path != expected_relative_path:
@@ -127,8 +123,7 @@ def verify_helper_entry(
         )
     if not is_executable(helper_path):
         raise RuntimeError(
-            f"{manifest_path} helper {helper_name!r} is not executable: "
-            f"{helper_path}"
+            f"{manifest_path} helper {helper_name!r} is not executable: {helper_path}"
         )
 
     actual_size = helper_path.stat().st_size
