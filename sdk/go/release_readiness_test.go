@@ -110,6 +110,7 @@ func TestReleaseReadiness(t *testing.T) {
 		"  go-sdk-release-readiness:",
 		"needs:",
 		"- go-sdk",
+		"- go-sdk-ci-release-evidence",
 		"uses: ./.github/workflows/go-sdk-release-readiness.yml",
 		"checkout_ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}",
 		"validate_synthetic_tags: true",
