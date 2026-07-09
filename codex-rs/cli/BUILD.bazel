@@ -21,7 +21,14 @@ codex_e2e_benchmark(
     binaries = [":codex"],
 )
 
+multiplatform_binaries(
+    name = "codex_code_mode_host",
+    filegroup_name = "codex_code_mode_host_release_binaries",
+    target = "//codex-rs/code-mode-host:codex-code-mode-host",
+)
+
 go_sdk_runtime_layouts(
     name = "codex_go_sdk_runtime_layout",
     binary = "codex",
+    code_mode_host_binary = "codex_code_mode_host",
 )
