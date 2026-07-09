@@ -76,6 +76,76 @@ func TestWindowsReleaseZipIncludesSandboxHelpers(t *testing.T) {
 	}
 }
 
+func TestShippingReleaseReadinessWorkflowSourcePreflight(t *testing.T) {
+	workflow := readRepoText(t, ".github/workflows/go-sdk-shipping-release-readiness.yml")
+
+	for _, required := range []string{
+		"name: go-sdk-shipping-release-readiness",
+		"workflow_call:",
+		"workflow_dispatch:",
+		"Shipping release source preflight",
+		"actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2",
+		"persist-credentials: false",
+		"shipping-release-readiness-metadata",
+		"shipping-release-readiness.json",
+		"workflowShape",
+		"thinWrapper",
+		"notReleaseReady",
+		"releaseReadinessImpact",
+		"reusedWorkflows",
+		".github/workflows/rust-release.yml",
+		".github/workflows/rust-release-windows.yml",
+		"reusedJobs",
+		"package-macos",
+		"finalize-macos",
+		"Build Codex package archive",
+		"Build Codex package archives",
+		"publish-dotslash",
+		"reusedScripts",
+		".github/scripts/build-codex-package-archive.sh",
+		"workflowReuseProofPath",
+		"duplicateCommandAuditPath",
+		"workflowLocalDuplicateCommands=false",
+		"workflowLocalDuplicateCommands",
+		"fixtureSubstitutions",
+		"boundedLogs",
+		"targetRequirements",
+		"x86_64-unknown-linux-musl",
+		"aarch64-unknown-linux-musl",
+		"aarch64-apple-darwin",
+		"x86_64-apple-darwin",
+		"x86_64-pc-windows-msvc",
+		"aarch64-pc-windows-msvc",
+		"requiredPackageArchiveSmokeTests",
+		"TestRealAppServerInitializeStrictDigest",
+		"TestRealAppServerRejectsDebugHookEnv",
+		"TestRealAppServerThreadRunHappyPath",
+		"TestRealAppServerCommandExecStreaming",
+		"TestRealAppServerProcessLifecycle",
+		"TestRealAppServerFilesystemWatch",
+		"dotslash-config",
+		"codex-command-runner.exe",
+		"codex-windows-sandbox-setup.exe",
+		"test_dotslash_release_archive_config_parity",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("go-sdk-shipping-release-readiness workflow missing %q", required)
+		}
+	}
+
+	for _, forbidden := range []string{
+		"secrets: inherit",
+		"contents: write",
+		"softprops/action-gh-release",
+		"dotslash-publish-release",
+		"GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+	} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("go-sdk-shipping-release-readiness workflow must stay validation-only and secretless; found %q", forbidden)
+		}
+	}
+}
+
 func workflowJobSection(t *testing.T, workflow string, job string) string {
 	t.Helper()
 

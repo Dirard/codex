@@ -1,0 +1,161 @@
+name: go-sdk-shipping-release-readiness
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  shipping-source-preflight:
+    name: Shipping release source preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Verify shipping release reuse anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          grep -F '.github/scripts/build-codex-package-archive.sh' .github/workflows/rust-release.yml
+          grep -F '.github/scripts/build-codex-package-archive.sh' .github/workflows/rust-release-windows.yml
+          grep -F 'package-macos:' .github/workflows/rust-release.yml
+          grep -F 'finalize-macos:' .github/workflows/rust-release.yml
+          grep -F 'Build Codex package archive' .github/workflows/rust-release.yml
+          grep -F 'Build Codex package archives' .github/workflows/rust-release-windows.yml
+          grep -F 'publish-dotslash:' .github/workflows/rust-release.yml
+          grep -F 'config: .github/dotslash-config.json' .github/workflows/rust-release.yml
+          grep -F 'codex-command-runner.exe' .github/workflows/rust-release-windows.yml
+          grep -F 'codex-windows-sandbox-setup.exe' .github/workflows/rust-release-windows.yml
+          grep -F 'def test_dotslash_release_archive_config_parity' scripts/codex_package/test_package_sources.py
+
+      - name: Write source-level shipping readiness metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          metadata_root="shipping-release-readiness-metadata"
+          mkdir -p "${metadata_root}/logs"
+
+          cat >"${metadata_root}/workflow-reuse-proof.txt" <<'EOF'
+          workflowShape=thinWrapper
+          notReleaseReady=true
+          reusedWorkflows:
+          - .github/workflows/rust-release.yml
+          - .github/workflows/rust-release-windows.yml
+          reusedJobs:
+          - package-macos
+          - finalize-macos
+          - publish-dotslash
+          - Build Codex package archive
+          - Build Codex package archives
+          reusedScripts:
+          - .github/scripts/build-codex-package-archive.sh
+          - scripts/codex_package/test_package_sources.py::test_dotslash_release_archive_config_parity
+          releaseWorkflowReferences:
+          - package-macos
+          - finalize-macos
+          - dotslash-config
+          - codex-command-runner.exe
+          - codex-windows-sandbox-setup.exe
+          EOF
+
+          cat >"${metadata_root}/duplicate-command-audit.txt" <<'EOF'
+          workflowLocalDuplicateCommands=false
+          sourcePreflightOnly=true
+          The shipping release-readiness wrapper currently records source-level reuse
+          anchors only. Full release readiness remains blocked until target jobs attach
+          downloaded archive inventories, checksum manifest copies, Windows published zip
+          inventories, macOS DMG/direct artifact proof, and DotSlash parity output.
+          EOF
+
+          cat >"${metadata_root}/logs/source-preflight.log" <<'EOF'
+          source-preflight=success
+          bounded=true
+          redaction=none-required
+          retention=artifact
+          notReleaseReady=true
+          EOF
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          targets = [
+              "x86_64-unknown-linux-musl",
+              "aarch64-unknown-linux-musl",
+              "aarch64-apple-darwin",
+              "x86_64-apple-darwin",
+              "x86_64-pc-windows-msvc",
+              "aarch64-pc-windows-msvc",
+          ]
+          required_smokes = [
+              "TestRealAppServerInitializeStrictDigest",
+              "TestRealAppServerRejectsDebugHookEnv",
+              "TestRealAppServerThreadRunHappyPath",
+              "TestRealAppServerCommandExecStreaming",
+              "TestRealAppServerProcessLifecycle",
+              "TestRealAppServerFilesystemWatch",
+          ]
+
+          metadata = {
+              "schemaVersion": 1,
+              "workflowShape": "thinWrapper",
+              "notReleaseReady": True,
+              "releaseReadinessImpact": (
+                  "source-preflight only; final shipping readiness is blocked until "
+                  "all target artifacts and downloaded evidence files are attached"
+              ),
+              "reusedWorkflows": [
+                  ".github/workflows/rust-release.yml",
+                  ".github/workflows/rust-release-windows.yml",
+              ],
+              "reusedJobs": [
+                  "package-macos",
+                  "finalize-macos",
+                  "publish-dotslash",
+                  "Build Codex package archive",
+                  "Build Codex package archives",
+              ],
+              "reusedScripts": [
+                  ".github/scripts/build-codex-package-archive.sh",
+                  "scripts/codex_package/test_package_sources.py::test_dotslash_release_archive_config_parity",
+              ],
+              "workflowReuseProofPath": "workflow-reuse-proof.txt",
+              "duplicateCommandAuditPath": "duplicate-command-audit.txt",
+              "workflowLocalDuplicateCommands": False,
+              "fixtureSubstitutions": [],
+              "boundedLogs": [
+                  {
+                      "path": "logs/source-preflight.log",
+                      "maxBytes": 4096,
+                      "redaction": "none-required",
+                      "retention": "artifact",
+                  }
+              ],
+              "targetRequirements": targets,
+              "requiredPackageArchiveSmokeTests": required_smokes,
+              "targets": {},
+              "dotslash": {
+                  "configPath": ".github/dotslash-config.json",
+                  "archiveParity": False,
+                  "archiveParityReportPath": "",
+                  "publishDotslashJob": "",
+              },
+          }
+
+          out = Path("shipping-release-readiness-metadata/shipping-release-readiness.json")
+          out.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload shipping release-readiness metadata
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: shipping-release-readiness-metadata
+          path: shipping-release-readiness-metadata/
+          if-no-files-found: error
