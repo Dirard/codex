@@ -50,6 +50,7 @@ esac
 			t.Fatalf("missing staged file %s: %v", required, err)
 		}
 	}
+	assertNotSymlink(t, filepath.Join(fixture.out, "bin", "codex"))
 
 	metadata := readRuntimeStagingMetadata(t, fixture.out)
 	if metadata.RuntimeSource != "bazelLayout" {
@@ -78,6 +79,54 @@ esac
 		"--verify-sandbox",
 		"--exec-path",
 		filepath.Join(fixture.out, "bin", "codex"),
+	)
+	verifyCmd.Env = append(os.Environ(), "GITHUB_WORKSPACE="+fixture.repoRoot)
+	verifyOutput, err := verifyCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage-codex-runtime.sh sandbox verification failed: %v\n%s", err, verifyOutput)
+	}
+}
+
+func TestStageCodexRuntimeScriptMaterializesSymlinkEntrypoint(t *testing.T) {
+	fixture := newLinuxStagingFixture(t, "symlink out")
+	realEntrypoint := filepath.Join(fixture.root, "bazel-out", "codex-real")
+	writeExecutable(t, realEntrypoint, "#!/usr/bin/env sh\nexit 0\n")
+	seedEntrypoint := filepath.Join(fixture.seedRoot, "bin", "codex")
+	if err := os.Remove(seedEntrypoint); err != nil {
+		t.Fatalf("remove seed entrypoint: %v", err)
+	}
+	if err := os.Symlink(realEntrypoint, seedEntrypoint); err != nil {
+		t.Skipf("symlink fixture is not available on this platform: %v", err)
+	}
+
+	cmd := exec.Command(
+		"bash",
+		fixture.script,
+		"--out",
+		fixture.out,
+		"--bazel-target",
+		fixture.target,
+		"--helper-root",
+		fixture.helperRoot,
+	)
+	cmd.Env = append(
+		os.Environ(),
+		"CODEX_GO_SDK_TEST_LAYOUT_ROOT="+fixture.seedRoot,
+		"GITHUB_WORKSPACE="+fixture.repoRoot,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage-codex-runtime.sh failed: %v\n%s", err, output)
+	}
+
+	stagedEntrypoint := filepath.Join(fixture.out, "bin", "codex")
+	assertNotSymlink(t, stagedEntrypoint)
+	verifyCmd := exec.Command(
+		"bash",
+		fixture.script,
+		"--verify-sandbox",
+		"--exec-path",
+		stagedEntrypoint,
 	)
 	verifyCmd.Env = append(os.Environ(), "GITHUB_WORKSPACE="+fixture.repoRoot)
 	verifyOutput, err := verifyCmd.CombinedOutput()
@@ -398,6 +447,17 @@ func assertRuntimeHelperManifest(t *testing.T, metadata runtimeStagingMetadata, 
 	}
 	if !strings.HasSuffix(metadata.HelperManifest.Path, filepath.Join(target, "codex-package-helpers.json")) {
 		t.Fatalf("helperManifest path = %q, want target manifest path", metadata.HelperManifest.Path)
+	}
+}
+
+func assertNotSymlink(t *testing.T, path string) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("lstat staged entrypoint: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("staged entrypoint must be a real executable, not a symlink: %s", path)
 	}
 }
 
