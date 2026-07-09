@@ -159,6 +159,73 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 	}
 }
 
+func (c *Client) CallAsync(ctx context.Context, method string, params any, result any, trace json.RawMessage) (<-chan error, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	id := protocol.StringRequestID(fmt.Sprintf("go-%d", c.nextID.Add(1)))
+	key, err := requestIDKey(id)
+	if err != nil {
+		return nil, err
+	}
+	waiter := make(chan response, 1)
+	if err := c.addWaiter(key, waiter); err != nil {
+		return nil, err
+	}
+
+	env := Envelope{ID: &id, Method: method, Trace: trace}
+	if params != nil {
+		data, err := json.Marshal(params)
+		if err != nil {
+			c.removeWaiter(key)
+			return nil, err
+		}
+		env.Params = data
+	}
+	frame, err := json.Marshal(env)
+	if err != nil {
+		c.removeWaiter(key)
+		return nil, err
+	}
+	if err := c.send(ctx, frame); err != nil {
+		c.removeWaiter(key)
+		return nil, err
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		select {
+		case item := <-waiter:
+			if item.err != nil {
+				done <- item.err
+				return
+			}
+			if item.env.Error != nil {
+				done <- item.env.Error
+				return
+			}
+			if result != nil {
+				if len(item.env.Result) == 0 {
+					done <- fmt.Errorf("missing result for %s", method)
+					return
+				}
+				if err := json.Unmarshal(item.env.Result, result); err != nil {
+					done <- err
+					return
+				}
+			}
+			done <- nil
+		case <-ctx.Done():
+			c.removeWaiter(key)
+			done <- ctx.Err()
+		case <-c.done:
+			c.removeWaiter(key)
+			done <- &ClosedError{}
+		}
+	}()
+	return done, nil
+}
+
 func (c *Client) Notify(ctx context.Context, method string, params any, trace json.RawMessage) error {
 	env := Envelope{Method: method, Trace: trace}
 	if params != nil {
