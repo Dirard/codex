@@ -96,5 +96,6 @@ __pycache__/
 *.pyc
 .supergoal/
 .serena/
+.codegraph/
 superpowers/
 .worktrees/
