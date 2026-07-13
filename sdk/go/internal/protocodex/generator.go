@@ -255,7 +255,14 @@ func schemaExcludedReasonAllowsMissingSchemaRef(visibility, reason string) bool 
 	if reason == "" {
 		return false
 	}
-	return visibility != "public" && visibility != "generatedOnly" && visibility != "handshakeOnly"
+	switch visibility {
+	case "compatibilityOnly", "internalTestOnly", "excluded":
+		return true
+	case "public", "generatedOnly", "handshakeOnly":
+		return false
+	default:
+		return false
+	}
 }
 
 func validateManualPayloadConversion(modeName, label, method string, marker *string) error {

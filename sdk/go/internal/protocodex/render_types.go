@@ -718,9 +718,13 @@ func renderStruct(name, key string, schema Schema, names map[string]string, serd
 	serdeShape := serdeShapeForType(name, key, serdeShapes)
 	taggedUnion, hasTaggedUnion := taggedObjectUnion(schema)
 	untaggedUnion, hasUntaggedUnion := untaggedObjectUnion(schema, hasTaggedUnion)
+	stringUnionValues, hasStringObjectUnion := mixedStringObjectUnionValues(schema)
 	var b strings.Builder
 	var fields []renderedField
 	b.WriteString(fmt.Sprintf("type %s struct {\n", name))
+	if hasStringObjectUnion {
+		b.WriteString("\tStringValue string `json:\"-\"`\n")
+	}
 	for _, propertyName := range sortedPropertyNames(properties) {
 		property := properties[propertyName]
 		fieldType := goTypeForSchema(property, names, required, required[propertyName])
@@ -749,7 +753,7 @@ func renderStruct(name, key string, schema Schema, names map[string]string, serd
 		fields = append(fields, field)
 		b.WriteString(fmt.Sprintf("\t%s %s `json:%q`\n", field.FieldName, field.Type, propertyName+",omitempty"))
 	}
-	if hasTaggedUnion || hasUntaggedUnion {
+	if hasTaggedUnion || hasUntaggedUnion || hasStringObjectUnion {
 		b.WriteString("\tRawJSON json.RawMessage `json:\"-\"`\n")
 	}
 	for _, serdeField := range serdeShape.Fields {
@@ -776,19 +780,25 @@ func renderStruct(name, key string, schema Schema, names map[string]string, serd
 	}
 	b.WriteString("}\n")
 	b.WriteByte('\n')
+	if hasStringObjectUnion {
+		b.WriteString(renderMixedStringObjectUnionValues(name, stringUnionValues))
+		b.WriteByte('\n')
+		b.WriteString(renderMixedStringObjectUnionIsSet(name, fields))
+		b.WriteByte('\n')
+	}
 	if !hasTaggedUnion {
 		taggedUnion = renderedTaggedUnion{}
 	}
 	if !hasUntaggedUnion {
 		untaggedUnion = renderedUntaggedUnion{}
 	}
-	b.WriteString(renderStructMarshal(name, fields, taggedUnion, untaggedUnion))
+	b.WriteString(renderStructMarshal(name, fields, taggedUnion, untaggedUnion, stringUnionValues))
 	b.WriteByte('\n')
-	b.WriteString(renderStructUnmarshal(name, fields, taggedUnion, untaggedUnion))
+	b.WriteString(renderStructUnmarshal(name, fields, taggedUnion, untaggedUnion, stringUnionValues))
 	return b.String()
 }
 
-func renderStructMarshal(name string, fields []renderedField, taggedUnion renderedTaggedUnion, untaggedUnion renderedUntaggedUnion) string {
+func renderStructMarshal(name string, fields []renderedField, taggedUnion renderedTaggedUnion, untaggedUnion renderedUntaggedUnion, stringUnionValues []string) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("func (v %s) MarshalJSON() ([]byte, error) {\n", name))
 	b.WriteString("\tout := map[string]any{}\n")
@@ -826,18 +836,43 @@ func renderStructMarshal(name string, fields []renderedField, taggedUnion render
 			}
 		}
 	}
+	if len(stringUnionValues) > 0 {
+		b.WriteString("\tif v.StringValue != \"\" {\n")
+		b.WriteString("\t\tif len(out) > 0 || len(bytes.TrimSpace(v.RawJSON)) > 0 { return nil, DecodeError{Field: \"\", Reason: \"matches multiple oneOf variants\"} }\n")
+		b.WriteString("\t\tswitch v.StringValue {\n")
+		b.WriteString(fmt.Sprintf("\t\tcase %s:\n", quotedStringCaseList(stringUnionValues)))
+		b.WriteString("\t\t\treturn json.Marshal(v.StringValue)\n")
+		b.WriteString("\t\tdefault:\n")
+		b.WriteString(fmt.Sprintf("\t\t\treturn nil, DecodeError{Field: \"\", Reason: fmt.Sprintf(\"unsupported %s string value %%q\", v.StringValue)}\n", name))
+		b.WriteString("\t\t}\n")
+		b.WriteString("\t}\n")
+	}
 	b.WriteString(renderTaggedUnionMarshalValidation(taggedUnion, fields))
 	b.WriteString(renderUntaggedUnionMarshalValidation(name, untaggedUnion))
 	b.WriteString("\treturn json.Marshal(out)\n}\n")
 	return b.String()
 }
 
-func renderStructUnmarshal(name string, fields []renderedField, taggedUnion renderedTaggedUnion, untaggedUnion renderedUntaggedUnion) string {
+func renderStructUnmarshal(name string, fields []renderedField, taggedUnion renderedTaggedUnion, untaggedUnion renderedUntaggedUnion, stringUnionValues []string) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("func (v *%s) UnmarshalJSON(data []byte) error {\n", name))
-	b.WriteString("\tif bytes.Equal(bytes.TrimSpace(data), []byte(\"null\")) { return DecodeError{Field: \"\", Reason: \"cannot be null\"} }\n")
+	b.WriteString("\ttrimmed := bytes.TrimSpace(data)\n")
+	b.WriteString("\tif bytes.Equal(trimmed, []byte(\"null\")) { return DecodeError{Field: \"\", Reason: \"cannot be null\"} }\n")
+	if len(stringUnionValues) > 0 {
+		b.WriteString("\tvar stringValue string\n")
+		b.WriteString("\tif err := json.Unmarshal(trimmed, &stringValue); err == nil {\n")
+		b.WriteString("\t\tswitch stringValue {\n")
+		b.WriteString(fmt.Sprintf("\t\tcase %s:\n", quotedStringCaseList(stringUnionValues)))
+		b.WriteString(fmt.Sprintf("\t\t\t*v = %s{StringValue: stringValue}\n", name))
+		b.WriteString("\t\tdefault:\n")
+		b.WriteString(fmt.Sprintf("\t\t\t*v = %s{RawJSON: append(json.RawMessage(nil), data...)}\n", name))
+		b.WriteString("\t\t}\n")
+		b.WriteString("\t\treturn nil\n")
+		b.WriteString("\t}\n")
+		b.WriteString("\tv.StringValue = \"\"\n")
+	}
 	b.WriteString("\tvar raw map[string]json.RawMessage\n")
-	b.WriteString("\tif err := json.Unmarshal(data, &raw); err != nil { return err }\n")
+	b.WriteString("\tif err := json.Unmarshal(trimmed, &raw); err != nil { return err }\n")
 	b.WriteString(renderTaggedUnionUnknownPrecheck(taggedUnion, fields))
 	for _, field := range fields {
 		if field.Flattened {
@@ -903,6 +938,37 @@ func renderStructUnmarshal(name string, fields []renderedField, taggedUnion rend
 	b.WriteString(renderUntaggedUnionValidation(untaggedUnion))
 	b.WriteString("\treturn nil\n}\n")
 	return b.String()
+}
+
+func renderMixedStringObjectUnionValues(name string, values []string) string {
+	var b strings.Builder
+	b.WriteString("var (\n")
+	for _, value := range values {
+		b.WriteString(fmt.Sprintf("\t%s = %s{StringValue: %q}\n", EnumConstName(name, value), name, value))
+	}
+	b.WriteString(")\n")
+	return b.String()
+}
+
+func renderMixedStringObjectUnionIsSet(name string, fields []renderedField) string {
+	checks := []string{"v.StringValue != \"\"", "len(bytes.TrimSpace(v.RawJSON)) > 0"}
+	for _, field := range fields {
+		switch {
+		case strings.HasPrefix(field.Type, "Optional[") || strings.HasPrefix(field.Type, "OptionalNonNull["):
+			checks = append(checks, fmt.Sprintf("v.%s.IsSet()", field.FieldName))
+		case field.Type == "json.RawMessage":
+			checks = append(checks, fmt.Sprintf("len(bytes.TrimSpace(v.%s)) > 0", field.FieldName))
+		case field.Type == "string":
+			checks = append(checks, fmt.Sprintf("v.%s != \"\"", field.FieldName))
+		case strings.HasPrefix(field.Type, "[]") || strings.HasPrefix(field.Type, "map["):
+			checks = append(checks, fmt.Sprintf("len(v.%s) > 0", field.FieldName))
+		case field.Type == "bool":
+			checks = append(checks, fmt.Sprintf("v.%s", field.FieldName))
+		default:
+			checks = append(checks, fmt.Sprintf("v.%s != 0", field.FieldName))
+		}
+	}
+	return fmt.Sprintf("func (v %s) IsSet() bool {\n\treturn %s\n}\n", name, strings.Join(checks, " || "))
 }
 
 func renderIntegerBoundsValidation(field renderedField) string {
@@ -1242,12 +1308,10 @@ func collectStructProperties(schema Schema) (map[string]Schema, map[string]bool)
 		properties[name] = property
 	}
 	if oneOfObjectUnion(schema) {
+		if taggedUnion, ok := taggedObjectUnion(schema); ok {
+			required[taggedUnion.Discriminator] = true
+		}
 		for _, variant := range schema.OneOf {
-			for _, name := range variant.Required {
-				if name == "kind" || name == "type" {
-					required[name] = true
-				}
-			}
 			for name, property := range variant.Properties {
 				if _, ok := properties[name]; !ok {
 					properties[name] = property
@@ -1475,6 +1539,31 @@ func oneOfObjectUnion(schema Schema) bool {
 	return false
 }
 
+func mixedStringObjectUnionValues(schema Schema) ([]string, bool) {
+	if len(schema.OneOf) == 0 {
+		return nil, false
+	}
+	var values []string
+	hasObject := false
+	for _, variant := range schema.OneOf {
+		switch {
+		case variant.Type == "string" && len(variant.Enum) > 0:
+			for _, raw := range variant.Enum {
+				var value string
+				if err := json.Unmarshal(raw, &value); err != nil {
+					return nil, false
+				}
+				values = append(values, value)
+			}
+		case variant.Type == "object" || len(variant.Properties) > 0:
+			hasObject = true
+		default:
+			return nil, false
+		}
+	}
+	return values, hasObject && len(values) > 0
+}
+
 func taggedObjectUnion(schema Schema) (renderedTaggedUnion, bool) {
 	if len(schema.OneOf) == 0 {
 		return renderedTaggedUnion{}, false
@@ -1517,6 +1606,9 @@ func untaggedObjectUnion(schema Schema, hasTaggedUnion bool) (renderedUntaggedUn
 	}
 	var variants []renderedUntaggedUnionVariant
 	for _, variant := range schema.OneOf {
+		if variant.Type == "string" && len(variant.Enum) > 0 {
+			continue
+		}
 		if variant.Type != "object" && len(variant.Properties) == 0 {
 			return renderedUntaggedUnion{}, false
 		}
@@ -1535,5 +1627,5 @@ func untaggedObjectUnion(schema Schema, hasTaggedUnion bool) (renderedUntaggedUn
 		}
 		variants = append(variants, rendered)
 	}
-	return renderedUntaggedUnion{Variants: variants}, true
+	return renderedUntaggedUnion{Variants: variants}, len(variants) > 0
 }

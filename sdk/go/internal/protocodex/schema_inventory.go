@@ -419,7 +419,8 @@ func payloadTypeNamesEquivalent(schemaType, manifestType string) bool {
 }
 
 func manifestEntryExcepted(raw json.RawMessage) bool {
-	return !rawJSONEmptyOrNull(raw)
+	present, err := validateExceptionReviewJSON(raw, "manifest exception")
+	return present && err == nil
 }
 
 func schemaRefName(ref string) string {

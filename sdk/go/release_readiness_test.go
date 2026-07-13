@@ -85,6 +85,7 @@ func TestReleaseReadiness(t *testing.T) {
 		`GIT_TRACE="${release_go_get_trace}"`,
 		`grep -F "${bare_remote}" "${release_go_get_trace}"`,
 		`go get "${release_import}@${release_version}"`,
+		"go-sdk-synthetic-tag-validation=v0,v1,annotated-v1,v2",
 		`codex "${module_import}"`,
 		`_ "${module_import}/protocol"`,
 		`codex "${release_import}"`,
@@ -94,6 +95,31 @@ func TestReleaseReadiness(t *testing.T) {
 		if !strings.Contains(workflow, required) {
 			t.Fatalf("go-sdk-release-readiness workflow missing %q", required)
 		}
+	}
+	dispatchStart := strings.Index(workflow, "  workflow_dispatch:\n")
+	pushStart := strings.Index(workflow, "  push:\n")
+	if dispatchStart == -1 || pushStart <= dispatchStart {
+		t.Fatal("go-sdk-release-readiness workflow dispatch inputs are missing")
+	}
+	dispatchSection := workflow[dispatchStart:pushStart]
+	for _, required := range []string{"validate_synthetic_tags:", "type: boolean", "default: true"} {
+		if !strings.Contains(dispatchSection, required) {
+			t.Fatalf("workflow_dispatch must default synthetic tag validation on; missing %q", required)
+		}
+	}
+
+	for _, required := range []string{
+		"Linux-only production sign-off",
+		"go-sdk-linux-release-readiness.json",
+		"codex-package_SHA256SUMS",
+		"linuxReleaseReady",
+	} {
+		if !strings.Contains(release, required) {
+			t.Fatalf("sdk/go/RELEASE.md missing Linux release handoff %q", required)
+		}
+	}
+	if strings.Contains(release, "must also have a successful `.github/workflows/sdk.yml` matrix run") {
+		t.Fatal("Linux release handoff must not require aggregate cross-platform sdk.yml evidence")
 	}
 
 	for _, forbidden := range []string{

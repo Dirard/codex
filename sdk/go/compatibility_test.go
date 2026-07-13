@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/openai/codex/sdk/go/protocol"
@@ -59,6 +60,18 @@ func TestStrictRejectsLegacyInitializeBeforeInitialized(t *testing.T) {
 	var compatErr *CompatibilityError
 	if !errors.As(err, &compatErr) {
 		t.Fatalf("err = %T, want *CompatibilityError", err)
+	}
+	requiredOverride := CompatibilityAllowProtocolDigestUnavailable
+	want := &CompatibilityError{
+		Reason:           "initialize response missing selected protocol digest",
+		ExpectedDigest:   protocol.ExperimentalProtocolDigest,
+		ExpectedMode:     ProtocolModeExperimental,
+		RuntimeVersion:   "0.0.0",
+		UserAgent:        "codex-go-test dev 0.0.0",
+		RequiredOverride: &requiredOverride,
+	}
+	if !reflect.DeepEqual(compatErr, want) {
+		t.Fatalf("compatibility error = %#v, want %#v", compatErr, want)
 	}
 	for _, frame := range transport.sentFrames() {
 		if methodFromFrame(t, frame) == "initialized" {
@@ -204,6 +217,21 @@ func TestStrictRejectsDigestMismatchAndWrongMode(t *testing.T) {
 	if !errors.As(err, &compatErr) {
 		t.Fatalf("err = %T, want *CompatibilityError", err)
 	}
+	foundExperimentalMode := ProtocolModeExperimental
+	requiredOverride := CompatibilityAllowDevBuild
+	want := &CompatibilityError{
+		Reason:           "initialize response protocol digest mismatch",
+		ExpectedDigest:   protocol.ExperimentalProtocolDigest,
+		FoundDigest:      "mismatch",
+		ExpectedMode:     ProtocolModeExperimental,
+		FoundMode:        &foundExperimentalMode,
+		RuntimeVersion:   "0.0.0",
+		UserAgent:        "codex-go-test dev 0.0.0",
+		RequiredOverride: &requiredOverride,
+	}
+	if !reflect.DeepEqual(compatErr, want) {
+		t.Fatalf("digest mismatch compatibility error = %#v, want %#v", compatErr, want)
+	}
 
 	payload = currentInitializePayload()
 	if err := json.Unmarshal(payload, &object); err != nil {
@@ -214,6 +242,19 @@ func TestStrictRejectsDigestMismatchAndWrongMode(t *testing.T) {
 	_, err = NewClient(context.Background(), ClientConfig{Transport: newScriptedInitializedTransport(t, payload)})
 	if !errors.As(err, &compatErr) {
 		t.Fatalf("err = %T, want *CompatibilityError", err)
+	}
+	foundStableMode := ProtocolModeStable
+	want = &CompatibilityError{
+		Reason:         "initialize response activeProtocolMode mismatch",
+		ExpectedDigest: protocol.ExperimentalProtocolDigest,
+		FoundDigest:    protocol.ExperimentalProtocolDigest,
+		ExpectedMode:   ProtocolModeExperimental,
+		FoundMode:      &foundStableMode,
+		RuntimeVersion: "0.0.0",
+		UserAgent:      "codex-go-test dev 0.0.0",
+	}
+	if !reflect.DeepEqual(compatErr, want) {
+		t.Fatalf("mode mismatch compatibility error = %#v, want %#v", compatErr, want)
 	}
 }
 
