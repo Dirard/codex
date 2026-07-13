@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -117,6 +118,77 @@ func TestClientCancellationRemovesWaiterAndLateResponseIsDrained(t *testing.T) {
 	transport.deliver(Envelope{ID: env.ID, Result: json.RawMessage(`{"ok":true}`)})
 	if err := <-callDone; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCallAsyncKeepsResponseOwnershipAfterSendContextCancellation(t *testing.T) {
+	transport := newMemoryTransport()
+	client := NewClient(transport, nil)
+	defer client.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	done, err := client.CallAsync(ctx, "command/exec", nil, &result, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := decodeEnvelope(t, transport.nextSent(t))
+	cancel()
+	select {
+	case err := <-done:
+		t.Fatalf("CallAsync completed after send-context cancellation: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	transport.deliver(Envelope{ID: request.ID, Result: json.RawMessage(`{"ok":true}`)})
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK {
+		t.Fatal("result.OK = false")
+	}
+}
+
+func TestInvalidInboundEnvelopeTerminatesClientWithDecodeError(t *testing.T) {
+	tests := map[string]json.RawMessage{
+		"empty":                 json.RawMessage(`{}`),
+		"error-missing-code":    json.RawMessage(`{"id":"server-1","error":{"message":"bad"}}`),
+		"error-missing-message": json.RawMessage(`{"id":"server-1","error":{"code":1}}`),
+		"error-null-code":       json.RawMessage(`{"id":"server-1","error":{"code":null,"message":"bad"}}`),
+		"error-null-message":    json.RawMessage(`{"id":"server-1","error":{"code":1,"message":null}}`),
+		"notification-null-id":  json.RawMessage(`{"id":null,"method":"server/event"}`),
+		"response-without-body": json.RawMessage(`{"id":"server-1"}`),
+		"response-with-both":    json.RawMessage(`{"id":"server-1","result":{},"error":{"code":1,"message":"bad"}}`),
+		"request-with-result":   json.RawMessage(`{"id":"server-1","method":"server/request","result":{}}`),
+	}
+	for name, frame := range tests {
+		t.Run(name, func(t *testing.T) {
+			transport := newMemoryTransport()
+			client := NewClient(transport, nil)
+			defer client.Close()
+
+			transport.recv <- frame
+			select {
+			case <-client.done:
+			case <-time.After(time.Second):
+				t.Fatal("client did not terminate after invalid inbound envelope")
+			}
+			var decodeErr *DecodeError
+			if err := client.terminalError(); !errors.As(err, &decodeErr) {
+				t.Fatalf("terminal error = %T(%v), want *DecodeError", err, err)
+			}
+		})
+	}
+}
+
+func TestInboundRPCErrorAllowsPresentZeroValues(t *testing.T) {
+	var env Envelope
+	if err := json.Unmarshal([]byte(`{"id":"server-1","error":{"code":0,"message":""}}`), &env); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateInboundEnvelope(env); err != nil {
+		t.Fatalf("validateInboundEnvelope() error = %v", err)
 	}
 }
 
@@ -336,6 +408,152 @@ func TestServerRequestHandlerQueueIsBounded(t *testing.T) {
 	close(release)
 }
 
+func TestServerRequestQueueOverloadDoesNotBlockResponseRouting(t *testing.T) {
+	transport := newMemoryTransport()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	handler := handlerFunc(func(ctx context.Context, method string, params json.RawMessage, trace json.RawMessage) (any, error) {
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		<-release
+		return nil, nil
+	})
+	client := NewClientWithOptions(transport, handler, ClientOptions{
+		HandlerConcurrency: 1,
+		HandlerQueue:       1,
+		HandlerTimeout:     time.Second,
+	})
+	defer func() {
+		close(release)
+		_ = client.Close()
+	}()
+
+	callDone := make(chan error, 1)
+	go func() {
+		callDone <- client.Call(context.Background(), "client/request", nil, nil, nil)
+	}()
+	request := decodeEnvelope(t, transport.nextSent(t))
+	for range cap(transport.sent) {
+		transport.sent <- json.RawMessage(`{}`)
+	}
+
+	for i := 1; i <= 3; i++ {
+		id := protocol.IntRequestID(int64(i))
+		transport.deliver(Envelope{ID: &id, Method: "server/request", Params: json.RawMessage(`{}`)})
+		if i == 1 {
+			<-started
+		}
+	}
+	transport.deliver(Envelope{ID: request.ID, Result: json.RawMessage(`{}`)})
+
+	select {
+	case err := <-callDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("response routing blocked behind an overloaded server-request reply")
+	}
+}
+
+func TestServerRequestReplyBacklogKeepsConnectionUsable(t *testing.T) {
+	transport := newGatedMemoryTransport()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	handler := handlerFunc(func(ctx context.Context, method string, params json.RawMessage, trace json.RawMessage) (any, error) {
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		<-release
+		return map[string]bool{"ok": true}, nil
+	})
+	client := NewClientWithOptions(transport, handler, ClientOptions{
+		HandlerConcurrency: 1,
+		HandlerQueue:       1,
+		HandlerTimeout:     2 * time.Second,
+	})
+	defer client.Close()
+
+	for i := 1; i <= 8; i++ {
+		id := protocol.IntRequestID(int64(i))
+		transport.deliver(Envelope{ID: &id, Method: "server/request", Params: json.RawMessage(`{}`)})
+		if i == 1 {
+			<-started
+		}
+		if i == 3 {
+			<-transport.sendStarted
+		}
+	}
+
+	callDone := make(chan error, 1)
+	go func() {
+		callDone <- client.Call(context.Background(), "client/request", nil, nil, nil)
+	}()
+	waitForCondition(t, func() bool { return client.waiterCount() == 1 }, "client request waiter was not registered")
+	callID := protocol.StringRequestID("go-1")
+	transport.deliver(Envelope{ID: &callID, Result: json.RawMessage(`{}`)})
+	waitForCondition(t, func() bool { return client.waiterCount() == 0 }, "client response was not routed while the writer was blocked")
+
+	transport.releaseSends()
+	select {
+	case err := <-callDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("client request did not complete after the writer was released")
+	}
+	close(release)
+
+	wantReplies := map[string]bool{}
+	for i := 1; i <= 8; i++ {
+		wantReplies[fmt.Sprint(i)] = i >= 3
+	}
+	for len(wantReplies) > 0 {
+		reply := decodeEnvelope(t, transport.nextSent(t))
+		if reply.ID == nil {
+			continue
+		}
+		encoded, err := json.Marshal(reply.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := string(encoded)
+		wantBusy, ok := wantReplies[id]
+		if !ok {
+			continue
+		}
+		if wantBusy && (reply.Error == nil || reply.Error.Code != -32001) {
+			t.Fatalf("overload reply %s error = %#v", id, reply.Error)
+		}
+		delete(wantReplies, id)
+	}
+
+	laterID := protocol.IntRequestID(100)
+	transport.deliver(Envelope{ID: &laterID, Method: "server/request", Params: json.RawMessage(`{}`)})
+	for {
+		reply := decodeEnvelope(t, transport.nextSent(t))
+		if reply.ID == nil {
+			continue
+		}
+		encoded, err := json.Marshal(reply.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(encoded) == "100" {
+			if reply.Error != nil {
+				t.Fatalf("later reply error = %#v", reply.Error)
+			}
+			return
+		}
+	}
+}
+
 func TestServerRequestHandlerErrorIsRedacted(t *testing.T) {
 	transport := newMemoryTransport()
 	handler := handlerFunc(func(ctx context.Context, method string, params json.RawMessage, trace json.RawMessage) (any, error) {
@@ -382,6 +600,38 @@ type memoryTransport struct {
 	sent   chan json.RawMessage
 	closed chan struct{}
 	once   sync.Once
+}
+
+type gatedMemoryTransport struct {
+	*memoryTransport
+	sendStarted chan struct{}
+	sendRelease chan struct{}
+	startOnce   sync.Once
+	releaseOnce sync.Once
+}
+
+func newGatedMemoryTransport() *gatedMemoryTransport {
+	return &gatedMemoryTransport{
+		memoryTransport: newMemoryTransport(),
+		sendStarted:     make(chan struct{}),
+		sendRelease:     make(chan struct{}),
+	}
+}
+
+func (t *gatedMemoryTransport) Send(ctx context.Context, frame json.RawMessage) error {
+	t.startOnce.Do(func() { close(t.sendStarted) })
+	select {
+	case <-t.sendRelease:
+		return t.memoryTransport.Send(ctx, frame)
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.closed:
+		return &ClosedError{}
+	}
+}
+
+func (t *gatedMemoryTransport) releaseSends() {
+	t.releaseOnce.Do(func() { close(t.sendRelease) })
 }
 
 func newMemoryTransport() *memoryTransport {
@@ -514,4 +764,16 @@ func (c *Client) waiterCount() int {
 	c.waitersMu.Lock()
 	defer c.waitersMu.Unlock()
 	return len(c.waiters)
+}
+
+func waitForCondition(tb testing.TB, condition func() bool, failure string) {
+	tb.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	tb.Fatal(failure)
 }

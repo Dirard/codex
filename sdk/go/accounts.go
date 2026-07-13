@@ -1,8 +1,8 @@
 package codex
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -14,13 +14,29 @@ type APIKey string
 
 func (k APIKey) String() string { return "[redacted]" }
 
+func (k APIKey) GoString() string { return k.String() }
+
 func (c *AccountsClient) LoginWithAPIKey(ctx context.Context, key APIKey) error {
-	if c == nil || c.client == nil {
-		return &ClosedError{}
-	}
-	params := protocol.LoginAccountParams{
+	return c.loginWithCredentials(ctx, key, protocol.LoginAccountParams{
 		TypeValue: "apiKey",
 		APIKey:    protocol.SomeNonNull(string(key)),
+	})
+}
+
+func (c *AccountsClient) LoginWithAmazonBedrock(ctx context.Context, key APIKey, region string) error {
+	if region == "" {
+		return &ConfigError{Reason: "amazon Bedrock login requires a region"}
+	}
+	return c.loginWithCredentials(ctx, key, protocol.LoginAccountParams{
+		TypeValue: "amazonBedrock",
+		APIKey:    protocol.SomeNonNull(string(key)),
+		Region:    protocol.SomeNonNull(region),
+	})
+}
+
+func (c *AccountsClient) loginWithCredentials(ctx context.Context, key APIKey, params protocol.LoginAccountParams) error {
+	if c == nil || c.client == nil {
+		return &ClosedError{}
 	}
 	_, err := c.client.Raw().AccountLoginStart(ctx, params)
 	if err != nil {
@@ -158,12 +174,46 @@ func (e redactedStringError) Error() string {
 }
 
 func redactAPIKeyString(value string, secret string) string {
-	return strings.ReplaceAll(value, secret, "[redacted]")
+	const redacted = "[redacted]"
+	value = strings.ReplaceAll(value, secret, redacted)
+	encoded, err := json.Marshal(secret)
+	if err == nil && len(encoded) >= 2 {
+		value = strings.ReplaceAll(value, string(encoded[1:len(encoded)-1]), redacted)
+	}
+	return value
 }
 
 func redactAPIKeyBytes(value []byte, secret string) []byte {
 	if len(value) == 0 {
 		return nil
 	}
-	return bytes.ReplaceAll(value, []byte(secret), []byte("[redacted]"))
+	var decoded any
+	if err := json.Unmarshal(value, &decoded); err == nil {
+		redacted, err := json.Marshal(redactAPIKeyJSONValue(decoded, secret))
+		if err == nil {
+			return redacted
+		}
+	}
+	return []byte(redactAPIKeyString(string(value), secret))
+}
+
+func redactAPIKeyJSONValue(value any, secret string) any {
+	switch value := value.(type) {
+	case string:
+		return redactAPIKeyString(value, secret)
+	case []any:
+		redacted := make([]any, len(value))
+		for i, item := range value {
+			redacted[i] = redactAPIKeyJSONValue(item, secret)
+		}
+		return redacted
+	case map[string]any:
+		redacted := make(map[string]any, len(value))
+		for key, item := range value {
+			redacted[redactAPIKeyString(key, secret)] = redactAPIKeyJSONValue(item, secret)
+		}
+		return redacted
+	default:
+		return value
+	}
 }
