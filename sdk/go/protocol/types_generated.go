@@ -37,11 +37,12 @@ func (v AdditionalPermissionProfile) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AdditionalPermissionProfile) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawFileSystem, ok := raw["fileSystem"]
@@ -91,11 +92,12 @@ func (v AttestationGenerateResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AttestationGenerateResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawToken, ok := raw["token"]
@@ -126,11 +128,12 @@ func (v ChatgptAuthTokensRefreshParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ChatgptAuthTokensRefreshParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawPreviousAccountID, ok := raw["previousAccountId"]
@@ -175,11 +178,12 @@ func (v ChatgptAuthTokensRefreshResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ChatgptAuthTokensRefreshResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAccessToken, ok := raw["accessToken"]
@@ -228,11 +232,12 @@ func (v ClientInfo) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ClientInfo) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawName, ok := raw["name"]
@@ -1863,8 +1868,21 @@ func (v ClientRequest) FuzzyFileSearchSessionStopParams() (FuzzyFileSearchSessio
 }
 
 type CommandExecutionApprovalDecision struct {
+	StringValue                   string                                      `json:"-"`
 	AcceptWithExecpolicyAmendment OptionalNonNull[map[string]json.RawMessage] `json:"acceptWithExecpolicyAmendment,omitempty"`
 	ApplyNetworkPolicyAmendment   OptionalNonNull[map[string]json.RawMessage] `json:"applyNetworkPolicyAmendment,omitempty"`
+	RawJSON                       json.RawMessage                             `json:"-"`
+}
+
+var (
+	CommandExecutionApprovalDecisionAccept           = CommandExecutionApprovalDecision{StringValue: "accept"}
+	CommandExecutionApprovalDecisionAcceptForSession = CommandExecutionApprovalDecision{StringValue: "acceptForSession"}
+	CommandExecutionApprovalDecisionDecline          = CommandExecutionApprovalDecision{StringValue: "decline"}
+	CommandExecutionApprovalDecisionCancel           = CommandExecutionApprovalDecision{StringValue: "cancel"}
+)
+
+func (v CommandExecutionApprovalDecision) IsSet() bool {
+	return v.StringValue != "" || len(bytes.TrimSpace(v.RawJSON)) > 0 || v.AcceptWithExecpolicyAmendment.IsSet() || v.ApplyNetworkPolicyAmendment.IsSet()
 }
 
 func (v CommandExecutionApprovalDecision) MarshalJSON() ([]byte, error) {
@@ -1875,15 +1893,66 @@ func (v CommandExecutionApprovalDecision) MarshalJSON() ([]byte, error) {
 	if v.ApplyNetworkPolicyAmendment.IsSet() {
 		out["applyNetworkPolicyAmendment"] = v.ApplyNetworkPolicyAmendment
 	}
+	if v.StringValue != "" {
+		if len(out) > 0 || len(bytes.TrimSpace(v.RawJSON)) > 0 {
+			return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+		}
+		switch v.StringValue {
+		case "accept", "acceptForSession", "decline", "cancel":
+			return json.Marshal(v.StringValue)
+		default:
+			return nil, DecodeError{Field: "", Reason: fmt.Sprintf("unsupported CommandExecutionApprovalDecision string value %q", v.StringValue)}
+		}
+	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	untaggedOneOfVariant0Matches := true
+	if _, ok := out["acceptWithExecpolicyAmendment"]; !ok {
+		untaggedOneOfVariant0Matches = false
+	}
+	if untaggedOneOfVariant0Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant1Matches := true
+	if _, ok := out["applyNetworkPolicyAmendment"]; !ok {
+		untaggedOneOfVariant1Matches = false
+	}
+	if untaggedOneOfVariant1Matches {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches && len(bytes.TrimSpace(v.RawJSON)) > 0 {
+			if !json.Valid(v.RawJSON) {
+				return nil, fmt.Errorf("invalid CommandExecutionApprovalDecision raw fallback")
+			}
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
 	return json.Marshal(out)
 }
 
 func (v *CommandExecutionApprovalDecision) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
+	var stringValue string
+	if err := json.Unmarshal(trimmed, &stringValue); err == nil {
+		switch stringValue {
+		case "accept", "acceptForSession", "decline", "cancel":
+			*v = CommandExecutionApprovalDecision{StringValue: stringValue}
+		default:
+			*v = CommandExecutionApprovalDecision{RawJSON: append(json.RawMessage(nil), data...)}
+		}
+		return nil
+	}
+	v.StringValue = ""
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAcceptWithExecpolicyAmendment, ok := raw["acceptWithExecpolicyAmendment"]
@@ -1898,6 +1967,33 @@ func (v *CommandExecutionApprovalDecision) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field applyNetworkPolicyAmendment: %w", err)
 		}
 	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	untaggedOneOfVariant0Matches := true
+	if rawValue, ok := raw["acceptWithExecpolicyAmendment"]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		untaggedOneOfVariant0Matches = false
+	}
+	if untaggedOneOfVariant0Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant1Matches := true
+	if rawValue, ok := raw["applyNetworkPolicyAmendment"]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		untaggedOneOfVariant1Matches = false
+	}
+	if untaggedOneOfVariant1Matches {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches {
+			v.RawJSON = append(v.RawJSON[:0], data...)
+			return nil
+		}
+		return DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
+	v.RawJSON = nil
 	return nil
 }
 
@@ -1962,11 +2058,12 @@ func (v CommandExecutionRequestApprovalParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CommandExecutionRequestApprovalParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAdditionalPermissions, ok := raw["additionalPermissions"]
@@ -2109,11 +2206,12 @@ func (v CommandExecutionRequestApprovalResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CommandExecutionRequestApprovalResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDecision, ok := raw["decision"]
@@ -2140,11 +2238,12 @@ func (v CurrentTimeReadParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CurrentTimeReadParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -2171,11 +2270,12 @@ func (v CurrentTimeReadResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CurrentTimeReadResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCurrentTimeAt, ok := raw["currentTimeAt"]
@@ -2214,11 +2314,12 @@ func (v DynamicToolCallParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *DynamicToolCallParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawArguments, ok := raw["arguments"]
@@ -2290,11 +2391,12 @@ func (v DynamicToolCallResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *DynamicToolCallResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawContentItems, ok := raw["contentItems"]
@@ -2363,11 +2465,12 @@ func (v FileChange) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FileChange) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -2478,11 +2581,12 @@ func (v FileChangeRequestApprovalParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FileChangeRequestApprovalParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawGrantRoot, ok := raw["grantRoot"]
@@ -2551,11 +2655,12 @@ func (v FileChangeRequestApprovalResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FileChangeRequestApprovalResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDecision, ok := raw["decision"]
@@ -2595,11 +2700,12 @@ func (v FuzzyFileSearchParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FuzzyFileSearchParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCancellationToken, ok := raw["cancellationToken"]
@@ -2642,11 +2748,12 @@ func (v FuzzyFileSearchResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FuzzyFileSearchResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawFiles, ok := raw["files"]
@@ -2685,11 +2792,12 @@ func (v FuzzyFileSearchResult) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FuzzyFileSearchResult) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawFileName, ok := raw["file_name"]
@@ -2765,11 +2873,12 @@ func (v FuzzyFileSearchSessionCompletedNotification) MarshalJSON() ([]byte, erro
 }
 
 func (v *FuzzyFileSearchSessionCompletedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawSessionID, ok := raw["sessionId"]
@@ -2798,11 +2907,12 @@ func (v FuzzyFileSearchSessionStartParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FuzzyFileSearchSessionStartParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRoots, ok := raw["roots"]
@@ -2860,11 +2970,12 @@ func (v FuzzyFileSearchSessionStopParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FuzzyFileSearchSessionStopParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawSessionID, ok := raw["sessionId"]
@@ -2914,11 +3025,12 @@ func (v FuzzyFileSearchSessionUpdateParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FuzzyFileSearchSessionUpdateParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawQuery, ok := raw["query"]
@@ -2980,11 +3092,12 @@ func (v FuzzyFileSearchSessionUpdatedNotification) MarshalJSON() ([]byte, error)
 }
 
 func (v *FuzzyFileSearchSessionUpdatedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawFiles, ok := raw["files"]
@@ -3037,11 +3150,12 @@ func (v GrantedPermissionProfile) MarshalJSON() ([]byte, error) {
 }
 
 func (v *GrantedPermissionProfile) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawFileSystem, ok := raw["fileSystem"]
@@ -3086,11 +3200,12 @@ func (v InitializeCapabilities) MarshalJSON() ([]byte, error) {
 }
 
 func (v *InitializeCapabilities) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawExperimentalAPI, ok := raw["experimentalApi"]
@@ -3147,11 +3262,12 @@ func (v InitializeParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *InitializeParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCapabilities, ok := raw["capabilities"]
@@ -3204,11 +3320,12 @@ func (v InitializeResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *InitializeResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawActiveProtocolMode, ok := raw["activeProtocolMode"]
@@ -3337,11 +3454,12 @@ func (v JSONRPCError) MarshalJSON() ([]byte, error) {
 }
 
 func (v *JSONRPCError) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawError, ok := raw["error"]
@@ -3384,11 +3502,12 @@ func (v JSONRPCErrorError) MarshalJSON() ([]byte, error) {
 }
 
 func (v *JSONRPCErrorError) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCode, ok := raw["code"]
@@ -3554,11 +3673,12 @@ func (v JSONRPCNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *JSONRPCNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMethod, ok := raw["method"]
@@ -3601,11 +3721,12 @@ func (v JSONRPCRequest) MarshalJSON() ([]byte, error) {
 }
 
 func (v *JSONRPCRequest) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawID, ok := raw["id"]
@@ -3656,11 +3777,12 @@ func (v JSONRPCResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *JSONRPCResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawID, ok := raw["id"]
@@ -3712,11 +3834,12 @@ func (v McpElicitationBooleanSchema) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpElicitationBooleanSchema) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDefaultValue, ok := raw["default"]
@@ -3769,11 +3892,12 @@ func (v McpElicitationConstOption) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpElicitationConstOption) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawConstValue, ok := raw["const"]
@@ -3933,11 +4057,12 @@ func (v McpElicitationLegacyTitledEnumSchema) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpElicitationLegacyTitledEnumSchema) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDefaultValue, ok := raw["default"]
@@ -4101,11 +4226,12 @@ func (v McpElicitationNumberSchema) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpElicitationNumberSchema) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDefaultValue, ok := raw["default"]
@@ -4312,11 +4438,12 @@ func (v McpElicitationSchema) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpElicitationSchema) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawSchema, ok := raw["$schema"]
@@ -4481,11 +4608,12 @@ func (v McpElicitationStringSchema) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpElicitationStringSchema) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDefaultValue, ok := raw["default"]
@@ -4564,11 +4692,12 @@ func (v McpElicitationTitledEnumItems) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpElicitationTitledEnumItems) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAnyOf, ok := raw["anyOf"]
@@ -4617,11 +4746,12 @@ func (v McpElicitationTitledMultiSelectEnumSchema) MarshalJSON() ([]byte, error)
 }
 
 func (v *McpElicitationTitledMultiSelectEnumSchema) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDefaultValue, ok := raw["default"]
@@ -4712,11 +4842,12 @@ func (v McpElicitationTitledSingleSelectEnumSchema) MarshalJSON() ([]byte, error
 }
 
 func (v *McpElicitationTitledSingleSelectEnumSchema) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDefaultValue, ok := raw["default"]
@@ -4773,11 +4904,12 @@ func (v McpElicitationUntitledEnumItems) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpElicitationUntitledEnumItems) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEnum, ok := raw["enum"]
@@ -4836,11 +4968,12 @@ func (v McpElicitationUntitledMultiSelectEnumSchema) MarshalJSON() ([]byte, erro
 }
 
 func (v *McpElicitationUntitledMultiSelectEnumSchema) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDefaultValue, ok := raw["default"]
@@ -4931,11 +5064,12 @@ func (v McpElicitationUntitledSingleSelectEnumSchema) MarshalJSON() ([]byte, err
 }
 
 func (v *McpElicitationUntitledSingleSelectEnumSchema) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDefaultValue, ok := raw["default"]
@@ -5122,11 +5256,12 @@ func (v McpServerElicitationRequestParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpServerElicitationRequestParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMeta, ok := raw["_meta"]
@@ -5316,11 +5451,12 @@ func (v McpServerElicitationRequestResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpServerElicitationRequestResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMeta, ok := raw["_meta"]
@@ -5361,11 +5497,12 @@ func (v NetworkApprovalContext) MarshalJSON() ([]byte, error) {
 }
 
 func (v *NetworkApprovalContext) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawHost, ok := raw["host"]
@@ -5404,11 +5541,12 @@ func (v NetworkPolicyAmendment) MarshalJSON() ([]byte, error) {
 }
 
 func (v *NetworkPolicyAmendment) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAction, ok := raw["action"]
@@ -5498,11 +5636,12 @@ func (v ParsedCommand) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ParsedCommand) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -5638,11 +5777,12 @@ func (v PermissionsRequestApprovalParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PermissionsRequestApprovalParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCwd, ok := raw["cwd"]
@@ -5743,11 +5883,12 @@ func (v PermissionsRequestApprovalResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PermissionsRequestApprovalResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawPermissions, ok := raw["permissions"]
@@ -5780,8 +5921,22 @@ func (v *PermissionsRequestApprovalResponse) UnmarshalJSON(data []byte) error {
 }
 
 type ReviewDecision struct {
+	StringValue                 string                                      `json:"-"`
 	ApprovedExecpolicyAmendment OptionalNonNull[map[string]json.RawMessage] `json:"approved_execpolicy_amendment,omitempty"`
 	NetworkPolicyAmendment      OptionalNonNull[map[string]json.RawMessage] `json:"network_policy_amendment,omitempty"`
+	RawJSON                     json.RawMessage                             `json:"-"`
+}
+
+var (
+	ReviewDecisionApproved           = ReviewDecision{StringValue: "approved"}
+	ReviewDecisionApprovedForSession = ReviewDecision{StringValue: "approved_for_session"}
+	ReviewDecisionDenied             = ReviewDecision{StringValue: "denied"}
+	ReviewDecisionTimedOut           = ReviewDecision{StringValue: "timed_out"}
+	ReviewDecisionAbort              = ReviewDecision{StringValue: "abort"}
+)
+
+func (v ReviewDecision) IsSet() bool {
+	return v.StringValue != "" || len(bytes.TrimSpace(v.RawJSON)) > 0 || v.ApprovedExecpolicyAmendment.IsSet() || v.NetworkPolicyAmendment.IsSet()
 }
 
 func (v ReviewDecision) MarshalJSON() ([]byte, error) {
@@ -5792,15 +5947,66 @@ func (v ReviewDecision) MarshalJSON() ([]byte, error) {
 	if v.NetworkPolicyAmendment.IsSet() {
 		out["network_policy_amendment"] = v.NetworkPolicyAmendment
 	}
+	if v.StringValue != "" {
+		if len(out) > 0 || len(bytes.TrimSpace(v.RawJSON)) > 0 {
+			return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+		}
+		switch v.StringValue {
+		case "approved", "approved_for_session", "denied", "timed_out", "abort":
+			return json.Marshal(v.StringValue)
+		default:
+			return nil, DecodeError{Field: "", Reason: fmt.Sprintf("unsupported ReviewDecision string value %q", v.StringValue)}
+		}
+	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	untaggedOneOfVariant0Matches := true
+	if _, ok := out["approved_execpolicy_amendment"]; !ok {
+		untaggedOneOfVariant0Matches = false
+	}
+	if untaggedOneOfVariant0Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant1Matches := true
+	if _, ok := out["network_policy_amendment"]; !ok {
+		untaggedOneOfVariant1Matches = false
+	}
+	if untaggedOneOfVariant1Matches {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches && len(bytes.TrimSpace(v.RawJSON)) > 0 {
+			if !json.Valid(v.RawJSON) {
+				return nil, fmt.Errorf("invalid ReviewDecision raw fallback")
+			}
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
 	return json.Marshal(out)
 }
 
 func (v *ReviewDecision) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
+	var stringValue string
+	if err := json.Unmarshal(trimmed, &stringValue); err == nil {
+		switch stringValue {
+		case "approved", "approved_for_session", "denied", "timed_out", "abort":
+			*v = ReviewDecision{StringValue: stringValue}
+		default:
+			*v = ReviewDecision{RawJSON: append(json.RawMessage(nil), data...)}
+		}
+		return nil
+	}
+	v.StringValue = ""
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawApprovedExecpolicyAmendment, ok := raw["approved_execpolicy_amendment"]
@@ -5815,6 +6021,33 @@ func (v *ReviewDecision) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field network_policy_amendment: %w", err)
 		}
 	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	untaggedOneOfVariant0Matches := true
+	if rawValue, ok := raw["approved_execpolicy_amendment"]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		untaggedOneOfVariant0Matches = false
+	}
+	if untaggedOneOfVariant0Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant1Matches := true
+	if rawValue, ok := raw["network_policy_amendment"]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		untaggedOneOfVariant1Matches = false
+	}
+	if untaggedOneOfVariant1Matches {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches {
+			v.RawJSON = append(v.RawJSON[:0], data...)
+			return nil
+		}
+		return DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
+	v.RawJSON = nil
 	return nil
 }
 
@@ -7000,11 +7233,12 @@ func (v ToolRequestUserInputAnswer) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ToolRequestUserInputAnswer) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAnswers, ok := raw["answers"]
@@ -7033,11 +7267,12 @@ func (v ToolRequestUserInputOption) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ToolRequestUserInputOption) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDescription, ok := raw["description"]
@@ -7084,11 +7319,12 @@ func (v ToolRequestUserInputParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ToolRequestUserInputParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAutoResolutionMs, ok := raw["autoResolutionMs"]
@@ -7176,11 +7412,12 @@ func (v ToolRequestUserInputQuestion) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ToolRequestUserInputQuestion) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawHeader, ok := raw["header"]
@@ -7245,11 +7482,12 @@ func (v ToolRequestUserInputResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ToolRequestUserInputResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAnswers, ok := raw["answers"]
@@ -7282,11 +7520,12 @@ func (v W3cTraceContext) MarshalJSON() ([]byte, error) {
 }
 
 func (v *W3cTraceContext) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTraceparent, ok := raw["traceparent"]
@@ -7349,11 +7588,12 @@ func (v Account) MarshalJSON() ([]byte, error) {
 }
 
 func (v *Account) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -7444,11 +7684,12 @@ func (v AccountLoginCompletedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AccountLoginCompletedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawError, ok := raw["error"]
@@ -7487,11 +7728,12 @@ func (v AccountRateLimitsUpdatedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AccountRateLimitsUpdatedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRateLimits, ok := raw["rateLimits"]
@@ -7520,11 +7762,12 @@ func (v AccountTokenUsageDailyBucket) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AccountTokenUsageDailyBucket) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawStartDate, ok := raw["startDate"]
@@ -7579,11 +7822,12 @@ func (v AccountTokenUsageSummary) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AccountTokenUsageSummary) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCurrentStreakDays, ok := raw["currentStreakDays"]
@@ -7636,11 +7880,12 @@ func (v AccountUpdatedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AccountUpdatedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAuthMode, ok := raw["authMode"]
@@ -7673,11 +7918,12 @@ func (v ActivePermissionProfile) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ActivePermissionProfile) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawExtends, ok := raw["extends"]
@@ -7730,11 +7976,12 @@ func (v AdditionalContextEntry) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AdditionalContextEntry) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawKind, ok := raw["kind"]
@@ -7792,11 +8039,12 @@ func (v AdditionalFileSystemPermissions) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AdditionalFileSystemPermissions) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEntries, ok := raw["entries"]
@@ -7844,11 +8092,12 @@ func (v AdditionalNetworkPermissions) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AdditionalNetworkPermissions) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEnabled, ok := raw["enabled"]
@@ -7877,11 +8126,12 @@ func (v AgentMessageDeltaNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AgentMessageDeltaNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDelta, ok := raw["delta"]
@@ -7962,11 +8212,12 @@ func (v AgentMessageInputContent) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AgentMessageInputContent) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -8056,11 +8307,12 @@ func (v AnalyticsConfig) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AnalyticsConfig) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEnabled, ok := raw["enabled"]
@@ -8116,11 +8368,12 @@ func (v AppBranding) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AppBranding) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCategory, ok := raw["category"]
@@ -8203,11 +8456,12 @@ func (v AppConfig) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AppConfig) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawApprovalsReviewer, ok := raw["approvals_reviewer"]
@@ -8320,11 +8574,12 @@ func (v AppInfo) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AppInfo) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAppMetadata, ok := raw["appMetadata"]
@@ -8451,11 +8706,12 @@ func (v AppListUpdatedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AppListUpdatedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawData, ok := raw["data"]
@@ -8528,11 +8784,12 @@ func (v AppMetadata) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AppMetadata) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCategories, ok := raw["categories"]
@@ -8621,11 +8878,12 @@ func (v AppReview) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AppReview) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawStatus, ok := raw["status"]
@@ -8660,11 +8918,12 @@ func (v AppScreenshot) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AppScreenshot) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawFileID, ok := raw["fileId"]
@@ -8723,11 +8982,12 @@ func (v AppSummary) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AppSummary) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCategory, ok := raw["category"]
@@ -8810,11 +9070,12 @@ func (v AppTemplateSummary) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AppTemplateSummary) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCanonicalConnectorID, ok := raw["canonicalConnectorId"]
@@ -8919,11 +9180,12 @@ func (v AppToolConfig) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AppToolConfig) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawApprovalMode, ok := raw["approval_mode"]
@@ -9009,11 +9271,12 @@ func (v AppsConfig) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AppsConfig) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDefaultValue, ok := raw["_default"]
@@ -9071,11 +9334,12 @@ func (v AppsDefaultConfig) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AppsDefaultConfig) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawApprovalsReviewer, ok := raw["approvals_reviewer"]
@@ -9142,11 +9406,12 @@ func (v AppsListParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AppsListParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCursor, ok := raw["cursor"]
@@ -9200,11 +9465,12 @@ func (v AppsListResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AppsListResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawData, ok := raw["data"]
@@ -9227,7 +9493,19 @@ func (v *AppsListResponse) UnmarshalJSON(data []byte) error {
 }
 
 type AskForApproval struct {
-	Granular OptionalNonNull[map[string]json.RawMessage] `json:"granular,omitempty"`
+	StringValue string                                      `json:"-"`
+	Granular    OptionalNonNull[map[string]json.RawMessage] `json:"granular,omitempty"`
+	RawJSON     json.RawMessage                             `json:"-"`
+}
+
+var (
+	AskForApprovalUntrusted = AskForApproval{StringValue: "untrusted"}
+	AskForApprovalOnRequest = AskForApproval{StringValue: "on-request"}
+	AskForApprovalNever     = AskForApproval{StringValue: "never"}
+)
+
+func (v AskForApproval) IsSet() bool {
+	return v.StringValue != "" || len(bytes.TrimSpace(v.RawJSON)) > 0 || v.Granular.IsSet()
 }
 
 func (v AskForApproval) MarshalJSON() ([]byte, error) {
@@ -9235,15 +9513,59 @@ func (v AskForApproval) MarshalJSON() ([]byte, error) {
 	if v.Granular.IsSet() {
 		out["granular"] = v.Granular
 	}
+	if v.StringValue != "" {
+		if len(out) > 0 || len(bytes.TrimSpace(v.RawJSON)) > 0 {
+			return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+		}
+		switch v.StringValue {
+		case "untrusted", "on-request", "never":
+			return json.Marshal(v.StringValue)
+		default:
+			return nil, DecodeError{Field: "", Reason: fmt.Sprintf("unsupported AskForApproval string value %q", v.StringValue)}
+		}
+	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	untaggedOneOfVariant0Matches := true
+	if _, ok := out["granular"]; !ok {
+		untaggedOneOfVariant0Matches = false
+	}
+	if untaggedOneOfVariant0Matches {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches && len(bytes.TrimSpace(v.RawJSON)) > 0 {
+			if !json.Valid(v.RawJSON) {
+				return nil, fmt.Errorf("invalid AskForApproval raw fallback")
+			}
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
 	return json.Marshal(out)
 }
 
 func (v *AskForApproval) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
+	var stringValue string
+	if err := json.Unmarshal(trimmed, &stringValue); err == nil {
+		switch stringValue {
+		case "untrusted", "on-request", "never":
+			*v = AskForApproval{StringValue: stringValue}
+		default:
+			*v = AskForApproval{RawJSON: append(json.RawMessage(nil), data...)}
+		}
+		return nil
+	}
+	v.StringValue = ""
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawGranular, ok := raw["granular"]
@@ -9252,6 +9574,26 @@ func (v *AskForApproval) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field granular: %w", err)
 		}
 	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	untaggedOneOfVariant0Matches := true
+	if rawValue, ok := raw["granular"]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		untaggedOneOfVariant0Matches = false
+	}
+	if untaggedOneOfVariant0Matches {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches {
+			v.RawJSON = append(v.RawJSON[:0], data...)
+			return nil
+		}
+		return DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
+	v.RawJSON = nil
 	return nil
 }
 
@@ -9293,11 +9635,12 @@ func (v ByteRange) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ByteRange) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEnd, ok := raw["end"]
@@ -9340,11 +9683,12 @@ func (v CancelLoginAccountParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CancelLoginAccountParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawLoginID, ok := raw["loginId"]
@@ -9371,11 +9715,12 @@ func (v CancelLoginAccountResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CancelLoginAccountResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawStatus, ok := raw["status"]
@@ -9432,11 +9777,12 @@ func (v CapabilityRootLocation) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CapabilityRootLocation) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -9499,11 +9845,31 @@ func (v *CapabilityRootLocation) UnmarshalJSON(data []byte) error {
 }
 
 type CodexErrorInfo struct {
+	StringValue                    string                                      `json:"-"`
 	ActiveTurnNotSteerable         OptionalNonNull[map[string]json.RawMessage] `json:"activeTurnNotSteerable,omitempty"`
 	HttpConnectionFailed           OptionalNonNull[map[string]json.RawMessage] `json:"httpConnectionFailed,omitempty"`
 	ResponseStreamConnectionFailed OptionalNonNull[map[string]json.RawMessage] `json:"responseStreamConnectionFailed,omitempty"`
 	ResponseStreamDisconnected     OptionalNonNull[map[string]json.RawMessage] `json:"responseStreamDisconnected,omitempty"`
 	ResponseTooManyFailedAttempts  OptionalNonNull[map[string]json.RawMessage] `json:"responseTooManyFailedAttempts,omitempty"`
+	RawJSON                        json.RawMessage                             `json:"-"`
+}
+
+var (
+	CodexErrorInfoContextWindowExceeded = CodexErrorInfo{StringValue: "contextWindowExceeded"}
+	CodexErrorInfoSessionBudgetExceeded = CodexErrorInfo{StringValue: "sessionBudgetExceeded"}
+	CodexErrorInfoUsageLimitExceeded    = CodexErrorInfo{StringValue: "usageLimitExceeded"}
+	CodexErrorInfoServerOverloaded      = CodexErrorInfo{StringValue: "serverOverloaded"}
+	CodexErrorInfoCyberPolicy           = CodexErrorInfo{StringValue: "cyberPolicy"}
+	CodexErrorInfoInternalServerError   = CodexErrorInfo{StringValue: "internalServerError"}
+	CodexErrorInfoUnauthorized          = CodexErrorInfo{StringValue: "unauthorized"}
+	CodexErrorInfoBadRequest            = CodexErrorInfo{StringValue: "badRequest"}
+	CodexErrorInfoThreadRollbackFailed  = CodexErrorInfo{StringValue: "threadRollbackFailed"}
+	CodexErrorInfoSandboxError          = CodexErrorInfo{StringValue: "sandboxError"}
+	CodexErrorInfoOther                 = CodexErrorInfo{StringValue: "other"}
+)
+
+func (v CodexErrorInfo) IsSet() bool {
+	return v.StringValue != "" || len(bytes.TrimSpace(v.RawJSON)) > 0 || v.ActiveTurnNotSteerable.IsSet() || v.HttpConnectionFailed.IsSet() || v.ResponseStreamConnectionFailed.IsSet() || v.ResponseStreamDisconnected.IsSet() || v.ResponseTooManyFailedAttempts.IsSet()
 }
 
 func (v CodexErrorInfo) MarshalJSON() ([]byte, error) {
@@ -9523,15 +9889,87 @@ func (v CodexErrorInfo) MarshalJSON() ([]byte, error) {
 	if v.ResponseTooManyFailedAttempts.IsSet() {
 		out["responseTooManyFailedAttempts"] = v.ResponseTooManyFailedAttempts
 	}
+	if v.StringValue != "" {
+		if len(out) > 0 || len(bytes.TrimSpace(v.RawJSON)) > 0 {
+			return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+		}
+		switch v.StringValue {
+		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "serverOverloaded", "cyberPolicy", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other":
+			return json.Marshal(v.StringValue)
+		default:
+			return nil, DecodeError{Field: "", Reason: fmt.Sprintf("unsupported CodexErrorInfo string value %q", v.StringValue)}
+		}
+	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	untaggedOneOfVariant0Matches := true
+	if _, ok := out["httpConnectionFailed"]; !ok {
+		untaggedOneOfVariant0Matches = false
+	}
+	if untaggedOneOfVariant0Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant1Matches := true
+	if _, ok := out["responseStreamConnectionFailed"]; !ok {
+		untaggedOneOfVariant1Matches = false
+	}
+	if untaggedOneOfVariant1Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant2Matches := true
+	if _, ok := out["responseStreamDisconnected"]; !ok {
+		untaggedOneOfVariant2Matches = false
+	}
+	if untaggedOneOfVariant2Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant3Matches := true
+	if _, ok := out["responseTooManyFailedAttempts"]; !ok {
+		untaggedOneOfVariant3Matches = false
+	}
+	if untaggedOneOfVariant3Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant4Matches := true
+	if _, ok := out["activeTurnNotSteerable"]; !ok {
+		untaggedOneOfVariant4Matches = false
+	}
+	if untaggedOneOfVariant4Matches {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches && len(bytes.TrimSpace(v.RawJSON)) > 0 {
+			if !json.Valid(v.RawJSON) {
+				return nil, fmt.Errorf("invalid CodexErrorInfo raw fallback")
+			}
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
 	return json.Marshal(out)
 }
 
 func (v *CodexErrorInfo) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
+	var stringValue string
+	if err := json.Unmarshal(trimmed, &stringValue); err == nil {
+		switch stringValue {
+		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "serverOverloaded", "cyberPolicy", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other":
+			*v = CodexErrorInfo{StringValue: stringValue}
+		default:
+			*v = CodexErrorInfo{RawJSON: append(json.RawMessage(nil), data...)}
+		}
+		return nil
+	}
+	v.StringValue = ""
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawActiveTurnNotSteerable, ok := raw["activeTurnNotSteerable"]
@@ -9564,6 +10002,54 @@ func (v *CodexErrorInfo) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field responseTooManyFailedAttempts: %w", err)
 		}
 	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	untaggedOneOfVariant0Matches := true
+	if rawValue, ok := raw["httpConnectionFailed"]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		untaggedOneOfVariant0Matches = false
+	}
+	if untaggedOneOfVariant0Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant1Matches := true
+	if rawValue, ok := raw["responseStreamConnectionFailed"]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		untaggedOneOfVariant1Matches = false
+	}
+	if untaggedOneOfVariant1Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant2Matches := true
+	if rawValue, ok := raw["responseStreamDisconnected"]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		untaggedOneOfVariant2Matches = false
+	}
+	if untaggedOneOfVariant2Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant3Matches := true
+	if rawValue, ok := raw["responseTooManyFailedAttempts"]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		untaggedOneOfVariant3Matches = false
+	}
+	if untaggedOneOfVariant3Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant4Matches := true
+	if rawValue, ok := raw["activeTurnNotSteerable"]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		untaggedOneOfVariant4Matches = false
+	}
+	if untaggedOneOfVariant4Matches {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches {
+			v.RawJSON = append(v.RawJSON[:0], data...)
+			return nil
+		}
+		return DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
+	v.RawJSON = nil
 	return nil
 }
 
@@ -9582,11 +10068,12 @@ func (v CollabAgentState) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CollabAgentState) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMessage, ok := raw["message"]
@@ -9651,11 +10138,12 @@ func (v CollaborationMode) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CollaborationMode) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMode, ok := raw["mode"]
@@ -9713,11 +10201,12 @@ func (v CollaborationModeListResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CollaborationModeListResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawData, ok := raw["data"]
@@ -9756,11 +10245,12 @@ func (v CollaborationModeMask) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CollaborationModeMask) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMode, ok := raw["mode"]
@@ -9851,11 +10341,12 @@ func (v CommandAction) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CommandAction) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -9972,11 +10463,12 @@ func (v CommandExecOutputDeltaNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CommandExecOutputDeltaNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCapReached, ok := raw["capReached"]
@@ -10102,11 +10594,12 @@ func (v CommandExecParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CommandExecParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCommand, ok := raw["command"]
@@ -10238,11 +10731,12 @@ func (v CommandExecResizeParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CommandExecResizeParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawProcessID, ok := raw["processId"]
@@ -10304,11 +10798,12 @@ func (v CommandExecResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CommandExecResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawExitCode, ok := raw["exitCode"]
@@ -10357,11 +10852,12 @@ func (v CommandExecTerminalSize) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CommandExecTerminalSize) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCols, ok := raw["cols"]
@@ -10404,11 +10900,12 @@ func (v CommandExecTerminateParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CommandExecTerminateParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawProcessID, ok := raw["processId"]
@@ -10466,11 +10963,12 @@ func (v CommandExecWriteParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CommandExecWriteParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCloseStdin, ok := raw["closeStdin"]
@@ -10540,11 +11038,12 @@ func (v CommandExecutionOutputDeltaNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CommandExecutionOutputDeltaNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDelta, ok := raw["delta"]
@@ -10619,11 +11118,12 @@ func (v CommandMigration) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CommandMigration) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawName, ok := raw["name"]
@@ -10652,11 +11152,12 @@ func (v ComputerUseRequirements) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ComputerUseRequirements) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAllowLockedComputerUse, ok := raw["allowLockedComputerUse"]
@@ -10777,11 +11278,12 @@ func (v Config) MarshalJSON() ([]byte, error) {
 }
 
 func (v *Config) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAnalytics, ok := raw["analytics"]
@@ -11019,11 +11521,12 @@ func (v ConfigBatchWriteParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ConfigBatchWriteParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEdits, ok := raw["edits"]
@@ -11076,11 +11579,12 @@ func (v ConfigEdit) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ConfigEdit) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawKeyPath, ok := raw["keyPath"]
@@ -11132,11 +11636,12 @@ func (v ConfigLayer) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ConfigLayer) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawConfig, ok := raw["config"]
@@ -11188,11 +11693,12 @@ func (v ConfigLayerMetadata) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ConfigLayerMetadata) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawName, ok := raw["name"]
@@ -11297,11 +11803,12 @@ func (v ConfigLayerSource) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ConfigLayerSource) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -11456,11 +11963,12 @@ func (v ConfigReadParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ConfigReadParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCwd, ok := raw["cwd"]
@@ -11499,11 +12007,12 @@ func (v ConfigReadResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ConfigReadResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawConfig, ok := raw["config"]
@@ -11608,11 +12117,12 @@ func (v ConfigRequirements) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ConfigRequirements) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAllowAppshots, ok := raw["allowAppshots"]
@@ -11727,11 +12237,12 @@ func (v ConfigRequirementsReadResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ConfigRequirementsReadResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRequirements, ok := raw["requirements"]
@@ -11766,11 +12277,12 @@ func (v ConfigValueWriteParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ConfigValueWriteParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawExpectedVersion, ok := raw["expectedVersion"]
@@ -11838,11 +12350,12 @@ func (v ConfigWarningNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ConfigWarningNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDetails, ok := raw["details"]
@@ -11895,11 +12408,12 @@ func (v ConfigWriteResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ConfigWriteResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawFilePath, ok := raw["filePath"]
@@ -11989,11 +12503,12 @@ func (v ConfiguredHookHandler) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ConfiguredHookHandler) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -12097,11 +12612,12 @@ func (v ConfiguredHookMatcherGroup) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ConfiguredHookMatcherGroup) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawHooks, ok := raw["hooks"]
@@ -12147,11 +12663,12 @@ func (v ConsumeAccountRateLimitResetCreditParams) MarshalJSON() ([]byte, error) 
 }
 
 func (v *ConsumeAccountRateLimitResetCreditParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCreditID, ok := raw["creditId"]
@@ -12184,11 +12701,12 @@ func (v ConsumeAccountRateLimitResetCreditResponse) MarshalJSON() ([]byte, error
 }
 
 func (v *ConsumeAccountRateLimitResetCreditResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawOutcome, ok := raw["outcome"]
@@ -12247,11 +12765,12 @@ func (v ContentItem) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ContentItem) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -12341,11 +12860,12 @@ func (v ContextCompactedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ContextCompactedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -12396,11 +12916,12 @@ func (v CreditsSnapshot) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CreditsSnapshot) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawBalance, ok := raw["balance"]
@@ -12447,11 +12968,12 @@ func (v DeprecationNoticeNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *DeprecationNoticeNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDetails, ok := raw["details"]
@@ -12508,11 +13030,12 @@ func (v DynamicToolCallOutputContentItem) MarshalJSON() ([]byte, error) {
 }
 
 func (v *DynamicToolCallOutputContentItem) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -12632,11 +13155,12 @@ func (v DynamicToolNamespaceTool) MarshalJSON() ([]byte, error) {
 }
 
 func (v *DynamicToolNamespaceTool) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -12777,11 +13301,12 @@ func (v DynamicToolSpec) MarshalJSON() ([]byte, error) {
 }
 
 func (v *DynamicToolSpec) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -12900,11 +13425,12 @@ func (v EnvironmentAddParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *EnvironmentAddParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawConnectTimeoutMs, ok := raw["connectTimeoutMs"]
@@ -12973,11 +13499,12 @@ func (v EnvironmentInfoParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *EnvironmentInfoParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEnvironmentID, ok := raw["environmentId"]
@@ -13008,11 +13535,12 @@ func (v EnvironmentInfoResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *EnvironmentInfoResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCwd, ok := raw["cwd"]
@@ -13047,11 +13575,12 @@ func (v EnvironmentShellInfo) MarshalJSON() ([]byte, error) {
 }
 
 func (v *EnvironmentShellInfo) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawName, ok := raw["name"]
@@ -13094,11 +13623,12 @@ func (v ErrorNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ErrorNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawError, ok := raw["error"]
@@ -13173,11 +13703,12 @@ func (v ExperimentalFeature) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ExperimentalFeature) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAnnouncement, ok := raw["announcement"]
@@ -13252,11 +13783,12 @@ func (v ExperimentalFeatureEnablementSetParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ExperimentalFeatureEnablementSetParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEnablement, ok := raw["enablement"]
@@ -13283,11 +13815,12 @@ func (v ExperimentalFeatureEnablementSetResponse) MarshalJSON() ([]byte, error) 
 }
 
 func (v *ExperimentalFeatureEnablementSetResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEnablement, ok := raw["enablement"]
@@ -13324,11 +13857,12 @@ func (v ExperimentalFeatureListParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ExperimentalFeatureListParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCursor, ok := raw["cursor"]
@@ -13372,11 +13906,12 @@ func (v ExperimentalFeatureListResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ExperimentalFeatureListResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawData, ok := raw["data"]
@@ -13427,11 +13962,12 @@ func (v ExternalAgentConfigDetectParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ExternalAgentConfigDetectParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCwds, ok := raw["cwds"]
@@ -13464,11 +14000,12 @@ func (v ExternalAgentConfigDetectResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ExternalAgentConfigDetectResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawItems, ok := raw["items"]
@@ -13497,11 +14034,12 @@ func (v ExternalAgentConfigImportCompletedNotification) MarshalJSON() ([]byte, e
 }
 
 func (v *ExternalAgentConfigImportCompletedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawImportID, ok := raw["importId"]
@@ -13538,11 +14076,12 @@ func (v ExternalAgentConfigImportHistoriesReadResponse) MarshalJSON() ([]byte, e
 }
 
 func (v *ExternalAgentConfigImportHistoriesReadResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawData, ok := raw["data"]
@@ -13575,11 +14114,12 @@ func (v ExternalAgentConfigImportHistory) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ExternalAgentConfigImportHistory) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCompletedAtMs, ok := raw["completedAtMs"]
@@ -13652,11 +14192,12 @@ func (v ExternalAgentConfigImportItemTypeFailure) MarshalJSON() ([]byte, error) 
 }
 
 func (v *ExternalAgentConfigImportItemTypeFailure) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCwd, ok := raw["cwd"]
@@ -13733,11 +14274,12 @@ func (v ExternalAgentConfigImportItemTypeSuccess) MarshalJSON() ([]byte, error) 
 }
 
 func (v *ExternalAgentConfigImportItemTypeSuccess) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCwd, ok := raw["cwd"]
@@ -13786,11 +14328,12 @@ func (v ExternalAgentConfigImportParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ExternalAgentConfigImportParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMigrationItems, ok := raw["migrationItems"]
@@ -13825,11 +14368,12 @@ func (v ExternalAgentConfigImportProgressNotification) MarshalJSON() ([]byte, er
 }
 
 func (v *ExternalAgentConfigImportProgressNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawImportID, ok := raw["importId"]
@@ -13866,11 +14410,12 @@ func (v ExternalAgentConfigImportResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ExternalAgentConfigImportResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawImportID, ok := raw["importId"]
@@ -13901,11 +14446,12 @@ func (v ExternalAgentConfigImportTypeResult) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ExternalAgentConfigImportTypeResult) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawFailures, ok := raw["failures"]
@@ -13962,11 +14508,12 @@ func (v ExternalAgentConfigMigrationItem) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ExternalAgentConfigMigrationItem) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCwd, ok := raw["cwd"]
@@ -14051,11 +14598,12 @@ func (v FeedbackUploadParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FeedbackUploadParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawClassification, ok := raw["classification"]
@@ -14116,11 +14664,12 @@ func (v FeedbackUploadResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FeedbackUploadResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -14153,11 +14702,12 @@ func (v FileChangeOutputDeltaNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FileChangeOutputDeltaNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDelta, ok := raw["delta"]
@@ -14220,11 +14770,12 @@ func (v FileChangePatchUpdatedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FileChangePatchUpdatedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawChanges, ok := raw["changes"]
@@ -14321,11 +14872,12 @@ func (v FileSystemPath) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FileSystemPath) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -14415,11 +14967,12 @@ func (v FileSystemSandboxEntry) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FileSystemSandboxEntry) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAccess, ok := raw["access"]
@@ -14481,11 +15034,12 @@ func (v FileSystemSpecialPath) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FileSystemSpecialPath) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawKindDiscriminator, ok := raw["kind"]
@@ -14573,11 +15127,12 @@ func (v FileUpdateChange) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FileUpdateChange) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDiff, ok := raw["diff"]
@@ -14635,11 +15190,12 @@ func (v FsChangedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FsChangedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawChangedPaths, ok := raw["changedPaths"]
@@ -14684,11 +15240,12 @@ func (v FsCopyParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FsCopyParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDestinationPath, ok := raw["destinationPath"]
@@ -14760,11 +15317,12 @@ func (v FsCreateDirectoryParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FsCreateDirectoryParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawPath, ok := raw["path"]
@@ -14818,11 +15376,12 @@ func (v FsGetMetadataParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FsGetMetadataParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawPath, ok := raw["path"]
@@ -14857,11 +15416,12 @@ func (v FsGetMetadataResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FsGetMetadataResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCreatedAtMs, ok := raw["createdAtMs"]
@@ -14932,11 +15492,12 @@ func (v FsReadDirectoryEntry) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FsReadDirectoryEntry) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawFileName, ok := raw["fileName"]
@@ -14983,11 +15544,12 @@ func (v FsReadDirectoryParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FsReadDirectoryParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawPath, ok := raw["path"]
@@ -15014,11 +15576,12 @@ func (v FsReadDirectoryResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FsReadDirectoryResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEntries, ok := raw["entries"]
@@ -15045,11 +15608,12 @@ func (v FsReadFileParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FsReadFileParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawPath, ok := raw["path"]
@@ -15076,11 +15640,12 @@ func (v FsReadFileResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FsReadFileResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDataBase64, ok := raw["dataBase64"]
@@ -15115,11 +15680,12 @@ func (v FsRemoveParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FsRemoveParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawForce, ok := raw["force"]
@@ -15179,11 +15745,12 @@ func (v FsUnwatchParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FsUnwatchParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawWatchID, ok := raw["watchId"]
@@ -15233,11 +15800,12 @@ func (v FsWatchParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FsWatchParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawPath, ok := raw["path"]
@@ -15274,11 +15842,12 @@ func (v FsWatchResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FsWatchResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawPath, ok := raw["path"]
@@ -15307,11 +15876,12 @@ func (v FsWriteFileParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FsWriteFileParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDataBase64, ok := raw["dataBase64"]
@@ -15407,11 +15977,12 @@ func (v FunctionCallOutputContentItem) MarshalJSON() ([]byte, error) {
 }
 
 func (v *FunctionCallOutputContentItem) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -15509,11 +16080,12 @@ func (v GetAccountParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *GetAccountParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRefreshToken, ok := raw["refreshToken"]
@@ -15548,11 +16120,12 @@ func (v GetAccountRateLimitsResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *GetAccountRateLimitsResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRateLimitResetCredits, ok := raw["rateLimitResetCredits"]
@@ -15595,11 +16168,12 @@ func (v GetAccountResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *GetAccountResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAccount, ok := raw["account"]
@@ -15636,11 +16210,12 @@ func (v GetAccountTokenUsageResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *GetAccountTokenUsageResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDailyUsageBuckets, ok := raw["dailyUsageBuckets"]
@@ -15675,11 +16250,12 @@ func (v GetWorkspaceMessagesResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *GetWorkspaceMessagesResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawFeatureEnabled, ok := raw["featureEnabled"]
@@ -15726,11 +16302,12 @@ func (v GitInfo) MarshalJSON() ([]byte, error) {
 }
 
 func (v *GitInfo) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawBranch, ok := raw["branch"]
@@ -15777,11 +16354,12 @@ func (v GuardianApprovalReview) MarshalJSON() ([]byte, error) {
 }
 
 func (v *GuardianApprovalReview) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRationale, ok := raw["rationale"]
@@ -15956,11 +16534,12 @@ func (v GuardianApprovalReviewAction) MarshalJSON() ([]byte, error) {
 }
 
 func (v *GuardianApprovalReviewAction) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -16245,11 +16824,12 @@ func (v GuardianWarningNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *GuardianWarningNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMessage, ok := raw["message"]
@@ -16292,11 +16872,12 @@ func (v HookCompletedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *HookCompletedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRun, ok := raw["run"]
@@ -16341,11 +16922,12 @@ func (v HookErrorInfo) MarshalJSON() ([]byte, error) {
 }
 
 func (v *HookErrorInfo) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMessage, ok := raw["message"]
@@ -16448,11 +17030,12 @@ func (v HookMetadata) MarshalJSON() ([]byte, error) {
 }
 
 func (v *HookMetadata) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCommand, ok := raw["command"]
@@ -16606,11 +17189,12 @@ func (v HookMigration) MarshalJSON() ([]byte, error) {
 }
 
 func (v *HookMigration) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawName, ok := raw["name"]
@@ -16639,11 +17223,12 @@ func (v HookOutputEntry) MarshalJSON() ([]byte, error) {
 }
 
 func (v *HookOutputEntry) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawKind, ok := raw["kind"]
@@ -16692,11 +17277,12 @@ func (v HookPromptFragment) MarshalJSON() ([]byte, error) {
 }
 
 func (v *HookPromptFragment) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawHookRunID, ok := raw["hookRunId"]
@@ -16777,11 +17363,12 @@ func (v HookRunSummary) MarshalJSON() ([]byte, error) {
 }
 
 func (v *HookRunSummary) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCompletedAt, ok := raw["completedAt"]
@@ -16951,11 +17538,12 @@ func (v HookStartedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *HookStartedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRun, ok := raw["run"]
@@ -17013,11 +17601,12 @@ func (v HooksListEntry) MarshalJSON() ([]byte, error) {
 }
 
 func (v *HooksListEntry) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCwd, ok := raw["cwd"]
@@ -17076,11 +17665,12 @@ func (v HooksListParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *HooksListParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCwds, ok := raw["cwds"]
@@ -17107,11 +17697,12 @@ func (v HooksListResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *HooksListResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawData, ok := raw["data"]
@@ -17156,11 +17747,12 @@ func (v InternalChatMessageMetadataPassthrough) MarshalJSON() ([]byte, error) {
 }
 
 func (v *InternalChatMessageMetadataPassthrough) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTurnID, ok := raw["turn_id"]
@@ -17189,11 +17781,12 @@ func (v ItemCompletedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ItemCompletedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCompletedAtMs, ok := raw["completedAtMs"]
@@ -17268,11 +17861,12 @@ func (v ItemGuardianApprovalReviewCompletedNotification) MarshalJSON() ([]byte, 
 }
 
 func (v *ItemGuardianApprovalReviewCompletedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAction, ok := raw["action"]
@@ -17389,11 +17983,12 @@ func (v ItemGuardianApprovalReviewStartedNotification) MarshalJSON() ([]byte, er
 }
 
 func (v *ItemGuardianApprovalReviewStartedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAction, ok := raw["action"]
@@ -17482,11 +18077,12 @@ func (v ItemStartedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ItemStartedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawItem, ok := raw["item"]
@@ -17559,11 +18155,12 @@ func (v ListMcpServerStatusParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ListMcpServerStatusParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCursor, ok := raw["cursor"]
@@ -17613,11 +18210,12 @@ func (v ListMcpServerStatusResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ListMcpServerStatusResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawData, ok := raw["data"]
@@ -17682,11 +18280,12 @@ func (v LocalShellAction) MarshalJSON() ([]byte, error) {
 }
 
 func (v *LocalShellAction) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -17781,6 +18380,7 @@ type LoginAccountParams struct {
 	ChatgptAccountID          OptionalNonNull[string] `json:"chatgptAccountId,omitempty"`
 	ChatgptPlanType           Optional[string]        `json:"chatgptPlanType,omitempty"`
 	CodexStreamlinedLogin     OptionalNonNull[bool]   `json:"codexStreamlinedLogin,omitempty"`
+	Region                    OptionalNonNull[string] `json:"region,omitempty"`
 	TypeValue                 string                  `json:"type,omitempty"`
 	UseHostedLoginSuccessPage OptionalNonNull[bool]   `json:"useHostedLoginSuccessPage,omitempty"`
 	RawJSON                   json.RawMessage         `json:"-"`
@@ -17808,6 +18408,9 @@ func (v LoginAccountParams) MarshalJSON() ([]byte, error) {
 			out["codexStreamlinedLogin"] = v.CodexStreamlinedLogin
 		}
 	}
+	if v.Region.IsSet() {
+		out["region"] = v.Region
+	}
 	out["type"] = v.TypeValue
 	if v.UseHostedLoginSuccessPage.IsSet() {
 		out["useHostedLoginSuccessPage"] = v.UseHostedLoginSuccessPage
@@ -17826,6 +18429,13 @@ func (v LoginAccountParams) MarshalJSON() ([]byte, error) {
 		if !v.ChatgptAccountID.IsSet() {
 			return nil, DecodeError{Field: "chatgptAccountId", Reason: "missing required field for type chatgptAuthTokens"}
 		}
+	case "amazonBedrock":
+		if !v.APIKey.IsSet() {
+			return nil, DecodeError{Field: "apiKey", Reason: "missing required field for type amazonBedrock"}
+		}
+		if !v.Region.IsSet() {
+			return nil, DecodeError{Field: "region", Reason: "missing required field for type amazonBedrock"}
+		}
 	default:
 		if len(v.RawJSON) > 0 {
 			return append([]byte(nil), v.RawJSON...), nil
@@ -17836,11 +18446,12 @@ func (v LoginAccountParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *LoginAccountParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -17859,6 +18470,7 @@ func (v *LoginAccountParams) UnmarshalJSON(data []byte) error {
 	case "chatgpt":
 	case "chatgptDeviceCode":
 	case "chatgptAuthTokens":
+	case "amazonBedrock":
 	default:
 		v.TypeValue = TypeValueDiscriminator
 		v.RawJSON = append(v.RawJSON[:0], data...)
@@ -17904,6 +18516,12 @@ func (v *LoginAccountParams) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field codexStreamlinedLogin: %w", err)
 		}
 	}
+	rawRegion, ok := raw["region"]
+	if ok {
+		if err := json.Unmarshal(rawRegion, &v.Region); err != nil {
+			return fmt.Errorf("field region: %w", err)
+		}
+	}
 	rawTypeValue, ok := raw["type"]
 	if !ok {
 		return DecodeError{Field: "type", Reason: "missing required field"}
@@ -17940,6 +18558,17 @@ func (v *LoginAccountParams) UnmarshalJSON(data []byte) error {
 			return DecodeError{Field: "chatgptAccountId", Reason: "missing required field for type chatgptAuthTokens"}
 		} else if bytes.Equal(rawValue, []byte("null")) {
 			return DecodeError{Field: "chatgptAccountId", Reason: "cannot be null"}
+		}
+	case "amazonBedrock":
+		if rawValue, ok := raw["apiKey"]; !ok {
+			return DecodeError{Field: "apiKey", Reason: "missing required field for type amazonBedrock"}
+		} else if bytes.Equal(rawValue, []byte("null")) {
+			return DecodeError{Field: "apiKey", Reason: "cannot be null"}
+		}
+		if rawValue, ok := raw["region"]; !ok {
+			return DecodeError{Field: "region", Reason: "missing required field for type amazonBedrock"}
+		} else if bytes.Equal(rawValue, []byte("null")) {
+			return DecodeError{Field: "region", Reason: "cannot be null"}
 		}
 	default:
 		v.RawJSON = append(v.RawJSON[:0], data...)
@@ -17991,6 +18620,7 @@ func (v LoginAccountResponse) MarshalJSON() ([]byte, error) {
 			return nil, DecodeError{Field: "verificationUrl", Reason: "missing required field for type chatgptDeviceCode"}
 		}
 	case "chatgptAuthTokens":
+	case "amazonBedrock":
 	default:
 		if len(v.RawJSON) > 0 {
 			return append([]byte(nil), v.RawJSON...), nil
@@ -18001,11 +18631,12 @@ func (v LoginAccountResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *LoginAccountResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -18024,6 +18655,7 @@ func (v *LoginAccountResponse) UnmarshalJSON(data []byte) error {
 	case "chatgpt":
 	case "chatgptDeviceCode":
 	case "chatgptAuthTokens":
+	case "amazonBedrock":
 	default:
 		v.TypeValue = TypeValueDiscriminator
 		v.RawJSON = append(v.RawJSON[:0], data...)
@@ -18094,6 +18726,7 @@ func (v *LoginAccountResponse) UnmarshalJSON(data []byte) error {
 			return DecodeError{Field: "verificationUrl", Reason: "cannot be null"}
 		}
 	case "chatgptAuthTokens":
+	case "amazonBedrock":
 	default:
 		v.RawJSON = append(v.RawJSON[:0], data...)
 	}
@@ -18165,11 +18798,12 @@ func (v ManagedHooksRequirements) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ManagedHooksRequirements) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawPermissionRequest, ok := raw["PermissionRequest"]
@@ -18306,11 +18940,12 @@ func (v MarketplaceAddParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *MarketplaceAddParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRefName, ok := raw["refName"]
@@ -18353,11 +18988,12 @@ func (v MarketplaceAddResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *MarketplaceAddResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAlreadyAdded, ok := raw["alreadyAdded"]
@@ -18406,11 +19042,12 @@ func (v MarketplaceInterface) MarshalJSON() ([]byte, error) {
 }
 
 func (v *MarketplaceInterface) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDisplayName, ok := raw["displayName"]
@@ -18435,11 +19072,12 @@ func (v MarketplaceLoadErrorInfo) MarshalJSON() ([]byte, error) {
 }
 
 func (v *MarketplaceLoadErrorInfo) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMarketplacePath, ok := raw["marketplacePath"]
@@ -18476,11 +19114,12 @@ func (v MarketplaceRemoveParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *MarketplaceRemoveParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMarketplaceName, ok := raw["marketplaceName"]
@@ -18511,11 +19150,12 @@ func (v MarketplaceRemoveResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *MarketplaceRemoveResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawInstalledRoot, ok := raw["installedRoot"]
@@ -18550,11 +19190,12 @@ func (v MarketplaceUpgradeErrorInfo) MarshalJSON() ([]byte, error) {
 }
 
 func (v *MarketplaceUpgradeErrorInfo) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMarketplaceName, ok := raw["marketplaceName"]
@@ -18593,11 +19234,12 @@ func (v MarketplaceUpgradeParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *MarketplaceUpgradeParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMarketplaceName, ok := raw["marketplaceName"]
@@ -18624,11 +19266,12 @@ func (v MarketplaceUpgradeResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *MarketplaceUpgradeResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawErrors, ok := raw["errors"]
@@ -18690,11 +19333,12 @@ func (v McpResourceReadParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpResourceReadParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawServer, ok := raw["server"]
@@ -18737,11 +19381,12 @@ func (v McpResourceReadResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpResourceReadResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawContents, ok := raw["contents"]
@@ -18786,11 +19431,12 @@ func (v McpServerInfo) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpServerInfo) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDescription, ok := raw["description"]
@@ -18851,11 +19497,12 @@ func (v McpServerMigration) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpServerMigration) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawName, ok := raw["name"]
@@ -18892,11 +19539,12 @@ func (v McpServerOauthLoginCompletedNotification) MarshalJSON() ([]byte, error) 
 }
 
 func (v *McpServerOauthLoginCompletedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawError, ok := raw["error"]
@@ -18957,11 +19605,12 @@ func (v McpServerOauthLoginParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpServerOauthLoginParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawName, ok := raw["name"]
@@ -19006,11 +19655,12 @@ func (v McpServerOauthLoginResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpServerOauthLoginResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAuthorizationURL, ok := raw["authorizationUrl"]
@@ -19085,11 +19735,12 @@ func (v McpServerStatus) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpServerStatus) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAuthStatus, ok := raw["authStatus"]
@@ -19183,11 +19834,12 @@ func (v McpServerStatusUpdatedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpServerStatusUpdatedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawError, ok := raw["error"]
@@ -19254,11 +19906,12 @@ func (v McpServerToolCallParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpServerToolCallParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMeta, ok := raw["_meta"]
@@ -19329,11 +19982,12 @@ func (v McpServerToolCallResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpServerToolCallResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMeta, ok := raw["_meta"]
@@ -19398,11 +20052,12 @@ func (v McpToolCallAppContext) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpToolCallAppContext) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawActionName, ok := raw["actionName"]
@@ -19459,11 +20114,12 @@ func (v McpToolCallError) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpToolCallError) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMessage, ok := raw["message"]
@@ -19496,11 +20152,12 @@ func (v McpToolCallProgressNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpToolCallProgressNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawItemID, ok := raw["itemId"]
@@ -19565,11 +20222,12 @@ func (v McpToolCallResult) MarshalJSON() ([]byte, error) {
 }
 
 func (v *McpToolCallResult) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMeta, ok := raw["_meta"]
@@ -19618,11 +20276,12 @@ func (v MemoryCitation) MarshalJSON() ([]byte, error) {
 }
 
 func (v *MemoryCitation) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEntries, ok := raw["entries"]
@@ -19665,11 +20324,12 @@ func (v MemoryCitationEntry) MarshalJSON() ([]byte, error) {
 }
 
 func (v *MemoryCitationEntry) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawLineEnd, ok := raw["lineEnd"]
@@ -19793,11 +20453,12 @@ func (v MigrationDetails) MarshalJSON() ([]byte, error) {
 }
 
 func (v *MigrationDetails) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCommands, ok := raw["commands"]
@@ -19937,11 +20598,12 @@ func (v Model) MarshalJSON() ([]byte, error) {
 }
 
 func (v *Model) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAdditionalSpeedTiers, ok := raw["additionalSpeedTiers"]
@@ -20106,11 +20768,12 @@ func (v ModelAvailabilityNux) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ModelAvailabilityNux) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMessage, ok := raw["message"]
@@ -20147,11 +20810,12 @@ func (v ModelListParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ModelListParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCursor, ok := raw["cursor"]
@@ -20195,11 +20859,12 @@ func (v ModelListResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ModelListResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawData, ok := raw["data"]
@@ -20257,11 +20922,12 @@ func (v ModelProviderCapabilitiesReadResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ModelProviderCapabilitiesReadResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawImageGeneration, ok := raw["imageGeneration"]
@@ -20322,11 +20988,12 @@ func (v ModelReroutedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ModelReroutedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawFromModel, ok := raw["fromModel"]
@@ -20407,11 +21074,12 @@ func (v ModelSafetyBufferingUpdatedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ModelSafetyBufferingUpdatedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawFasterModel, ok := raw["fasterModel"]
@@ -20498,11 +21166,12 @@ func (v ModelServiceTier) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ModelServiceTier) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDescription, ok := raw["description"]
@@ -20561,11 +21230,12 @@ func (v ModelUpgradeInfo) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ModelUpgradeInfo) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMigrationMarkdown, ok := raw["migrationMarkdown"]
@@ -20620,11 +21290,12 @@ func (v ModelVerificationNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ModelVerificationNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -20673,11 +21344,12 @@ func (v ModelsRequirements) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ModelsRequirements) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawNewThread, ok := raw["newThread"]
@@ -20865,11 +21537,12 @@ func (v NetworkRequirements) MarshalJSON() ([]byte, error) {
 }
 
 func (v *NetworkRequirements) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAllowLocalBinding, ok := raw["allowLocalBinding"]
@@ -20991,11 +21664,12 @@ func (v NewThreadModelDefaults) MarshalJSON() ([]byte, error) {
 }
 
 func (v *NewThreadModelDefaults) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawModel, ok := raw["model"]
@@ -21045,11 +21719,12 @@ func (v OverriddenMetadata) MarshalJSON() ([]byte, error) {
 }
 
 func (v *OverriddenMetadata) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEffectiveValue, ok := raw["effectiveValue"]
@@ -21117,11 +21792,12 @@ func (v PatchChangeKind) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PatchChangeKind) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -21194,11 +21870,12 @@ func (v PermissionProfileListParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PermissionProfileListParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCursor, ok := raw["cursor"]
@@ -21242,11 +21919,12 @@ func (v PermissionProfileListResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PermissionProfileListResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawData, ok := raw["data"]
@@ -21285,11 +21963,12 @@ func (v PermissionProfileSummary) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PermissionProfileSummary) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAllowed, ok := raw["allowed"]
@@ -21346,11 +22025,12 @@ func (v PlanDeltaNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PlanDeltaNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDelta, ok := raw["delta"]
@@ -21451,16 +22131,17 @@ func (v PluginAvailability) MarshalJSON() ([]byte, error) {
 }
 
 type PluginDetail struct {
-	AppTemplates    []AppTemplateSummary      `json:"appTemplates,omitempty"`
-	Apps            []AppSummary              `json:"apps,omitempty"`
-	Description     Optional[string]          `json:"description,omitempty"`
-	Hooks           []PluginHookSummary       `json:"hooks,omitempty"`
-	MarketplaceName string                    `json:"marketplaceName,omitempty"`
-	MarketplacePath Optional[AbsolutePathBuf] `json:"marketplacePath,omitempty"`
-	McpServers      []string                  `json:"mcpServers,omitempty"`
-	ShareURL        Optional[string]          `json:"shareUrl,omitempty"`
-	Skills          []SkillSummary            `json:"skills,omitempty"`
-	Summary         PluginSummary             `json:"summary,omitempty"`
+	AppTemplates    []AppTemplateSummary             `json:"appTemplates,omitempty"`
+	Apps            []AppSummary                     `json:"apps,omitempty"`
+	Description     Optional[string]                 `json:"description,omitempty"`
+	Hooks           []PluginHookSummary              `json:"hooks,omitempty"`
+	MarketplaceName string                           `json:"marketplaceName,omitempty"`
+	MarketplacePath Optional[AbsolutePathBuf]        `json:"marketplacePath,omitempty"`
+	McpServers      []string                         `json:"mcpServers,omitempty"`
+	ScheduledTasks  Optional[[]ScheduledTaskSummary] `json:"scheduledTasks,omitempty"`
+	ShareURL        Optional[string]                 `json:"shareUrl,omitempty"`
+	Skills          []SkillSummary                   `json:"skills,omitempty"`
+	Summary         PluginSummary                    `json:"summary,omitempty"`
 }
 
 func (v PluginDetail) MarshalJSON() ([]byte, error) {
@@ -21476,6 +22157,9 @@ func (v PluginDetail) MarshalJSON() ([]byte, error) {
 		out["marketplacePath"] = v.MarketplacePath
 	}
 	out["mcpServers"] = v.McpServers
+	if v.ScheduledTasks.IsSet() {
+		out["scheduledTasks"] = v.ScheduledTasks
+	}
 	if v.ShareURL.IsSet() {
 		out["shareUrl"] = v.ShareURL
 	}
@@ -21485,11 +22169,12 @@ func (v PluginDetail) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginDetail) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAppTemplates, ok := raw["appTemplates"]
@@ -21554,6 +22239,12 @@ func (v *PluginDetail) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(rawMcpServers, &v.McpServers); err != nil {
 		return fmt.Errorf("field mcpServers: %w", err)
 	}
+	rawScheduledTasks, ok := raw["scheduledTasks"]
+	if ok {
+		if err := json.Unmarshal(rawScheduledTasks, &v.ScheduledTasks); err != nil {
+			return fmt.Errorf("field scheduledTasks: %w", err)
+		}
+	}
 	rawShareURL, ok := raw["shareUrl"]
 	if ok {
 		if err := json.Unmarshal(rawShareURL, &v.ShareURL); err != nil {
@@ -21596,11 +22287,12 @@ func (v PluginHookSummary) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginHookSummary) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEventName, ok := raw["eventName"]
@@ -21645,11 +22337,12 @@ func (v PluginInstallParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginInstallParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMarketplacePath, ok := raw["marketplacePath"]
@@ -21705,11 +22398,12 @@ func (v PluginInstallResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginInstallResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAppsNeedingAuth, ok := raw["appsNeedingAuth"]
@@ -21752,11 +22446,12 @@ func (v PluginInstalledParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginInstalledParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCwds, ok := raw["cwds"]
@@ -21789,11 +22484,12 @@ func (v PluginInstalledResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginInstalledResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMarketplaceLoadErrors, ok := raw["marketplaceLoadErrors"]
@@ -21898,11 +22594,12 @@ func (v PluginInterface) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginInterface) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawBrandColor, ok := raw["brandColor"]
@@ -22061,11 +22758,12 @@ func (v PluginListParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginListParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCwds, ok := raw["cwds"]
@@ -22102,11 +22800,12 @@ func (v PluginListResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginListResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawFeaturedPluginIDs, ok := raw["featuredPluginIds"]
@@ -22163,11 +22862,12 @@ func (v PluginMarketplaceEntry) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginMarketplaceEntry) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawInterfaceValue, ok := raw["interface"]
@@ -22224,11 +22924,12 @@ func (v PluginReadParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginReadParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMarketplacePath, ok := raw["marketplacePath"]
@@ -22267,11 +22968,12 @@ func (v PluginReadResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginReadResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawPlugin, ok := raw["plugin"]
@@ -22298,11 +23000,12 @@ func (v PluginShareCheckoutParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginShareCheckoutParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRemotePluginID, ok := raw["remotePluginId"]
@@ -22343,11 +23046,12 @@ func (v PluginShareCheckoutResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginShareCheckoutResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMarketplaceName, ok := raw["marketplaceName"]
@@ -22454,11 +23158,12 @@ func (v PluginShareContext) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginShareContext) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCreatorAccountUserID, ok := raw["creatorAccountUserId"]
@@ -22525,11 +23230,12 @@ func (v PluginShareDeleteParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginShareDeleteParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRemotePluginID, ok := raw["remotePluginId"]
@@ -22589,11 +23295,12 @@ func (v PluginShareListItem) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginShareListItem) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawLocalPluginPath, ok := raw["localPluginPath"]
@@ -22647,11 +23354,12 @@ func (v PluginShareListResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginShareListResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawData, ok := raw["data"]
@@ -22684,11 +23392,12 @@ func (v PluginSharePrincipal) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginSharePrincipal) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawName, ok := raw["name"]
@@ -22773,11 +23482,12 @@ func (v PluginShareSaveParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginShareSaveParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDiscoverability, ok := raw["discoverability"]
@@ -22824,11 +23534,12 @@ func (v PluginShareSaveResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginShareSaveResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRemotePluginID, ok := raw["remotePluginId"]
@@ -22869,11 +23580,12 @@ func (v PluginShareTarget) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginShareTarget) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawPrincipalID, ok := raw["principalId"]
@@ -22938,11 +23650,12 @@ func (v PluginShareUpdateTargetsParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginShareUpdateTargetsParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDiscoverability, ok := raw["discoverability"]
@@ -22991,11 +23704,12 @@ func (v PluginShareUpdateTargetsResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginShareUpdateTargetsResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDiscoverability, ok := raw["discoverability"]
@@ -23036,11 +23750,12 @@ func (v PluginSkillReadParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginSkillReadParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRemoteMarketplaceName, ok := raw["remoteMarketplaceName"]
@@ -23089,11 +23804,12 @@ func (v PluginSkillReadResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginSkillReadResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawContents, ok := raw["contents"]
@@ -23165,11 +23881,12 @@ func (v PluginSource) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginSource) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -23327,11 +24044,12 @@ func (v PluginSummary) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginSummary) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAuthPolicy, ok := raw["authPolicy"]
@@ -23478,11 +24196,12 @@ func (v PluginUninstallParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginUninstallParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawPluginID, ok := raw["pluginId"]
@@ -23532,11 +24251,12 @@ func (v PluginsMigration) MarshalJSON() ([]byte, error) {
 }
 
 func (v *PluginsMigration) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMarketplaceName, ok := raw["marketplaceName"]
@@ -23583,11 +24303,12 @@ func (v ProcessExitedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ProcessExitedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawExitCode, ok := raw["exitCode"]
@@ -23664,11 +24385,12 @@ func (v ProcessKillParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ProcessKillParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawProcessHandle, ok := raw["processHandle"]
@@ -23722,11 +24444,12 @@ func (v ProcessOutputDeltaNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ProcessOutputDeltaNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCapReached, ok := raw["capReached"]
@@ -23792,11 +24515,12 @@ func (v ProcessResizePtyParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ProcessResizePtyParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawProcessHandle, ok := raw["processHandle"]
@@ -23892,11 +24616,12 @@ func (v ProcessSpawnParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ProcessSpawnParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCommand, ok := raw["command"]
@@ -24025,11 +24750,12 @@ func (v ProcessTerminalSize) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ProcessTerminalSize) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCols, ok := raw["cols"]
@@ -24082,11 +24808,12 @@ func (v ProcessWriteStdinParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ProcessWriteStdinParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCloseStdin, ok := raw["closeStdin"]
@@ -24178,11 +24905,12 @@ func (v RateLimitResetCredit) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RateLimitResetCredit) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDescription, ok := raw["description"]
@@ -24270,11 +24998,12 @@ func (v RateLimitResetCreditsSummary) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RateLimitResetCreditsSummary) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAvailableCount, ok := raw["availableCount"]
@@ -24344,11 +25073,12 @@ func (v RateLimitSnapshot) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RateLimitSnapshot) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCredits, ok := raw["credits"]
@@ -24421,11 +25151,12 @@ func (v RateLimitWindow) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RateLimitWindow) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawResetsAt, ok := raw["resetsAt"]
@@ -24468,11 +25199,12 @@ func (v RawResponseItemCompletedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RawResponseItemCompletedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawItem, ok := raw["item"]
@@ -24563,11 +25295,12 @@ func (v RealtimeVoicesList) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RealtimeVoicesList) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDefaultV1, ok := raw["defaultV1"]
@@ -24628,11 +25361,12 @@ func (v ReasoningEffortOption) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ReasoningEffortOption) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDescription, ok := raw["description"]
@@ -24689,11 +25423,12 @@ func (v ReasoningItemContent) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ReasoningItemContent) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -24778,11 +25513,12 @@ func (v ReasoningItemReasoningSummary) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ReasoningItemReasoningSummary) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -24852,11 +25588,12 @@ func (v ReasoningSummaryPartAddedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ReasoningSummaryPartAddedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawItemID, ok := raw["itemId"]
@@ -24921,11 +25658,12 @@ func (v ReasoningSummaryTextDeltaNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ReasoningSummaryTextDeltaNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDelta, ok := raw["delta"]
@@ -25000,11 +25738,12 @@ func (v ReasoningTextDeltaNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ReasoningTextDeltaNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawContentIndex, ok := raw["contentIndex"]
@@ -25099,11 +25838,12 @@ func (v RemoteControlClient) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RemoteControlClient) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAppVersion, ok := raw["appVersion"]
@@ -25191,11 +25931,12 @@ func (v RemoteControlClientsListParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RemoteControlClientsListParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCursor, ok := raw["cursor"]
@@ -25249,11 +25990,12 @@ func (v RemoteControlClientsListResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RemoteControlClientsListResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawData, ok := raw["data"]
@@ -25288,11 +26030,12 @@ func (v RemoteControlClientsRevokeParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RemoteControlClientsRevokeParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawClientID, ok := raw["clientId"]
@@ -25363,11 +26106,12 @@ func (v RemoteControlDisableParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RemoteControlDisableParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEphemeral, ok := raw["ephemeral"]
@@ -25402,11 +26146,12 @@ func (v RemoteControlDisableResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RemoteControlDisableResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEnvironmentID, ok := raw["environmentId"]
@@ -25463,11 +26208,12 @@ func (v RemoteControlEnableParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RemoteControlEnableParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEphemeral, ok := raw["ephemeral"]
@@ -25502,11 +26248,12 @@ func (v RemoteControlEnableResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RemoteControlEnableResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEnvironmentID, ok := raw["environmentId"]
@@ -25563,11 +26310,12 @@ func (v RemoteControlPairingStartParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RemoteControlPairingStartParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawManualCode, ok := raw["manualCode"]
@@ -25602,11 +26350,12 @@ func (v RemoteControlPairingStartResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RemoteControlPairingStartResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEnvironmentID, ok := raw["environmentId"]
@@ -25665,11 +26414,12 @@ func (v RemoteControlPairingStatusParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RemoteControlPairingStatusParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawManualPairingCode, ok := raw["manualPairingCode"]
@@ -25698,11 +26448,12 @@ func (v RemoteControlPairingStatusResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RemoteControlPairingStatusResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawClaimed, ok := raw["claimed"]
@@ -25737,11 +26488,12 @@ func (v RemoteControlStatusChangedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RemoteControlStatusChangedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEnvironmentID, ok := raw["environmentId"]
@@ -25802,11 +26554,12 @@ func (v RemoteControlStatusReadResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RemoteControlStatusReadResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEnvironmentID, ok := raw["environmentId"]
@@ -25867,11 +26620,12 @@ func (v RequestPermissionProfile) MarshalJSON() ([]byte, error) {
 }
 
 func (v *RequestPermissionProfile) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawFileSystem, ok := raw["fileSystem"]
@@ -25936,11 +26690,12 @@ func (v Resource) MarshalJSON() ([]byte, error) {
 }
 
 func (v *Resource) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMeta, ok := raw["_meta"]
@@ -26039,11 +26794,12 @@ func (v ResourceTemplate) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ResourceTemplate) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAnnotations, ok := raw["annotations"]
@@ -26305,11 +27061,12 @@ func (v ResponseItem) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ResponseItem) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -26674,11 +27431,12 @@ func (v ResponsesAPIWebSearchAction) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ResponsesAPIWebSearchAction) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -26772,11 +27530,12 @@ func (v ReviewStartParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ReviewStartParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDelivery, ok := raw["delivery"]
@@ -26825,11 +27584,12 @@ func (v ReviewStartResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ReviewStartResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawReviewThreadID, ok := raw["reviewThreadId"]
@@ -26903,11 +27663,12 @@ func (v ReviewTarget) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ReviewTarget) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -27039,11 +27800,12 @@ func (v SandboxPolicy) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SandboxPolicy) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -27138,11 +27900,12 @@ func (v SandboxWorkspaceWrite) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SandboxWorkspaceWrite) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawExcludeSlashTmp, ok := raw["exclude_slash_tmp"]
@@ -27172,6 +27935,238 @@ func (v *SandboxWorkspaceWrite) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type ScheduledTaskSchedule struct {
+	Days          Optional[[]ScheduledTaskWeekday] `json:"days,omitempty"`
+	IntervalHours OptionalNonNull[uint32]          `json:"intervalHours,omitempty"`
+	Time          OptionalNonNull[string]          `json:"time,omitempty"`
+	TypeValue     string                           `json:"type,omitempty"`
+	RawJSON       json.RawMessage                  `json:"-"`
+}
+
+func (v ScheduledTaskSchedule) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if v.Days.IsSet() {
+		out["days"] = v.Days
+	}
+	if v.IntervalHours.IsSet() {
+		out["intervalHours"] = v.IntervalHours
+	}
+	if v.Time.IsSet() {
+		out["time"] = v.Time
+	}
+	out["type"] = v.TypeValue
+	switch v.TypeValue {
+	case "hourly":
+		if !v.IntervalHours.IsSet() {
+			return nil, DecodeError{Field: "intervalHours", Reason: "missing required field for type hourly"}
+		}
+	case "daily":
+		if !v.Time.IsSet() {
+			return nil, DecodeError{Field: "time", Reason: "missing required field for type daily"}
+		}
+	case "weekdays":
+		if !v.Time.IsSet() {
+			return nil, DecodeError{Field: "time", Reason: "missing required field for type weekdays"}
+		}
+	case "weekly":
+		if !v.Days.IsSet() {
+			return nil, DecodeError{Field: "days", Reason: "missing required field for type weekly"}
+		}
+		if v.Days.IsNull() {
+			return nil, DecodeError{Field: "days", Reason: "cannot be null"}
+		}
+		if !v.Time.IsSet() {
+			return nil, DecodeError{Field: "time", Reason: "missing required field for type weekly"}
+		}
+	default:
+		if len(v.RawJSON) > 0 {
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "type", Reason: fmt.Sprintf("unsupported discriminator value %q", v.TypeValue)}
+	}
+	return json.Marshal(out)
+}
+
+func (v *ScheduledTaskSchedule) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawTypeValueDiscriminator, ok := raw["type"]
+	if !ok {
+		return DecodeError{Field: "type", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawTypeValueDiscriminator, []byte("null")) {
+		return DecodeError{Field: "type", Reason: "cannot be null"}
+	}
+	var TypeValueDiscriminator string
+	if err := json.Unmarshal(rawTypeValueDiscriminator, &TypeValueDiscriminator); err != nil {
+		return fmt.Errorf("field type: %w", err)
+	}
+	switch TypeValueDiscriminator {
+	case "hourly":
+	case "daily":
+	case "weekdays":
+	case "weekly":
+	default:
+		v.TypeValue = TypeValueDiscriminator
+		v.RawJSON = append(v.RawJSON[:0], data...)
+		return nil
+	}
+	rawDays, ok := raw["days"]
+	if ok {
+		if err := json.Unmarshal(rawDays, &v.Days); err != nil {
+			return fmt.Errorf("field days: %w", err)
+		}
+	}
+	rawIntervalHours, ok := raw["intervalHours"]
+	if ok {
+		if err := json.Unmarshal(rawIntervalHours, &v.IntervalHours); err != nil {
+			return fmt.Errorf("field intervalHours: %w", err)
+		}
+		if valueIntervalHours, ok := v.IntervalHours.Value(); ok {
+			if valueIntervalHours < 0 {
+				return DecodeError{Field: "intervalHours", Reason: "below minimum 0"}
+			}
+		}
+	}
+	rawTime, ok := raw["time"]
+	if ok {
+		if err := json.Unmarshal(rawTime, &v.Time); err != nil {
+			return fmt.Errorf("field time: %w", err)
+		}
+	}
+	rawTypeValue, ok := raw["type"]
+	if !ok {
+		return DecodeError{Field: "type", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawTypeValue, []byte("null")) {
+		return DecodeError{Field: "type", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawTypeValue, &v.TypeValue); err != nil {
+		return fmt.Errorf("field type: %w", err)
+	}
+	v.RawJSON = nil
+	switch v.TypeValue {
+	case "hourly":
+		if rawValue, ok := raw["intervalHours"]; !ok {
+			return DecodeError{Field: "intervalHours", Reason: "missing required field for type hourly"}
+		} else if bytes.Equal(rawValue, []byte("null")) {
+			return DecodeError{Field: "intervalHours", Reason: "cannot be null"}
+		}
+	case "daily":
+		if rawValue, ok := raw["time"]; !ok {
+			return DecodeError{Field: "time", Reason: "missing required field for type daily"}
+		} else if bytes.Equal(rawValue, []byte("null")) {
+			return DecodeError{Field: "time", Reason: "cannot be null"}
+		}
+	case "weekdays":
+		if rawValue, ok := raw["time"]; !ok {
+			return DecodeError{Field: "time", Reason: "missing required field for type weekdays"}
+		} else if bytes.Equal(rawValue, []byte("null")) {
+			return DecodeError{Field: "time", Reason: "cannot be null"}
+		}
+	case "weekly":
+		if rawValue, ok := raw["days"]; !ok {
+			return DecodeError{Field: "days", Reason: "missing required field for type weekly"}
+		} else if bytes.Equal(rawValue, []byte("null")) {
+			return DecodeError{Field: "days", Reason: "cannot be null"}
+		}
+		if rawValue, ok := raw["time"]; !ok {
+			return DecodeError{Field: "time", Reason: "missing required field for type weekly"}
+		} else if bytes.Equal(rawValue, []byte("null")) {
+			return DecodeError{Field: "time", Reason: "cannot be null"}
+		}
+	default:
+		v.RawJSON = append(v.RawJSON[:0], data...)
+	}
+	return nil
+}
+
+type ScheduledTaskSummary struct {
+	Key      string                `json:"key,omitempty"`
+	Name     string                `json:"name,omitempty"`
+	Prompt   string                `json:"prompt,omitempty"`
+	Schedule ScheduledTaskSchedule `json:"schedule,omitempty"`
+}
+
+func (v ScheduledTaskSummary) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["key"] = v.Key
+	out["name"] = v.Name
+	out["prompt"] = v.Prompt
+	out["schedule"] = v.Schedule
+	return json.Marshal(out)
+}
+
+func (v *ScheduledTaskSummary) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawKey, ok := raw["key"]
+	if !ok {
+		return DecodeError{Field: "key", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawKey, []byte("null")) {
+		return DecodeError{Field: "key", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawKey, &v.Key); err != nil {
+		return fmt.Errorf("field key: %w", err)
+	}
+	rawName, ok := raw["name"]
+	if !ok {
+		return DecodeError{Field: "name", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawName, []byte("null")) {
+		return DecodeError{Field: "name", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawName, &v.Name); err != nil {
+		return fmt.Errorf("field name: %w", err)
+	}
+	rawPrompt, ok := raw["prompt"]
+	if !ok {
+		return DecodeError{Field: "prompt", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawPrompt, []byte("null")) {
+		return DecodeError{Field: "prompt", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawPrompt, &v.Prompt); err != nil {
+		return fmt.Errorf("field prompt: %w", err)
+	}
+	rawSchedule, ok := raw["schedule"]
+	if !ok {
+		return DecodeError{Field: "schedule", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawSchedule, []byte("null")) {
+		return DecodeError{Field: "schedule", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawSchedule, &v.Schedule); err != nil {
+		return fmt.Errorf("field schedule: %w", err)
+	}
+	return nil
+}
+
+type ScheduledTaskWeekday string
+
+const (
+	ScheduledTaskWeekdayMo ScheduledTaskWeekday = "MO"
+	ScheduledTaskWeekdayTu ScheduledTaskWeekday = "TU"
+	ScheduledTaskWeekdayWe ScheduledTaskWeekday = "WE"
+	ScheduledTaskWeekdayTh ScheduledTaskWeekday = "TH"
+	ScheduledTaskWeekdayFr ScheduledTaskWeekday = "FR"
+	ScheduledTaskWeekdaySa ScheduledTaskWeekday = "SA"
+	ScheduledTaskWeekdaySu ScheduledTaskWeekday = "SU"
+)
+
 type SelectedCapabilityRoot struct {
 	ID       string                 `json:"id,omitempty"`
 	Location CapabilityRootLocation `json:"location,omitempty"`
@@ -27185,11 +28180,12 @@ func (v SelectedCapabilityRoot) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SelectedCapabilityRoot) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawID, ok := raw["id"]
@@ -27226,11 +28222,12 @@ func (v SendAddCreditsNudgeEmailParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SendAddCreditsNudgeEmailParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCreditType, ok := raw["creditType"]
@@ -27257,11 +28254,12 @@ func (v SendAddCreditsNudgeEmailResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SendAddCreditsNudgeEmailResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawStatus, ok := raw["status"]
@@ -27290,11 +28288,12 @@ func (v ServerRequestResolvedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ServerRequestResolvedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRequestID, ok := raw["requestId"]
@@ -27337,11 +28336,12 @@ func (v SessionMigration) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SessionMigration) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCwd, ok := raw["cwd"]
@@ -27374,8 +28374,22 @@ func (v *SessionMigration) UnmarshalJSON(data []byte) error {
 }
 
 type SessionSource struct {
-	Custom   OptionalNonNull[string]         `json:"custom,omitempty"`
-	SubAgent OptionalNonNull[SubAgentSource] `json:"subAgent,omitempty"`
+	StringValue string                          `json:"-"`
+	Custom      OptionalNonNull[string]         `json:"custom,omitempty"`
+	SubAgent    OptionalNonNull[SubAgentSource] `json:"subAgent,omitempty"`
+	RawJSON     json.RawMessage                 `json:"-"`
+}
+
+var (
+	SessionSourceCli       = SessionSource{StringValue: "cli"}
+	SessionSourceVscode    = SessionSource{StringValue: "vscode"}
+	SessionSourceExec      = SessionSource{StringValue: "exec"}
+	SessionSourceAppServer = SessionSource{StringValue: "appServer"}
+	SessionSourceUnknown   = SessionSource{StringValue: "unknown"}
+)
+
+func (v SessionSource) IsSet() bool {
+	return v.StringValue != "" || len(bytes.TrimSpace(v.RawJSON)) > 0 || v.Custom.IsSet() || v.SubAgent.IsSet()
 }
 
 func (v SessionSource) MarshalJSON() ([]byte, error) {
@@ -27386,15 +28400,66 @@ func (v SessionSource) MarshalJSON() ([]byte, error) {
 	if v.SubAgent.IsSet() {
 		out["subAgent"] = v.SubAgent
 	}
+	if v.StringValue != "" {
+		if len(out) > 0 || len(bytes.TrimSpace(v.RawJSON)) > 0 {
+			return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+		}
+		switch v.StringValue {
+		case "cli", "vscode", "exec", "appServer", "unknown":
+			return json.Marshal(v.StringValue)
+		default:
+			return nil, DecodeError{Field: "", Reason: fmt.Sprintf("unsupported SessionSource string value %q", v.StringValue)}
+		}
+	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	untaggedOneOfVariant0Matches := true
+	if _, ok := out["custom"]; !ok {
+		untaggedOneOfVariant0Matches = false
+	}
+	if untaggedOneOfVariant0Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant1Matches := true
+	if _, ok := out["subAgent"]; !ok {
+		untaggedOneOfVariant1Matches = false
+	}
+	if untaggedOneOfVariant1Matches {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches && len(bytes.TrimSpace(v.RawJSON)) > 0 {
+			if !json.Valid(v.RawJSON) {
+				return nil, fmt.Errorf("invalid SessionSource raw fallback")
+			}
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
 	return json.Marshal(out)
 }
 
 func (v *SessionSource) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
+	var stringValue string
+	if err := json.Unmarshal(trimmed, &stringValue); err == nil {
+		switch stringValue {
+		case "cli", "vscode", "exec", "appServer", "unknown":
+			*v = SessionSource{StringValue: stringValue}
+		default:
+			*v = SessionSource{RawJSON: append(json.RawMessage(nil), data...)}
+		}
+		return nil
+	}
+	v.StringValue = ""
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCustom, ok := raw["custom"]
@@ -27409,6 +28474,33 @@ func (v *SessionSource) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field subAgent: %w", err)
 		}
 	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	untaggedOneOfVariant0Matches := true
+	if rawValue, ok := raw["custom"]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		untaggedOneOfVariant0Matches = false
+	}
+	if untaggedOneOfVariant0Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant1Matches := true
+	if rawValue, ok := raw["subAgent"]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		untaggedOneOfVariant1Matches = false
+	}
+	if untaggedOneOfVariant1Matches {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches {
+			v.RawJSON = append(v.RawJSON[:0], data...)
+			return nil
+		}
+		return DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
+	v.RawJSON = nil
 	return nil
 }
 
@@ -27431,11 +28523,12 @@ func (v Settings) MarshalJSON() ([]byte, error) {
 }
 
 func (v *Settings) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDeveloperInstructions, ok := raw["developer_instructions"]
@@ -27474,11 +28567,12 @@ func (v SkillDependencies) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SkillDependencies) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTools, ok := raw["tools"]
@@ -27507,11 +28601,12 @@ func (v SkillErrorInfo) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SkillErrorInfo) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMessage, ok := raw["message"]
@@ -27570,11 +28665,12 @@ func (v SkillInterface) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SkillInterface) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawBrandColor, ok := raw["brandColor"]
@@ -27647,11 +28743,12 @@ func (v SkillMetadata) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SkillMetadata) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDependencies, ok := raw["dependencies"]
@@ -27736,11 +28833,12 @@ func (v SkillMigration) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SkillMigration) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawName, ok := raw["name"]
@@ -27792,11 +28890,12 @@ func (v SkillSummary) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SkillSummary) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDescription, ok := raw["description"]
@@ -27879,11 +28978,12 @@ func (v SkillToolDependency) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SkillToolDependency) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCommand, ok := raw["command"]
@@ -27973,11 +29073,12 @@ func (v SkillsConfigWriteParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SkillsConfigWriteParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEnabled, ok := raw["enabled"]
@@ -28016,11 +29117,12 @@ func (v SkillsConfigWriteResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SkillsConfigWriteResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEffectiveEnabled, ok := raw["effectiveEnabled"]
@@ -28047,11 +29149,12 @@ func (v SkillsExtraRootsSetParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SkillsExtraRootsSetParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawExtraRoots, ok := raw["extraRoots"]
@@ -28103,11 +29206,12 @@ func (v SkillsListEntry) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SkillsListEntry) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCwd, ok := raw["cwd"]
@@ -28162,11 +29266,12 @@ func (v SkillsListParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SkillsListParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCwds, ok := raw["cwds"]
@@ -28203,11 +29308,12 @@ func (v SkillsListResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SkillsListResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawData, ok := raw["data"]
@@ -28247,11 +29353,12 @@ func (v SpendControlLimitSnapshot) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SpendControlLimitSnapshot) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawLimit, ok := raw["limit"]
@@ -28306,8 +29413,20 @@ const (
 )
 
 type SubAgentSource struct {
+	StringValue string                                      `json:"-"`
 	Other       OptionalNonNull[string]                     `json:"other,omitempty"`
 	ThreadSpawn OptionalNonNull[map[string]json.RawMessage] `json:"thread_spawn,omitempty"`
+	RawJSON     json.RawMessage                             `json:"-"`
+}
+
+var (
+	SubAgentSourceReview              = SubAgentSource{StringValue: "review"}
+	SubAgentSourceCompact             = SubAgentSource{StringValue: "compact"}
+	SubAgentSourceMemoryConsolidation = SubAgentSource{StringValue: "memory_consolidation"}
+)
+
+func (v SubAgentSource) IsSet() bool {
+	return v.StringValue != "" || len(bytes.TrimSpace(v.RawJSON)) > 0 || v.Other.IsSet() || v.ThreadSpawn.IsSet()
 }
 
 func (v SubAgentSource) MarshalJSON() ([]byte, error) {
@@ -28318,15 +29437,66 @@ func (v SubAgentSource) MarshalJSON() ([]byte, error) {
 	if v.ThreadSpawn.IsSet() {
 		out["thread_spawn"] = v.ThreadSpawn
 	}
+	if v.StringValue != "" {
+		if len(out) > 0 || len(bytes.TrimSpace(v.RawJSON)) > 0 {
+			return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+		}
+		switch v.StringValue {
+		case "review", "compact", "memory_consolidation":
+			return json.Marshal(v.StringValue)
+		default:
+			return nil, DecodeError{Field: "", Reason: fmt.Sprintf("unsupported SubAgentSource string value %q", v.StringValue)}
+		}
+	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	untaggedOneOfVariant0Matches := true
+	if _, ok := out["thread_spawn"]; !ok {
+		untaggedOneOfVariant0Matches = false
+	}
+	if untaggedOneOfVariant0Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant1Matches := true
+	if _, ok := out["other"]; !ok {
+		untaggedOneOfVariant1Matches = false
+	}
+	if untaggedOneOfVariant1Matches {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches && len(bytes.TrimSpace(v.RawJSON)) > 0 {
+			if !json.Valid(v.RawJSON) {
+				return nil, fmt.Errorf("invalid SubAgentSource raw fallback")
+			}
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
 	return json.Marshal(out)
 }
 
 func (v *SubAgentSource) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
+	var stringValue string
+	if err := json.Unmarshal(trimmed, &stringValue); err == nil {
+		switch stringValue {
+		case "review", "compact", "memory_consolidation":
+			*v = SubAgentSource{StringValue: stringValue}
+		default:
+			*v = SubAgentSource{RawJSON: append(json.RawMessage(nil), data...)}
+		}
+		return nil
+	}
+	v.StringValue = ""
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawOther, ok := raw["other"]
@@ -28341,6 +29511,33 @@ func (v *SubAgentSource) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field thread_spawn: %w", err)
 		}
 	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	untaggedOneOfVariant0Matches := true
+	if rawValue, ok := raw["thread_spawn"]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		untaggedOneOfVariant0Matches = false
+	}
+	if untaggedOneOfVariant0Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant1Matches := true
+	if rawValue, ok := raw["other"]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		untaggedOneOfVariant1Matches = false
+	}
+	if untaggedOneOfVariant1Matches {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches {
+			v.RawJSON = append(v.RawJSON[:0], data...)
+			return nil
+		}
+		return DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
+	v.RawJSON = nil
 	return nil
 }
 
@@ -28355,11 +29552,12 @@ func (v SubagentMigration) MarshalJSON() ([]byte, error) {
 }
 
 func (v *SubagentMigration) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawName, ok := raw["name"]
@@ -28394,11 +29592,12 @@ func (v TerminalInteractionNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TerminalInteractionNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawItemID, ok := raw["itemId"]
@@ -28469,11 +29668,12 @@ func (v TextElement) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TextElement) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawByteRange, ok := raw["byteRange"]
@@ -28508,11 +29708,12 @@ func (v TextPosition) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TextPosition) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawColumn, ok := raw["column"]
@@ -28557,11 +29758,12 @@ func (v TextRange) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TextRange) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEnd, ok := raw["end"]
@@ -28664,11 +29866,12 @@ func (v Thread) MarshalJSON() ([]byte, error) {
 }
 
 func (v *Thread) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAgentNickname, ok := raw["agentNickname"]
@@ -28884,11 +30087,12 @@ func (v ThreadApproveGuardianDeniedActionParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadApproveGuardianDeniedActionParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawEvent, ok := raw["event"]
@@ -28946,11 +30150,12 @@ func (v ThreadArchiveParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadArchiveParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -28998,11 +30203,12 @@ func (v ThreadArchivedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadArchivedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -29047,11 +30253,12 @@ func (v ThreadBackgroundTerminal) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadBackgroundTerminal) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCommand, ok := raw["command"]
@@ -29136,11 +30343,12 @@ func (v ThreadBackgroundTerminalsCleanParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadBackgroundTerminalsCleanParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -29196,11 +30404,12 @@ func (v ThreadBackgroundTerminalsListParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadBackgroundTerminalsListParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCursor, ok := raw["cursor"]
@@ -29248,11 +30457,12 @@ func (v ThreadBackgroundTerminalsListResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadBackgroundTerminalsListResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawData, ok := raw["data"]
@@ -29287,11 +30497,12 @@ func (v ThreadBackgroundTerminalsTerminateParams) MarshalJSON() ([]byte, error) 
 }
 
 func (v *ThreadBackgroundTerminalsTerminateParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawProcessID, ok := raw["processId"]
@@ -29328,11 +30539,12 @@ func (v ThreadBackgroundTerminalsTerminateResponse) MarshalJSON() ([]byte, error
 }
 
 func (v *ThreadBackgroundTerminalsTerminateResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTerminated, ok := raw["terminated"]
@@ -29359,11 +30571,12 @@ func (v ThreadClosedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadClosedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -29390,11 +30603,12 @@ func (v ThreadCompactStartParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadCompactStartParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -29442,11 +30656,12 @@ func (v ThreadDecrementElicitationParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadDecrementElicitationParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -29475,11 +30690,12 @@ func (v ThreadDecrementElicitationResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadDecrementElicitationResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCount, ok := raw["count"]
@@ -29516,11 +30732,12 @@ func (v ThreadDeleteParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadDeleteParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -29568,11 +30785,12 @@ func (v ThreadDeletedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadDeletedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -29692,11 +30910,12 @@ func (v ThreadForkParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadForkParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawApprovalPolicy, ok := raw["approvalPolicy"]
@@ -29869,11 +31088,12 @@ func (v ThreadForkResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadForkResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawActivePermissionProfile, ok := raw["activePermissionProfile"]
@@ -30028,11 +31248,12 @@ func (v ThreadGoal) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadGoal) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCreatedAt, ok := raw["createdAt"]
@@ -30125,11 +31346,12 @@ func (v ThreadGoalClearParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadGoalClearParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -30156,11 +31378,12 @@ func (v ThreadGoalClearResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadGoalClearResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCleared, ok := raw["cleared"]
@@ -30187,11 +31410,12 @@ func (v ThreadGoalClearedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadGoalClearedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -30218,11 +31442,12 @@ func (v ThreadGoalGetParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadGoalGetParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -30251,11 +31476,12 @@ func (v ThreadGoalGetResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadGoalGetResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawGoal, ok := raw["goal"]
@@ -30290,11 +31516,12 @@ func (v ThreadGoalSetParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadGoalSetParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawObjective, ok := raw["objective"]
@@ -30339,11 +31566,12 @@ func (v ThreadGoalSetResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadGoalSetResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawGoal, ok := raw["goal"]
@@ -30387,11 +31615,12 @@ func (v ThreadGoalUpdatedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadGoalUpdatedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawGoal, ok := raw["goal"]
@@ -30443,11 +31672,12 @@ func (v ThreadIncrementElicitationParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadIncrementElicitationParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -30476,11 +31706,12 @@ func (v ThreadIncrementElicitationResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadIncrementElicitationResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCount, ok := raw["count"]
@@ -30519,11 +31750,12 @@ func (v ThreadInjectItemsParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadInjectItemsParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawItems, ok := raw["items"]
@@ -30590,7 +31822,7 @@ type ThreadItem struct {
 	ExitCode          Optional[int32]                              `json:"exitCode,omitempty"`
 	Fragments         OptionalNonNull[[]HookPromptFragment]        `json:"fragments,omitempty"`
 	ID                OptionalNonNull[string]                      `json:"id,omitempty"`
-	Kind              SubAgentActivityKind                         `json:"kind,omitempty"`
+	Kind              OptionalNonNull[SubAgentActivityKind]        `json:"kind,omitempty"`
 	McpAppResourceUri Optional[string]                             `json:"mcpAppResourceUri,omitempty"`
 	MemoryCitation    Optional[MemoryCitation]                     `json:"memoryCitation,omitempty"`
 	Model             Optional[string]                             `json:"model,omitempty"`
@@ -30678,7 +31910,9 @@ func (v ThreadItem) MarshalJSON() ([]byte, error) {
 	if v.ID.IsSet() {
 		out["id"] = v.ID
 	}
-	out["kind"] = v.Kind
+	if v.Kind.IsSet() {
+		out["kind"] = v.Kind
+	}
 	if v.McpAppResourceUri.IsSet() {
 		out["mcpAppResourceUri"] = v.McpAppResourceUri
 	}
@@ -30875,6 +32109,9 @@ func (v ThreadItem) MarshalJSON() ([]byte, error) {
 		if !v.ID.IsSet() {
 			return nil, DecodeError{Field: "id", Reason: "missing required field for type subAgentActivity"}
 		}
+		if !v.Kind.IsSet() {
+			return nil, DecodeError{Field: "kind", Reason: "missing required field for type subAgentActivity"}
+		}
 	case "webSearch":
 		if !v.ID.IsSet() {
 			return nil, DecodeError{Field: "id", Reason: "missing required field for type webSearch"}
@@ -30940,11 +32177,12 @@ func (v ThreadItem) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadItem) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -31097,14 +32335,10 @@ func (v *ThreadItem) UnmarshalJSON(data []byte) error {
 		}
 	}
 	rawKind, ok := raw["kind"]
-	if !ok {
-		return DecodeError{Field: "kind", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawKind, []byte("null")) {
-		return DecodeError{Field: "kind", Reason: "cannot be null"}
-	}
-	if err := json.Unmarshal(rawKind, &v.Kind); err != nil {
-		return fmt.Errorf("field kind: %w", err)
+	if ok {
+		if err := json.Unmarshal(rawKind, &v.Kind); err != nil {
+			return fmt.Errorf("field kind: %w", err)
+		}
 	}
 	rawMcpAppResourceUri, ok := raw["mcpAppResourceUri"]
 	if ok {
@@ -31563,11 +32797,12 @@ func (v ThreadItemsListParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadItemsListParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCursor, ok := raw["cursor"]
@@ -31631,11 +32866,12 @@ func (v ThreadItemsListResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadItemsListResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawBackwardsCursor, ok := raw["backwardsCursor"]
@@ -31724,11 +32960,12 @@ func (v ThreadListParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadListParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAncestorThreadID, ok := raw["ancestorThreadId"]
@@ -31834,11 +33071,12 @@ func (v ThreadListResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadListResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawBackwardsCursor, ok := raw["backwardsCursor"]
@@ -31883,11 +33121,12 @@ func (v ThreadLoadedListParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadLoadedListParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCursor, ok := raw["cursor"]
@@ -31925,11 +33164,12 @@ func (v ThreadLoadedListResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadLoadedListResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawData, ok := raw["data"]
@@ -31971,11 +33211,12 @@ func (v ThreadMemoryModeSetParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadMemoryModeSetParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMode, ok := raw["mode"]
@@ -32043,11 +33284,12 @@ func (v ThreadMetadataGitInfoUpdateParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadMetadataGitInfoUpdateParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawBranch, ok := raw["branch"]
@@ -32086,11 +33328,12 @@ func (v ThreadMetadataUpdateParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadMetadataUpdateParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawGitInfo, ok := raw["gitInfo"]
@@ -32123,11 +33366,12 @@ func (v ThreadMetadataUpdateResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadMetadataUpdateResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThread, ok := raw["thread"]
@@ -32158,11 +33402,12 @@ func (v ThreadNameUpdatedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadNameUpdatedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -32201,11 +33446,12 @@ func (v ThreadReadParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadReadParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawIncludeTurns, ok := raw["includeTurns"]
@@ -32242,11 +33488,12 @@ func (v ThreadReadResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadReadResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThread, ok := raw["thread"]
@@ -32275,11 +33522,12 @@ func (v ThreadRealtimeAppendAudioParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadRealtimeAppendAudioParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAudio, ok := raw["audio"]
@@ -32339,11 +33587,12 @@ func (v ThreadRealtimeAppendSpeechParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadRealtimeAppendSpeechParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawText, ok := raw["text"]
@@ -32407,11 +33656,12 @@ func (v ThreadRealtimeAppendTextParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadRealtimeAppendTextParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRole, ok := raw["role"]
@@ -32491,11 +33741,12 @@ func (v ThreadRealtimeAudioChunk) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadRealtimeAudioChunk) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawData, ok := raw["data"]
@@ -32569,11 +33820,12 @@ func (v ThreadRealtimeClosedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadRealtimeClosedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawReason, ok := raw["reason"]
@@ -32608,11 +33860,12 @@ func (v ThreadRealtimeErrorNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadRealtimeErrorNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMessage, ok := raw["message"]
@@ -32651,11 +33904,12 @@ func (v ThreadRealtimeItemAddedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadRealtimeItemAddedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawItem, ok := raw["item"]
@@ -32710,11 +33964,12 @@ func (v ThreadRealtimeListVoicesResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadRealtimeListVoicesResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawVoices, ok := raw["voices"]
@@ -32743,11 +33998,12 @@ func (v ThreadRealtimeOutputAudioDeltaNotification) MarshalJSON() ([]byte, error
 }
 
 func (v *ThreadRealtimeOutputAudioDeltaNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAudio, ok := raw["audio"]
@@ -32786,11 +34042,12 @@ func (v ThreadRealtimeSdpNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadRealtimeSdpNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawSdp, ok := raw["sdp"]
@@ -32877,11 +34134,12 @@ func (v ThreadRealtimeStartParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadRealtimeStartParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawClientManagedHandoffs, ok := raw["clientManagedHandoffs"]
@@ -33028,11 +34286,12 @@ func (v ThreadRealtimeStartTransport) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadRealtimeStartTransport) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -33102,11 +34361,12 @@ func (v ThreadRealtimeStartedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadRealtimeStartedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRealtimeSessionID, ok := raw["realtimeSessionId"]
@@ -33149,11 +34409,12 @@ func (v ThreadRealtimeStopParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadRealtimeStopParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -33205,11 +34466,12 @@ func (v ThreadRealtimeTranscriptDeltaNotification) MarshalJSON() ([]byte, error)
 }
 
 func (v *ThreadRealtimeTranscriptDeltaNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDelta, ok := raw["delta"]
@@ -33260,11 +34522,12 @@ func (v ThreadRealtimeTranscriptDoneNotification) MarshalJSON() ([]byte, error) 
 }
 
 func (v *ThreadRealtimeTranscriptDoneNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawRole, ok := raw["role"]
@@ -33321,11 +34584,12 @@ func (v ThreadResumeInitialTurnsPageParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadResumeInitialTurnsPageParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawItemsView, ok := raw["itemsView"]
@@ -33435,11 +34699,12 @@ func (v ThreadResumeParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadResumeParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawApprovalPolicy, ok := raw["approvalPolicy"]
@@ -33612,11 +34877,12 @@ func (v ThreadResumeResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadResumeResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawActivePermissionProfile, ok := raw["activePermissionProfile"]
@@ -33767,11 +35033,12 @@ func (v ThreadRollbackParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadRollbackParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawNumTurns, ok := raw["numTurns"]
@@ -33811,11 +35078,12 @@ func (v ThreadRollbackResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadRollbackResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThread, ok := raw["thread"]
@@ -33866,11 +35134,12 @@ func (v ThreadSearchParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadSearchParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawArchived, ok := raw["archived"]
@@ -33946,11 +35215,12 @@ func (v ThreadSearchResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadSearchResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawBackwardsCursor, ok := raw["backwardsCursor"]
@@ -33991,11 +35261,12 @@ func (v ThreadSearchResult) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadSearchResult) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawSnippet, ok := raw["snippet"]
@@ -34034,11 +35305,12 @@ func (v ThreadSetNameParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadSetNameParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawName, ok := raw["name"]
@@ -34132,11 +35404,12 @@ func (v ThreadSettings) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadSettings) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawActivePermissionProfile, ok := raw["activePermissionProfile"]
@@ -34311,11 +35584,12 @@ func (v ThreadSettingsUpdateParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadSettingsUpdateParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawApprovalPolicy, ok := raw["approvalPolicy"]
@@ -34437,11 +35711,12 @@ func (v ThreadSettingsUpdatedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadSettingsUpdatedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -34480,11 +35755,12 @@ func (v ThreadShellCommandParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadShellCommandParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCommand, ok := raw["command"]
@@ -34669,11 +35945,12 @@ func (v ThreadStartParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadStartParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAllowProviderModelFallback, ok := raw["allowProviderModelFallback"]
@@ -34894,11 +36171,12 @@ func (v ThreadStartResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadStartResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawActivePermissionProfile, ok := raw["activePermissionProfile"]
@@ -35044,11 +36322,12 @@ func (v ThreadStartedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadStartedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThread, ok := raw["thread"]
@@ -35094,11 +36373,12 @@ func (v ThreadStatus) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadStatus) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -35168,11 +36448,12 @@ func (v ThreadStatusChangedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadStatusChangedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawStatus, ok := raw["status"]
@@ -35215,11 +36496,12 @@ func (v ThreadTokenUsage) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadTokenUsage) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawLast, ok := raw["last"]
@@ -35266,11 +36548,12 @@ func (v ThreadTokenUsageUpdatedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadTokenUsageUpdatedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -35333,11 +36616,12 @@ func (v ThreadTurnsListParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadTurnsListParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCursor, ok := raw["cursor"]
@@ -35401,11 +36685,12 @@ func (v ThreadTurnsListResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadTurnsListResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawBackwardsCursor, ok := raw["backwardsCursor"]
@@ -35444,11 +36729,12 @@ func (v ThreadUnarchiveParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadUnarchiveParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -35475,11 +36761,12 @@ func (v ThreadUnarchiveResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadUnarchiveResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThread, ok := raw["thread"]
@@ -35506,11 +36793,12 @@ func (v ThreadUnarchivedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadUnarchivedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -35537,11 +36825,12 @@ func (v ThreadUnsubscribeParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadUnsubscribeParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -35568,11 +36857,12 @@ func (v ThreadUnsubscribeResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ThreadUnsubscribeResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawStatus, ok := raw["status"]
@@ -35615,11 +36905,12 @@ func (v TokenUsageBreakdown) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TokenUsageBreakdown) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCachedInputTokens, ok := raw["cachedInputTokens"]
@@ -35712,11 +37003,12 @@ func (v Tool) MarshalJSON() ([]byte, error) {
 }
 
 func (v *Tool) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMeta, ok := raw["_meta"]
@@ -35788,11 +37080,12 @@ func (v ToolsV2) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ToolsV2) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawWebSearch, ok := raw["web_search"]
@@ -35839,11 +37132,12 @@ func (v Turn) MarshalJSON() ([]byte, error) {
 }
 
 func (v *Turn) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCompletedAt, ok := raw["completedAt"]
@@ -35926,11 +37220,12 @@ func (v TurnCompletedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TurnCompletedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -35971,11 +37266,12 @@ func (v TurnDiffUpdatedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TurnDiffUpdatedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawDiff, ok := raw["diff"]
@@ -36024,11 +37320,12 @@ func (v TurnEnvironmentParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TurnEnvironmentParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCwd, ok := raw["cwd"]
@@ -36073,11 +37370,12 @@ func (v TurnError) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TurnError) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAdditionalDetails, ok := raw["additionalDetails"]
@@ -36122,11 +37420,12 @@ func (v TurnInterruptParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TurnInterruptParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -36196,11 +37495,12 @@ func (v TurnModerationMetadataNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TurnModerationMetadataNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMetadata, ok := raw["metadata"]
@@ -36246,11 +37546,12 @@ func (v TurnPlanStep) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TurnPlanStep) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawStatus, ok := raw["status"]
@@ -36303,11 +37604,12 @@ func (v TurnPlanUpdatedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TurnPlanUpdatedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawExplanation, ok := raw["explanation"]
@@ -36434,11 +37736,12 @@ func (v TurnStartParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TurnStartParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAdditionalContext, ok := raw["additionalContext"]
@@ -36583,11 +37886,12 @@ func (v TurnStartResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TurnStartResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTurn, ok := raw["turn"]
@@ -36616,11 +37920,12 @@ func (v TurnStartedNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TurnStartedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -36682,11 +37987,12 @@ func (v TurnSteerParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TurnSteerParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAdditionalContext, ok := raw["additionalContext"]
@@ -36751,11 +38057,12 @@ func (v TurnSteerResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TurnSteerResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTurnID, ok := raw["turnId"]
@@ -36790,11 +38097,12 @@ func (v TurnsPage) MarshalJSON() ([]byte, error) {
 }
 
 func (v *TurnsPage) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawBackwardsCursor, ok := raw["backwardsCursor"]
@@ -36891,11 +38199,12 @@ func (v UserInput) MarshalJSON() ([]byte, error) {
 }
 
 func (v *UserInput) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -37037,11 +38346,12 @@ func (v WarningNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *WarningNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawMessage, ok := raw["message"]
@@ -37102,11 +38412,12 @@ func (v WebSearchAction) MarshalJSON() ([]byte, error) {
 }
 
 func (v *WebSearchAction) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawTypeValueDiscriminator, ok := raw["type"]
@@ -37209,11 +38520,12 @@ func (v WebSearchLocation) MarshalJSON() ([]byte, error) {
 }
 
 func (v *WebSearchLocation) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCity, ok := raw["city"]
@@ -37273,11 +38585,12 @@ func (v WebSearchToolConfig) MarshalJSON() ([]byte, error) {
 }
 
 func (v *WebSearchToolConfig) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawAllowedDomains, ok := raw["allowed_domains"]
@@ -37320,11 +38633,12 @@ func (v WindowsSandboxReadinessResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *WindowsSandboxReadinessResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawStatus, ok := raw["status"]
@@ -37357,11 +38671,12 @@ func (v WindowsSandboxSetupCompletedNotification) MarshalJSON() ([]byte, error) 
 }
 
 func (v *WindowsSandboxSetupCompletedNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawError, ok := raw["error"]
@@ -37415,11 +38730,12 @@ func (v WindowsSandboxSetupStartParams) MarshalJSON() ([]byte, error) {
 }
 
 func (v *WindowsSandboxSetupStartParams) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawCwd, ok := raw["cwd"]
@@ -37452,11 +38768,12 @@ func (v WindowsSandboxSetupStartResponse) MarshalJSON() ([]byte, error) {
 }
 
 func (v *WindowsSandboxSetupStartResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawStarted, ok := raw["started"]
@@ -37487,11 +38804,12 @@ func (v WindowsWorldWritableWarningNotification) MarshalJSON() ([]byte, error) {
 }
 
 func (v *WindowsWorldWritableWarningNotification) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawExtraCount, ok := raw["extraCount"]
@@ -37553,11 +38871,12 @@ func (v WorkspaceMessage) MarshalJSON() ([]byte, error) {
 }
 
 func (v *WorkspaceMessage) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return DecodeError{Field: "", Reason: "cannot be null"}
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
 	}
 	rawArchivedAt, ok := raw["archivedAt"]
