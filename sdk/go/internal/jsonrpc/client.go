@@ -17,7 +17,7 @@ type ServerRequestHandler interface {
 }
 
 type ServerNotificationHandler interface {
-	HandleServerNotification(ctx context.Context, method string, params json.RawMessage, trace json.RawMessage)
+	HandleServerNotification(ctx context.Context, method string, params json.RawMessage, trace json.RawMessage) error
 }
 
 type safeError interface {
@@ -28,6 +28,7 @@ type ClientOptions struct {
 	HandlerConcurrency int
 	HandlerQueue       int
 	HandlerTimeout     time.Duration
+	OnTermination      func(error) error
 }
 
 type Client struct {
@@ -40,16 +41,28 @@ type Client struct {
 	waiters   map[string]chan response
 	nextID    atomic.Uint64
 
-	closeMu sync.Mutex
-	closed  bool
-	done    chan struct{}
-	ctx     context.Context
-	cancel  context.CancelFunc
+	closeMu     sync.Mutex
+	closed      bool
+	terminalErr error
+	done        chan struct{}
+	ctx         context.Context
+	cancel      context.CancelFunc
 
 	handlerQueue   chan Envelope
+	serverReplies  chan Envelope
 	handlerSlots   chan struct{}
 	handlerTimeout time.Duration
+	onTermination  func(error) error
 }
+
+type terminationOrigin uint8
+
+const (
+	terminationExplicitClose terminationOrigin = iota
+	terminationUnexpected
+)
+
+const minimumServerReplyQueue = 256
 
 type handlerResult struct {
 	result any
@@ -68,6 +81,10 @@ func NewClient(transport Transport, handler ServerRequestHandler) *Client {
 func NewClientWithOptions(transport Transport, handler ServerRequestHandler, opts ClientOptions) *Client {
 	opts = normalizeClientOptions(opts)
 	ctx, cancel := context.WithCancel(context.Background())
+	replyQueueSize := opts.HandlerQueue
+	if replyQueueSize < minimumServerReplyQueue {
+		replyQueueSize = minimumServerReplyQueue
+	}
 	c := &Client{
 		transport:      transport,
 		handler:        handler,
@@ -77,12 +94,15 @@ func NewClientWithOptions(transport Transport, handler ServerRequestHandler, opt
 		ctx:            ctx,
 		cancel:         cancel,
 		handlerQueue:   make(chan Envelope, opts.HandlerQueue),
+		serverReplies:  make(chan Envelope, replyQueueSize),
 		handlerSlots:   make(chan struct{}, opts.HandlerConcurrency),
 		handlerTimeout: opts.HandlerTimeout,
+		onTermination:  opts.OnTermination,
 	}
 	for i := 0; i < opts.HandlerConcurrency; i++ {
 		go c.serverRequestWorker()
 	}
+	go c.serverReplyWorker()
 	go c.receiveLoop()
 	return c
 }
@@ -155,7 +175,7 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 		return ctx.Err()
 	case <-c.done:
 		c.removeWaiter(key)
-		return &ClosedError{}
+		return c.terminalError()
 	}
 }
 
@@ -215,12 +235,9 @@ func (c *Client) CallAsync(ctx context.Context, method string, params any, resul
 				}
 			}
 			done <- nil
-		case <-ctx.Done():
-			c.removeWaiter(key)
-			done <- ctx.Err()
 		case <-c.done:
 			c.removeWaiter(key)
-			done <- &ClosedError{}
+			done <- c.terminalError()
 		}
 	}()
 	return done, nil
@@ -243,25 +260,32 @@ func (c *Client) Notify(ctx context.Context, method string, params any, trace js
 }
 
 func (c *Client) Close() error {
-	return c.terminate(&ClosedError{}, true)
+	return c.terminate(&ClosedError{}, terminationExplicitClose)
 }
 
-func (c *Client) terminate(waiterErr error, closeTransport bool) error {
+func (c *Client) terminate(waiterErr error, origin terminationOrigin) error {
 	c.closeMu.Lock()
 	if c.closed {
+		done := c.done
 		c.closeMu.Unlock()
+		<-done
 		return nil
 	}
 	c.closed = true
 	c.cancel()
-	close(c.done)
 	c.closeMu.Unlock()
 
-	var closeErr error
-	if closeTransport {
-		closeErr = c.transport.Close()
+	closeErr := c.transport.Close()
+	if origin == terminationUnexpected && c.onTermination != nil {
+		if terminalErr := c.onTermination(waiterErr); terminalErr != nil {
+			waiterErr = terminalErr
+		}
 	}
 	c.failAll(waiterErr)
+	c.closeMu.Lock()
+	c.terminalErr = waiterErr
+	close(c.done)
+	c.closeMu.Unlock()
 	return closeErr
 }
 
@@ -306,23 +330,29 @@ func (c *Client) receiveLoop() {
 			if c.isClosed() || errors.Is(err, context.Canceled) {
 				return
 			}
-			_ = c.terminate(err, true)
+			_ = c.terminate(err, terminationUnexpected)
 			return
 		}
 		var env Envelope
 		if err := json.Unmarshal(frame, &env); err != nil {
-			_ = c.terminate(err, true)
+			_ = c.terminate(err, terminationUnexpected)
 			return
 		}
-		c.route(env)
+		if err := c.route(env); err != nil {
+			_ = c.terminate(err, terminationUnexpected)
+			return
+		}
 	}
 }
 
-func (c *Client) route(env Envelope) {
+func (c *Client) route(env Envelope) error {
+	if err := validateInboundEnvelope(env); err != nil {
+		return err
+	}
 	if env.ID != nil && env.Method == "" {
 		key, err := requestIDKey(*env.ID)
 		if err != nil {
-			return
+			return nil
 		}
 		c.waitersMu.Lock()
 		waiter := c.waiters[key]
@@ -331,7 +361,7 @@ func (c *Client) route(env Envelope) {
 		if waiter != nil {
 			waiter <- response{env: env}
 		}
-		return
+		return nil
 	}
 	if env.Method != "" && env.ID != nil {
 		select {
@@ -340,13 +370,46 @@ func (c *Client) route(env Envelope) {
 		default:
 			c.sendServerError(env, -32001, "codex sdk server request queue is full")
 		}
-		return
+		return nil
 	}
 	if env.Method != "" {
 		if handler, ok := c.handler.(ServerNotificationHandler); ok {
-			handler.HandleServerNotification(c.ctx, env.Method, env.Params, env.Trace)
+			return handler.HandleServerNotification(c.ctx, env.Method, env.Params, env.Trace)
 		}
 	}
+	return nil
+}
+
+func validateInboundEnvelope(env Envelope) error {
+	if env.idPresent && env.ID == nil {
+		return &DecodeError{Reason: "id must not be null"}
+	}
+	hasID := env.ID != nil
+	hasMethod := env.Method != ""
+	hasParams := len(env.Params) > 0
+	hasResult := len(env.Result) > 0
+	hasError := env.Error != nil
+	if hasError && (!env.Error.codePresent || !env.Error.messagePresent) {
+		return &DecodeError{Reason: "error must contain code and message"}
+	}
+
+	switch {
+	case hasID && !hasMethod:
+		if hasParams || hasResult == hasError {
+			return &DecodeError{Reason: "response must contain exactly one of result or error"}
+		}
+	case hasID && hasMethod:
+		if hasResult || hasError {
+			return &DecodeError{Reason: "request must not contain result or error"}
+		}
+	case !hasID && hasMethod:
+		if hasResult || hasError {
+			return &DecodeError{Reason: "notification must not contain result or error"}
+		}
+	default:
+		return &DecodeError{Reason: "envelope must be a response, request, or notification"}
+	}
+	return nil
 }
 
 func (c *Client) serverRequestWorker() {
@@ -365,7 +428,7 @@ func (c *Client) handleServerRequest(env Envelope) {
 	defer cancel()
 
 	if c.handler == nil {
-		c.sendServerReply(Envelope{
+		c.queueServerReply(Envelope{
 			ID:    env.ID,
 			Error: &RPCError{Code: -32000, Message: safeHandlerErrorMessage(ctx, fmt.Errorf("server request handler is not configured"))},
 		})
@@ -408,21 +471,42 @@ func (c *Client) handleServerRequest(env Envelope) {
 	} else {
 		reply.Result = []byte("null")
 	}
-	c.sendServerReply(reply)
+	c.queueServerReply(reply)
 }
 
 func (c *Client) sendServerError(env Envelope, code int64, message string) {
-	c.sendServerReply(Envelope{ID: env.ID, Error: &RPCError{Code: code, Message: message}})
+	c.queueServerReply(Envelope{ID: env.ID, Error: &RPCError{Code: code, Message: message}})
 }
 
-func (c *Client) sendServerReply(reply Envelope) {
-	frame, err := json.Marshal(reply)
-	if err != nil {
-		return
+func (c *Client) queueServerReply(reply Envelope) {
+	select {
+	case c.serverReplies <- reply:
+	case <-c.done:
+	default:
+		_ = c.terminate(&ClosedError{Reason: "server reply queue overflow"}, terminationUnexpected)
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, c.handlerTimeout)
-	defer cancel()
-	_ = c.send(ctx, frame)
+}
+
+func (c *Client) serverReplyWorker() {
+	for {
+		select {
+		case reply := <-c.serverReplies:
+			frame, err := json.Marshal(reply)
+			if err != nil {
+				_ = c.terminate(err, terminationUnexpected)
+				return
+			}
+			ctx, cancel := context.WithTimeout(c.ctx, c.handlerTimeout)
+			err = c.send(ctx, frame)
+			cancel()
+			if err != nil && !c.isClosed() {
+				_ = c.terminate(err, terminationUnexpected)
+				return
+			}
+		case <-c.done:
+			return
+		}
+	}
 }
 
 func safeHandlerErrorMessage(ctx context.Context, err error) string {
@@ -453,4 +537,13 @@ func (c *Client) isClosed() bool {
 	c.closeMu.Lock()
 	defer c.closeMu.Unlock()
 	return c.closed
+}
+
+func (c *Client) terminalError() error {
+	c.closeMu.Lock()
+	defer c.closeMu.Unlock()
+	if c.terminalErr != nil {
+		return c.terminalErr
+	}
+	return &ClosedError{}
 }
