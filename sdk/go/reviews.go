@@ -75,7 +75,7 @@ func (h *ReviewHandle) Wait(ctx context.Context) (*ReviewResult, error) {
 		return nil, err
 	}
 	defer stream.Close()
-	return collectRunResultForThread(ctx, h.reviewThreadID, h.turnID, stream)
+	return collectRunResultForThread(ctx, h.reviewThreadID, h.turnID, stream, h.client.limits)
 }
 
 func (h *ReviewHandle) ReviewThreadID() string {

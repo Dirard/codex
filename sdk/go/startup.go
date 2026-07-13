@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"reflect"
@@ -24,11 +25,26 @@ const (
 )
 
 var reservedRuntimeEnv = map[string]struct{}{
-	"CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG":    {},
-	"CODEX_APP_SERVER_MANAGED_CONFIG_PATH":       {},
-	"CODEX_APP_SERVER_LOGIN_ISSUER":              {},
-	"CODEX_APP_SERVER_AUTH_BASE_URL_FOR_TESTS":   {},
-	"CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE": {},
+	"CODEX_APP_SERVER_AUTH_BASE_URL_FOR_TESTS":            {},
+	"CODEX_APP_SERVER_DEV_OPEN_APP_URL":                   {},
+	"CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG":             {},
+	"CODEX_APP_SERVER_LOGIN_CLIENT_ID":                    {},
+	"CODEX_APP_SERVER_LOGIN_ISSUER":                       {},
+	"CODEX_APP_SERVER_MANAGED_CONFIG_PATH":                {},
+	"CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE":          {},
+	"CODEX_APP_SERVER_TEST_USER_CONFIG_FILE":              {},
+	"CODEX_AUTHAPI_BASE_URL":                              {},
+	"CODEX_CODE_MODE_HOST_PATH":                           {},
+	"CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN":                  {},
+	"CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID":          {},
+	"CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID":              {},
+	"CODEX_EXEC_SERVER_NOISE_REGISTRY_URL":                {},
+	"CODEX_EXEC_SERVER_URL":                               {},
+	"CODEX_INTERNAL_ORIGINATOR_OVERRIDE":                   {},
+	"CODEX_REFRESH_TOKEN_URL_OVERRIDE":                    {},
+	"CODEX_REVOKE_TOKEN_URL_OVERRIDE":                     {},
+	"CODEX_TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS": {},
+	"CODEX_TEST_RATE_LIMIT_RESET_REQUEST_TIMEOUT_MS":       {},
 }
 
 type rawOnlyHighLevelWorkflow struct {
@@ -180,11 +196,42 @@ func rawOnlyDisabledHighLevelWorkflowMetadata(disabled map[string]string) []stri
 
 func validateConfigOverrides(overrides map[string]string) error {
 	for key, value := range overrides {
-		if isSecretLike(key) || isSecretLike(value) {
-			return &ConfigError{Reason: "secret-like ConfigOverrides key/value rejected: [redacted]"}
+		if isSecretLike(key) || isSecretLike(value) || !isAllowedConfigOverride(key, value) {
+			return &ConfigError{Reason: "unsupported or secret-like ConfigOverrides key/value rejected: [redacted]"}
 		}
 	}
 	return nil
+}
+
+func isAllowedConfigOverride(key string, value string) bool {
+	switch key {
+	case "model":
+		return isQuotedConfigIdentifier(value)
+	case "sandbox_mode":
+		switch value {
+		case `"read-only"`, `"workspace-write"`, `"danger-full-access"`:
+			return true
+		}
+	}
+	return false
+}
+
+func isQuotedConfigIdentifier(value string) bool {
+	if len(value) < 3 || value[0] != '"' || value[len(value)-1] != '"' {
+		return false
+	}
+	for _, ch := range value[1 : len(value)-1] {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') {
+			continue
+		}
+		switch ch {
+		case '-', '.', '/', ':', '_':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func isSecretLike(value string) bool {
@@ -346,9 +393,15 @@ func (c *Client) initialize(ctx context.Context, cfg ClientConfig, source runtim
 	}
 	envelope, err := decodeInitializeCompatibility(raw)
 	if err != nil {
+		var compatibilityErr *CompatibilityError
+		if errors.As(err, &compatibilityErr) {
+			compatibilityErr.ExpectedDigest, _ = expectedProtocol(cfg.ProtocolMode)
+			compatibilityErr.ExpectedMode = cfg.ProtocolMode
+			compatibilityErr.RuntimePath = c.metadata.RuntimePath
+		}
 		return err
 	}
-	current, note, override, err := validateInitializeCompatibility(envelope, cfg, source)
+	current, note, override, err := validateInitializeCompatibility(envelope, cfg, source, c.metadata.RuntimePath)
 	if err != nil {
 		return err
 	}
@@ -450,19 +503,39 @@ func optionalStringField(fields map[string]json.RawMessage, name string) (string
 	return value, true, nil
 }
 
-func validateInitializeCompatibility(env initializeCompatibilityEnvelope, cfg ClientConfig, source runtimeSource) (*protocol.InitializeResponse, string, bool, error) {
+func validateInitializeCompatibility(env initializeCompatibilityEnvelope, cfg ClientConfig, source runtimeSource, runtimePath string) (*protocol.InitializeResponse, string, bool, error) {
 	expectedDigest, expectedMode := expectedProtocol(cfg.ProtocolMode)
 	observedDigest := observedProtocolDigest(env, cfg.ProtocolMode)
 	modeMatches := env.ActiveProtocolMode != nil && *env.ActiveProtocolMode == expectedMode
 	if cfg.Compatibility == CompatibilityStrict {
 		if observedDigest == "" {
-			return nil, "", false, &CompatibilityError{Reason: "initialize response missing selected protocol digest"}
+			requiredOverride := CompatibilityAllowProtocolDigestUnavailable
+			return nil, "", false, newCompatibilityError(
+				"initialize response missing selected protocol digest",
+				env,
+				cfg.ProtocolMode,
+				runtimePath,
+				&requiredOverride,
+			)
 		}
 		if observedDigest != expectedDigest {
-			return nil, "", false, &CompatibilityError{Reason: "initialize response protocol digest mismatch"}
+			requiredOverride := CompatibilityAllowDevBuild
+			return nil, "", false, newCompatibilityError(
+				"initialize response protocol digest mismatch",
+				env,
+				cfg.ProtocolMode,
+				runtimePath,
+				&requiredOverride,
+			)
 		}
 		if !modeMatches {
-			return nil, "", false, &CompatibilityError{Reason: "initialize response activeProtocolMode mismatch"}
+			return nil, "", false, newCompatibilityError(
+				"initialize response activeProtocolMode mismatch",
+				env,
+				cfg.ProtocolMode,
+				runtimePath,
+				nil,
+			)
 		}
 		current, err := decodeCurrentInitializeResponse(env)
 		if err != nil {
@@ -481,18 +554,69 @@ func validateInitializeCompatibility(env initializeCompatibilityEnvelope, cfg Cl
 	devSource := source == runtimeSourceInjected || source == runtimeSourceExplicitPath
 	devIdentity := looksLikeDevBuild(env.UserAgent)
 	if !devSource || !devIdentity {
-		return nil, "", false, &CompatibilityError{Reason: "compatibility override requires injected or explicit dev runtime"}
+		return nil, "", false, newCompatibilityError(
+			"compatibility override requires injected or explicit dev runtime",
+			env,
+			cfg.ProtocolMode,
+			runtimePath,
+			nil,
+		)
 	}
 	if env.ActiveProtocolMode != nil && *env.ActiveProtocolMode != expectedMode {
-		return nil, "", false, &CompatibilityError{Reason: "initialize response activeProtocolMode mismatch"}
+		return nil, "", false, newCompatibilityError(
+			"initialize response activeProtocolMode mismatch",
+			env,
+			cfg.ProtocolMode,
+			runtimePath,
+			nil,
+		)
 	}
 	if cfg.Compatibility == CompatibilityAllowProtocolDigestUnavailable {
 		if hasNonEmptyProtocolDigest(env) {
-			return nil, "", false, &CompatibilityError{Reason: "non-empty protocol digest requires current initialize validation"}
+			requiredOverride := CompatibilityAllowDevBuild
+			return nil, "", false, newCompatibilityError(
+				"non-empty protocol digest requires current initialize validation",
+				env,
+				cfg.ProtocolMode,
+				runtimePath,
+				&requiredOverride,
+			)
 		}
 		return nil, "CompatibilityAllowProtocolDigestUnavailable accepted legacy dev/test initialize response with missing digest or mode", true, nil
 	}
 	return nil, "CompatibilityAllowDevBuild accepted explicit dev runtime digest mismatch or missing digest", true, nil
+}
+
+func newCompatibilityError(
+	reason string,
+	env initializeCompatibilityEnvelope,
+	expectedMode ProtocolMode,
+	runtimePath string,
+	requiredOverride *CompatibilityPolicy,
+) *CompatibilityError {
+	expectedDigest, _ := expectedProtocol(expectedMode)
+	return &CompatibilityError{
+		Reason:           reason,
+		ExpectedDigest:   expectedDigest,
+		FoundDigest:      observedProtocolDigest(env, expectedMode),
+		ExpectedMode:     expectedMode,
+		FoundMode:        publicProtocolMode(env.ActiveProtocolMode),
+		RuntimePath:      runtimePath,
+		RuntimeVersion:   runtimeVersionFromUserAgent(env.UserAgent),
+		UserAgent:        env.UserAgent,
+		RequiredOverride: requiredOverride,
+	}
+}
+
+func publicProtocolMode(mode *protocol.ActiveProtocolMode) *ProtocolMode {
+	if mode == nil {
+		return nil
+	}
+	publicMode := ProtocolModeExperimental
+	if *mode == protocol.ActiveProtocolModeStable {
+		publicMode = ProtocolModeStable
+	}
+	return &publicMode
 }
 
 func hasNonEmptyProtocolDigest(env initializeCompatibilityEnvelope) bool {

@@ -52,9 +52,10 @@ func TestLoadManifestRejectsDirectionMismatch(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "manifest.json")
 	err := os.WriteFile(path, []byte(`{
+		"manifestSchemaVersion": 1,
 		"stable": {
 			"protocolMode": "stable",
-			"clientRequests": [{"direction": "serverToClient", "method": "bad"}],
+			"clientRequests": [{"variant": "Bad", "direction": "serverToClient", "method": "bad"}],
 			"serverRequests": [],
 			"serverNotifications": [],
 			"clientNotifications": []
@@ -81,9 +82,11 @@ func TestLoadManifestRejectsUnknownRequestSerializationScope(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "manifest.json")
 	err := os.WriteFile(path, []byte(`{
+		"manifestSchemaVersion": 1,
 		"stable": {
 			"protocolMode": "stable",
 			"clientRequests": [{
+				"variant": "Bad",
 				"direction": "clientToServer",
 				"method": "bad",
 				"requestSerializationScopes": [{"kind": "mystery"}]
