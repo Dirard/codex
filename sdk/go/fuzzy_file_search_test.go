@@ -140,7 +140,7 @@ func TestFuzzyFileSearchSessionStreamRoutesBySessionID(t *testing.T) {
 	}
 }
 
-func TestFuzzyFileSearchSessionCompletedKeepsHandleActiveUntilClose(t *testing.T) {
+func TestFuzzyFileSearchSessionStreamSpansMultipleQueryCompletions(t *testing.T) {
 	transport := newScriptedInitializedTransport(t, nil)
 	client, err := NewClient(context.Background(), ClientConfig{Transport: transport})
 	if err != nil {
@@ -172,8 +172,6 @@ func TestFuzzyFileSearchSessionCompletedKeepsHandleActiveUntilClose(t *testing.T
 	if typed.SessionID != session.ID() {
 		t.Fatalf("sessionId = %q, want %q", typed.SessionID, session.ID())
 	}
-	expectClosedStream(t, stream)
-
 	beforeUpdate := methodFrameCount(t, transport, "fuzzyFileSearch/sessionUpdate")
 	if err := session.Update(context.Background(), FuzzySearchUpdate{Query: "after"}); err != nil {
 		t.Fatalf("update after search completion: %v", err)
@@ -185,11 +183,20 @@ func TestFuzzyFileSearchSessionCompletedKeepsHandleActiveUntilClose(t *testing.T
 	assertRequestStringParam(t, updateParams, "sessionId", session.ID())
 	assertRequestStringParam(t, updateParams, "query", "after")
 
-	nextStream, err := session.Stream(context.Background())
-	if err != nil {
-		t.Fatalf("stream after search completion: %v", err)
+	transport.deliverNotification("fuzzyFileSearch/sessionUpdated", mustJSON(t, protocol.FuzzyFileSearchSessionUpdatedNotification{
+		SessionID: session.ID(),
+		Query:     "after",
+		Files:     []protocol.FuzzyFileSearchResult{},
+	}), nil)
+	if notification := nextTestNotification(t, stream); notification.Method != "fuzzyFileSearch/sessionUpdated" {
+		t.Fatalf("second query notification method = %q", notification.Method)
 	}
-	_ = nextStream.Close()
+	transport.deliverNotification("fuzzyFileSearch/sessionCompleted", mustJSON(t, protocol.FuzzyFileSearchSessionCompletedNotification{
+		SessionID: session.ID(),
+	}), nil)
+	if notification := nextTestNotification(t, stream); notification.Method != "fuzzyFileSearch/sessionCompleted" {
+		t.Fatalf("second completion notification method = %q", notification.Method)
+	}
 
 	beforeStop := methodFrameCount(t, transport, "fuzzyFileSearch/sessionStop")
 	if err := session.Close(context.Background()); err != nil {
@@ -198,6 +205,7 @@ func TestFuzzyFileSearchSessionCompletedKeepsHandleActiveUntilClose(t *testing.T
 	if got := methodFrameCount(t, transport, "fuzzyFileSearch/sessionStop"); got != beforeStop+1 {
 		t.Fatalf("fuzzyFileSearch/sessionStop sent %d times, want %d", got, beforeStop+1)
 	}
+	expectClosedStream(t, stream)
 }
 
 func TestFuzzyFileSearchSessionStableModeRejectsExperimentalStartBeforeWrite(t *testing.T) {

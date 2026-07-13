@@ -71,6 +71,7 @@ func TestServerHandlerDocsCoverage(t *testing.T) {
 	contents := readDocsTargets(t, serverHandlerDocsOwnerFiles)
 	publicDocs := strings.Join(mapValues(readDocsTargets(t, publicDocsFiles)), "\n")
 	for _, row := range protocol.ServerRequestMetadataByMethod {
+		assertTestOwnerExists(t, row.Method, row.UnitTestOwner)
 		switch row.Visibility {
 		case "sdk-public", "experimental-public":
 			target, ok := serverHandlerDocsOwnerFiles[row.DocsExampleOwner]
@@ -149,6 +150,9 @@ func TestLoginAccountExampleAvoidsAPIKeyLiterals(t *testing.T) {
 	if !strings.Contains(content, "LoginWithAPIKey(ctx, apiKey)") {
 		t.Fatalf("examples/login_account/main.go should pass an API key supplied by the caller")
 	}
+	if !strings.Contains(content, "LoginWithAmazonBedrock(ctx, apiKey, bedrockRegion)") {
+		t.Fatalf("examples/login_account/main.go should show typed Amazon Bedrock login")
+	}
 }
 
 func TestWindowsSandboxExampleHandlesUnsupportedPlatform(t *testing.T) {
@@ -219,10 +223,14 @@ func TestREADMEClientLimitDefaults(t *testing.T) {
 		"4096",
 		"ResourceStreamQueue",
 		"256",
+		"ResourceStreamQueueBytes",
 		"PendingTurnQueue",
 		"512",
 		"PendingTurnMap",
+		"PendingNotificationBytes",
 		"GlobalSubscriberQueue",
+		"GlobalSubscriberQueueBytes",
+		"64 MiB",
 		"HandlerConcurrency",
 		"HandlerQueue",
 		"HandlerTimeout",
