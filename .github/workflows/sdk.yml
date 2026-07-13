@@ -96,7 +96,7 @@ jobs:
             --remote-download-toplevel \
             -- \
             build \
-            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            --build_metadata=COMMIT_SHA="${GITHUB_SHA}" \
             --build_metadata=TAG_job=sdk \
             -- \
             //codex-rs/cli:codex
@@ -156,7 +156,7 @@ jobs:
         run: pnpm -r --filter ./sdk/typescript run test
 
       - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.setup_bazel.outputs.cache-hit != 'true'
+        if: always() && !cancelled()
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
@@ -167,7 +167,85 @@ jobs:
         if: always() && !cancelled()
         uses: ./.github/actions/check-clean-worktree
 
+  go-sdk-linux-helper-roots:
+    name: Go SDK Linux helper root - ${{ matrix.target }}
+    runs-on:
+      group: ${{ github.event.repository.name }}-runners
+      labels: ${{ matrix.runner_label }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner_label: ${{ github.event.repository.name }}-linux-x64-xl
+          - target: aarch64-unknown-linux-musl
+            runner_label: ${{ github.event.repository.name }}-linux-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          toolchain: "1.95.0"
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux bwrap build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bubblewrap pkg-config libcap-dev
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+
+      - name: Install musl build tools
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - name: Build and materialize release-owned helper root
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cd "${GITHUB_WORKSPACE}/codex-rs"
+          cargo build --target "$TARGET" --release --timings --bin bwrap
+          bwrap_path="target/${TARGET}/release/bwrap"
+          test -f "$bwrap_path"
+          strip --strip-debug --strip-unneeded "$bwrap_path"
+          helper_root="${RUNNER_TEMP}/codex-package-helpers"
+          PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 -m codex_package.materialize_helpers \
+            --target "$TARGET" \
+            --output-root "$helper_root" \
+            --bwrap-bin "$bwrap_path"
+          PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 -m codex_package.materialize_helpers \
+            --target "$TARGET" \
+            --output-root "$helper_root" \
+            --verify-only
+          tar -C "$helper_root" -czf "${RUNNER_TEMP}/go-sdk-package-helper-root-${TARGET}.tar.gz" "$TARGET"
+
+      - name: Upload release-owned helper root
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: go-sdk-package-helper-root-${{ matrix.target }}
+          path: ${{ runner.temp }}/go-sdk-package-helper-root-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
   go-sdk:
+    needs: go-sdk-linux-helper-roots
     name: Go SDK - ${{ matrix.name }}
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 90
@@ -304,6 +382,13 @@ jobs:
         with:
           target: ${{ matrix.bazel_target }}
 
+      - name: Download pre-produced Linux helper root
+        if: ${{ runner.os == 'Linux' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: go-sdk-package-helper-root-${{ matrix.bazel_target }}
+          path: ${{ runner.temp }}/downloaded-go-sdk-package-helper-root
+
       - name: Materialize package helper root
         shell: bash
         env:
@@ -311,21 +396,26 @@ jobs:
         run: |
           set -euo pipefail
           cd "${GITHUB_WORKSPACE}/codex-rs"
+          CODEX_PACKAGE_HELPER_ROOT="${RUNNER_TEMP}/codex-package-helpers"
+          if [[ "$TARGET" == *linux* ]]; then
+            helper_archive="${RUNNER_TEMP}/downloaded-go-sdk-package-helper-root/go-sdk-package-helper-root-${TARGET}.tar.gz"
+            test -f "$helper_archive"
+            rm -rf "${CODEX_PACKAGE_HELPER_ROOT:?}/${TARGET:?}"
+            mkdir -p "$CODEX_PACKAGE_HELPER_ROOT"
+            tar -xzf "$helper_archive" -C "$CODEX_PACKAGE_HELPER_ROOT"
+            PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 -m codex_package.materialize_helpers \
+              --target "$TARGET" \
+              --output-root "$CODEX_PACKAGE_HELPER_ROOT" \
+              --verify-only
+            echo "CODEX_GO_SDK_HELPER_ROOT_SOURCE=release-owned-artifact" >> "$GITHUB_ENV"
+            echo "CODEX_PACKAGE_HELPER_ROOT=$CODEX_PACKAGE_HELPER_ROOT" >> "$GITHUB_ENV"
+            exit 0
+          fi
           helper_args=(
             --target "$TARGET"
             --output-root "${RUNNER_TEMP}/codex-package-helpers"
           )
           case "$TARGET" in
-            *linux*)
-              cargo build --target "$TARGET" --release --timings --bin bwrap
-              bwrap_path="target/${TARGET}/release/bwrap"
-              if [[ ! -f "$bwrap_path" ]]; then
-                echo "bwrap binary ${bwrap_path} not found" >&2
-                exit 1
-              fi
-              strip --strip-debug --strip-unneeded "$bwrap_path"
-              helper_args+=(--bwrap-bin "$bwrap_path")
-              ;;
             *windows*)
               cargo build --target "$TARGET" --release --timings --bin codex-command-runner --bin codex-windows-sandbox-setup
               helper_args+=(
@@ -335,8 +425,7 @@ jobs:
               ;;
           esac
 
-          CODEX_PACKAGE_HELPER_ROOT="${RUNNER_TEMP}/codex-package-helpers"
-          rm -rf "${CODEX_PACKAGE_HELPER_ROOT}/${TARGET}"
+          rm -rf "${CODEX_PACKAGE_HELPER_ROOT:?}/${TARGET:?}"
           PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 -m codex_package.materialize_helpers "${helper_args[@]}"
           PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 -m codex_package.materialize_helpers \
             --target "$TARGET" \
@@ -367,6 +456,29 @@ jobs:
           set -euo pipefail
           "${CODEX_EXEC_PATH:?}" --version
 
+      - name: Verify Linux sandbox readiness
+        if: ${{ matrix.sandbox || false }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${GITHUB_WORKSPACE}/.github/scripts/stage-codex-runtime.sh" \
+            --verify-sandbox \
+            --exec-path "${CODEX_EXEC_PATH:?}"
+
+      - name: Build Go SDK auth fixture
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build \
+            --manifest-path "${GITHUB_WORKSPACE}/codex-rs/Cargo.toml" \
+            -p codex-app-server \
+            --bin codex-app-server
+          auth_fixture_path="${GITHUB_WORKSPACE}/codex-rs/target/debug/codex-app-server"
+          test -x "$auth_fixture_path"
+          echo "CODEX_GO_SDK_AUTH_FIXTURE_PATH=$auth_fixture_path" >> "$GITHUB_ENV"
+          echo "CODEX_GO_SDK_REQUIRE_AUTH_FIXTURE=1" >> "$GITHUB_ENV"
+
       - name: Test Go SDK against real app-server
         shell: bash
         env:
@@ -389,20 +501,19 @@ jobs:
             TestRealAppServerModelList
             TestRealAppServerProtocolModeExperimentalGate
             TestRealAppServerUnauthenticatedAccountRead
+            TestAuthFixtureUnauthenticatedAccountRead
+            TestAuthFixtureFakeAPIKeyLogin
+            TestAuthFixtureDeviceCodeFlow
+            TestAuthFixtureUsageAndRateLimitRead
           )
-          go test ./... -list 'TestRealAppServer|TestDigestMismatch|TestCompatibilityOverridePolicy' | tee "${RUNNER_TEMP}/go-sdk-real-tests.txt"
+          go test ./... -list 'TestRealAppServer|TestDigestMismatch|TestCompatibilityOverridePolicy|TestAuthFixture' | tee "${RUNNER_TEMP}/go-sdk-integration-tests.txt"
           for test_name in "${required_tests[@]}"; do
-            if ! grep -qx "$test_name" "${RUNNER_TEMP}/go-sdk-real-tests.txt"; then
-              echo "Missing required Go SDK real app-server test: ${test_name}" >&2
+            if ! grep -qx "$test_name" "${RUNNER_TEMP}/go-sdk-integration-tests.txt"; then
+              echo "Missing required Go SDK integration test: ${test_name}" >&2
               exit 1
             fi
             go test ./... -run "^${test_name}$"
           done
-          if [[ "${{ matrix.sandbox || false }}" == "true" ]]; then
-            "${GITHUB_WORKSPACE}/.github/scripts/stage-codex-runtime.sh" \
-              --verify-sandbox \
-              --exec-path "${CODEX_EXEC_PATH:?}"
-          fi
           go test ./...
 
       - name: Race-test Go SDK
@@ -426,7 +537,8 @@ jobs:
               echo "CODEX_GO_SDK_ZSTD_SOURCE must point at the Stage 5G materialized zstd executable" >&2
               exit 1
             fi
-            zstd_args+=(--zstd-source "${CODEX_GO_SDK_ZSTD_SOURCE}")
+            zstd_realpath="$(cd "$(dirname "${CODEX_GO_SDK_ZSTD_SOURCE}")" && pwd -P)/$(basename "${CODEX_GO_SDK_ZSTD_SOURCE}")"
+            zstd_args+=(--zstd-source "$zstd_realpath")
           else
             zstd_bin="$(command -v zstd || true)"
             if [[ -z "$zstd_bin" ]]; then
@@ -441,6 +553,7 @@ jobs:
               exit 1
             fi
           fi
+          export GO_SDK_ZSTD_EXECUTABLE="$zstd_realpath"
           release_shape_args=()
           if [[ "${{ matrix.release_shape || false }}" == "true" ]]; then
             release_shape_args+=(--windows-release-shaped-msvc --windows-msvc-host-platform)
@@ -498,6 +611,12 @@ jobs:
           if "${{ matrix.release_shape || false }}" == "true" and not archive.get("windowsReleaseShapedMsvc"):
               raise SystemExit("Windows package archive did not record release-shaped MSVC layout")
           PY
+
+          if [[ "${{ matrix.sandbox || false }}" == "true" ]]; then
+            "${GITHUB_WORKSPACE}/.github/scripts/stage-codex-runtime.sh" \
+              --verify-sandbox \
+              --exec-path "${CODEX_EXEC_PATH:?}"
+          fi
           cd sdk/go
           smoke_tests=(
             TestRealAppServerInitializeStrictDigest
@@ -532,10 +651,39 @@ jobs:
           export GO_SDK_RELEASE_SHAPE="${{ matrix.release_shape || false }}"
           export GO_SDK_RUNNER_LABEL="${{ matrix.runner_label }}"
           export GO_SDK_TARGET="${{ matrix.bazel_target }}"
+          package_archive_path="$(
+            python3 - "${CODEX_RUNTIME_METADATA_PATH:?}" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              metadata = json.load(handle)
+          print((metadata.get("packageArchive") or {}).get("path", ""))
+          PY
+          )"
+          if [[ ! -f "$package_archive_path" ]]; then
+            echo "Staged package archive is missing: $package_archive_path" >&2
+            exit 1
+          fi
+          package_archive_name="$(basename "$package_archive_path")"
+          cp "$package_archive_path" "$evidence_dir/$package_archive_name"
+          bash "${GITHUB_WORKSPACE}/.github/scripts/write-codex-package-checksums.sh" \
+            --dist "$evidence_dir" \
+            --manifest "$evidence_dir/codex-package_SHA256SUMS"
+          export GO_SDK_PACKAGE_ARCHIVE_ARTIFACT="$package_archive_name"
           python3 - <<'PY'
+          import hashlib
           import json
           import os
+          import subprocess
           from pathlib import Path
+
+          def sha256_file(path: Path) -> str:
+              digest = hashlib.sha256()
+              with path.open("rb") as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
 
           evidence_dir = Path(os.environ["GO_SDK_EVIDENCE_DIR"])
           target = os.environ["GO_SDK_TARGET"]
@@ -543,6 +691,70 @@ jobs:
           helper_root_source = os.environ.get("CODEX_GO_SDK_HELPER_ROOT_SOURCE", "")
           metadata_path = evidence_dir / "staging-metadata.json"
           metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+          if metadata.get("bazelCompilationMode") != "opt":
+              raise SystemExit("release evidence requires Bazel opt compilation mode")
+          if metadata.get("seedProvenance") != "bazelOutput":
+              raise SystemExit("release evidence requires a Bazel-produced runtime seed")
+          package_archive = metadata.get("packageArchive") or {}
+          if package_archive.get("builder") != ".github/scripts/build-codex-package-archive.sh":
+              raise SystemExit("release evidence did not use the shared shipping package builder")
+          archive_name = os.environ["GO_SDK_PACKAGE_ARCHIVE_ARTIFACT"]
+          archive_path = evidence_dir / archive_name
+          archive_sha256 = sha256_file(archive_path)
+          if archive_sha256 != package_archive.get("sha256"):
+              raise SystemExit("staged package archive sha256 does not match copied artifact")
+          manifest_path = evidence_dir / "codex-package_SHA256SUMS"
+          manifest_entries = {
+              line.split(maxsplit=1)[1].lstrip("* "): line.split(maxsplit=1)[0]
+              for line in manifest_path.read_text(encoding="utf-8").splitlines()
+              if line.strip()
+          }
+          if manifest_entries.get(archive_name) != archive_sha256:
+              raise SystemExit("public checksum manifest does not bind the staged package archive")
+          zstd_executable = os.environ["GO_SDK_ZSTD_EXECUTABLE"]
+          decompressor = subprocess.Popen(
+              [zstd_executable, "-dc", str(archive_path)],
+              stdout=subprocess.PIPE,
+              stderr=subprocess.PIPE,
+          )
+          if decompressor.stdout is None or decompressor.stderr is None:
+              raise SystemExit("failed to capture exact zstd decompressor pipes")
+          inventory_result = subprocess.run(
+              ["tar", "-tf", "-"],
+              stdin=decompressor.stdout,
+              check=False,
+              capture_output=True,
+              text=True,
+          )
+          decompressor.stdout.close()
+          decompressor_stderr = decompressor.stderr.read().decode("utf-8", errors="replace")
+          decompressor_returncode = decompressor.wait()
+          if decompressor_returncode != 0:
+              raise SystemExit(
+                  f"exact zstd decompressor failed with exit {decompressor_returncode}: {decompressor_stderr}"
+              )
+          if inventory_result.returncode != 0:
+              raise SystemExit(
+                  f"tar inventory failed with exit {inventory_result.returncode}: {inventory_result.stderr}"
+              )
+          inventory = sorted(
+              line.removeprefix("./")
+              for line in inventory_result.stdout.splitlines()
+              if line
+          )
+          if inventory != sorted(package_archive.get("inventory") or []):
+              raise SystemExit("staged package archive inventory does not match the copied artifact")
+          required_members = {
+              "bin/codex",
+              "bin/codex-code-mode-host",
+              "codex-package.json",
+              "codex-path/rg",
+              "codex-resources/bwrap",
+              "codex-resources/zsh/bin/zsh",
+          }
+          missing_members = required_members - set(inventory)
+          if missing_members:
+              raise SystemExit(f"staged package archive is missing {sorted(missing_members)}")
           smoke_tests = (evidence_dir / "package-archive-smoke-tests.txt").read_text(encoding="utf-8").splitlines()
           architecture_proof_path = evidence_dir / "architecture-proof.json"
           architecture_proof = {
@@ -569,12 +781,24 @@ jobs:
               "jobConclusion": "success",
               "jobName": f"Go SDK - {os.environ['GO_SDK_MATRIX_NAME']}",
               "packageArchiveSmokeTests": smoke_tests,
+              "packageArchiveArtifact": {
+                  "checksumManifestPath": manifest_path.name,
+                  "inventory": inventory,
+                  "path": archive_path.name,
+                  "sha256": archive_sha256,
+              },
               "packageArchiveVerifier": "success",
               "runnerLabel": runner_label,
               "runtimeSource": metadata.get("runtimeSource"),
               "stagingMetadata": metadata,
           }
-          if helper_root_source == "producer-mode-blocked":
+          if helper_root_source == "release-owned-artifact":
+              evidence["helperRootEvidence"] = {
+                  "source": "preProducedStage5GArtifact",
+                  "artifactName": f"go-sdk-package-helper-root-{target}",
+                  "verification": "materialize_helpers --verify-only",
+              }
+          elif helper_root_source == "producer-mode-blocked":
               evidence["helperRootEvidence"] = {
                   "source": "producerModeMaterializeHelpers",
                   "releaseReadinessImpact": (
@@ -585,6 +809,8 @@ jobs:
               }
               evidence["notReleaseReady"] = True
               evidence["releaseReadinessImpact"] = evidence["helperRootEvidence"]["releaseReadinessImpact"]
+          if "linux" in target:
+              evidence["sandboxVerifier"] = "success"
           if "windows" in target:
               windows_host_proof = {
                   "target": target,
@@ -651,7 +877,7 @@ jobs:
           go test ./... -run 'TestResourceCoverage|TestResourceDocsCoverage|TestServerHandlerDocsCoverage'
 
       - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.setup_bazel.outputs.cache-hit != 'true'
+        if: always() && !cancelled()
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
@@ -702,6 +928,11 @@ jobs:
           target_output_root.mkdir(parents=True)
           targets = {}
           not_release_ready_targets = []
+          linux_targets = {
+              "x86_64-unknown-linux-musl",
+              "aarch64-unknown-linux-musl",
+          }
+          linux_not_release_ready_targets = []
           for evidence_path in Path("downloaded-go-sdk-ci-release-evidence").glob("**/target-evidence.json"):
               evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
               target = evidence.get("bazelTarget")
@@ -713,6 +944,14 @@ jobs:
                   raise SystemExit(f"Go SDK CI evidence for {target} did not record success")
               if evidence.get("skipped") or evidence.get("notReleaseReady"):
                   not_release_ready_targets.append(target)
+                  if target in linux_targets:
+                      linux_not_release_ready_targets.append(target)
+              if target in linux_targets:
+                  helper_source = (evidence.get("helperRootEvidence") or {}).get("source")
+                  if helper_source != "preProducedStage5GArtifact":
+                      linux_not_release_ready_targets.append(target)
+                  if evidence.get("sandboxVerifier") != "success":
+                      linux_not_release_ready_targets.append(target)
               target_dir = target_output_root / target
               target_dir.mkdir()
               for source in evidence_path.parent.iterdir():
@@ -726,14 +965,25 @@ jobs:
               targets[target] = evidence
           if set(targets) != expected_targets:
               raise SystemExit(f"Go SDK CI evidence targets {sorted(targets)} did not match {sorted(expected_targets)}")
-          aggregate = {"targets": targets}
-          if not_release_ready_targets:
-              aggregate["notReleaseReady"] = True
-              aggregate["notReleaseReadyTargets"] = sorted(not_release_ready_targets)
-              aggregate["releaseReadinessImpact"] = (
-                  "SDK CI target evidence is uploaded for audit only; final release "
-                  "readiness remains blocked until every target lacks skipped/notReleaseReady markers"
+          if linux_not_release_ready_targets:
+              raise SystemExit(
+                  "Linux Go SDK release evidence is incomplete for "
+                  f"{sorted(set(linux_not_release_ready_targets))}"
               )
+          aggregate = {
+              "evidenceKind": "ciPreflightOnly",
+              "notReleaseReady": True,
+              "linuxReleaseReady": False,
+              "linuxPreflightComplete": True,
+              "targets": targets,
+              "linuxTargets": sorted(linux_targets),
+              "releaseReadinessImpact": (
+                  "SDK CI target evidence is uploaded for audit only; it is preflight evidence, "
+                  "not publication-finalized Linux release evidence"
+              ),
+          }
+          if not_release_ready_targets:
+              aggregate["notReleaseReadyTargets"] = sorted(not_release_ready_targets)
           (output_dir / "go-sdk-ci-release-evidence.json").write_text(
               json.dumps(aggregate, indent=2, sort_keys=True) + "\n",
               encoding="utf-8",
@@ -755,3 +1005,12 @@ jobs:
     with:
       checkout_ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       validate_synthetic_tags: true
+
+  go-sdk-linux-shipping-release-readiness:
+    needs:
+      - go-sdk
+    if: ${{ always() && !cancelled() }}
+    uses: ./.github/workflows/go-sdk-shipping-release-readiness.yml
+    with:
+      checkout_ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      evidence_source: ci-preflight

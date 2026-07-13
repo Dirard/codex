@@ -148,7 +148,7 @@ func renderServerNotificationMetadata(manifest *Manifest, stableServerNotificati
 		b.WriteString("}},\n")
 	}
 	b.WriteString("}\n")
-	b.WriteString("\nfunc DecodeServerNotificationPayload(method string, params json.RawMessage) any {\n")
+	b.WriteString("\nfunc DecodeServerNotificationPayload(method string, params json.RawMessage) (any, error) {\n")
 	b.WriteString("\tswitch method {\n")
 	for _, entry := range manifest.Experimental.ServerNotifications {
 		if entry.PayloadType == "" {
@@ -156,12 +156,13 @@ func renderServerNotificationMetadata(manifest *Manifest, stableServerNotificati
 		}
 		b.WriteString(fmt.Sprintf("\tcase %q:\n", entry.Method))
 		b.WriteString(fmt.Sprintf("\t\tvar payload %s\n", entry.PayloadType))
-		b.WriteString("\t\tif json.Unmarshal(params, &payload) == nil {\n")
-		b.WriteString("\t\t\treturn payload\n")
+		b.WriteString("\t\tif err := json.Unmarshal(params, &payload); err != nil {\n")
+		b.WriteString("\t\t\treturn nil, err\n")
 		b.WriteString("\t\t}\n")
+		b.WriteString("\t\treturn payload, nil\n")
 	}
 	b.WriteString("\t}\n")
-	b.WriteString("\treturn append(json.RawMessage(nil), params...)\n")
+	b.WriteString("\treturn append(json.RawMessage(nil), params...), nil\n")
 	b.WriteString("}\n")
 	b.WriteString("\nvar RoutingLifecycleByStartMethod = map[string]RoutingLifecycleMetadata{\n")
 	for _, entry := range manifest.Experimental.RoutingLifecycle {

@@ -112,15 +112,30 @@ func TestReleaseChecksumManifestCoversZstdPackageArchives(t *testing.T) {
 
 func TestShippingReleaseReadinessWorkflowArtifactMetadata(t *testing.T) {
 	workflow := readRepoText(t, ".github/workflows/go-sdk-shipping-release-readiness.yml")
-	collector := readRepoText(t, ".github/scripts/go_sdk_shipping_release_readiness.py")
-	shippingSources := workflow + "\n" + collector
+	sdkWorkflow := readRepoText(t, ".github/workflows/sdk.yml")
+	rustReleaseWorkflow := readRepoText(t, ".github/workflows/rust-release.yml")
 
 	for _, required := range []string{
-		"shipping-release-readiness.json",
-		"reusedWorkflows",
-		"reusedJobs",
-		"reusedScripts",
-		"workflowLocalDuplicateCommands=false",
+		"name: go-sdk-shipping-release-readiness",
+		"workflow_call:",
+		"checkout_ref:",
+		"evidence_source:",
+		"ci-preflight",
+		"rust-release",
+		"Download actual Rust release Linux artifacts",
+		`pattern: "{x86_64,aarch64}-unknown-linux-musl{,-app-server}"`,
+		"source-preflight",
+		"collect-linux-release",
+		"go_sdk_shipping_release_readiness.py",
+		"codex-package_SHA256SUMS",
+		"write-codex-package-checksums.sh",
+		"github.run_id",
+		"github.run_attempt",
+		"github.ref_name",
+		"shipping-release-readiness-metadata",
+		"actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2",
+		"actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
+		"persist-credentials: false",
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Fatalf("go-sdk-shipping-release-readiness workflow source anchors missing %q", required)
@@ -128,76 +143,80 @@ func TestShippingReleaseReadinessWorkflowArtifactMetadata(t *testing.T) {
 	}
 
 	for _, required := range []string{
-		"name: go-sdk-shipping-release-readiness",
-		"workflow_call:",
-		"workflow_dispatch:",
-		"Shipping release source preflight",
-		"Shipping package archive - ${{ matrix.target }}",
-		"Package macOS artifacts - ${{ matrix.target }}",
-		"Verify macOS artifacts - ${{ matrix.target }}",
-		"Shipping DotSlash parity",
-		"Shipping release-readiness evidence",
-		"actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2",
-		"actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
-		"persist-credentials: false",
-		"shipping-release-readiness-metadata",
-		"shipping-target-${{ matrix.target }}",
-		"pattern: shipping-target-*",
-		"merge-multiple: true",
-		"go_sdk_shipping_release_readiness.py",
-		"build-fixture-artifacts",
-		"collect-artifacts",
-		"--fixture-substitutions non-publishing",
-		"nonPublishingFixtureBinaries",
-		"disabledSigningAndNotarization",
-		"shipping-release-readiness.json",
-		"workflowShape",
-		"thinWrapper",
-		"notReleaseReady",
-		"releaseReadinessImpact",
-		"reusedWorkflows",
-		".github/workflows/rust-release.yml",
-		".github/workflows/rust-release-windows.yml",
-		"reusedJobs",
-		"package-macos",
-		"finalize-macos",
-		"Build Codex package archive",
-		"Build Codex package archives",
-		"publish-dotslash",
-		"reusedScripts",
-		".github/scripts/build-codex-package-archive.sh",
-		".github/scripts/write-codex-package-checksums.sh",
-		"workflowReuseProofPath",
-		"duplicateCommandAuditPath",
-		"workflowLocalDuplicateCommands=false",
-		"workflowLocalDuplicateCommands",
-		"fixtureSubstitutions",
-		"boundedLogs",
-		"targetRequirements",
-		"x86_64-unknown-linux-musl",
-		"aarch64-unknown-linux-musl",
-		"aarch64-apple-darwin",
-		"x86_64-apple-darwin",
-		"x86_64-pc-windows-msvc",
-		"aarch64-pc-windows-msvc",
-		"requiredPackageArchiveSmokeTests",
-		"TestRealAppServerInitializeStrictDigest",
-		"TestRealAppServerRejectsDebugHookEnv",
-		"TestRealAppServerThreadRunHappyPath",
-		"TestRealAppServerCommandExecStreaming",
-		"TestRealAppServerProcessLifecycle",
-		"TestRealAppServerFilesystemWatch",
-		"dotslash-config",
-		"codex-command-runner.exe",
-		"codex-windows-sandbox-setup.exe",
-		"test_dotslash_release_archive_config_parity",
+		"go-sdk-linux-helper-roots:",
+		"labels: ${{ matrix.runner_label }}",
+		"Upload release-owned helper root",
+		"Download pre-produced Linux helper root",
+		"go-sdk-package-helper-root-${TARGET}.tar.gz",
+		"tar -xzf \"$helper_archive\"",
+		"CODEX_GO_SDK_HELPER_ROOT_SOURCE=release-owned-artifact",
+		"source\": \"preProducedStage5GArtifact",
+		"write-codex-package-checksums.sh",
+		"packageArchiveArtifact",
+		"seedProvenance",
+		"bazelCompilationMode",
+		"Verify Linux sandbox readiness",
+		"go-sdk-linux-shipping-release-readiness:",
+		"always() && !cancelled()",
+		"uses: ./.github/workflows/go-sdk-shipping-release-readiness.yml",
+		"evidence_source: ci-preflight",
 	} {
-		if !strings.Contains(shippingSources, required) {
-			t.Fatalf("go-sdk-shipping-release-readiness sources missing %q", required)
+		if !strings.Contains(sdkWorkflow, required) {
+			t.Fatalf("sdk workflow Linux release evidence missing %q", required)
 		}
 	}
 
+	for _, required := range []string{
+		"go-sdk-linux-verification:",
+		"commit_sha: ${{ steps.validate-tag.outputs.commit_sha }}",
+		`commit_sha="$(git rev-parse "${GITHUB_SHA}^{commit}")"`,
+		"ref: ${{ needs.tag-check.outputs.commit_sha }}",
+		"Run full Linux Go SDK verification",
+		"Check Rust-owned Go SDK protocol sources",
+		"write_go_sdk_manifest",
+		"just write-app-server-schema --check",
+		"write_schema_fixtures",
+		"just test -p codex-app-server-protocol",
+		"go test ./... -count=1",
+		"go test -race ./... -count=1",
+		"go vet ./...",
+		"Run Go SDK smoke tests against Linux release package",
+		"stage-codex-runtime.sh\" --verify-sandbox --exec-path \"$runtime_path\"",
+		"sandboxSmoke",
+		"cache-dependency-path: sdk/go/go.mod",
+		"go-sdk-release-smoke-${TARGET}.json",
+		"CODEX_GO_SDK_REQUIRE_REAL_APP_SERVER=1",
+		"test ./... -list",
+		"for smoke_test in",
+		"go-sdk-linux-shipping-release-readiness:",
+		"needs.go-sdk-linux-verification.result == 'success'",
+		"verification_job: go-sdk-linux-verification",
+		"verification_conclusion: ${{ needs.go-sdk-linux-verification.result }}",
+		"checkout_ref: ${{ needs.tag-check.outputs.commit_sha }}",
+		"verification_commit_sha: ${{ needs.tag-check.outputs.commit_sha }}",
+		"evidence_source: rust-release",
+		"needs.go-sdk-linux-shipping-release-readiness.result == 'success'",
+		"Download preliminary Linux release readiness metadata",
+		"finalize-linux-release",
+		"dist/go-sdk-linux-release-readiness.json",
+	} {
+		if !strings.Contains(rustReleaseWorkflow, required) {
+			t.Fatalf("rust-release Linux Go SDK gate missing %q", required)
+		}
+	}
+	if strings.Contains(rustReleaseWorkflow, "cache-dependency-path: sdk/go/go.sum") {
+		t.Fatal("rust-release Linux Go setup must not use the absent sdk/go/go.sum cache dependency")
+	}
+
 	for _, forbidden := range []string{
+		"workflow_dispatch:",
+		"build-fixture-artifacts",
+		"--fixture-substitutions",
+		"nonPublishingFixtureBinaries",
+		"disabledSigningAndNotarization",
+		"aarch64-apple-darwin",
+		"x86_64-apple-darwin",
+		"pc-windows-msvc",
 		"secrets: inherit",
 		"contents: write",
 		"softprops/action-gh-release",
@@ -206,6 +225,39 @@ func TestShippingReleaseReadinessWorkflowArtifactMetadata(t *testing.T) {
 	} {
 		if strings.Contains(workflow, forbidden) {
 			t.Fatalf("go-sdk-shipping-release-readiness workflow must stay validation-only and secretless; found %q", forbidden)
+		}
+	}
+}
+
+func TestStageSevenLinuxOnlyValidationBranchesBeforeCrossPlatformEvidence(t *testing.T) {
+	verification := readRepoText(t, "docs/superpowers/plans/2026-07-02-go-sdk-full/stage-07-final-verification.md")
+	releaseReadinessRequirement := strings.Index(verification, `${CODEX_GO_SDK_RELEASE_READINESS_RUN_ID:?set to the successful go-sdk-release-readiness.yml run id for the reviewed commit}`)
+	releaseReadinessValidation := strings.Index(verification, `verify_run "${CODEX_GO_SDK_RELEASE_READINESS_RUN_ID}" "go-sdk-release-readiness"`)
+	linuxBranch := strings.Index(verification, `if [[ "${linux_only}" == "true" ]]; then`)
+	legacyValidation := strings.Index(verification, `python3 - "${sdk_metadata}"`)
+	if releaseReadinessRequirement == -1 || releaseReadinessValidation == -1 || linuxBranch == -1 || legacyValidation == -1 {
+		t.Fatal("stage 7 must require module release readiness and contain Linux-only and legacy SDK evidence validation branches")
+	}
+	if releaseReadinessRequirement > linuxBranch || releaseReadinessValidation > linuxBranch {
+		t.Fatal("stage 7 must validate Go module release readiness before choosing platform evidence")
+	}
+	if !strings.Contains(verification, "go-sdk-synthetic-tag-validation=v0,v1,annotated-v1,v2") {
+		t.Fatal("stage 7 must require immutable log evidence that all synthetic Go module tag lanes ran")
+	}
+	if linuxBranch > legacyValidation {
+		t.Fatal("stage 7 must choose Linux-only validation before evaluating cross-platform SDK evidence")
+	}
+	branchBody := verification[linuxBranch:legacyValidation]
+	if !strings.Contains(branchBody, "validate-linux-release") ||
+		!strings.Contains(branchBody, "else\nverify_run \"${CODEX_GO_SDK_CI_RUN_ID}\" \"blocking-ci\"") {
+		t.Fatal("stage 7 Linux-only branch must validate published Linux evidence before the legacy branch")
+	}
+	if !strings.Contains(verification, `verify_run "${CODEX_GO_SDK_CI_RUN_ID}" "blocking-ci"`) {
+		t.Fatal("stage 7 must validate the blocking-ci caller run that owns reusable sdk jobs")
+	}
+	for _, linuxJob := range []string{"sdk / Go SDK - linux-musl", "sdk / Go SDK - linux-arm64-musl"} {
+		if !strings.Contains(verification, linuxJob) {
+			t.Fatalf("stage 7 must require successful nested Linux SDK job %q", linuxJob)
 		}
 	}
 }

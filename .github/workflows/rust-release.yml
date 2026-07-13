@@ -21,12 +21,15 @@ concurrency:
 jobs:
   tag-check:
     runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.validate-tag.outputs.commit_sha }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
       - name: Validate tag matches Cargo.toml version
+        id: validate-tag
         shell: bash
         run: |
           set -euo pipefail
@@ -47,11 +50,92 @@ jobs:
           [[ "${tag_ver}" == "${cargo_ver}" ]] \
             || { echo "❌  Tag ${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
 
+          commit_sha="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          echo "commit_sha=${commit_sha}" >> "${GITHUB_OUTPUT}"
+
           echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
 
-  build:
+  linux-package-helper-roots:
+    name: Linux package helper root - ${{ matrix.target }}
     needs: tag-check
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ${{ github.event.repository.name }}-linux-x64-xl
+          - target: aarch64-unknown-linux-musl
+            runner: ${{ github.event.repository.name }}-linux-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.tag-check.outputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          toolchain: "1.95.0"
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux bwrap build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bubblewrap pkg-config libcap-dev
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+
+      - name: Install musl build tools
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - name: Build and materialize release-owned Linux helper root
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cd "${GITHUB_WORKSPACE}/codex-rs"
+          cargo build --target "$TARGET" --release --timings --bin bwrap
+          bwrap_path="target/${TARGET}/release/bwrap"
+          test -f "$bwrap_path"
+          strip --strip-debug --strip-unneeded "$bwrap_path"
+          helper_root="${RUNNER_TEMP}/codex-package-helpers"
+          PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 -m codex_package.materialize_helpers \
+            --target "$TARGET" \
+            --output-root "$helper_root" \
+            --bwrap-bin "$bwrap_path"
+          PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 -m codex_package.materialize_helpers \
+            --target "$TARGET" \
+            --output-root "$helper_root" \
+            --verify-only
+          tar -C "$helper_root" -czf "${RUNNER_TEMP}/linux-package-helper-root-${TARGET}.tar.gz" "$TARGET"
+
+      - name: Upload release-owned Linux helper root
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: linux-package-helper-root-${{ matrix.target }}
+          path: ${{ runner.temp }}/linux-package-helper-root-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  build:
+    needs:
+      - tag-check
+      - linux-package-helper-roots
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     # Release builds can take a long time, so leave some headroom to avoid
@@ -369,19 +453,30 @@ jobs:
             cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
           fi
 
-      - name: Materialize package helpers
+      - name: Download pre-produced Linux helper root
+        if: ${{ runner.os != 'macOS' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: linux-package-helper-root-${{ matrix.target }}
+          path: ${{ runner.temp }}/downloaded-linux-package-helper-root
+
+      - name: Verify pre-produced Linux package helpers
         if: ${{ runner.os != 'macOS' }}
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
+          helper_archive="${RUNNER_TEMP}/downloaded-linux-package-helper-root/linux-package-helper-root-${TARGET}.tar.gz"
+          test -f "$helper_archive"
           CODEX_PACKAGE_HELPER_ROOT="${RUNNER_TEMP}/codex-package-helpers"
-          rm -rf "${CODEX_PACKAGE_HELPER_ROOT}/${TARGET}"
+          rm -rf "${CODEX_PACKAGE_HELPER_ROOT:?}/${TARGET:?}"
+          mkdir -p "$CODEX_PACKAGE_HELPER_ROOT"
+          tar -xzf "$helper_archive" -C "$CODEX_PACKAGE_HELPER_ROOT"
           PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 -m codex_package.materialize_helpers \
             --target "$TARGET" \
             --output-root "$CODEX_PACKAGE_HELPER_ROOT" \
-            --bwrap-bin "target/${TARGET}/release/bwrap"
+            --verify-only
           echo "CODEX_PACKAGE_HELPER_ROOT=$CODEX_PACKAGE_HELPER_ROOT" >> "$GITHUB_ENV"
 
       - name: Resolve materialized package helpers
@@ -419,9 +514,11 @@ jobs:
             echo "Materialized bwrap helper $bwrap_bin has sha256:${package_bwrap_digest}, expected sha256:${CODEX_BWRAP_SHA256}" >&2
             exit 1
           fi
-          echo "CODEX_PACKAGE_RG_BIN=$rg_bin" >> "$GITHUB_ENV"
-          echo "CODEX_PACKAGE_ZSH_BIN=$zsh_bin" >> "$GITHUB_ENV"
-          echo "CODEX_PACKAGE_BWRAP_BIN=$bwrap_bin" >> "$GITHUB_ENV"
+          {
+            echo "CODEX_PACKAGE_RG_BIN=$rg_bin"
+            echo "CODEX_PACKAGE_ZSH_BIN=$zsh_bin"
+            echo "CODEX_PACKAGE_BWRAP_BIN=$bwrap_bin"
+          } >> "$GITHUB_ENV"
 
       - name: Build Codex package archive
         if: ${{ runner.os != 'macOS' }}
@@ -528,6 +625,98 @@ jobs:
             # non-Windows artifact directories small.
             zstd -T0 -19 --rm "$dest/$base"
           done
+
+      - name: Set up Go for Linux release smoke tests
+        if: ${{ contains(matrix.target, 'linux') && matrix.bundle == 'primary' }}
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.25"
+          cache-dependency-path: sdk/go/go.mod
+
+      - name: Run Go SDK smoke tests against Linux release package
+        if: ${{ contains(matrix.target, 'linux') && matrix.bundle == 'primary' }}
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          archive="dist/${TARGET}/codex-package-${TARGET}.tar.zst"
+          stage_dir="$(mktemp -d "${RUNNER_TEMP}/go-sdk-release-smoke.XXXXXX")"
+          tar -I zstd -xf "$archive" -C "$stage_dir"
+          runtime_path="${stage_dir}/bin/codex"
+          test -x "$runtime_path"
+          "${GITHUB_WORKSPACE}/.github/scripts/stage-codex-runtime.sh" --verify-sandbox --exec-path "$runtime_path"
+
+          case "$TARGET" in
+            x86_64-unknown-linux-musl) expected_arch="x86_64" ;;
+            aarch64-unknown-linux-musl) expected_arch="aarch64|arm64" ;;
+            *)
+              echo "Unexpected Linux release target: $TARGET" >&2
+              exit 1
+              ;;
+          esac
+          uname_machine="$(uname -m)"
+          [[ "$uname_machine" =~ ^(${expected_arch})$ ]]
+
+          smoke_tests=(
+            TestRealAppServerInitializeStrictDigest
+            TestRealAppServerRejectsDebugHookEnv
+            TestRealAppServerThreadRunHappyPath
+            TestRealAppServerCommandExecStreaming
+            TestRealAppServerProcessLifecycle
+            TestRealAppServerFilesystemWatch
+          )
+          passed_smoke_tests=()
+          for smoke_test in "${smoke_tests[@]}"; do
+            go -C "${GITHUB_WORKSPACE}/sdk/go" test ./... -list "^${smoke_test}$" |
+              grep -Fx "$smoke_test"
+            CODEX_EXEC_PATH="$runtime_path" \
+            CODEX_GO_SDK_REQUIRE_REAL_APP_SERVER=1 \
+              go -C "${GITHUB_WORKSPACE}/sdk/go" test ./... -count=1 -run "^${smoke_test}$"
+            passed_smoke_tests+=("$smoke_test")
+          done
+          smoke_tests_joined="$(IFS='|'; echo "${passed_smoke_tests[*]}")"
+
+          archive_sha256="$(sha256sum "$archive" | awk '{print $1}')"
+          commit_sha="$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
+          evidence_path="dist/${TARGET}/go-sdk-release-smoke-${TARGET}.json"
+          TARGET="$TARGET" \
+          UNAME_MACHINE="$uname_machine" \
+          ARCHIVE_NAME="$(basename "$archive")" \
+          ARCHIVE_SHA256="$archive_sha256" \
+          COMMIT_SHA="$commit_sha" \
+          EVIDENCE_PATH="$evidence_path" \
+          SMOKE_TESTS="$smoke_tests_joined" \
+            python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          evidence = {
+              "sourceWorkflow": ".github/workflows/rust-release.yml",
+              "workflowRunId": os.environ["WORKFLOW_RUN_ID"],
+              "workflowRunAttempt": os.environ["WORKFLOW_RUN_ATTEMPT"],
+              "commitSha": os.environ["COMMIT_SHA"],
+              "target": os.environ["TARGET"],
+              "jobConclusion": "success",
+              "unameMachine": os.environ["UNAME_MACHINE"],
+              "packageArchiveFilename": os.environ["ARCHIVE_NAME"],
+              "packageArchiveSha256": os.environ["ARCHIVE_SHA256"],
+              "smokeTests": os.environ["SMOKE_TESTS"].split("|"),
+              "sandboxSmoke": {
+                  "verifier": ".github/scripts/stage-codex-runtime.sh",
+                  "arguments": ["--verify-sandbox", "--exec-path"],
+                  "bwrapPath": "codex-resources/bwrap",
+                  "result": "success",
+              },
+          }
+          Path(os.environ["EVIDENCE_PATH"]).write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
 
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: ${{ runner.os != 'macOS' }}
@@ -799,7 +988,7 @@ jobs:
         run: |
           set -euo pipefail
           CODEX_PACKAGE_HELPER_ROOT="${RUNNER_TEMP}/codex-package-helpers"
-          rm -rf "${CODEX_PACKAGE_HELPER_ROOT}/${TARGET}"
+          rm -rf "${CODEX_PACKAGE_HELPER_ROOT:?}/${TARGET}"
           PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 -m codex_package.materialize_helpers \
             --target "$TARGET" \
             --output-root "$CODEX_PACKAGE_HELPER_ROOT"
@@ -1212,6 +1401,93 @@ jobs:
     with:
       publish: true
 
+  go-sdk-linux-verification:
+    name: Go SDK Linux verification
+    needs: tag-check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.tag-check.outputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.25"
+          cache-dependency-path: sdk/go/go.mod
+
+      - name: Setup Rust for Go SDK protocol source checks
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          toolchain: "1.95.0"
+
+      - name: Install Rust helpers for Go SDK protocol source checks
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: just,nextest@0.9.103
+
+      - name: Check Rust-owned Go SDK protocol sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd codex-rs
+          cargo run --manifest-path Cargo.toml -p codex-app-server-protocol --bin write_go_sdk_manifest -- \
+            --check \
+            --output ../sdk/go/internal/protocodex/manifest/app_server_protocol_manifest.json
+          just write-app-server-schema --check
+          cargo run --manifest-path Cargo.toml -p codex-app-server-protocol --bin write_schema_fixtures -- \
+            --experimental \
+            --check \
+            --schema-root ../sdk/go/internal/protocodex/schema-experimental
+          just test -p codex-app-server-protocol
+
+      - name: Run full Linux Go SDK verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd sdk/go
+          go test ./... -count=1
+          go test -race ./... -count=1
+          go vet ./...
+          go run ./internal/cmd/protocodex --check --mode stable \
+            --stable-schema-root ../../codex-rs/app-server-protocol/schema \
+            --experimental-schema-root internal/protocodex/schema-experimental \
+            --manifest internal/protocodex/manifest/app_server_protocol_manifest.json
+          go run ./internal/cmd/protocodex --check --mode experimental \
+            --stable-schema-root ../../codex-rs/app-server-protocol/schema \
+            --experimental-schema-root internal/protocodex/schema-experimental \
+            --manifest internal/protocodex/manifest/app_server_protocol_manifest.json
+          go run ./internal/cmd/protocodex --check --mode both \
+            --stable-schema-root ../../codex-rs/app-server-protocol/schema \
+            --experimental-schema-root internal/protocodex/schema-experimental \
+            --manifest internal/protocodex/manifest/app_server_protocol_manifest.json \
+            --out protocol \
+            --root-out .
+
+  go-sdk-linux-shipping-release-readiness:
+    needs:
+      - tag-check
+      - build
+      - go-sdk-linux-verification
+    if: >-
+      ${{
+        always() &&
+        needs.tag-check.result == 'success' &&
+        needs.build.result == 'success' &&
+        needs.go-sdk-linux-verification.result == 'success'
+      }}
+    uses: ./.github/workflows/go-sdk-shipping-release-readiness.yml
+    with:
+      checkout_ref: ${{ needs.tag-check.outputs.commit_sha }}
+      evidence_source: rust-release
+      verification_job: go-sdk-linux-verification
+      verification_conclusion: ${{ needs.go-sdk-linux-verification.result }}
+      verification_commit_sha: ${{ needs.tag-check.outputs.commit_sha }}
+
   release:
     needs:
       - tag-check
@@ -1219,6 +1495,8 @@ jobs:
       - finalize-macos
       - build-windows
       - argument-comment-lint-release-assets
+      - go-sdk-linux-verification
+      - go-sdk-linux-shipping-release-readiness
     if: >-
       ${{
         always() &&
@@ -1226,7 +1504,9 @@ jobs:
         needs.build.result == 'success' &&
         needs.finalize-macos.result == 'success' &&
         needs.build-windows.result == 'success' &&
-        needs.argument-comment-lint-release-assets.result == 'success'
+        needs.argument-comment-lint-release-assets.result == 'success' &&
+        needs.go-sdk-linux-verification.result == 'success' &&
+        needs.go-sdk-linux-shipping-release-readiness.result == 'success'
       }}
     name: release
     runs-on: ubuntu-latest
@@ -1286,6 +1566,30 @@ jobs:
           bash .github/scripts/write-codex-package-checksums.sh \
             --dist dist \
             --manifest dist/codex-package_SHA256SUMS
+
+      - name: Download preliminary Linux release readiness metadata
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: shipping-release-readiness-metadata
+          path: preliminary-linux-release-readiness
+
+      - name: Finalize Linux readiness against the public checksum manifest
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          commit_sha="$(git rev-parse HEAD)"
+          python3 .github/scripts/go_sdk_shipping_release_readiness.py \
+            finalize-linux-release \
+            --metadata-dir preliminary-linux-release-readiness \
+            --public-checksum-manifest dist/codex-package_SHA256SUMS \
+            --out dist/go-sdk-linux-release-readiness.json \
+            --run-id "$WORKFLOW_RUN_ID" \
+            --run-attempt "$WORKFLOW_RUN_ATTEMPT" \
+            --commit-sha "$commit_sha" \
+            --release-tag "$RELEASE_TAG"
 
       - name: Add config schema release asset
         run: |

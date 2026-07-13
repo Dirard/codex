@@ -93,10 +93,11 @@ It does not call DotSlash, read the package cache, discover helpers from `PATH`,
 source-build helper payloads, or fetch helper archives from the network.
 
 The release wrapper `.github/scripts/build-codex-package-archive.sh` always uses
-that strict mode. The shipping release workflows run
-`python3 -m codex_package.materialize_helpers` before package assembly, set
-`CODEX_PACKAGE_HELPER_ROOT`, and then consume only already materialized helper
-payloads:
+that strict mode. Linux `rust-release` creates one release-owned helper-root
+artifact per target in the prerequisite `linux-package-helper-roots` job. The
+package matrix downloads that artifact, runs
+`python3 -m codex_package.materialize_helpers --verify-only`, sets
+`CODEX_PACKAGE_HELPER_ROOT`, and then consumes only the verified payloads:
 
 ```text
 ${CODEX_PACKAGE_HELPER_ROOT}/<target>/rg[.exe]

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,28 @@ func TestThreadRunCollectsFinalResponseAndTokenUsage(t *testing.T) {
 	usage, ok := result.TokenUsage.Value()
 	if !ok || usage.Total.TotalTokens != 11 {
 		t.Fatalf("TokenUsage = %#v, %v; want total 11", usage, ok)
+	}
+}
+
+func TestThreadStartSendsStringApprovalPolicy(t *testing.T) {
+	transport := newWorkflowTransport(t)
+	client, err := NewClient(context.Background(), ClientConfig{Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	if _, err := client.Threads.Start(context.Background(), ThreadStartOptions{
+		ApprovalPolicy: protocol.AskForApprovalNever,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal(requestParamsForMethod(t, transport, "thread/start"), &params); err != nil {
+		t.Fatal(err)
+	}
+	if string(params["approvalPolicy"]) != `"never"` {
+		t.Fatalf("approvalPolicy = %s, want never", params["approvalPolicy"])
 	}
 }
 
@@ -207,6 +230,43 @@ func TestLoginWithAPIKeyRedactsReturnedErrors(t *testing.T) {
 	}
 }
 
+func TestLoginWithAPIKeyRedactsJSONEscapedSecrets(t *testing.T) {
+	const secret = "sk-test-\"quote\\backslash\nline"
+	isolateTestCodexHome(t)
+	data := mustJSON(t, map[string]any{
+		"echoedKey": secret,
+		secret:      []any{secret},
+	})
+	transport := newWorkflowTransport(t)
+	transport.errors["account/login/start"] = &jsonrpc.RPCError{
+		Code:    -32000,
+		Message: "server rejected API key " + secret,
+		Data:    data,
+	}
+	client, err := NewClient(context.Background(), ClientConfig{Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	err = client.Accounts.LoginWithAPIKey(context.Background(), APIKey(secret))
+	var rpcErr *jsonrpc.RPCError
+	if !errors.As(err, &rpcErr) {
+		t.Fatalf("err = %T(%v), want inspectable *RPCError", err, err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rpcErr.Data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"echoedKey":  "[redacted]",
+		"[redacted]": []any{"[redacted]"},
+	}
+	if !reflect.DeepEqual(decoded, want) {
+		t.Fatalf("redacted RPC data = %#v, want %#v", decoded, want)
+	}
+}
+
 func TestDeviceCodeLoginHandleExposesUserPromptFields(t *testing.T) {
 	isolateTestCodexHome(t)
 	transport := newWorkflowTransport(t)
@@ -216,6 +276,7 @@ func TestDeviceCodeLoginHandleExposesUserPromptFields(t *testing.T) {
 		VerificationURL: protocol.SomeNonNull("https://example.com/device"),
 		UserCode:        protocol.SomeNonNull("ABCD-EFGH"),
 	})
+	transport.responses["account/read"] = json.RawMessage(`{"account":{"type":"apiKey"},"requiresOpenaiAuth":true}`)
 	client, err := NewClient(context.Background(), ClientConfig{Transport: transport})
 	if err != nil {
 		t.Fatal(err)
@@ -432,6 +493,7 @@ func TestAccountLoginHandleWaitsForCompletion(t *testing.T) {
 		LoginID:   protocol.SomeNonNull("login-1"),
 		AuthURL:   protocol.SomeNonNull("https://example.test/auth"),
 	})
+	transport.responses["account/read"] = json.RawMessage(`{"account":{"type":"apiKey"},"requiresOpenaiAuth":true}`)
 	client, err := NewClient(context.Background(), ClientConfig{Transport: transport})
 	if err != nil {
 		t.Fatal(err)
@@ -910,7 +972,7 @@ func newWorkflowTransport(t *testing.T) *scriptedTransport {
 	t.Helper()
 	transport := newScriptedInitializedTransport(t, nil)
 	transport.responses["thread/start"] = mustJSON(t, protocol.ThreadStartResponse{
-		ApprovalPolicy:    protocol.AskForApproval{},
+		ApprovalPolicy:    protocol.AskForApprovalNever,
 		ApprovalsReviewer: protocol.ApprovalsReviewerAutoReview,
 		Cwd:               protocol.AbsolutePathBuf("/tmp"),
 		Model:             "test-model",
@@ -924,7 +986,7 @@ func newWorkflowTransport(t *testing.T) *scriptedTransport {
 			ModelProvider: "test-provider",
 			Preview:       "",
 			SessionID:     "session-1",
-			Source:        protocol.SessionSource{},
+			Source:        protocol.SessionSourceCli,
 			Status:        protocol.ThreadStatus{TypeValue: "idle"},
 			Turns:         []protocol.Turn{},
 			UpdatedAt:     1,
