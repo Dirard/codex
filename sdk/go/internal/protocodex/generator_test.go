@@ -1,11 +1,64 @@
 package protocodex
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestRenderMixedStringObjectUnionPreservesBothWireShapes(t *testing.T) {
+	schema := Schema{OneOf: []Schema{
+		{Type: "string", Enum: []json.RawMessage{json.RawMessage(`"never"`)}},
+		{
+			Type:       "object",
+			Required:   []string{"granular"},
+			Properties: map[string]Schema{"granular": {Type: "object"}},
+		},
+	}}
+	rendered := renderDefinitionType("AskForApproval", "AskForApproval", schema, map[string]string{}, nil, nil, nil)
+	for _, required := range []string{
+		"StringValue string",
+		`AskForApprovalNever = AskForApproval{StringValue: "never"}`,
+		"var stringValue string",
+		"return json.Marshal(v.StringValue)",
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("mixed string/object union rendering missing %q\n%s", required, rendered)
+		}
+	}
+}
+
+func TestRenderTaggedObjectUnionRequiresOnlyTheDiscriminatorGlobally(t *testing.T) {
+	schema := Schema{OneOf: []Schema{
+		{
+			Type:     "object",
+			Required: []string{"type", "id", "text"},
+			Properties: map[string]Schema{
+				"type": {Type: "string", Enum: []json.RawMessage{json.RawMessage(`"agentMessage"`)}},
+				"id":   {Type: "string"},
+				"text": {Type: "string"},
+			},
+		},
+		{
+			Type:     "object",
+			Required: []string{"type", "id", "kind"},
+			Properties: map[string]Schema{
+				"type": {Type: "string", Enum: []json.RawMessage{json.RawMessage(`"subAgentActivity"`)}},
+				"id":   {Type: "string"},
+				"kind": {Type: "string"},
+			},
+		},
+	}}
+	rendered := renderDefinitionType("ThreadItem", "ThreadItem", schema, map[string]string{}, nil, nil, nil)
+	if !strings.Contains(rendered, "Kind OptionalNonNull[string]") {
+		t.Fatalf("variant-only kind field must remain optional in the merged struct\n%s", rendered)
+	}
+	if strings.Contains(rendered, `if !ok { return DecodeError{Field: "kind", Reason: "missing required field"} }`) {
+		t.Fatalf("variant-only kind field was required before discriminator dispatch\n%s", rendered)
+	}
+}
 
 func TestGenerateWritesProtocolAndInventory(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "protocol")
@@ -108,7 +161,7 @@ func TestGenerateWritesProtocolAndInventory(t *testing.T) {
 	for _, required := range []string{
 		"type ServerNotificationRoutingMetadata struct",
 		"ServerNotificationRoutingByMethod",
-		"DecodeServerNotificationPayload",
+		"func DecodeServerNotificationPayload(method string, params json.RawMessage) (any, error)",
 		"case \"item/plan/delta\":",
 		"var payload PlanDeltaNotification",
 		"type RoutingLifecycleMetadata struct",
@@ -673,6 +726,257 @@ func TestManifestDigestMetadataIsFailClosed(t *testing.T) {
 	err = validateManifestDigests("experimental", mutated)
 	if err == nil || !strings.Contains(err.Error(), "schemaDigest") {
 		t.Fatalf("err = %v, want empty schemaDigest rejection", err)
+	}
+}
+
+func TestManifestSchemaVersionIsFailClosed(t *testing.T) {
+	data, err := os.ReadFile(testManifestPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "missing", mutate: func(manifest map[string]any) { delete(manifest, "manifestSchemaVersion") }},
+		{name: "zero", mutate: func(manifest map[string]any) { manifest["manifestSchemaVersion"] = 0 }},
+		{name: "future", mutate: func(manifest map[string]any) { manifest["manifestSchemaVersion"] = 2 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var manifest map[string]any
+			if err := json.Unmarshal(data, &manifest); err != nil {
+				t.Fatal(err)
+			}
+			tt.mutate(manifest)
+			mutated, err := json.Marshal(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "manifest.json")
+			if err := os.WriteFile(path, mutated, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err = LoadManifest(path)
+			if err == nil || !strings.Contains(err.Error(), "manifestSchemaVersion") {
+				t.Fatalf("err = %v, want manifestSchemaVersion rejection", err)
+			}
+		})
+	}
+}
+
+func TestManifestV1SemanticMetadataIsFailClosed(t *testing.T) {
+	data, err := os.ReadFile(testManifestPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		wantErr string
+		mutate  func(map[string]any)
+	}{
+		{
+			name:    "protocol mode",
+			wantErr: "protocolMode",
+			mutate: func(manifest map[string]any) {
+				manifest["experimental"].(map[string]any)["protocolMode"] = "future"
+			},
+		},
+		{
+			name:    "SDK visibility",
+			wantErr: "sdkVisibility",
+			mutate: func(manifest map[string]any) {
+				mode := manifest["experimental"].(map[string]any)
+				mode["clientRequests"].([]any)[0].(map[string]any)["sdkVisibility"] = "future"
+			},
+		},
+		{
+			name:    "serde shape requirement",
+			wantErr: "serdeShapeRequirement",
+			mutate: func(manifest map[string]any) {
+				mode := manifest["experimental"].(map[string]any)
+				mode["clientRequests"].([]any)[0].(map[string]any)["serdeShapeRequirement"] = "future"
+			},
+		},
+		{
+			name:    "retry policy",
+			wantErr: "retry",
+			mutate: func(manifest map[string]any) {
+				mode := manifest["experimental"].(map[string]any)
+				mode["clientRequests"].([]any)[0].(map[string]any)["retry"] = "retryAfterWrite"
+			},
+		},
+		{
+			name:    "empty exception review",
+			wantErr: "exception",
+			mutate: func(manifest map[string]any) {
+				mode := manifest["experimental"].(map[string]any)
+				mode["clientRequests"].([]any)[0].(map[string]any)["exception"] = map[string]any{}
+			},
+		},
+		{
+			name:    "incomplete experimental marker",
+			wantErr: "experimental",
+			mutate: func(manifest map[string]any) {
+				mode := manifest["experimental"].(map[string]any)
+				mode["clientRequests"].([]any)[0].(map[string]any)["experimental"] = map[string]any{"reason": "future"}
+			},
+		},
+		{
+			name:    "incomplete experimental discriminator",
+			wantErr: "discriminator",
+			mutate: func(manifest map[string]any) {
+				mode := manifest["experimental"].(map[string]any)
+				for _, collection := range []string{"clientRequests", "serverRequests", "serverNotifications", "clientNotifications"} {
+					for _, rawEntry := range mode[collection].([]any) {
+						fields := rawEntry.(map[string]any)["experimentalFields"].([]any)
+						if len(fields) == 0 {
+							continue
+						}
+						fields[0].(map[string]any)["discriminator"] = map[string]any{}
+						return
+					}
+				}
+				t.Fatal("canonical manifest has no experimental field")
+			},
+		},
+		{
+			name:    "unknown serde presence",
+			wantErr: "presence",
+			mutate: func(manifest map[string]any) {
+				mode := manifest["experimental"].(map[string]any)
+				shapes := mode["serdeShapes"].([]any)
+				for _, rawShape := range shapes {
+					fields := rawShape.(map[string]any)["fields"].([]any)
+					if len(fields) == 0 {
+						continue
+					}
+					fields[0].(map[string]any)["shape"].(map[string]any)["presence"] = "future"
+					return
+				}
+				t.Fatal("canonical manifest has no serde field")
+			},
+		},
+		{
+			name:    "incomplete default provider",
+			wantErr: "provider",
+			mutate: func(manifest map[string]any) {
+				mode := manifest["experimental"].(map[string]any)
+				shapes := mode["serdeShapes"].([]any)
+				for _, rawShape := range shapes {
+					for _, rawField := range rawShape.(map[string]any)["fields"].([]any) {
+						shape := rawField.(map[string]any)["shape"].(map[string]any)
+						if shape["default"] == nil {
+							continue
+						}
+						shape["default"].(map[string]any)["provider"] = map[string]any{}
+						return
+					}
+				}
+				t.Fatal("canonical manifest has no serde default")
+			},
+		},
+		{
+			name:    "manual conversion mismatch",
+			wantErr: "manualPayloadConversion",
+			mutate: func(manifest map[string]any) {
+				mode := manifest["experimental"].(map[string]any)
+				entry := mode["clientRequests"].([]any)[0].(map[string]any)
+				entry["serdeShapeRequirement"] = "schemaSufficient"
+				entry["manualPayloadConversion"] = "manual response payload conversion"
+			},
+		},
+		{
+			name:    "zero context limit",
+			wantErr: "maxAdditionalContextEntries",
+			mutate: func(manifest map[string]any) {
+				manifest["modelContextLimits"].(map[string]any)["maxAdditionalContextEntries"] = 0
+			},
+		},
+		{
+			name:    "negative context limit",
+			wantErr: "maxAdditionalContextValueBytes",
+			mutate: func(manifest map[string]any) {
+				manifest["modelContextLimits"].(map[string]any)["maxAdditionalContextValueBytes"] = -1
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var manifest map[string]any
+			if err := json.Unmarshal(data, &manifest); err != nil {
+				t.Fatal(err)
+			}
+			tt.mutate(manifest)
+			mutated, err := json.Marshal(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "manifest.json")
+			if err := os.WriteFile(path, mutated, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err = LoadManifest(path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want rejection containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestManifestV1RejectsUnknownNestedField(t *testing.T) {
+	data, err := os.ReadFile(testManifestPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	experimental := manifest["experimental"].(map[string]any)
+	notifications := experimental["serverNotifications"].([]any)
+	notification := notifications[0].(map[string]any)
+	notification["unknownV1Field"] = true
+	mutated, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "manifest.json")
+	if err := os.WriteFile(path, mutated, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = LoadManifest(path)
+	if err == nil || !strings.Contains(err.Error(), "unknownV1Field") {
+		t.Fatalf("err = %v, want unknown nested field rejection", err)
+	}
+}
+
+func TestManifestV1InformationalMetadataIsRepresented(t *testing.T) {
+	manifest, err := LoadManifest(testManifestPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Experimental.ClientRequests[0].Variant == "" || manifest.Experimental.ServerRequests[0].Variant == "" {
+		t.Fatal("request variant metadata was not decoded")
+	}
+	if manifest.Experimental.ServerNotifications[0].Variant == "" {
+		t.Fatal("notification variant metadata was not decoded")
+	}
+	var sawRoutingReason bool
+	var sawMissingIdentityReason bool
+	for _, entry := range manifest.Experimental.ServerNotifications {
+		sawRoutingReason = sawRoutingReason || entry.RoutingStrategy.Reason != ""
+		sawMissingIdentityReason = sawMissingIdentityReason || entry.RoutingStrategy.MissingIdentityReason != ""
+	}
+	if !sawRoutingReason || !sawMissingIdentityReason {
+		t.Fatal("routing reason metadata was not decoded")
+	}
+	var sawReviewNote bool
+	for _, shape := range manifest.Experimental.SerdeShapes {
+		sawReviewNote = sawReviewNote || shape.ReviewNote != nil
+	}
+	if !sawReviewNote {
+		t.Fatal("serde shape review metadata was not decoded")
 	}
 }
 
