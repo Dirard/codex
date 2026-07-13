@@ -13,10 +13,15 @@ const (
 	DefaultMaxAdditionalContextKeyBytes   int64 = protocol.MaxAdditionalContextKeyBytes
 	DefaultMaxAdditionalContextValueBytes int64 = protocol.MaxAdditionalContextValueBytes
 	DefaultMaxAdditionalContextTotalBytes int64 = protocol.MaxAdditionalContextTotalBytes
+	DefaultMaxRunResultItems                    = 4096
+	DefaultMaxRunResultBytes              int64 = 16 * 1024 * 1024
 	DefaultResourceStreamQueue                  = 256
+	DefaultResourceStreamQueueBytes       int64 = 64 * 1024 * 1024
 	DefaultPendingTurnQueue                     = 512
 	DefaultPendingTurnMap                       = 128
+	DefaultPendingNotificationBytes       int64 = 64 * 1024 * 1024
 	DefaultGlobalSubscriberQueue                = 512
+	DefaultGlobalSubscriberQueueBytes     int64 = 64 * 1024 * 1024
 	DefaultHandlerConcurrency                   = 16
 	DefaultHandlerQueue                         = 256
 	DefaultStderrRingBytes                      = 64 * 1024
@@ -34,10 +39,15 @@ func normalizeLimits(l ClientLimits) (ClientLimits, error) {
 		l.MaxAdditionalContextKeyBytes < 0 ||
 		l.MaxAdditionalContextValueBytes < 0 ||
 		l.MaxAdditionalContextTotalBytes < 0 ||
+		l.MaxRunResultItems < 0 ||
+		l.MaxRunResultBytes < 0 ||
 		l.ResourceStreamQueue < 0 ||
+		l.ResourceStreamQueueBytes < 0 ||
 		l.PendingTurnQueue < 0 ||
 		l.PendingTurnMap < 0 ||
+		l.PendingNotificationBytes < 0 ||
 		l.GlobalSubscriberQueue < 0 ||
+		l.GlobalSubscriberQueueBytes < 0 ||
 		l.HandlerConcurrency < 0 ||
 		l.HandlerQueue < 0 ||
 		l.HandlerTimeout < 0 ||
@@ -63,6 +73,12 @@ func normalizeLimits(l ClientLimits) (ClientLimits, error) {
 	if l.MaxAdditionalContextTotalBytes == 0 {
 		l.MaxAdditionalContextTotalBytes = DefaultMaxAdditionalContextTotalBytes
 	}
+	if l.MaxRunResultItems == 0 {
+		l.MaxRunResultItems = DefaultMaxRunResultItems
+	}
+	if l.MaxRunResultBytes == 0 {
+		l.MaxRunResultBytes = DefaultMaxRunResultBytes
+	}
 	if l.MaxAdditionalContextEntries > DefaultMaxAdditionalContextEntries {
 		l.MaxAdditionalContextEntries = DefaultMaxAdditionalContextEntries
 	}
@@ -78,14 +94,23 @@ func normalizeLimits(l ClientLimits) (ClientLimits, error) {
 	if l.ResourceStreamQueue == 0 {
 		l.ResourceStreamQueue = DefaultResourceStreamQueue
 	}
+	if l.ResourceStreamQueueBytes == 0 {
+		l.ResourceStreamQueueBytes = DefaultResourceStreamQueueBytes
+	}
 	if l.PendingTurnQueue == 0 {
 		l.PendingTurnQueue = DefaultPendingTurnQueue
 	}
 	if l.PendingTurnMap == 0 {
 		l.PendingTurnMap = DefaultPendingTurnMap
 	}
+	if l.PendingNotificationBytes == 0 {
+		l.PendingNotificationBytes = DefaultPendingNotificationBytes
+	}
 	if l.GlobalSubscriberQueue == 0 {
 		l.GlobalSubscriberQueue = DefaultGlobalSubscriberQueue
+	}
+	if l.GlobalSubscriberQueueBytes == 0 {
+		l.GlobalSubscriberQueueBytes = DefaultGlobalSubscriberQueueBytes
 	}
 	if l.HandlerConcurrency == 0 {
 		l.HandlerConcurrency = DefaultHandlerConcurrency
