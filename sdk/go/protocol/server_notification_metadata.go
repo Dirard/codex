@@ -114,355 +114,424 @@ var ServerNotificationRoutingByMethod = map[string]ServerNotificationRoutingMeta
 	"account/login/completed":                   {Method: "account/login/completed", PayloadType: "AccountLoginCompletedNotification", PayloadSchemaRef: "#/definitions/AccountLoginCompletedNotification", Visibility: "public", SchemaExcludedReason: "", ManualPayloadConversion: "", RoutingKind: "routedWithGlobalFallback", Experimental: false, Routes: []ServerNotificationRouteMetadata{{ResourceDomain: "account", WireIdentitySource: "account/login/completed", IdentityExtractors: []ServerNotificationIdentityExtractor{{FieldPath: "loginId", IdentityName: "loginId", Optional: true, TerminalPredicateJSON: ""}}}}},
 }
 
-func DecodeServerNotificationPayload(method string, params json.RawMessage) any {
+func DecodeServerNotificationPayload(method string, params json.RawMessage) (any, error) {
 	switch method {
 	case "error":
 		var payload ErrorNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/started":
 		var payload ThreadStartedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/status/changed":
 		var payload ThreadStatusChangedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/archived":
 		var payload ThreadArchivedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/deleted":
 		var payload ThreadDeletedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/unarchived":
 		var payload ThreadUnarchivedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/closed":
 		var payload ThreadClosedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "skills/changed":
 		var payload SkillsChangedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/name/updated":
 		var payload ThreadNameUpdatedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/goal/updated":
 		var payload ThreadGoalUpdatedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/goal/cleared":
 		var payload ThreadGoalClearedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/settings/updated":
 		var payload ThreadSettingsUpdatedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/tokenUsage/updated":
 		var payload ThreadTokenUsageUpdatedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "turn/started":
 		var payload TurnStartedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "hook/started":
 		var payload HookStartedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "turn/completed":
 		var payload TurnCompletedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "hook/completed":
 		var payload HookCompletedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "turn/diff/updated":
 		var payload TurnDiffUpdatedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "turn/plan/updated":
 		var payload TurnPlanUpdatedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "item/started":
 		var payload ItemStartedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "item/autoApprovalReview/started":
 		var payload ItemGuardianApprovalReviewStartedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "item/autoApprovalReview/completed":
 		var payload ItemGuardianApprovalReviewCompletedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "item/completed":
 		var payload ItemCompletedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "rawResponseItem/completed":
 		var payload RawResponseItemCompletedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "item/agentMessage/delta":
 		var payload AgentMessageDeltaNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "item/plan/delta":
 		var payload PlanDeltaNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "command/exec/outputDelta":
 		var payload CommandExecOutputDeltaNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "process/outputDelta":
 		var payload ProcessOutputDeltaNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "process/exited":
 		var payload ProcessExitedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "item/commandExecution/outputDelta":
 		var payload CommandExecutionOutputDeltaNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "item/commandExecution/terminalInteraction":
 		var payload TerminalInteractionNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "item/fileChange/outputDelta":
 		var payload FileChangeOutputDeltaNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "item/fileChange/patchUpdated":
 		var payload FileChangePatchUpdatedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "serverRequest/resolved":
 		var payload ServerRequestResolvedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "item/mcpToolCall/progress":
 		var payload McpToolCallProgressNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "mcpServer/oauthLogin/completed":
 		var payload McpServerOauthLoginCompletedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "mcpServer/startupStatus/updated":
 		var payload McpServerStatusUpdatedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "account/updated":
 		var payload AccountUpdatedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "account/rateLimits/updated":
 		var payload AccountRateLimitsUpdatedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "app/list/updated":
 		var payload AppListUpdatedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "remoteControl/status/changed":
 		var payload RemoteControlStatusChangedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "externalAgentConfig/import/progress":
 		var payload ExternalAgentConfigImportProgressNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "externalAgentConfig/import/completed":
 		var payload ExternalAgentConfigImportCompletedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "fs/changed":
 		var payload FsChangedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "item/reasoning/summaryTextDelta":
 		var payload ReasoningSummaryTextDeltaNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "item/reasoning/summaryPartAdded":
 		var payload ReasoningSummaryPartAddedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "item/reasoning/textDelta":
 		var payload ReasoningTextDeltaNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/compacted":
 		var payload ContextCompactedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "model/rerouted":
 		var payload ModelReroutedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "model/verification":
 		var payload ModelVerificationNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "turn/moderationMetadata":
 		var payload TurnModerationMetadataNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "model/safetyBuffering/updated":
 		var payload ModelSafetyBufferingUpdatedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "warning":
 		var payload WarningNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "guardianWarning":
 		var payload GuardianWarningNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "deprecationNotice":
 		var payload DeprecationNoticeNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "configWarning":
 		var payload ConfigWarningNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "fuzzyFileSearch/sessionUpdated":
 		var payload FuzzyFileSearchSessionUpdatedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "fuzzyFileSearch/sessionCompleted":
 		var payload FuzzyFileSearchSessionCompletedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/realtime/started":
 		var payload ThreadRealtimeStartedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/realtime/itemAdded":
 		var payload ThreadRealtimeItemAddedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/realtime/transcript/delta":
 		var payload ThreadRealtimeTranscriptDeltaNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/realtime/transcript/done":
 		var payload ThreadRealtimeTranscriptDoneNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/realtime/outputAudio/delta":
 		var payload ThreadRealtimeOutputAudioDeltaNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/realtime/sdp":
 		var payload ThreadRealtimeSdpNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/realtime/error":
 		var payload ThreadRealtimeErrorNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "thread/realtime/closed":
 		var payload ThreadRealtimeClosedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "windows/worldWritableWarning":
 		var payload WindowsWorldWritableWarningNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "windowsSandbox/setupCompleted":
 		var payload WindowsSandboxSetupCompletedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	case "account/login/completed":
 		var payload AccountLoginCompletedNotification
-		if json.Unmarshal(params, &payload) == nil {
-			return payload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return nil, err
 		}
+		return payload, nil
 	}
-	return append(json.RawMessage(nil), params...)
+	return append(json.RawMessage(nil), params...), nil
 }
 
 var RoutingLifecycleByStartMethod = map[string]RoutingLifecycleMetadata{
@@ -475,6 +544,6 @@ var RoutingLifecycleByStartMethod = map[string]RoutingLifecycleMetadata{
 	"process/spawn":                {ResourceDomain: "process", StartMethod: "process/spawn", WireIdentitySource: "processHandle", StartCompletion: LifecycleTriggerMetadata{Kind: "jsonRpcResponse", Method: "process/spawn", Predicate: ""}, CleanupTriggers: []LifecycleTriggerMetadata{LifecycleTriggerMetadata{Kind: "terminalNotification", Method: "process/exited", Predicate: "processHandle matches spawned process"}}, NotificationOptOutDependencies: []string{"process/outputDelta", "process/exited"}},
 	"fs/watch":                     {ResourceDomain: "fs", StartMethod: "fs/watch", WireIdentitySource: "watchId", StartCompletion: LifecycleTriggerMetadata{Kind: "jsonRpcResponse", Method: "fs/watch", Predicate: ""}, CleanupTriggers: []LifecycleTriggerMetadata{LifecycleTriggerMetadata{Kind: "explicitMethodResponse", Method: "fs/unwatch", Predicate: ""}}, NotificationOptOutDependencies: []string{"fs/changed"}},
 	"mcpServer/oauth/login":        {ResourceDomain: "mcpServer", StartMethod: "mcpServer/oauth/login", WireIdentitySource: "name", StartCompletion: LifecycleTriggerMetadata{Kind: "jsonRpcResponse", Method: "mcpServer/oauth/login", Predicate: ""}, CleanupTriggers: []LifecycleTriggerMetadata{LifecycleTriggerMetadata{Kind: "terminalNotification", Method: "mcpServer/oauthLogin/completed", Predicate: "name matches OAuth server"}}, NotificationOptOutDependencies: []string{"mcpServer/oauthLogin/completed"}},
-	"fuzzyFileSearch/sessionStart": {ResourceDomain: "fuzzyFileSearch", StartMethod: "fuzzyFileSearch/sessionStart", WireIdentitySource: "sessionId", StartCompletion: LifecycleTriggerMetadata{Kind: "jsonRpcResponse", Method: "fuzzyFileSearch/sessionStart", Predicate: ""}, CleanupTriggers: []LifecycleTriggerMetadata{LifecycleTriggerMetadata{Kind: "explicitMethodResponse", Method: "fuzzyFileSearch/sessionStop", Predicate: ""}, LifecycleTriggerMetadata{Kind: "terminalNotification", Method: "fuzzyFileSearch/sessionCompleted", Predicate: "sessionId matches search session"}}, NotificationOptOutDependencies: []string{"fuzzyFileSearch/sessionUpdated", "fuzzyFileSearch/sessionCompleted"}},
+	"fuzzyFileSearch/sessionStart": {ResourceDomain: "fuzzyFileSearch", StartMethod: "fuzzyFileSearch/sessionStart", WireIdentitySource: "sessionId", StartCompletion: LifecycleTriggerMetadata{Kind: "jsonRpcResponse", Method: "fuzzyFileSearch/sessionStart", Predicate: ""}, CleanupTriggers: []LifecycleTriggerMetadata{LifecycleTriggerMetadata{Kind: "explicitMethodResponse", Method: "fuzzyFileSearch/sessionStop", Predicate: ""}}, NotificationOptOutDependencies: []string{"fuzzyFileSearch/sessionUpdated", "fuzzyFileSearch/sessionCompleted"}},
 	"thread/realtime/start":        {ResourceDomain: "realtime", StartMethod: "thread/realtime/start", WireIdentitySource: "threadId", StartCompletion: LifecycleTriggerMetadata{Kind: "terminalNotification", Method: "thread/realtime/started", Predicate: "threadId matches realtime thread"}, CleanupTriggers: []LifecycleTriggerMetadata{LifecycleTriggerMetadata{Kind: "explicitMethodResponse", Method: "thread/realtime/stop", Predicate: ""}, LifecycleTriggerMetadata{Kind: "terminalNotification", Method: "thread/realtime/closed", Predicate: "threadId matches realtime thread"}}, NotificationOptOutDependencies: []string{"thread/realtime/started", "thread/realtime/itemAdded", "thread/realtime/transcript/delta", "thread/realtime/transcript/done", "thread/realtime/outputAudio/delta", "thread/realtime/sdp", "thread/realtime/error", "thread/realtime/closed"}},
 }
