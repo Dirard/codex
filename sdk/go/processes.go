@@ -191,18 +191,32 @@ func (c *ProcessesClient) releaseProcess(handle string) {
 func (c *ProcessesClient) isProcessActive(handle string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.activeProcesses[handle] != nil
+	process := c.activeProcesses[handle]
+	if process == nil || process.state == nil {
+		return false
+	}
+	process.state.mu.Lock()
+	defer process.state.mu.Unlock()
+	return !process.state.exited
 }
 
-func (c *Client) observeProcessLifecycle(method string, params []byte) {
+func (c *Client) observeProcessLifecycle(method string, params []byte) string {
 	if c == nil || c.Processes == nil || method != "process/exited" {
-		return
+		return ""
 	}
 	var payload protocol.ProcessExitedNotification
 	if err := json.Unmarshal(params, &payload); err != nil || payload.ProcessHandle == "" {
-		return
+		return ""
 	}
-	c.Processes.releaseProcess(payload.ProcessHandle)
+	c.Processes.mu.Lock()
+	process := c.Processes.activeProcesses[payload.ProcessHandle]
+	if process != nil && process.state != nil {
+		process.state.mu.Lock()
+		process.state.exited = true
+		process.state.mu.Unlock()
+	}
+	c.Processes.mu.Unlock()
+	return payload.ProcessHandle
 }
 
 func processSpawnParams(opts ProcessSpawnOptions, handle string) protocol.ProcessSpawnParams {

@@ -17,15 +17,17 @@ type compiledResourceCallsite struct {
 
 var compiledResourceCallsites = map[string]compiledResourceCallsite{
 	"account/login/start": {
-		wrapperName: "Accounts.StartChatGPTLogin / Accounts.StartDeviceCodeLogin / Accounts.LoginWithAPIKey / LoginHandle",
+		wrapperName: "Accounts.StartChatGPTLogin / Accounts.StartDeviceCodeLogin / Accounts.LoginWithAPIKey / Accounts.LoginWithAmazonBedrock / LoginHandle",
 		convention:  "handle-start",
-		callsite:    `login, err := client.Accounts.StartDeviceCodeLogin(ctx); login, err = client.Accounts.StartChatGPTLogin(ctx); err = client.Accounts.LoginWithAPIKey(ctx, codex.APIKey("test-key")); result, err := login.Wait(ctx)`,
+		callsite:    `login, err := client.Accounts.StartDeviceCodeLogin(ctx); login, err = client.Accounts.StartChatGPTLogin(ctx); err = client.Accounts.LoginWithAPIKey(ctx, codex.APIKey("test-key")); err = client.Accounts.LoginWithAmazonBedrock(ctx, codex.APIKey("test-key"), "eu-central-1"); result, err := login.Wait(ctx)`,
 		compile: func(ctx context.Context, client *Client) {
 			login, err := client.Accounts.StartDeviceCodeLogin(ctx)
 			_ = err
 			login, err = client.Accounts.StartChatGPTLogin(ctx)
 			_ = err
 			err = client.Accounts.LoginWithAPIKey(ctx, APIKey("test-key"))
+			_ = err
+			err = client.Accounts.LoginWithAmazonBedrock(ctx, APIKey("test-key"), "eu-central-1")
 			_ = err
 			result, err := login.Wait(ctx)
 			_, _ = result, err

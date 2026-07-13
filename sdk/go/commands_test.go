@@ -6,6 +6,7 @@ import (
 	"errors"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/openai/codex/sdk/go/protocol"
 )
@@ -117,6 +118,40 @@ func TestCommandExecImmediateFollowupSendsStartBeforeWrite(t *testing.T) {
 	}
 	waitForMethod(t, transport, "command/exec/write")
 	assertMethodOrder(t, transport, "command/exec", "command/exec/write")
+	releaseResponse()
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCommandExecStartCancellationDoesNotAbandonHandle(t *testing.T) {
+	transport := newScriptedInitializedTransport(t, nil)
+	releaseResponse := transport.deferResponse("command/exec", mustJSON(t, protocol.CommandExecResponse{ExitCode: 0}))
+	client, err := NewClient(context.Background(), ClientConfig{Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	handle, err := client.Commands.Exec(ctx, CommandExecOptions{Command: []string{"sleep", "30"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForMethod(t, transport, "command/exec")
+	cancel()
+
+	select {
+	case <-handle.state.done:
+		_, stateErr := handle.state.result()
+		t.Fatalf("start context cancellation completed active command: %v", stateErr)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := handle.Terminate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitForMethod(t, transport, "command/exec/terminate")
+
 	releaseResponse()
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatal(err)
