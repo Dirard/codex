@@ -382,7 +382,7 @@ func (t *Thread) Run(ctx context.Context, input Input, opts TurnOptions) (*RunRe
 		return nil, err
 	}
 	defer stream.Close()
-	return collectRunResult(ctx, handle.id, stream)
+	return collectRunResult(ctx, handle.id, stream, t.client.limits)
 }
 
 func (t *Thread) Turn(ctx context.Context, input Input, opts TurnOptions) (*TurnHandle, error) {
@@ -424,7 +424,7 @@ func threadStartParams(opts ThreadStartOptions) protocol.ThreadStartParams {
 	if len(opts.RuntimeWorkspaceRoots) > 0 {
 		params.RuntimeWorkspaceRoots = protocol.Some(opts.RuntimeWorkspaceRoots)
 	}
-	if opts.ApprovalPolicy.Granular.IsSet() {
+	if opts.ApprovalPolicy.IsSet() {
 		params.ApprovalPolicy = protocol.Some(opts.ApprovalPolicy)
 	}
 	if opts.ApprovalsReviewer != "" {
@@ -504,7 +504,7 @@ func threadResumeParams(opts ThreadResumeOptions) protocol.ThreadResumeParams {
 	if len(opts.RuntimeWorkspaceRoots) > 0 {
 		params.RuntimeWorkspaceRoots = protocol.Some(opts.RuntimeWorkspaceRoots)
 	}
-	if opts.ApprovalPolicy.Granular.IsSet() {
+	if opts.ApprovalPolicy.IsSet() {
 		params.ApprovalPolicy = protocol.Some(opts.ApprovalPolicy)
 	}
 	if opts.ApprovalsReviewer != "" {
@@ -560,7 +560,7 @@ func threadForkParams(opts ThreadForkOptions) protocol.ThreadForkParams {
 	if len(opts.RuntimeWorkspaceRoots) > 0 {
 		params.RuntimeWorkspaceRoots = protocol.Some(opts.RuntimeWorkspaceRoots)
 	}
-	if opts.ApprovalPolicy.Granular.IsSet() {
+	if opts.ApprovalPolicy.IsSet() {
 		params.ApprovalPolicy = protocol.Some(opts.ApprovalPolicy)
 	}
 	if opts.ApprovalsReviewer != "" {
@@ -621,7 +621,7 @@ func applyTurnOptions(params *protocol.TurnStartParams, opts TurnOptions) {
 	if len(opts.RuntimeWorkspaceRoots) > 0 {
 		params.RuntimeWorkspaceRoots = protocol.Some(opts.RuntimeWorkspaceRoots)
 	}
-	if opts.ApprovalPolicy.Granular.IsSet() {
+	if opts.ApprovalPolicy.IsSet() {
 		params.ApprovalPolicy = protocol.Some(opts.ApprovalPolicy)
 	}
 	if opts.ApprovalsReviewer != "" {

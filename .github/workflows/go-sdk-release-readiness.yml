@@ -16,6 +16,11 @@ on:
         description: "Optional checkout ref for manual validation"
         required: false
         type: string
+      validate_synthetic_tags:
+        description: "Validate synthetic v0, v1, annotated v1, and v2 module tags"
+        required: false
+        type: boolean
+        default: true
   push:
     tags:
       - "sdk/go/v*"
@@ -57,6 +62,7 @@ jobs:
 
           release_tags=()
           declare -A synthetic_tag_refs=()
+          synthetic_tag_validation_ran=false
           if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
             checked_out_commit="$(git rev-parse HEAD)"
             tagged_commit="$(git rev-parse "${GITHUB_REF}^{commit}")"
@@ -70,6 +76,7 @@ jobs:
             fi
             release_tags=("${ref_name}")
           elif [[ "${{ inputs.validate_synthetic_tags || false }}" == "true" ]]; then
+            synthetic_tag_validation_ran=true
             annotated_synthetic_tag="sdk/go/v1.99.1-go-sdk-ci-annotated"
             release_tags=(
               "sdk/go/v0.99.0-go-sdk-ci"
@@ -100,6 +107,8 @@ jobs:
                 xargs -r perl -0pi -e 's#github\.com/openai/codex/sdk/go"#github.com/openai/codex/sdk/go/v2"#g; s#github\.com/openai/codex/sdk/go/(?!v[0-9]+(?:/|"))#github.com/openai/codex/sdk/go/v2/#g' < "${self_imports}"
               fi
               stale_v2_imports="${RUNNER_TEMP}/codex-go-sdk-v2-stale-imports"
+              # The dollar expressions on the next line belong to Perl.
+              # shellcheck disable=SC2016
               find sdk/go -name '*.go' -print0 | xargs -0 perl -ne 'print "$ARGV:$.:$_" if /github\.com\/openai\/codex\/sdk\/go(?:"|\/(?!v[0-9]+(?:\/|")))/' > "${stale_v2_imports}"
               test ! -s "${stale_v2_imports}" || { cat "${stale_v2_imports}"; exit 1; }
               go -C sdk/go test ./...
@@ -150,7 +159,8 @@ jobs:
           export GOPRIVATE=github.com/openai/codex
           export GONOSUMDB=github.com/openai/codex
           export GIT_ALLOW_PROTOCOL=file:https:ssh
-          export GOMODCACHE="$(mktemp -d)"
+          GOMODCACHE="$(mktemp -d)"
+          export GOMODCACHE
 
           consumer_dir="$(mktemp -d)"
           cd "${consumer_dir}"
@@ -203,6 +213,10 @@ jobs:
             go mod tidy
             go test ./...
           done
+
+          if [[ "${synthetic_tag_validation_ran}" == "true" ]]; then
+            echo "go-sdk-synthetic-tag-validation=v0,v1,annotated-v1,v2"
+          fi
 
       - name: Check for a clean worktree
         if: always() && !cancelled()

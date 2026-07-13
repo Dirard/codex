@@ -20,6 +20,8 @@ type ClientConfig struct {
 	Launch              LaunchOptions
 	CWD                 string
 	Env                 map[string]string
+	// ConfigOverrides accepts only audited non-secret runtime settings.
+	// Currently supported keys are model and sandbox_mode.
 	ConfigOverrides     map[string]string
 	ClientName          string
 	ClientVersion       string
@@ -63,7 +65,9 @@ const (
 // complete JSON-RPC envelope. Implementations own their external framing, if any:
 // callers pass raw JSON objects without a trailing newline or content-length
 // header. The SDK owns JSON-RPC request correlation, generated method dispatch,
-// and serialized calls into Send.
+// and serialized calls into Send. Receive must return promptly when ctx is
+// canceled. Close must unblock any active Receive call; after Close, Receive
+// and Send must return an error instead of accepting more frames.
 type Transport interface {
 	Receive(ctx context.Context) (json.RawMessage, error)
 	Send(ctx context.Context, frame json.RawMessage) error
@@ -91,10 +95,15 @@ type ClientLimits struct {
 	MaxAdditionalContextKeyBytes   int64
 	MaxAdditionalContextValueBytes int64
 	MaxAdditionalContextTotalBytes int64
+	MaxRunResultItems              int
+	MaxRunResultBytes              int64
 	ResourceStreamQueue            int
+	ResourceStreamQueueBytes       int64
 	PendingTurnQueue               int
 	PendingTurnMap                 int
+	PendingNotificationBytes       int64
 	GlobalSubscriberQueue          int
+	GlobalSubscriberQueueBytes     int64
 	HandlerConcurrency             int
 	HandlerQueue                   int
 	HandlerTimeout                 time.Duration

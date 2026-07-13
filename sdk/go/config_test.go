@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -73,48 +74,161 @@ func TestMissingExplicitRuntimeReturnsTypedError(t *testing.T) {
 	}
 }
 
-func TestConfigOverridesRejectSecretLikeValues(t *testing.T) {
-	_, err := NewClient(context.Background(), ClientConfig{
-		ConfigOverrides: map[string]string{"api_key": "shhh"},
-	})
-	var configErr *ConfigError
-	if !errors.As(err, &configErr) {
-		t.Fatalf("err = %T, want *ConfigError", err)
+func TestConfigOverridesRejectSecretBearingValuesBeforeRuntimeLookup(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "secret substring", key: "api_key", value: "shhh"},
+		{
+			name:  "literal provider header",
+			key:   "model_providers.custom.http_headers.X-Api-Key",
+			value: `"opaque-material-42"`,
+		},
+		{
+			name:  "literal telemetry header",
+			key:   "otel.exporter.otlp-http.headers.X-Key",
+			value: `"opaque-material-43"`,
+		},
+		{
+			name:  "literal provider query parameter",
+			key:   "model_providers.custom.query_params.x-key",
+			value: `"opaque-material-44"`,
+		},
+		{
+			name:  "dynamic environment map",
+			key:   "mcp_servers.private.env.FOO",
+			value: `"opaque-material-45"`,
+		},
+		{
+			name:  "unsupported non-secret path",
+			key:   "model_providers.custom.base_url",
+			value: `"https://example.invalid/v1"`,
+		},
 	}
-	if strings.Contains(err.Error(), "shhh") || strings.Contains(err.Error(), "api_key") {
-		t.Fatalf("error leaked secret-like key/value: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewClient(context.Background(), ClientConfig{
+				CodexPath:       "/must/not/spawn",
+				ConfigOverrides: map[string]string{tt.key: tt.value},
+			})
+			var configErr *ConfigError
+			if !errors.As(err, &configErr) {
+				t.Fatalf("err = %T, want *ConfigError", err)
+			}
+			if strings.Contains(err.Error(), tt.key) || strings.Contains(err.Error(), tt.value) {
+				t.Fatalf("error leaked rejected key/value: %v", err)
+			}
+		})
 	}
 }
 
 func TestRuntimeEnvScrubsAndRejectsReservedHookNames(t *testing.T) {
-	parent := []string{
-		"PATH=/bin",
-		"CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG=1",
-		"CODEX_APP_SERVER_MANAGED_CONFIG_PATH=/tmp/managed.toml",
-		"CODEX_APP_SERVER_LOGIN_ISSUER=http://example.invalid",
+	reservedNames := []string{
+		"CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG",
+		"CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
+		"CODEX_APP_SERVER_LOGIN_ISSUER",
+		"CODEX_APP_SERVER_AUTH_BASE_URL_FOR_TESTS",
+		"CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE",
+		"CODEX_REFRESH_TOKEN_URL_OVERRIDE",
+		"CODEX_REVOKE_TOKEN_URL_OVERRIDE",
+		"CODEX_APP_SERVER_LOGIN_CLIENT_ID",
+		"CODEX_APP_SERVER_DEV_OPEN_APP_URL",
+		"CODEX_APP_SERVER_TEST_USER_CONFIG_FILE",
+		"CODEX_AUTHAPI_BASE_URL",
+		"CODEX_CODE_MODE_HOST_PATH",
+		"CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN",
+		"CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID",
+		"CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID",
+		"CODEX_EXEC_SERVER_NOISE_REGISTRY_URL",
+		"CODEX_EXEC_SERVER_URL",
+		"CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+		"CODEX_TEST_RATE_LIMIT_RESET_REQUEST_TIMEOUT_MS",
+		"CODEX_TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS",
+	}
+	parent := []string{"PATH=/bin"}
+	for _, name := range reservedNames {
+		parent = append(parent, name+"=ambient")
 	}
 	env := buildRuntimeEnv(parent, map[string]string{"SAFE_FLAG": "ok"})
-	joined := strings.Join(env, "\n")
-	if strings.Contains(joined, "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG") ||
-		strings.Contains(joined, "CODEX_APP_SERVER_MANAGED_CONFIG_PATH") ||
-		strings.Contains(joined, "CODEX_APP_SERVER_LOGIN_ISSUER") {
-		t.Fatalf("reserved env leaked into child env: %s", joined)
+	childKeys := make(map[string]struct{}, len(env))
+	for _, item := range env {
+		key, _, ok := strings.Cut(item, "=")
+		if ok {
+			childKeys[key] = struct{}{}
+		}
 	}
-	if !strings.Contains(joined, "SAFE_FLAG=ok") {
-		t.Fatalf("override missing: %s", joined)
+	for _, name := range reservedNames {
+		if _, ok := childKeys[name]; ok {
+			t.Errorf("reserved env %s leaked into child env", name)
+		}
 	}
-	_, err := NewClient(context.Background(), ClientConfig{
-		Env: map[string]string{"CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE": "1"},
-	})
-	var configErr *ConfigError
-	if !errors.As(err, &configErr) {
-		t.Fatalf("err = %T, want *ConfigError", err)
+	if _, ok := childKeys["SAFE_FLAG"]; !ok {
+		t.Fatal("safe override missing from child env")
 	}
-	_, err = NewClient(context.Background(), ClientConfig{
-		Env: map[string]string{"CODEX_APP_SERVER_MANAGED_CONFIG_PATH": "/tmp/managed.toml"},
-	})
-	if !errors.As(err, &configErr) {
-		t.Fatalf("err = %T, want *ConfigError", err)
+	for _, name := range reservedNames {
+		t.Run(name, func(t *testing.T) {
+			_, err := NewClient(context.Background(), ClientConfig{
+				Env: map[string]string{name: "override"},
+			})
+			var configErr *ConfigError
+			if !errors.As(err, &configErr) {
+				t.Fatalf("err = %T, want *ConfigError", err)
+			}
+		})
+	}
+}
+
+func TestReservedRuntimeEnvTracksRustAuthAndDebugHooks(t *testing.T) {
+	type hookSource struct {
+		path     string
+		exact    map[string]struct{}
+		prefixes []string
+	}
+	sources := []hookSource{
+		{
+			path: "codex-rs/login/src/auth/manager.rs",
+			exact: map[string]struct{}{
+				"CODEX_REFRESH_TOKEN_URL_OVERRIDE":   {},
+				"CODEX_REVOKE_TOKEN_URL_OVERRIDE":    {},
+				"CODEX_APP_SERVER_LOGIN_CLIENT_ID":   {},
+			},
+		},
+		{
+			path:  "codex-rs/login/src/auth/personal_access_token.rs",
+			exact: map[string]struct{}{"CODEX_AUTHAPI_BASE_URL": {}},
+		},
+		{path: "codex-rs/app-server/src/lib.rs", prefixes: []string{"CODEX_APP_SERVER_TEST_"}},
+		{path: "codex-rs/app-server/src/request_processors/account_processor.rs", prefixes: []string{"CODEX_APP_SERVER_"}},
+		{path: "codex-rs/app-server/src/request_processors/account_processor/rate_limit_resets.rs", prefixes: []string{"CODEX_TEST_"}},
+		{path: "codex-rs/core-plugins/src/remote_bundle.rs", prefixes: []string{"CODEX_TEST_"}},
+		{
+			path:  "codex-rs/code-mode/src/remote_session.rs",
+			exact: map[string]struct{}{"CODEX_CODE_MODE_HOST_PATH": {}},
+		},
+		{path: "codex-rs/exec-server/src/environment.rs", prefixes: []string{"CODEX_EXEC_SERVER_"}},
+		{
+			path:  "codex-rs/login/src/auth/default_client.rs",
+			exact: map[string]struct{}{"CODEX_INTERNAL_ORIGINATOR_OVERRIDE": {}},
+		},
+	}
+	envNamePattern := regexp.MustCompile(`"(CODEX_[A-Z0-9_]+)"`)
+	for _, source := range sources {
+		data, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(source.path)))
+		if err != nil {
+			t.Fatalf("read %s: %v", source.path, err)
+		}
+		for _, groups := range envNamePattern.FindAllStringSubmatch(string(data), -1) {
+			match := groups[1]
+			_, selected := source.exact[match]
+			for _, prefix := range source.prefixes {
+				selected = selected || strings.HasPrefix(match, prefix)
+			}
+			if selected && !isReservedEnv(match) {
+				t.Errorf("Rust control hook %s from %s is not reserved by the Go SDK", match, source.path)
+			}
+		}
 	}
 }
 
@@ -256,6 +370,19 @@ func TestNotificationOptOutValidation(t *testing.T) {
 	}
 	if got := rawOnlyClient.Metadata().DisabledHighLevelWorkflows; !reflect.DeepEqual(got, wantDisabled) {
 		t.Fatalf("raw-only disabled workflows = %#v, want %#v", got, wantDisabled)
+	}
+}
+
+func TestMetadataReturnsIndependentDisabledWorkflowSlice(t *testing.T) {
+	client := &Client{metadata: Metadata{
+		DisabledHighLevelWorkflows: []string{"turn/start requires turn/completed"},
+	}}
+
+	first := client.Metadata()
+	first.DisabledHighLevelWorkflows[0] = "mutated"
+	second := client.Metadata()
+	if got := second.DisabledHighLevelWorkflows; !reflect.DeepEqual(got, []string{"turn/start requires turn/completed"}) {
+		t.Fatalf("metadata disabled workflows = %#v, want independent snapshot", got)
 	}
 }
 

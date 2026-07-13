@@ -48,7 +48,13 @@ gh workflow run go-sdk-release-readiness.yml -f checkout_ref="$(git rev-parse HE
 
 The workflow is validation-only. It does not publish artifacts, push persistent tags, or require secrets. For normal CI it creates temporary synthetic `sdk/go/v0.*`, `sdk/go/v1.*`, annotated `sdk/go/v1.*`, and rewritten-tree `sdk/go/v2.*` tags inside a local bare repository, then verifies external consumers can resolve the module and its `/protocol` subpackage through Git.
 
-This workflow is necessary but not sufficient for a release-ready sign-off. Before claiming Go SDK release readiness, the reviewed commit must also have a successful `.github/workflows/sdk.yml` matrix run that uploads `go-sdk-ci-release-evidence` with target-bound `packageArchive` runtime evidence and no `notReleaseReady`, `notReleaseReadyTargets`, or producer-mode helper-root markers; successful `.github/workflows/go-sdk-shipping-release-readiness.yml` metadata from real non-fixture `releaseArtifactEvidence`; and Stage 7 validation against the GitHub Actions run IDs plus downloaded artifacts. Non-publishing fixture evidence, local YAML parsing, or local unit tests are preflight evidence only.
+## Linux-only production sign-off
+
+Linux production readiness requires both a successful manual `go-sdk-release-readiness` run and a successful `rust-release` run for the same reviewed commit. The module run must include the synthetic v0, v1, annotated v1, and v2 tag lanes described above.
+
+Download the published `go-sdk-linux-release-readiness.json` and `codex-package_SHA256SUMS` assets from the matching `rust-v*` release, then run the Linux branch of the Stage 7 validator. The metadata must set `linuxReleaseReady` to `true`, cover both Linux targets, match the public checksums, and contain successful real app-server and sandbox smoke evidence for each package archive.
+
+Linux-only sign-off does not require aggregate cross-platform `sdk.yml` evidence or the absence of readiness markers from Windows/macOS producer lanes. Those lanes remain separate release gates when their platforms are in scope. Non-publishing fixture evidence can validate archive shape, but it cannot establish Linux shipping readiness.
 
 ## Bad Tags
 
