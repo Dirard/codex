@@ -23,6 +23,7 @@ from codex_package.helper_manifest import write_helper_manifest
 from codex_package.layout import build_package_dir
 from codex_package.layout import ZSH_RESOURCE_PATH
 from codex_package.materialize_helpers import materialize_manifest_helper
+from codex_package.materialize_helpers import main as materialize_helpers_main
 from codex_package.targets import PACKAGE_VARIANTS
 from codex_package.targets import TARGET_SPECS
 from codex_package.targets import PackageInputs
@@ -471,6 +472,25 @@ class Stage5GPackageSourceContractTest(unittest.TestCase):
         self.assertIn("CODEX_PACKAGE_BWRAP_BIN", workflow)
         self.assertIn("--bwrap-bin", workflow)
 
+    def test_linux_rust_release_consumes_preproduced_helper_artifact(self) -> None:
+        workflow = read_text(".github/workflows/rust-release.yml")
+        producer_start = workflow.index("\n  linux-package-helper-roots:")
+        build_start = workflow.index("\n  build:", producer_start)
+        producer = workflow[producer_start:build_start]
+        build_end = workflow.index("\n  sign-macos-binaries:", build_start)
+        build = workflow[build_start:build_end]
+
+        self.assertIn("codex_package.materialize_helpers", producer)
+        self.assertIn("Upload release-owned Linux helper root", producer)
+        self.assertIn("linux-package-helper-root-${{ matrix.target }}", producer)
+        self.assertIn("- linux-package-helper-roots", build)
+        self.assertIn("Download pre-produced Linux helper root", build)
+        self.assertIn("--verify-only", build)
+        self.assertEqual(build.count("codex_package.materialize_helpers"), 1)
+        consumer_start = build.index("Download pre-produced Linux helper root")
+        consumer_end = build.index("Build Codex package archive", consumer_start)
+        self.assertNotIn("--bwrap-bin", build[consumer_start:consumer_end])
+
     def test_linux_release_package_bwrap_matches_embedded_digest(self) -> None:
         workflow = read_text(".github/workflows/rust-release.yml")
 
@@ -525,15 +545,27 @@ class Stage5GPackageSourceContractTest(unittest.TestCase):
             'CODEX_PACKAGE_HELPER_ROOT="${RUNNER_TEMP}/codex-package-helpers"'
         )
 
-        for workflow in [rust_workflow, windows_workflow]:
-            with self.subTest(workflow=workflow.splitlines()[0]):
-                self.assertIn("Materialize package helpers", workflow)
-                self.assertIn(producer, workflow)
-                self.assertIn(helper_root_env, workflow)
-                self.assertLess(
-                    workflow.index("Materialize package helpers"),
-                    workflow.index("Resolve materialized package helpers"),
-                )
+        self.assertIn(
+            "Build and materialize release-owned Linux helper root", rust_workflow
+        )
+        self.assertIn("Download pre-produced Linux helper root", rust_workflow)
+        self.assertIn("Verify pre-produced Linux package helpers", rust_workflow)
+        self.assertIn(producer, rust_workflow)
+        self.assertIn(helper_root_env, rust_workflow)
+        self.assertLess(
+            rust_workflow.index(
+                "Build and materialize release-owned Linux helper root"
+            ),
+            rust_workflow.index("Download pre-produced Linux helper root"),
+        )
+
+        self.assertIn("Materialize package helpers", windows_workflow)
+        self.assertIn(producer, windows_workflow)
+        self.assertIn(helper_root_env, windows_workflow)
+        self.assertLess(
+            windows_workflow.index("Materialize package helpers"),
+            windows_workflow.index("Resolve materialized package helpers"),
+        )
 
     def test_materialize_manifest_helper_extracts_verified_payload(self) -> None:
         spec = TARGET_SPECS["x86_64-unknown-linux-musl"]
@@ -636,6 +668,35 @@ class Stage5GPackageSourceContractTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Verified materialized package helpers", result.stdout)
+
+    def test_materialize_helpers_verify_only_never_fetches(self) -> None:
+        spec = TARGET_SPECS["x86_64-unknown-linux-musl"]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target_root = root / spec.target
+            target_root.mkdir()
+            touch_executable(target_root / "rg")
+            touch_executable(target_root / "zsh")
+            touch_executable(target_root / "bwrap")
+            write_helper_manifest(spec, target_root)
+
+            argv = [
+                "codex_package.materialize_helpers",
+                "--target",
+                spec.target,
+                "--output-root",
+                str(root),
+                "--verify-only",
+            ]
+            with (
+                patch.object(sys, "argv", argv),
+                patch(
+                    "codex_package.materialize_helpers.download_archive",
+                    side_effect=AssertionError("verify-only must not fetch"),
+                ) as download,
+            ):
+                self.assertEqual(materialize_helpers_main(), 0)
+                download.assert_not_called()
 
     def test_dotslash_release_archive_config_parity(self) -> None:
         config = json.loads(read_text(".github/dotslash-config.json"))
