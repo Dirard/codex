@@ -15,7 +15,17 @@ type TransportError struct{ Reason string }
 
 func (e *TransportError) Error() string { return "codex sdk transport error: " + e.Reason }
 
-type CompatibilityError struct{ Reason string }
+type CompatibilityError struct {
+	Reason           string
+	ExpectedDigest   string
+	FoundDigest      string
+	ExpectedMode     ProtocolMode
+	FoundMode        *ProtocolMode
+	RuntimePath      string
+	RuntimeVersion   string
+	UserAgent        string
+	RequiredOverride *CompatibilityPolicy
+}
 
 func (e *CompatibilityError) Error() string { return "codex sdk compatibility error: " + e.Reason }
 
@@ -42,9 +52,19 @@ type OverflowError struct{ Reason string }
 
 func (e *OverflowError) Error() string { return "codex sdk overflow: " + e.Reason }
 
-type DecodeError struct{ Reason string }
+type DecodeError struct {
+	Reason string
+	cause  error
+}
 
 func (e *DecodeError) Error() string { return "codex sdk decode error: " + e.Reason }
+
+func (e *DecodeError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
 
 type FrameSizeError = jsonrpc.FrameSizeError
 type ClosedError = jsonrpc.ClosedError
