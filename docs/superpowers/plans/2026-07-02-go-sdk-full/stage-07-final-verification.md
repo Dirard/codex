@@ -535,13 +535,19 @@ grep -F 'codex-windows-sandbox-setup.exe' .github/workflows/rust-release-windows
 grep -F 'publish-dotslash:' .github/workflows/rust-release.yml
 grep -F 'config: .github/dotslash-config.json' .github/workflows/rust-release.yml
 grep -F 'def test_dotslash_release_archive_config_parity' scripts/codex_package/test_package_sources.py
-grep -F 'go-sdk-shipping-release-readiness' .github/workflows/go-sdk-shipping-release-readiness.yml
-grep -F '.github/workflows/rust-release.yml' .github/workflows/go-sdk-shipping-release-readiness.yml
-grep -F '.github/workflows/rust-release-windows.yml' .github/workflows/go-sdk-shipping-release-readiness.yml
-grep -F 'shipping-release-readiness-metadata' .github/workflows/go-sdk-shipping-release-readiness.yml
-grep -F 'shipping-release-readiness.json' .github/workflows/go-sdk-shipping-release-readiness.yml
-grep -E 'reusedWorkflows|reusedJobs|reusedScripts|workflowLocalDuplicateCommands' .github/workflows/go-sdk-shipping-release-readiness.yml
-grep -E 'package-macos|finalize-macos|Build Codex package archive|Build Codex package archives|publish-dotslash|dotslash-config|codex-command-runner.exe|codex-windows-sandbox-setup.exe' .github/workflows/go-sdk-shipping-release-readiness.yml
+# Linux-only release evidence rule: SDK CI emits a blocking source preflight.
+# Only the rust-release caller may select rust-release evidence and assert readiness
+# after validating the actual same-run primary/app-server archives and native smoke proof.
+grep -F 'evidence_source:' .github/workflows/go-sdk-shipping-release-readiness.yml
+grep -F 'source-preflight' .github/workflows/go-sdk-shipping-release-readiness.yml
+grep -F 'collect-linux-release' .github/workflows/go-sdk-shipping-release-readiness.yml
+grep -F 'pattern: "{x86_64,aarch64}-unknown-linux-musl{,-app-server}"' .github/workflows/go-sdk-shipping-release-readiness.yml
+grep -F 'evidence_source: ci-preflight' .github/workflows/sdk.yml
+grep -F 'evidence_source: rust-release' .github/workflows/rust-release.yml
+grep -F 'Run Go SDK smoke tests against Linux release package' .github/workflows/rust-release.yml
+grep -F "needs.go-sdk-linux-shipping-release-readiness.result == 'success'" .github/workflows/rust-release.yml
+grep -F 'go-sdk-linux-helper-roots:' .github/workflows/sdk.yml
+grep -F 'Download pre-produced Linux helper root' .github/workflows/sdk.yml
 awk '
   /- name: Test Go SDK release archive runtime/ { in_archive = 1 }
   in_archive && /- name: Rust protocol\/schema source-of-truth checks/ { in_archive = 0 }
@@ -631,10 +637,14 @@ grep -F 'parent debug hook env was scrubbed' sdk/go/real_app_server_test.go
 
 ```bash
 cd /home/dirard/dev/ai-apps/codex/.worktrees/codex-go-sdk-full
-: "${CODEX_GO_SDK_CI_RUN_ID:?set to the successful sdk.yml run id for the reviewed commit}"
+: "${CODEX_GO_SDK_SHIPPING_RELEASE_RUN_ID:?set to the successful rust-release run id for the reviewed commit}"
+: "${CODEX_GO_SDK_RELEASE_TAG:?set to the rust-v release tag produced by that run}"
 : "${CODEX_GO_SDK_RELEASE_READINESS_RUN_ID:?set to the successful go-sdk-release-readiness.yml run id for the reviewed commit}"
-: "${CODEX_GO_SDK_SHIPPING_RELEASE_RUN_ID:?set to the successful shipping release-readiness run id for the reviewed commit}"
 expected_sha="$(git rev-parse HEAD)"
+linux_only="${CODEX_GO_SDK_LINUX_ONLY:-true}"
+if [[ "${linux_only}" != "true" ]]; then
+  : "${CODEX_GO_SDK_CI_RUN_ID:?set to the successful blocking-ci run id for the reviewed commit}"
+fi
 verify_run() {
   run_id="$1"
   expected_workflow="$2"
@@ -643,7 +653,7 @@ verify_run() {
   mkdir -p .verification
   gh run view "${run_id}" --json headSha,status,conclusion,workflowName,event,jobs >"${json_path}"
   gh run view "${run_id}" --log >"${log_path}"
-  python3 - "${json_path}" "${expected_sha}" "${expected_workflow}" <<'PY'
+  python3 - "${json_path}" "${expected_sha}" "${expected_workflow}" "${log_path}" <<'PY'
 import json
 import sys
 
@@ -659,11 +669,53 @@ jobs = run.get("jobs") or []
 failed = [job for job in jobs if job.get("conclusion") not in {None, "success", "skipped"}]
 if failed:
     raise SystemExit(f"run {sys.argv[1]} has failed jobs: {failed}")
+if sys.argv[3] == "go-sdk-release-readiness":
+    if run.get("event") != "workflow_dispatch":
+        raise SystemExit("Go SDK release-readiness evidence must come from workflow_dispatch")
+    with open(sys.argv[4], encoding="utf-8") as fh:
+        run_log = fh.read()
+    marker = "go-sdk-synthetic-tag-validation=v0,v1,annotated-v1,v2"
+    if marker not in run_log:
+        raise SystemExit("Go SDK release-readiness run lacks synthetic tag lane evidence")
+if sys.argv[3] == "blocking-ci":
+    jobs_by_name = {job.get("name"): job for job in jobs}
+    required_linux_sdk_jobs = [
+        "sdk / Go SDK - linux-musl",
+        "sdk / Go SDK - linux-arm64-musl",
+    ]
+    missing = [
+        name
+        for name in required_linux_sdk_jobs
+        if (jobs_by_name.get(name) or {}).get("conclusion") != "success"
+    ]
+    if missing:
+        raise SystemExit(f"blocking-ci run lacks successful Linux SDK jobs: {missing}")
 PY
 }
-verify_run "${CODEX_GO_SDK_CI_RUN_ID}" "sdk"
+verify_run "${CODEX_GO_SDK_SHIPPING_RELEASE_RUN_ID}" "rust-release"
 verify_run "${CODEX_GO_SDK_RELEASE_READINESS_RUN_ID}" "go-sdk-release-readiness"
-verify_run "${CODEX_GO_SDK_SHIPPING_RELEASE_RUN_ID}" "go-sdk-shipping-release-readiness"
+if [[ "${linux_only}" == "true" ]]; then
+  published_linux_dir=".verification/published-linux-release"
+  rm -rf "${published_linux_dir}"
+  mkdir -p "${published_linux_dir}"
+  gh release download "${CODEX_GO_SDK_RELEASE_TAG}" \
+    --pattern go-sdk-linux-release-readiness.json \
+    --pattern codex-package_SHA256SUMS \
+    --dir "${published_linux_dir}"
+  shipping_run_attempt="$(
+    gh api "repos/openai/codex/actions/runs/${CODEX_GO_SDK_SHIPPING_RELEASE_RUN_ID}" \
+      --jq .run_attempt
+  )"
+  python3 .github/scripts/go_sdk_shipping_release_readiness.py \
+    validate-linux-release \
+    --metadata "${published_linux_dir}/go-sdk-linux-release-readiness.json" \
+    --public-checksum-manifest "${published_linux_dir}/codex-package_SHA256SUMS" \
+    --run-id "${CODEX_GO_SDK_SHIPPING_RELEASE_RUN_ID}" \
+    --run-attempt "${shipping_run_attempt}" \
+    --commit-sha "${expected_sha}" \
+    --release-tag "${CODEX_GO_SDK_RELEASE_TAG}"
+else
+verify_run "${CODEX_GO_SDK_CI_RUN_ID}" "blocking-ci"
 sdk_artifacts_dir=".verification/sdk-ci-release-artifacts"
 rm -rf "${sdk_artifacts_dir}"
 mkdir -p "${sdk_artifacts_dir}"
@@ -1126,10 +1178,11 @@ grep -R 'package-macos\|finalize-macos\|DMG\|dmg' .verification/github-actions-"
 grep -R 'codex-command-runner.exe\|codex-windows-sandbox-setup.exe' .verification/github-actions-"${CODEX_GO_SDK_SHIPPING_RELEASE_RUN_ID}".log
 grep -R 'sha256\|SHA256\|tar.zst\|codex-package_SHA256SUMS' .verification/github-actions-"${CODEX_GO_SDK_SHIPPING_RELEASE_RUN_ID}".log
 grep -R 'publish-dotslash\|dotslash-config.json\|test_dotslash_release_archive_config_parity\|codex-responses-api-proxy\|bwrap\|codex-command-runner\|codex-windows-sandbox-setup' .verification/github-actions-"${CODEX_GO_SDK_SHIPPING_RELEASE_RUN_ID}".log
+fi
 rm -rf .verification
 ```
 
-Expected: all three run IDs point to successful completed runs for the reviewed commit. The `sdk.yml` run uploads `go-sdk-ci-release-evidence/go-sdk-ci-release-evidence.json`, and Stage 7 cross-checks that metadata against `gh run view --json jobs` so every claimed release target has a successful, non-skipped SDK CI job plus target-bound packageArchive verifier, release cargo profile, staging metadata, runner label, bounded log, no top-level `notReleaseReady`/`notReleaseReadyTargets` block, no target skipped/not-release-ready marker, no `helperRootEvidence.source=producerModeMaterializeHelpers` block, macOS x64 architecture proof with downloaded proof-file evidence, Windows MSVC release-shaped host proof with downloaded proof-file evidence, and required smoke-test evidence that was listed before it ran. The shipping release-readiness run uploads `shipping-release-readiness-metadata/shipping-release-readiness.json`, and Stage 7 cross-checks that artifact against the shipping run jobs for downloaded real release workflow/script reuse proof, downloaded duplicate-command audit proof, successful critical reused jobs (`packageMacosJob`, `finalizeMacosJob`, and `publishDotslashJob`), explicit empty `fixtureSubstitutions`, top-level readiness semantics (`releaseArtifactEvidence` must be real non-fixture evidence with `notReleaseReady=false`; `nonPublishingFixtureEvidence` is accepted only as an audit/preflight artifact and must stop before final release-ready sign-off), present bounded log files, target-specific successful job names/conclusions, target-specific `codex-package-*.tar.zst` and `codex-app-server-package-*.tar.zst` archive filenames, downloaded archive member inventories, downloaded public checksum manifest copies, mode-matched provenance records (`realReleaseWorkflow` for non-fixture evidence), in-archive executable paths, runtime helper paths inside the `codex-package` archives, and the real full required packageArchive smoke suite, plus macOS `package-macos`/`finalize-macos` DMG/direct artifact names, macOS x64 runner/architecture proof, Windows package archive plus downloaded published zip helper inventory, and `publish-dotslash` consumption/parity for every entry in `.github/dotslash-config.json` with a downloaded parity report. `sdk.yml`, release-readiness, and shipping logs are supplemental anchors only; if GitHub Actions access, run IDs, downloaded artifacts, required metadata fields, required downloaded evidence files, or real non-fixture shipping evidence are unavailable, Stage 7 is blocked rather than downgraded to local YAML parsing, metadata-only proof, fixture-only proof, or log-only greps. The command removes `.verification` after consuming the evidence so the subsequent clean-worktree gate is not failed by its own downloaded artifacts.
+Expected for the Linux-only scope: the SDK CI run is preflight evidence and never claims release readiness. The `rust-release` run must publish `go-sdk-linux-release-readiness.json` and `codex-package_SHA256SUMS`; the executable validator requires the same run id/attempt, reviewed commit, release tag, both Linux targets, primary and app-server archive digests/inventories, and the exact six native smoke-test proofs. Any missing release asset or provenance mismatch blocks Stage 7. The legacy all-platform verifier remains under the explicit `CODEX_GO_SDK_LINUX_ONLY=false` branch for the broader project plan and is not part of this Linux-only handoff.
 
 - [ ] Resolve ignored plan/spec artifacts before the final clean gate. For this plan bundle, execute exactly one reviewed path and record it in the final verification notes: force-add `docs/superpowers/plans/2026-07-02-go-sdk-full` if the plan bundle is part of the deliverable, move/remove the ignored plan bundle from the final release-readiness worktree after handoff if it is not part of the deliverable, or provide a committed reviewed allowlist file through `CODEX_GO_SDK_IGNORED_PLAN_ALLOWLIST` containing the exact `git status --porcelain` ignored lines that are intentionally accepted. Do not leave `!! docs/superpowers/` as an unexamined side effect.
 - [ ] Check clean generated output with the same fail-fast gate as CI, including untracked generated files and unresolved ignored plan/spec artifacts:

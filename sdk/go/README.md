@@ -48,16 +48,19 @@ Zero-valued `ClientLimits` fields use SDK defaults. Negative values fail during 
 | `MaxAdditionalContextValueBytes` | 1000 bytes |
 | `MaxAdditionalContextTotalBytes` | 4096 bytes |
 | `ResourceStreamQueue` | 256 |
+| `ResourceStreamQueueBytes` | 64 MiB |
 | `PendingTurnQueue` | 512 |
 | `PendingTurnMap` | 128 |
+| `PendingNotificationBytes` | 64 MiB |
 | `GlobalSubscriberQueue` | 512 |
+| `GlobalSubscriberQueueBytes` | 64 MiB |
 | `HandlerConcurrency` | 16 |
 | `HandlerQueue` | 256 |
 | `HandlerTimeout` | 60s |
 | `StderrRingBytes` | 64 KiB |
 | `LifecycleInactivityTimeout` | 5m |
 
-`ConfigOverrides` are for non-secret runtime settings. Do not pass API keys, OAuth tokens, cookies, private keys, or passwords through config overrides, logs, examples, or error text.
+`ConfigOverrides` are restricted to the audited non-secret keys `model` and `sandbox_mode`; unsupported paths fail before runtime lookup. Do not pass API keys, OAuth tokens, cookies, private keys, or passwords through config overrides, logs, examples, or error text.
 
 <!-- codex-go-sdk-resource:Config -->
 <!-- codex-go-sdk-docs:configRequirements/read -->

@@ -21,6 +21,7 @@ func TestRawClientPublicShape(t *testing.T) {
 			ModelProvider: "test",
 			Preview:       "",
 			SessionID:     "session-1",
+			Source:        protocol.SessionSourceCli,
 			Status:        protocol.ThreadStatus{TypeValue: "idle"},
 			Turns:         []protocol.Turn{},
 			UpdatedAt:     1,
@@ -203,6 +204,18 @@ func TestDirectClientCallRejectsNonPublicMethodsBeforeWrite(t *testing.T) {
 		{
 			name:   "compatibility only v1 method",
 			method: "getConversationSummary",
+		},
+		{
+			name:   "compatibility only git diff method",
+			method: "gitDiffToRemote",
+		},
+		{
+			name:   "compatibility only auth status method",
+			method: "getAuthStatus",
+		},
+		{
+			name:   "internal test-only experimental method",
+			method: "mock/experimentalMethod",
 		},
 	}
 

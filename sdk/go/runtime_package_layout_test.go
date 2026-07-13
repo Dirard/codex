@@ -167,6 +167,9 @@ func TestRuntimeLayoutGoSDKWorkflowWiring(t *testing.T) {
 		"--windows-release-shaped-msvc",
 		"--windows-msvc-host-platform",
 		`CODEX_GO_SDK_REQUIRE_REAL_APP_SERVER: "1"`,
+		"Build Go SDK auth fixture",
+		"CODEX_GO_SDK_AUTH_FIXTURE_PATH=",
+		"CODEX_GO_SDK_REQUIRE_AUTH_FIXTURE=1",
 		"TestRealAppServerInitializeStrictDigest",
 		"TestRealAppServerRejectsDebugHookEnv",
 		"TestRealAppServerDigestMismatch",
@@ -181,6 +184,10 @@ func TestRuntimeLayoutGoSDKWorkflowWiring(t *testing.T) {
 		"TestRealAppServerModelList",
 		"TestRealAppServerProtocolModeExperimentalGate",
 		"TestRealAppServerUnauthenticatedAccountRead",
+		"TestAuthFixtureUnauthenticatedAccountRead",
+		"TestAuthFixtureFakeAPIKeyLogin",
+		"TestAuthFixtureDeviceCodeFlow",
+		"TestAuthFixtureUsageAndRateLimitRead",
 		"go test -race ./...",
 		"--release-package-archive",
 		"--cargo-profile release",
@@ -191,7 +198,9 @@ func TestRuntimeLayoutGoSDKWorkflowWiring(t *testing.T) {
 		"CODEX_GO_SDK_HELPER_ROOT_SOURCE=producer-mode-blocked",
 		"unset CODEX_HOME",
 		"CODEX_GO_SDK_ZSTD_SOURCE",
+		"GO_SDK_ZSTD_EXECUTABLE",
 		"--zstd-source",
+		`[zstd_executable, "-dc", str(archive_path)]`,
 		"DotSlash fallback is not accepted",
 		"release-archive-smoke.log",
 		"release_shape_args+=(--windows-release-shaped-msvc --windows-msvc-host-platform)",
@@ -207,6 +216,10 @@ func TestRuntimeLayoutGoSDKWorkflowWiring(t *testing.T) {
 		"producerModeMaterializeHelpers",
 		"notReleaseReadyTargets",
 		"SDK CI target evidence is uploaded for audit only",
+		`"evidenceKind": "ciPreflightOnly"`,
+		`"notReleaseReady": True`,
+		`"linuxReleaseReady": False`,
+		`"linuxPreflightComplete": True`,
 		"windowsReleaseShapedMsvc",
 		"go-sdk-ci-release-evidence",
 		"target-evidence.json",
@@ -239,6 +252,16 @@ func TestRuntimeLayoutGoSDKWorkflowWiring(t *testing.T) {
 		}
 	}
 
+	aggregateStart := strings.Index(workflow, "aggregate = {")
+	aggregateEnd := strings.Index(workflow[aggregateStart:], `(output_dir / "go-sdk-ci-release-evidence.json")`)
+	if aggregateStart == -1 || aggregateEnd == -1 {
+		t.Fatal("sdk.yml is missing the Go SDK CI aggregate evidence block")
+	}
+	aggregate := workflow[aggregateStart : aggregateStart+aggregateEnd]
+	if strings.Contains(aggregate, `"linuxReleaseReady": True`) {
+		t.Fatal("SDK CI preflight aggregate must not claim Linux release readiness")
+	}
+
 	stepOrder := []string{
 		"  go-sdk:",
 		"Checkout repository",
@@ -266,13 +289,13 @@ func TestRuntimeLayoutGoSDKWorkflowWiring(t *testing.T) {
 		previous = current
 	}
 
+	for name := range reservedRuntimeEnv {
+		if strings.Contains(workflow, name+"=") {
+			t.Fatalf("sdk.yml go-sdk job contains forbidden runtime control env %q", name)
+		}
+	}
 	for _, forbidden := range []string{
 		`echo "CODEX_HOME=`,
-		"CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG=",
-		"CODEX_APP_SERVER_MANAGED_CONFIG_PATH=",
-		"CODEX_APP_SERVER_LOGIN_ISSUER=",
-		"CODEX_APP_SERVER_AUTH_BASE_URL_FOR_TESTS=",
-		"CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE=",
 		".github/workflows/zstd",
 		"TestSandboxPolicy",
 		"--schema-root internal/protocodex/schema",

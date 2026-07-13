@@ -2,6 +2,8 @@ package codex
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -204,10 +206,17 @@ func TestResourceCoverage(t *testing.T) {
 			t.Fatalf("duplicate resource coverage row for %q", row.Method)
 		}
 		rowsByMethod[row.Method] = row
+		assertTestOwnerExists(t, row.Method, row.UnitTestOwner)
+		if row.SafeIntegrationOwner != "" {
+			assertTestOwnerExists(t, row.Method, row.SafeIntegrationOwner)
+		}
 		if row.SDKVisibility == "public" {
 			assertPublicResourceCoverageRow(t, row)
 		} else {
 			assertGeneratedOnlyResourceCoverageRow(t, row)
+		}
+		if strings.Contains(row.SafeIntegrationReason, "Stage 7") {
+			t.Fatalf("%s has stale Stage 7 safe-integration status: %q", row.Method, row.SafeIntegrationReason)
 		}
 	}
 	for method, owner := range map[string]string{
@@ -228,6 +237,40 @@ func TestResourceCoverage(t *testing.T) {
 		if row.ResourceOwner != owner {
 			t.Fatalf("%s resource owner = %q, want %q", method, row.ResourceOwner, owner)
 		}
+	}
+	for method, owner := range map[string]string{
+		"account/login/start":                  "integration_auth_test.go",
+		"account/rateLimits/read":              "integration_auth_test.go",
+		"account/rateLimitResetCredit/consume": "integration_auth_test.go",
+		"account/read":                         "integration_auth_test.go",
+		"account/usage/read":                   "integration_auth_test.go",
+		"app/list":                             "real_app_server_test.go",
+		"mcpServerStatus/list":                 "real_app_server_test.go",
+		"plugin/list":                          "real_app_server_test.go",
+		"review/start":                         "real_app_server_test.go",
+		"skills/list":                          "real_app_server_test.go",
+	} {
+		row, ok := rowsByMethod[method]
+		if !ok {
+			t.Fatalf("resource coverage missing integration-tested method %q", method)
+		}
+		if row.SafeIntegrationOwner != owner {
+			t.Fatalf("%s safe integration owner = %q, want %q", method, row.SafeIntegrationOwner, owner)
+		}
+	}
+}
+
+func assertTestOwnerExists(t *testing.T, method string, owner string) {
+	t.Helper()
+	if owner == "" {
+		return
+	}
+	info, err := os.Stat(filepath.FromSlash(owner))
+	if err != nil {
+		t.Fatalf("%s test owner %q is not a readable file: %v", method, owner, err)
+	}
+	if info.IsDir() {
+		t.Fatalf("%s test owner %q is a directory", method, owner)
 	}
 }
 
