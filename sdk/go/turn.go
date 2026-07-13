@@ -82,13 +82,14 @@ func (h *TurnHandle) Interrupt(ctx context.Context) error {
 	return err
 }
 
-func collectRunResult(ctx context.Context, turnID string, stream *NotificationStream) (*RunResult, error) {
-	return collectRunResultForThread(ctx, "", turnID, stream)
+func collectRunResult(ctx context.Context, turnID string, stream *NotificationStream, limits ClientLimits) (*RunResult, error) {
+	return collectRunResultForThread(ctx, "", turnID, stream, limits)
 }
 
-func collectRunResultForThread(ctx context.Context, threadID string, turnID string, stream *NotificationStream) (*RunResult, error) {
+func collectRunResultForThread(ctx context.Context, threadID string, turnID string, stream *NotificationStream, limits ClientLimits) (*RunResult, error) {
 	result := &RunResult{TurnID: turnID}
 	var items []protocol.ThreadItem
+	var itemBytes int64
 	completed := false
 	for {
 		notification, ok := stream.Next(ctx)
@@ -96,10 +97,11 @@ func collectRunResultForThread(ctx context.Context, threadID string, turnID stri
 			if err := stream.Err(); err != nil {
 				return nil, err
 			}
-			if completed {
-				result.Items = items
-				result.FinalResponse = finalResponseFromItems(items)
+			if !completed {
+				return nil, &DecodeError{Reason: "turn stream closed before turn/completed"}
 			}
+			result.Items = items
+			result.FinalResponse = finalResponseFromItems(items)
 			return result, nil
 		}
 		switch payload := notification.Payload.(type) {
@@ -107,7 +109,9 @@ func collectRunResultForThread(ctx context.Context, threadID string, turnID stri
 			if payload.TurnID != turnID || !threadMatches(threadID, payload.ThreadID) {
 				continue
 			}
-			items = append(items, payload.Item)
+			if err := appendRunResultItems(&items, &itemBytes, []protocol.ThreadItem{payload.Item}, len(notification.RawParams), limits); err != nil {
+				return nil, err
+			}
 		case protocol.TurnCompletedNotification:
 			if payload.Turn.ID != turnID || !threadMatches(threadID, payload.ThreadID) {
 				continue
@@ -119,7 +123,9 @@ func collectRunResultForThread(ctx context.Context, threadID string, turnID stri
 			result.CompletedAt = payload.Turn.CompletedAt
 			result.DurationMs = payload.Turn.DurationMs
 			if len(items) == 0 && len(payload.Turn.Items) > 0 {
-				items = append(items, payload.Turn.Items...)
+				if err := appendRunResultItems(&items, &itemBytes, payload.Turn.Items, len(notification.RawParams), limits); err != nil {
+					return nil, err
+				}
 			}
 		case protocol.ThreadTokenUsageUpdatedNotification:
 			if payload.TurnID != turnID || !threadMatches(threadID, payload.ThreadID) {
@@ -128,6 +134,18 @@ func collectRunResultForThread(ctx context.Context, threadID string, turnID stri
 			result.TokenUsage = protocol.Some(payload.TokenUsage)
 		}
 	}
+}
+
+func appendRunResultItems(items *[]protocol.ThreadItem, encodedBytes *int64, additional []protocol.ThreadItem, additionalBytes int, limits ClientLimits) error {
+	if len(additional) > limits.MaxRunResultItems-len(*items) {
+		return &OverflowError{Reason: "run result item count exceeded configured limit"}
+	}
+	if int64(additionalBytes) > limits.MaxRunResultBytes-*encodedBytes {
+		return &OverflowError{Reason: "run result item bytes exceeded configured limit"}
+	}
+	*items = append(*items, additional...)
+	*encodedBytes += int64(additionalBytes)
+	return nil
 }
 
 func threadMatches(expected string, actual string) bool {

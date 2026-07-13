@@ -128,15 +128,9 @@ pub(super) fn go_sdk_routing_lifecycle_entries() -> Vec<RoutingLifecycleEntry> {
             start_completion: WireCompletion::JsonRpcResponse {
                 method: "fuzzyFileSearch/sessionStart",
             },
-            cleanup_triggers: vec![
-                CleanupTrigger::ExplicitMethodResponse {
-                    method: "fuzzyFileSearch/sessionStop",
-                },
-                CleanupTrigger::TerminalNotification {
-                    method: "fuzzyFileSearch/sessionCompleted",
-                    predicate: "sessionId matches search session",
-                },
-            ],
+            cleanup_triggers: vec![CleanupTrigger::ExplicitMethodResponse {
+                method: "fuzzyFileSearch/sessionStop",
+            }],
             notification_opt_out_dependencies: vec![
                 "fuzzyFileSearch/sessionUpdated",
                 "fuzzyFileSearch/sessionCompleted",

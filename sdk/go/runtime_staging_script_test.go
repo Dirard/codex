@@ -234,10 +234,10 @@ func TestStageCodexRuntimeScriptThreadsWindowsMsvcHostPlatform(t *testing.T) {
 	content := readRepoText(t, ".github/scripts/stage-codex-runtime.sh")
 	for _, required := range []string{
 		"bazel_host_platform_args+=(--host_platform=//:local_windows_msvc)",
-		`-- build "${bazel_host_platform_args[@]}" -- "$label"`,
-		`-- cquery "${bazel_host_platform_args[@]}" --output=files "$label"`,
-		`bazel build "${bazel_host_platform_args[@]}" "$label"`,
-		`bazel cquery "${bazel_host_platform_args[@]}" --output=files "$label"`,
+		`-- build "${bazel_mode_args[@]}" "${bazel_host_platform_args[@]}" -- "$label"`,
+		`-- cquery "${bazel_mode_args[@]}" "${bazel_host_platform_args[@]}" --output=files "$label"`,
+		`bazel build "${bazel_mode_args[@]}" "${bazel_host_platform_args[@]}" "$label"`,
+		`bazel cquery "${bazel_mode_args[@]}" "${bazel_host_platform_args[@]}" --output=files "$label"`,
 		"--windows-msvc-host-platform requires a Windows target",
 	} {
 		if !strings.Contains(content, required) {
@@ -309,6 +309,12 @@ func TestStageCodexRuntimeScriptStagesReleasePackageArchive(t *testing.T) {
 	if metadata.CargoProfile != "release" {
 		t.Fatalf("cargoProfile = %q, want release", metadata.CargoProfile)
 	}
+	if metadata.BazelCompilationMode != "opt" {
+		t.Fatalf("bazelCompilationMode = %q, want opt", metadata.BazelCompilationMode)
+	}
+	if metadata.SeedProvenance != "testFixture" {
+		t.Fatalf("seedProvenance = %q, want testFixture", metadata.SeedProvenance)
+	}
 	if metadata.ZstdSource != "stage5gMaterialized" {
 		t.Fatalf("zstdSource = %q, want stage5gMaterialized", metadata.ZstdSource)
 	}
@@ -326,6 +332,12 @@ func TestStageCodexRuntimeScriptStagesReleasePackageArchive(t *testing.T) {
 	}
 	if !strings.HasSuffix(metadata.PackageArchive.GzipPath, ".tar.gz") {
 		t.Fatalf("packageArchive gzipPath = %q, want tar.gz", metadata.PackageArchive.GzipPath)
+	}
+	if metadata.PackageArchive.SHA256 == "" {
+		t.Fatal("packageArchive sha256 missing")
+	}
+	if len(metadata.PackageArchive.Inventory) == 0 {
+		t.Fatal("packageArchive inventory missing")
 	}
 	if strings.Join(metadata.PackageArchive.ArchiveFormats, ",") != "tar.gz,tar.zst" {
 		t.Fatalf("packageArchive archiveFormats = %v, want tar.gz and tar.zst", metadata.PackageArchive.ArchiveFormats)
@@ -391,11 +403,19 @@ func TestStageCodexRuntimeScriptsUseVerifiedHelpersOnly(t *testing.T) {
 			"download_archive",
 			"curl ",
 			"wget ",
-			"build-codex-package-archive.sh",
 		} {
 			if strings.Contains(content, forbidden) {
 				t.Fatalf("%s must not fetch helpers during staging; found %q", path, forbidden)
 			}
+		}
+	}
+	shellScript := readRepoText(t, ".github/scripts/stage-codex-runtime.sh")
+	for _, required := range []string{
+		"bazel_mode_args=(-c opt)",
+		"build-codex-package-archive.sh",
+	} {
+		if !strings.Contains(shellScript, required) {
+			t.Fatalf("stage-codex-runtime.sh release path missing %q", required)
 		}
 	}
 }
@@ -412,6 +432,7 @@ type linuxStagingFixture struct {
 
 type runtimeStagingMetadata struct {
 	ArchiveFormats           []string               `json:"archiveFormats"`
+	BazelCompilationMode     string                 `json:"bazelCompilationMode"`
 	BazelTarget              string                 `json:"bazelTarget"`
 	CargoProfile             string                 `json:"cargoProfile"`
 	CodeExecPath             string                 `json:"codeExecPath"`
@@ -419,6 +440,7 @@ type runtimeStagingMetadata struct {
 	LayoutTarget             string                 `json:"layoutTarget"`
 	PackageArchive           *runtimePackageArchive `json:"packageArchive"`
 	RuntimeSource            string                 `json:"runtimeSource"`
+	SeedProvenance           string                 `json:"seedProvenance"`
 	WindowsMsvcHostPlatform  bool                   `json:"windowsMsvcHostPlatform"`
 	WindowsReleaseShapedMsvc bool                   `json:"windowsReleaseShapedMsvc"`
 	ZstdSource               string                 `json:"zstdSource"`
@@ -433,7 +455,9 @@ type runtimeHelperManifest struct {
 type runtimePackageArchive struct {
 	ArchiveFormats           []string `json:"archiveFormats"`
 	GzipPath                 string   `json:"gzipPath"`
+	Inventory                []string `json:"inventory"`
 	Path                     string   `json:"path"`
+	SHA256                   string   `json:"sha256"`
 	Target                   string   `json:"target"`
 	WindowsMsvcHostPlatform  bool     `json:"windowsMsvcHostPlatform"`
 	WindowsReleaseShapedMsvc bool     `json:"windowsReleaseShapedMsvc"`
