@@ -8,6 +8,47 @@ import (
 	"testing"
 )
 
+func TestAskForApprovalPreservesStringAndGranularVariants(t *testing.T) {
+	for _, want := range []AskForApproval{
+		AskForApprovalUntrusted,
+		AskForApprovalOnRequest,
+		AskForApprovalNever,
+	} {
+		encoded, err := json.Marshal(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded AskForApproval
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(decoded, want) {
+			t.Fatalf("decoded approval = %#v, want %#v", decoded, want)
+		}
+	}
+
+	granularJSON := []byte(`{"granular":{"mcp_elicitations":true,"rules":false,"sandbox_approval":true}}`)
+	var granular AskForApproval
+	if err := json.Unmarshal(granularJSON, &granular); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(granular)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotObject map[string]any
+	var wantObject map[string]any
+	if err := json.Unmarshal(encoded, &gotObject); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(granularJSON, &wantObject); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotObject, wantObject) {
+		t.Fatalf("granular approval = %#v, want %#v", gotObject, wantObject)
+	}
+}
+
 func TestGeneratedStructUsesSerdeAliasesAndOmitsUnsetOptionals(t *testing.T) {
 	var screenshot AppScreenshot
 	if err := json.Unmarshal([]byte(`{"file_id":"file-1","user_prompt":"look"}`), &screenshot); err != nil {
@@ -78,6 +119,19 @@ func TestGeneratedTaggedUnionRequiresVariantFields(t *testing.T) {
 	var decodeErr DecodeError
 	if !errors.As(err, &decodeErr) || !isOneOf(decodeErr.Field, "description", "inputSchema", "name") {
 		t.Fatalf("err = %v, want DecodeError for a missing function variant field", err)
+	}
+}
+
+func TestThreadItemAgentMessageDoesNotRequireSubAgentKind(t *testing.T) {
+	var item ThreadItem
+	if err := json.Unmarshal([]byte(`{"type":"agentMessage","id":"item-1","text":"ok","phase":"final_answer","memoryCitation":null}`), &item); err != nil {
+		t.Fatal(err)
+	}
+	if item.TypeValue != "agentMessage" {
+		t.Fatalf("type = %q, want agentMessage", item.TypeValue)
+	}
+	if text, ok := item.Text.Value(); !ok || text != "ok" {
+		t.Fatalf("text = %q, %t, want ok, true", text, ok)
 	}
 }
 

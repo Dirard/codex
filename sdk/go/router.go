@@ -24,15 +24,18 @@ type notificationRouter struct {
 	streams        map[routerKey]map[*NotificationStream]struct{}
 	global         map[*NotificationStream]struct{}
 	pending        map[routerKey][]pendingNotification
+	pendingBytes   int64
 	overflow       map[routerKey]*OverflowError
 	timers         map[routerKey]*time.Timer
 	nextPendingSeq uint64
 	closed         bool
+	terminalErr    error
 }
 
 type pendingNotification struct {
-	seq          uint64
-	notification Notification
+	seq           uint64
+	notification  Notification
+	retainedBytes int64
 }
 
 func newNotificationRouter(limits ClientLimits) *notificationRouter {
@@ -67,14 +70,19 @@ func (r *notificationRouter) subscribeKeys(keys []routerKey, filter ...func(Noti
 	if len(filter) > 0 {
 		streamFilter = filter[0]
 	}
-	stream := newFilteredNotificationStream(r.limits.ResourceStreamQueue, nil, streamFilter)
+	stream := newFilteredNotificationStream(
+		r.limits.ResourceStreamQueue,
+		r.limits.ResourceStreamQueueBytes,
+		nil,
+		streamFilter,
+	)
 	stream.onClose = func() { r.unsubscribe(stream, keys) }
-
 	for {
 		r.mu.Lock()
 		if r.closed {
+			err := r.terminalErr
 			r.mu.Unlock()
-			stream.closeWithError(&ClosedError{})
+			stream.closeWithError(err)
 			return stream
 		}
 		var pending []pendingNotification
@@ -84,12 +92,18 @@ func (r *notificationRouter) subscribeKeys(keys []routerKey, filter ...func(Noti
 				timer.Stop()
 				delete(r.timers, key)
 			}
-			pending = append(pending, r.pending[key]...)
-			delete(r.pending, key)
+			pending = append(pending, r.removePendingLocked(key)...)
 			if err := r.overflow[key]; err != nil && overflowErr == nil {
 				overflowErr = err
 			}
 			delete(r.overflow, key)
+		}
+		if len(pending) > 0 {
+			claimedSequences := make(map[uint64]struct{}, len(pending))
+			for _, notification := range pending {
+				claimedSequences[notification.seq] = struct{}{}
+			}
+			r.dropPendingSequencesLocked(claimedSequences)
 		}
 		if len(pending) == 0 && overflowErr == nil {
 			for _, key := range keys {
@@ -178,12 +192,17 @@ func routeHasTurnIdentity(route protocol.ServerNotificationRouteMetadata) bool {
 }
 
 func (r *notificationRouter) subscribeGlobal() *NotificationStream {
-	stream := newNotificationStream(r.limits.GlobalSubscriberQueue, nil)
+	stream := newNotificationStream(
+		r.limits.GlobalSubscriberQueue,
+		r.limits.GlobalSubscriberQueueBytes,
+		nil,
+	)
 	stream.onClose = func() { r.unsubscribeGlobal(stream) }
 	r.mu.Lock()
 	if r.closed {
+		err := r.terminalErr
 		r.mu.Unlock()
-		stream.closeWithError(&ClosedError{})
+		stream.closeWithError(err)
 		return stream
 	}
 	r.global[stream] = struct{}{}
@@ -191,7 +210,7 @@ func (r *notificationRouter) subscribeGlobal() *NotificationStream {
 	return stream
 }
 
-func (r *notificationRouter) route(ctx context.Context, method string, params json.RawMessage, trace json.RawMessage) {
+func (r *notificationRouter) route(ctx context.Context, method string, params json.RawMessage, trace json.RawMessage) error {
 	notification := Notification{
 		Method:    method,
 		RawParams: append([]byte(nil), params...),
@@ -199,7 +218,16 @@ func (r *notificationRouter) route(ctx context.Context, method string, params js
 	}
 	metadata, known := protocol.ServerNotificationRoutingByMethod[method]
 	if known {
-		notification.Payload = decodeKnownNotification(method, params)
+		payload, err := decodeKnownNotification(method, params)
+		if err != nil {
+			decodeErr := &DecodeError{
+				Reason: "invalid " + method + " notification payload",
+				cause:  err,
+			}
+			r.closeWithError(decodeErr)
+			return decodeErr
+		}
+		notification.Payload = payload
 	} else {
 		notification.Payload = UnknownNotification{
 			Method: method,
@@ -208,12 +236,27 @@ func (r *notificationRouter) route(ctx context.Context, method string, params js
 		}
 	}
 	keys := routingKeys(metadata, params)
-	keys = append(keys, realtimeRoutingKeys(method, params)...)
-	r.deliver(ctx, notification, keys, true)
+	pendingKeys := pendingRoutingKeys(metadata, params)
+	realtimeKeys := realtimeRoutingKeys(method, params)
+	keys = append(keys, realtimeKeys...)
+	pendingKeys = append(pendingKeys, realtimeKeys...)
+	r.deliver(ctx, notification, keys, pendingKeys, true)
+	return nil
 }
 
 func (r *notificationRouter) close() {
+	r.closeWithError(&ClosedError{})
+}
+
+func (r *notificationRouter) closeWithError(err error) {
+	if err == nil {
+		err = &ClosedError{}
+	}
 	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return
+	}
 	streams := make(map[*NotificationStream]struct{})
 	for _, byStream := range r.streams {
 		for stream := range byStream {
@@ -227,19 +270,21 @@ func (r *notificationRouter) close() {
 		timer.Stop()
 	}
 	r.closed = true
+	r.terminalErr = err
 	r.streams = map[routerKey]map[*NotificationStream]struct{}{}
 	r.global = map[*NotificationStream]struct{}{}
 	r.pending = map[routerKey][]pendingNotification{}
+	r.pendingBytes = 0
 	r.overflow = map[routerKey]*OverflowError{}
 	r.timers = map[routerKey]*time.Timer{}
 	r.mu.Unlock()
 
 	for stream := range streams {
-		stream.closeWithError(&ClosedError{})
+		stream.closeWithError(err)
 	}
 }
 
-func (r *notificationRouter) deliver(_ context.Context, notification Notification, keys []routerKey, global bool) {
+func (r *notificationRouter) deliver(_ context.Context, notification Notification, keys []routerKey, pendingKeys []routerKey, global bool) {
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
@@ -248,7 +293,6 @@ func (r *notificationRouter) deliver(_ context.Context, notification Notificatio
 	var streams []*NotificationStream
 	terminalStreams := map[*NotificationStream]struct{}{}
 	seen := map[*NotificationStream]struct{}{}
-	var pendingKeys []routerKey
 	deliveredByRoute := false
 	if global {
 		for stream := range r.global {
@@ -261,13 +305,10 @@ func (r *notificationRouter) deliver(_ context.Context, notification Notificatio
 	}
 	for _, key := range keys {
 		keyStreams := r.streams[key]
-		hasSubscribers := len(keyStreams) > 0
-		acceptedForKey := false
 		for stream := range keyStreams {
 			if !stream.accepts(notification) {
 				continue
 			}
-			acceptedForKey = true
 			deliveredByRoute = true
 			if isTerminalNotification(methodForNotification(notification), key.domain) {
 				terminalStreams[stream] = struct{}{}
@@ -278,15 +319,22 @@ func (r *notificationRouter) deliver(_ context.Context, notification Notificatio
 			seen[stream] = struct{}{}
 			streams = append(streams, stream)
 		}
-		if !acceptedForKey && !hasSubscribers {
-			pendingKeys = append(pendingKeys, key)
-		}
 	}
 	if !deliveredByRoute {
 		r.nextPendingSeq++
-		pending := pendingNotification{seq: r.nextPendingSeq, notification: notification}
-		for _, key := range pendingKeys {
-			r.appendPendingLocked(key, pending)
+		pending := pendingNotification{
+			seq:           r.nextPendingSeq,
+			notification:  notification,
+			retainedBytes: notificationRetainedBytes(notification),
+		}
+		for _, key := range dedupeRouterKeys(pendingKeys) {
+			if len(r.streams[key]) == 0 {
+				if err := r.appendPendingLocked(key, pending); err != nil {
+					r.mu.Unlock()
+					r.closeWithError(err)
+					return
+				}
+			}
 		}
 	}
 	r.mu.Unlock()
@@ -299,19 +347,57 @@ func (r *notificationRouter) deliver(_ context.Context, notification Notificatio
 	}
 }
 
-func (r *notificationRouter) appendPendingLocked(key routerKey, notification pendingNotification) {
-	if _, exists := r.pending[key]; !exists && len(r.pending) >= r.limits.PendingTurnMap {
-		if evicted, ok := r.evictPendingLocked(); ok {
-			r.setPendingOverflowLocked(evicted, "pending notification map overflow")
+func (r *notificationRouter) dropPendingSequencesLocked(sequences map[uint64]struct{}) {
+	for key, pending := range r.pending {
+		kept := pending[:0]
+		for _, notification := range pending {
+			if _, claimed := sequences[notification.seq]; claimed {
+				r.releasePendingBytesLocked(notification)
+				continue
+			}
+			kept = append(kept, notification)
+		}
+		clear(pending[len(kept):])
+		if len(kept) > 0 {
+			r.pending[key] = kept
+			continue
+		}
+		delete(r.pending, key)
+		delete(r.overflow, key)
+		if timer := r.timers[key]; timer != nil {
+			timer.Stop()
+			delete(r.timers, key)
 		}
 	}
+}
+
+func (r *notificationRouter) appendPendingLocked(key routerKey, notification pendingNotification) error {
+	_, exists := r.pending[key]
+	if !exists && len(r.pending) >= r.limits.PendingTurnMap {
+		return r.setPendingOverflowLocked(key, "pending notification map overflow")
+	}
+	if notification.retainedBytes <= 0 {
+		notification.retainedBytes = notificationRetainedBytes(notification.notification)
+	}
+	if notification.retainedBytes > r.limits.PendingNotificationBytes-r.pendingBytes {
+		return r.setPendingOverflowLocked(key, "pending notification byte budget exceeded")
+	}
 	pending := append(r.pending[key], notification)
+	r.pendingBytes += notification.retainedBytes
 	if len(pending) > r.limits.PendingTurnQueue {
-		r.setPendingOverflowLocked(key, "pending notification queue overflow")
-		pending = pending[len(pending)-r.limits.PendingTurnQueue:]
+		if err := r.setPendingOverflowLocked(key, "pending notification queue overflow"); err != nil {
+			return err
+		}
+		droppedCount := len(pending) - r.limits.PendingTurnQueue
+		for _, dropped := range pending[:droppedCount] {
+			r.releasePendingBytesLocked(dropped)
+		}
+		clear(pending[:droppedCount])
+		pending = pending[droppedCount:]
 	}
 	r.pending[key] = pending
 	r.ensurePendingTimerLocked(key)
+	return nil
 }
 
 func (r *notificationRouter) dropPendingNotifications(key routerKey, drop func(Notification) bool) {
@@ -331,10 +417,13 @@ func (r *notificationRouter) dropPendingNotifications(key routerKey, drop func(N
 	}
 	kept := pending[:0]
 	for _, notification := range pending {
-		if !drop(notification.notification) {
-			kept = append(kept, notification)
+		if drop(notification.notification) {
+			r.releasePendingBytesLocked(notification)
+			continue
 		}
+		kept = append(kept, notification)
 	}
+	clear(pending[len(kept):])
 	if len(kept) > 0 {
 		r.pending[key] = kept
 		return
@@ -354,24 +443,20 @@ func (r *notificationRouter) ensurePendingTimerLocked(key routerKey) {
 	timeout := r.limits.LifecycleInactivityTimeout
 	r.timers[key] = time.AfterFunc(timeout, func() {
 		r.mu.Lock()
-		delete(r.pending, key)
+		r.removePendingLocked(key)
 		delete(r.overflow, key)
 		delete(r.timers, key)
 		r.mu.Unlock()
 	})
 }
 
-func (r *notificationRouter) evictPendingLocked() (routerKey, bool) {
-	for key := range r.pending {
-		delete(r.pending, key)
-		return key, true
+func (r *notificationRouter) setPendingOverflowLocked(key routerKey, reason string) error {
+	if _, exists := r.overflow[key]; !exists && len(r.overflow) >= r.limits.PendingTurnMap {
+		return &OverflowError{Reason: "pending overflow sentinel capacity exceeded"}
 	}
-	return routerKey{}, false
-}
-
-func (r *notificationRouter) setPendingOverflowLocked(key routerKey, reason string) {
 	r.overflow[key] = &OverflowError{Reason: reason}
 	r.ensurePendingTimerLocked(key)
+	return nil
 }
 
 func (r *notificationRouter) closeKeys(keys []routerKey, err error) {
@@ -382,7 +467,7 @@ func (r *notificationRouter) closeKeys(keys []routerKey, err error) {
 			streams[stream] = struct{}{}
 		}
 		delete(r.streams, key)
-		delete(r.pending, key)
+		r.removePendingLocked(key)
 		delete(r.overflow, key)
 		if timer := r.timers[key]; timer != nil {
 			timer.Stop()
@@ -393,6 +478,19 @@ func (r *notificationRouter) closeKeys(keys []routerKey, err error) {
 	for stream := range streams {
 		stream.closeWithError(err)
 	}
+}
+
+func (r *notificationRouter) removePendingLocked(key routerKey) []pendingNotification {
+	pending := r.pending[key]
+	for _, notification := range pending {
+		r.releasePendingBytesLocked(notification)
+	}
+	delete(r.pending, key)
+	return pending
+}
+
+func (r *notificationRouter) releasePendingBytesLocked(notification pendingNotification) {
+	r.pendingBytes -= notification.retainedBytes
 }
 
 func (r *notificationRouter) unsubscribe(stream *NotificationStream, keys []routerKey) {
@@ -437,6 +535,53 @@ func routingKeys(metadata protocol.ServerNotificationRoutingMetadata, params jso
 		}
 	}
 	return keys
+}
+
+func pendingRoutingKeys(metadata protocol.ServerNotificationRoutingMetadata, params json.RawMessage) []routerKey {
+	if metadata.Method == "" {
+		return nil
+	}
+	var raw map[string]any
+	if len(params) > 0 {
+		_ = json.Unmarshal(params, &raw)
+	}
+	var keys []routerKey
+	for _, route := range metadata.Routes {
+		for _, extractor := range route.IdentityExtractors {
+			if !claimablePendingIdentity(metadata.Method, route.ResourceDomain, extractor.FieldPath) {
+				continue
+			}
+			value, ok := stringAtJSONPath(raw, extractor.FieldPath)
+			if !ok {
+				if route.ResourceDomain == "account" && extractor.FieldPath == "loginId" && extractor.Optional {
+					value = ""
+				} else {
+					continue
+				}
+			}
+			if value == "" && route.ResourceDomain != "account" {
+				continue
+			}
+			keys = append(keys, routerKey{domain: route.ResourceDomain, identity: value})
+		}
+	}
+	return dedupeRouterKeys(keys)
+}
+
+func claimablePendingIdentity(method string, domain string, fieldPath string) bool {
+	if fieldPath == "turnId" || fieldPath == "turn.id" {
+		return true
+	}
+	switch domain {
+	case "command", "fs", "fuzzyFileSearch", "process":
+		return true
+	case "account":
+		return method == "account/login/completed" && fieldPath == "loginId"
+	case "mcpServer":
+		return method == "mcpServer/oauthLogin/completed" && fieldPath == "name"
+	default:
+		return false
+	}
 }
 
 func realtimeRoutingKeys(method string, params json.RawMessage) []routerKey {
@@ -555,6 +700,6 @@ func methodForNotification(notification Notification) string {
 	return notification.Method
 }
 
-func decodeKnownNotification(method string, params json.RawMessage) any {
+func decodeKnownNotification(method string, params json.RawMessage) (any, error) {
 	return protocol.DecodeServerNotificationPayload(method, params)
 }

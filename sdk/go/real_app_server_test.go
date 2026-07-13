@@ -16,10 +16,26 @@ import (
 	"testing"
 	"time"
 
+	internaljsonrpc "github.com/openai/codex/sdk/go/internal/jsonrpc"
 	"github.com/openai/codex/sdk/go/protocol"
 )
 
 const realAppServerTimeout = 30 * time.Second
+
+func TestRealAppServerLinuxUsesWorkspaceWriteSandbox(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux-only sandbox policy")
+	}
+	codexHome := t.TempDir()
+	writeRealAppServerConfig(t, codexHome, "http://127.0.0.1")
+	content, err := os.ReadFile(filepath.Join(codexHome, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), `sandbox_mode = "workspace-write"`) {
+		t.Fatalf("config.toml does not enable workspace-write sandbox: %s", content)
+	}
+}
 
 func TestRealAppServerInitializeStrictDigest(t *testing.T) {
 	client, _, runtimePath, _ := newRealAppServerClient(t)
@@ -44,25 +60,82 @@ func TestRealAppServerInitializeStrictDigest(t *testing.T) {
 
 func TestRealAppServerRejectsDebugHookEnv(t *testing.T) {
 	runtimePath := requireRealAppServerRuntime(t)
-	ctx := realAppServerContext(t)
 
-	_, err := NewClient(ctx, ClientConfig{
-		CodexPath: runtimePath,
-		Env: map[string]string{
-			"CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE": "1",
-		},
+	t.Run("SDK rejects reserved child environment", func(t *testing.T) {
+		for name := range reservedRuntimeEnv {
+			t.Run(name, func(t *testing.T) {
+				ctx := realAppServerContext(t)
+				_, err := NewClient(ctx, ClientConfig{
+					CodexPath: runtimePath,
+					Env:       map[string]string{name: "override"},
+				})
+				var cfgErr *ConfigError
+				if !errors.As(err, &cfgErr) {
+					t.Fatalf("err = %T, want *ConfigError for reserved hook env", err)
+				}
+			})
+		}
 	})
-	var cfgErr *ConfigError
-	if !errors.As(err, &cfgErr) {
-		t.Fatalf("err = %T, want *ConfigError for reserved hook env", err)
-	}
 
-	t.Setenv("CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE", "1")
-	t.Setenv("CODEX_APP_SERVER_AUTH_BASE_URL_FOR_TESTS", "http://127.0.0.1/debug-hook")
-	client, _, _, _ := newRealAppServerClient(t)
-	if client.Metadata().RuntimePath == "" {
-		t.Fatal("real app-server did not initialize after parent debug hook env was scrubbed")
-	}
+	t.Run("release process ignores managed-config debug path", func(t *testing.T) {
+		codexHome := t.TempDir()
+		fixture := newRealResponsesFixture(t)
+		writeRealAppServerConfig(t, codexHome, fixture.URL())
+		invalidManagedConfig := filepath.Join(t.TempDir(), "invalid-managed-config.toml")
+		if err := os.WriteFile(invalidManagedConfig, []byte("invalid = [\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ctx := realAppServerContext(t)
+		transport, err := internaljsonrpc.StartStdio(ctx, internaljsonrpc.StdioOptions{
+			Path: runtimePath,
+			Args: []string{"app-server", "--listen", "stdio://"},
+			Dir:  t.TempDir(),
+			Env: append(realAppServerDirectEnvironment(codexHome),
+				"CODEX_APP_SERVER_MANAGED_CONFIG_PATH="+invalidManagedConfig,
+				"CODEX_APP_SERVER_LOGIN_ISSUER="+fixture.URL(),
+				"CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE=1",
+				"CODEX_APP_SERVER_AUTH_BASE_URL_FOR_TESTS="+fixture.URL(),
+			),
+			MaxFrameBytes: DefaultMaxFrameBytes,
+			StderrBytes:   DefaultStderrRingBytes,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := NewClient(ctx, ClientConfig{Transport: transport})
+		if err != nil {
+			_ = transport.Close()
+			t.Fatalf("release app-server honored a debug-only environment hook: %v; stderr: %s", err, transport.StderrTail())
+		}
+		t.Cleanup(func() { _ = client.Close() })
+	})
+
+	t.Run("release process rejects hidden plugin-startup bypass", func(t *testing.T) {
+		ctx := realAppServerContext(t)
+		transport, err := internaljsonrpc.StartStdio(ctx, internaljsonrpc.StdioOptions{
+			Path: runtimePath,
+			Args: []string{
+				"app-server",
+				"--listen",
+				"stdio://",
+				"--disable-plugin-startup-tasks-for-tests",
+			},
+			Env:           realAppServerDirectEnvironment(t.TempDir()),
+			MaxFrameBytes: DefaultMaxFrameBytes,
+			StderrBytes:   DefaultStderrRingBytes,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, initErr := NewClient(ctx, ClientConfig{Transport: transport})
+		_ = transport.Close()
+		if initErr == nil {
+			t.Fatal("release app-server accepted the hidden plugin-startup test argument")
+		}
+		if stderr := transport.StderrTail(); !strings.Contains(stderr, "disable-plugin-startup-tasks-for-tests") {
+			t.Fatalf("release app-server rejected hidden argument without naming it; stderr: %s", stderr)
+		}
+	})
 }
 
 func TestRealAppServerDigestMismatch(t *testing.T) {
@@ -85,6 +158,10 @@ func TestRealAppServerThreadRunHappyPath(t *testing.T) {
 	}
 	result, err := thread.Run(ctx, Text("say ok"), TurnOptions{CWD: workdir})
 	if err != nil {
+		var generatedDecodeErr protocol.DecodeError
+		if errors.As(err, &generatedDecodeErr) {
+			t.Fatalf("thread run generated decode failure at field %q", generatedDecodeErr.Field)
+		}
 		t.Fatal(err)
 	}
 	if result.FinalResponse != "real app-server ok" {
@@ -105,6 +182,18 @@ func TestRealAppServerConfigReadWrite(t *testing.T) {
 		Value:         json.RawMessage(`"mock-model"`),
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Config.BatchWrite(ctx, protocol.ConfigBatchWriteParams{
+		Edits: []protocol.ConfigEdit{{
+			KeyPath:       "model",
+			MergeStrategy: protocol.MergeStrategyReplace,
+			Value:         json.RawMessage(`"mock-model"`),
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Config.ReadRequirements(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.Config.Read(ctx, protocol.ConfigReadParams{}); err != nil {
@@ -200,7 +289,7 @@ func TestRealAppServerProcessLifecycle(t *testing.T) {
 }
 
 func TestRealAppServerSafeResourceWorkflows(t *testing.T) {
-	client, _, _, workdir := newRealAppServerClient(t)
+	client, _, _, workdir := newRealAppServerClient(t, realAssistantResponseSSE("review fixture ok"))
 	ctx := realAppServerContext(t)
 
 	if _, err := client.Threads.List(ctx, protocol.ThreadListParams{}); err != nil {
@@ -208,6 +297,48 @@ func TestRealAppServerSafeResourceWorkflows(t *testing.T) {
 	}
 	if _, err := client.FileSystem.GetMetadata(ctx, protocol.FsGetMetadataParams{Path: protocol.AbsolutePathBuf(workdir)}); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := client.Skills.List(ctx, protocol.SkillsListParams{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Hooks.List(ctx, protocol.HooksListParams{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Apps.List(ctx, protocol.AppsListParams{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.MCP.ListStatus(ctx, protocol.ListMcpServerStatusParams{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Plugins.List(ctx, protocol.PluginListParams{}); err != nil {
+		t.Fatal(err)
+	}
+	assertManifestBackedNotApplicable(t, []string{
+		"marketplace/add",
+		"marketplace/remove",
+		"marketplace/upgrade",
+	}, "the manifest exposes only side-effecting marketplace add, remove, and upgrade methods; Linux release tests do not mutate marketplace configuration")
+	thread, err := client.Threads.Start(ctx, ThreadStartOptions{CWD: workdir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, err := client.Reviews.Start(ctx, ReviewStartOptions{
+		ThreadID: thread.ID(),
+		Target: protocol.ReviewTarget{
+			TypeValue:    "custom",
+			Instructions: protocol.SomeNonNull("Review the fixture without changing files."),
+		},
+		Delivery: ReviewDeliveryDetached,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := review.Wait(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalResponse != "review fixture ok" {
+		t.Fatalf("review final response = %q, want review fixture ok", result.FinalResponse)
 	}
 }
 
@@ -222,6 +353,12 @@ func TestRealAppServerRemoteControlWorkflow(t *testing.T) {
 	if status.ServerName == "" {
 		t.Fatal("remoteControl/status/read returned empty server name")
 	}
+	assertManifestBackedNotApplicable(t, []string{
+		"remoteControl/pairing/start",
+		"remoteControl/pairing/status",
+		"remoteControl/client/list",
+		"remoteControl/client/revoke",
+	}, "paired remote-control service or session is unavailable in the hermetic app-server fixture; package tests cover the external-session variants")
 }
 
 func TestRealAppServerModelList(t *testing.T) {
@@ -232,27 +369,48 @@ func TestRealAppServerModelList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, model := range response.Data {
-		if model.ID == "mock-model" {
-			return
-		}
+	if len(response.Data) == 0 {
+		t.Fatal("model/list returned an empty catalog")
 	}
-	t.Fatalf("model list did not include mock-model: %#v", response.Data)
+	seen := make(map[string]struct{}, len(response.Data))
+	for _, model := range response.Data {
+		if model.ID == "" {
+			t.Fatal("model/list returned a model with an empty id")
+		}
+		if _, ok := seen[model.ID]; ok {
+			t.Fatalf("model/list returned duplicate model id %q", model.ID)
+		}
+		seen[model.ID] = struct{}{}
+	}
 }
 
 func TestRealAppServerProtocolModeExperimentalGate(t *testing.T) {
-	client, _, _, workdir := newRealAppServerClientWithConfig(t, nil, ClientConfig{
+	stableClient, _, _, stableWorkdir := newRealAppServerClientWithConfig(t, nil, ClientConfig{
 		ProtocolMode: ProtocolModeStable,
 	})
 	ctx := realAppServerContext(t)
 
-	_, err := client.Threads.Start(ctx, ThreadStartOptions{
-		CWD:                   workdir,
+	_, err := stableClient.Threads.Start(ctx, ThreadStartOptions{
+		CWD:                   stableWorkdir,
 		MockExperimentalField: "stable-must-reject",
 	})
 	var cfgErr *ConfigError
 	if !errors.As(err, &cfgErr) {
 		t.Fatalf("err = %T, want *ConfigError for experimental field in stable mode", err)
+	}
+
+	experimentalClient, _, _, experimentalWorkdir := newRealAppServerClientWithConfig(t, nil, ClientConfig{
+		ProtocolMode: ProtocolModeExperimental,
+	})
+	thread, err := experimentalClient.Threads.Start(ctx, ThreadStartOptions{
+		CWD:                   experimentalWorkdir,
+		MockExperimentalField: "experimental-must-accept",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thread.ID() == "" {
+		t.Fatal("experimental thread/start returned an empty thread id")
 	}
 }
 
@@ -266,6 +424,29 @@ func TestRealAppServerUnauthenticatedAccountRead(t *testing.T) {
 	}
 	if account, ok := response.Account.Value(); ok {
 		t.Fatalf("account = %#v, want unauthenticated empty account", account)
+	}
+	if response.RequiresOpenaiAuth {
+		t.Fatal("unauthenticated custom provider unexpectedly requires OpenAI auth")
+	}
+}
+
+func assertManifestBackedNotApplicable(t *testing.T, methods []string, reason string) {
+	t.Helper()
+	want := make(map[string]struct{}, len(methods))
+	for _, method := range methods {
+		want[method] = struct{}{}
+	}
+	for _, row := range generatedResourceCoverage {
+		if _, ok := want[row.Method]; !ok {
+			continue
+		}
+		if row.SafeIntegrationOwner != "" || row.SafeIntegrationReason != reason {
+			t.Fatalf("%s integration coverage = owner %q reason %q", row.Method, row.SafeIntegrationOwner, row.SafeIntegrationReason)
+		}
+		delete(want, row.Method)
+	}
+	if len(want) != 0 {
+		t.Fatalf("generated resource coverage is missing not-applicable methods: %v", want)
 	}
 }
 
@@ -330,7 +511,6 @@ func newRealAppServerClientWithConfig(t *testing.T, streams []string, overrides 
 		cfg.Env = map[string]string{}
 	}
 	cfg.Env["CODEX_HOME"] = codexHome
-	cfg.ConfigOverrides = mergeRealAppServerConfigOverrides(cfg.ConfigOverrides, fixture.URL())
 
 	ctx := realAppServerContext(t)
 	client, err := NewClient(ctx, cfg)
@@ -339,24 +519,6 @@ func newRealAppServerClientWithConfig(t *testing.T, streams []string, overrides 
 	}
 	t.Cleanup(func() { _ = client.Close() })
 	return client, fixture, runtimePath, workdir
-}
-
-func mergeRealAppServerConfigOverrides(existing map[string]string, serverURL string) map[string]string {
-	merged := map[string]string{
-		"model":                                             "mock-model",
-		"model_provider":                                    "mock_provider",
-		"model_providers.mock_provider.name":                "Mock provider for Go SDK tests",
-		"model_providers.mock_provider.base_url":            serverURL + "/v1",
-		"model_providers.mock_provider.wire_api":            "responses",
-		"model_providers.mock_provider.request_max_retries": "0",
-		"model_providers.mock_provider.stream_max_retries":  "0",
-		"approval_policy":                                   "never",
-		"sandbox_mode":                                      "danger-full-access",
-	}
-	for key, value := range existing {
-		merged[key] = value
-	}
-	return merged
 }
 
 func requireRealAppServerRuntime(t *testing.T) string {
@@ -385,25 +547,46 @@ func realAppServerContext(t *testing.T) context.Context {
 	return ctx
 }
 
+func realAppServerDirectEnvironment(codexHome string) []string {
+	env := make([]string, 0, 10)
+	for _, key := range []string{"PATH", "TMPDIR", "LANG", "LC_ALL", "TZ"} {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	return append(env,
+		"HOME="+codexHome,
+		"CODEX_HOME="+codexHome,
+		"RUST_LOG=error",
+	)
+}
+
 func writeRealAppServerConfig(t *testing.T, codexHome string, serverURL string) {
 	t.Helper()
 	content := fmt.Sprintf(`
 model = "mock-model"
 approval_policy = "never"
-sandbox_mode = "danger-full-access"
-chatgpt_base_url = %[1]q
+sandbox_mode = %q
+chatgpt_base_url = %q
 model_provider = "mock_provider"
 
 [model_providers.mock_provider]
 name = "Mock provider for Go SDK tests"
-base_url = %[2]q
+base_url = %q
 wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
-`, serverURL, serverURL+"/v1")
+`, realAppServerSandboxMode(), serverURL, serverURL+"/v1")
 	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(strings.TrimSpace(content)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func realAppServerSandboxMode() string {
+	if runtime.GOOS == "linux" {
+		return "workspace-write"
+	}
+	return "danger-full-access"
 }
 
 func realAssistantResponseSSE(text string) string {

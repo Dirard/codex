@@ -3,7 +3,10 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
+
+	"github.com/openai/codex/sdk/go/protocol"
 )
 
 func TestTurnHandleInjectsThreadAndTurnIdentity(t *testing.T) {
@@ -35,6 +38,73 @@ func TestTurnHandleInjectsThreadAndTurnIdentity(t *testing.T) {
 	interruptParams := requestParamsForMethod(t, transport, "turn/interrupt")
 	assertRequestThreadID(t, interruptParams, "thread-1")
 	assertRequestStringField(t, interruptParams, "turnId", "turn-1")
+}
+
+func TestCollectRunResultRejectsStreamClosedBeforeTerminalNotification(t *testing.T) {
+	stream := newNotificationStream(1, DefaultResourceStreamQueueBytes, nil)
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	limits, normalizeErr := normalizeLimits(ClientLimits{})
+	if normalizeErr != nil {
+		t.Fatal(normalizeErr)
+	}
+	_, err := collectRunResult(context.Background(), "turn-1", stream, limits)
+	var decodeErr *DecodeError
+	if !errors.As(err, &decodeErr) {
+		t.Fatalf("err = %T(%v), want *DecodeError", err, err)
+	}
+}
+
+func TestCollectRunResultLimitsStreamedItems(t *testing.T) {
+	stream := newNotificationStream(2, DefaultResourceStreamQueueBytes, nil)
+	for _, itemID := range []string{"item-1", "item-2"} {
+		stream.send(Notification{
+			RawParams: json.RawMessage(`{"item":{}}`),
+			Payload: protocol.ItemCompletedNotification{
+				ThreadID: "thread-1",
+				TurnID:   "turn-1",
+				Item:     protocol.ThreadItem{ID: protocol.SomeNonNull(itemID), TypeValue: "agentMessage"},
+			},
+		})
+	}
+
+	_, err := collectRunResult(context.Background(), "turn-1", stream, ClientLimits{
+		MaxRunResultItems: 1,
+		MaxRunResultBytes: DefaultMaxRunResultBytes,
+	})
+	var overflowErr *OverflowError
+	if !errors.As(err, &overflowErr) {
+		t.Fatalf("err = %T(%v), want *OverflowError", err, err)
+	}
+}
+
+func TestCollectRunResultLimitsTerminalFallbackItems(t *testing.T) {
+	stream := newNotificationStream(1, DefaultResourceStreamQueueBytes, nil)
+	stream.send(Notification{
+		RawParams: json.RawMessage(`{"turn":{"items":[{},{}]}}`),
+		Payload: protocol.TurnCompletedNotification{
+			ThreadID: "thread-1",
+			Turn: protocol.Turn{
+				ID:     "turn-1",
+				Status: protocol.TurnStatusCompleted,
+				Items: []protocol.ThreadItem{
+					{ID: protocol.SomeNonNull("item-1"), TypeValue: "agentMessage"},
+					{ID: protocol.SomeNonNull("item-2"), TypeValue: "agentMessage"},
+				},
+			},
+		},
+	})
+
+	_, err := collectRunResult(context.Background(), "turn-1", stream, ClientLimits{
+		MaxRunResultItems: 1,
+		MaxRunResultBytes: DefaultMaxRunResultBytes,
+	})
+	var overflowErr *OverflowError
+	if !errors.As(err, &overflowErr) {
+		t.Fatalf("err = %T(%v), want *OverflowError", err, err)
+	}
 }
 
 func assertRequestStringField(t *testing.T, params json.RawMessage, field string, want string) {
