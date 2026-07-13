@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"sync/atomic"
 
@@ -162,15 +161,6 @@ func (c *FuzzyFileSearchClient) releaseSession(sessionID string) {
 	delete(c.sessions, sessionID)
 }
 
-func (c *FuzzyFileSearchClient) closeSessionRoute(sessionID string) {
-	if c == nil || sessionID == "" {
-		return
-	}
-	if c.client != nil && c.client.router != nil {
-		c.client.router.closeKeys([]routerKey{{domain: "fuzzyFileSearch", identity: sessionID}}, nil)
-	}
-}
-
 func (c *FuzzyFileSearchClient) isSessionActive(sessionID string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -181,15 +171,4 @@ func (c *FuzzyFileSearchClient) isSessionKnown(sessionID string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.sessions[sessionID] != nil
-}
-
-func (c *Client) observeFuzzyFileSearchLifecycle(method string, params json.RawMessage) {
-	if c == nil || c.FuzzyFileSearch == nil || method != "fuzzyFileSearch/sessionCompleted" {
-		return
-	}
-	var payload protocol.FuzzyFileSearchSessionCompletedNotification
-	if err := json.Unmarshal(params, &payload); err != nil || payload.SessionID == "" {
-		return
-	}
-	c.FuzzyFileSearch.closeSessionRoute(payload.SessionID)
 }

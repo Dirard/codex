@@ -13,7 +13,7 @@ import (
 // codex-go-sdk-docs:account/rateLimits/read
 // codex-go-sdk-docs:account/read
 // codex-go-sdk-docs:account/usage/read
-func loginAndReadAccount(ctx context.Context, client *codex.Client, apiKey codex.APIKey) error {
+func loginAndReadAccount(ctx context.Context, client *codex.Client, apiKey codex.APIKey, bedrockRegion string) error {
 	login, err := client.Accounts.StartDeviceCodeLogin(ctx)
 	if err != nil {
 		return err
@@ -27,6 +27,9 @@ func loginAndReadAccount(ctx context.Context, client *codex.Client, apiKey codex
 	}
 	_, _ = login.Wait(ctx)
 	if err := client.Accounts.LoginWithAPIKey(ctx, apiKey); err != nil {
+		return err
+	}
+	if err := client.Accounts.LoginWithAmazonBedrock(ctx, apiKey, bedrockRegion); err != nil {
 		return err
 	}
 	if _, err := client.Accounts.Read(ctx, false); err != nil {

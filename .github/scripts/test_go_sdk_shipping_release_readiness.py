@@ -219,6 +219,228 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
                     fixture_substitutions=go_sdk_shipping_release_readiness.fixture_substitution_records(),
                 )
 
+    def test_collect_linux_release_artifacts_binds_archives_to_release_run(self) -> None:
+        if shutil.which("tar") is None or shutil.which("zstd") is None:
+            self.skipTest("tar and zstd are required for package archive fixtures")
+
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            artifacts_dir = root / "artifacts"
+            out_dir = root / "shipping-release-readiness-metadata"
+            artifacts_dir.mkdir()
+            self.write_linux_release_artifacts(
+                artifacts_dir,
+                root,
+                run_id="12345",
+                run_attempt="2",
+                commit_sha="a" * 40,
+            )
+
+            go_sdk_shipping_release_readiness.collect_linux_release_artifacts(
+                artifacts_dir,
+                out_dir,
+                run_id="12345",
+                run_attempt="2",
+                commit_sha="a" * 40,
+                release_tag="rust-v1.2.3",
+                verification_job="go-sdk-linux-verification",
+                verification_conclusion="success",
+                verification_commit_sha="a" * 40,
+            )
+
+            metadata = json.loads(
+                (out_dir / "shipping-release-readiness.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertFalse(metadata["notReleaseReady"])
+            self.assertTrue(metadata["linuxReleaseReady"])
+            self.assertEqual(metadata["evidenceKind"], "rustReleaseArtifactEvidence")
+            self.assertEqual(metadata["source"]["workflowRunId"], "12345")
+            self.assertEqual(metadata["source"]["workflowRunAttempt"], "2")
+            self.assertEqual(metadata["source"]["commitSha"], "a" * 40)
+            self.assertEqual(
+                metadata["goSdkVerification"],
+                {
+                    "workflow": go_sdk_shipping_release_readiness.RUST_RELEASE_WORKFLOW,
+                    "workflowRunId": "12345",
+                    "workflowRunAttempt": "2",
+                    "job": "go-sdk-linux-verification",
+                    "conclusion": "success",
+                    "commitSha": "a" * 40,
+                },
+            )
+            self.assertEqual(
+                sorted(metadata["targets"]),
+                sorted(go_sdk_shipping_release_readiness.LINUX_TARGETS),
+            )
+            for target, target_metadata in metadata["targets"].items():
+                self.assertEqual(
+                    target_metadata["packageArchive"]["artifactName"], target
+                )
+                self.assertEqual(
+                    target_metadata["appServerPackageArchive"]["artifactName"],
+                    f"{target}-app-server",
+                )
+                self.assertEqual(
+                    target_metadata["smokeEvidence"]["packageArchiveSha256"],
+                    target_metadata["packageArchive"]["sha256"],
+                )
+                self.assertEqual(
+                    target_metadata["smokeEvidence"]["sandboxSmoke"],
+                    go_sdk_shipping_release_readiness.REQUIRED_LINUX_SANDBOX_SMOKE,
+                )
+
+            public_manifest = artifacts_dir / "codex-package_SHA256SUMS"
+            final_evidence = root / "go-sdk-linux-release-readiness.json"
+            go_sdk_shipping_release_readiness.finalize_linux_release_evidence(
+                out_dir,
+                public_manifest,
+                final_evidence,
+                run_id="12345",
+                run_attempt="2",
+                commit_sha="a" * 40,
+                release_tag="rust-v1.2.3",
+            )
+            finalized = go_sdk_shipping_release_readiness.validate_linux_release_evidence(
+                final_evidence,
+                public_manifest,
+                run_id="12345",
+                run_attempt="2",
+                commit_sha="a" * 40,
+                release_tag="rust-v1.2.3",
+                require_publication_finalization=True,
+            )
+            self.assertTrue(finalized["publicationFinalized"])
+            self.assertEqual(
+                finalized["publicChecksumManifest"]["sha256"],
+                go_sdk_shipping_release_readiness.sha256_file(public_manifest),
+            )
+            for target in go_sdk_shipping_release_readiness.LINUX_TARGETS:
+                for package_key in ("packageArchive", "appServerPackageArchive"):
+                    self.assertEqual(
+                        finalized["targets"][target][package_key]["checksumManifestPath"],
+                        public_manifest.name,
+                    )
+
+    def test_finalize_linux_release_evidence_rejects_public_manifest_drift(self) -> None:
+        if shutil.which("tar") is None or shutil.which("zstd") is None:
+            self.skipTest("tar and zstd are required for package archive fixtures")
+
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            artifacts_dir = root / "artifacts"
+            out_dir = root / "shipping-release-readiness-metadata"
+            artifacts_dir.mkdir()
+            self.write_linux_release_artifacts(
+                artifacts_dir,
+                root,
+                run_id="12345",
+                run_attempt="1",
+                commit_sha="a" * 40,
+            )
+            go_sdk_shipping_release_readiness.collect_linux_release_artifacts(
+                artifacts_dir,
+                out_dir,
+                run_id="12345",
+                run_attempt="1",
+                commit_sha="a" * 40,
+                release_tag="rust-v1.2.3",
+                verification_job="go-sdk-linux-verification",
+                verification_conclusion="success",
+                verification_commit_sha="a" * 40,
+            )
+            public_manifest = artifacts_dir / "codex-package_SHA256SUMS"
+            public_manifest.write_text(
+                public_manifest.read_text(encoding="utf-8").replace("a", "b", 1),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "public checksum manifest"):
+                go_sdk_shipping_release_readiness.finalize_linux_release_evidence(
+                    out_dir,
+                    public_manifest,
+                    root / "go-sdk-linux-release-readiness.json",
+                    run_id="12345",
+                    run_attempt="1",
+                    commit_sha="a" * 40,
+                    release_tag="rust-v1.2.3",
+                )
+
+    def test_collect_linux_release_artifacts_rejects_foreign_smoke_evidence(self) -> None:
+        if shutil.which("tar") is None or shutil.which("zstd") is None:
+            self.skipTest("tar and zstd are required for package archive fixtures")
+
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            artifacts_dir = root / "artifacts"
+            out_dir = root / "shipping-release-readiness-metadata"
+            artifacts_dir.mkdir()
+            self.write_linux_release_artifacts(
+                artifacts_dir,
+                root,
+                run_id="12345",
+                run_attempt="1",
+                commit_sha="a" * 40,
+            )
+            evidence_path = next(artifacts_dir.rglob("go-sdk-release-smoke-*.json"))
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["workflowRunId"] = "foreign-run"
+            evidence_path.write_text(
+                json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "workflow run"):
+                go_sdk_shipping_release_readiness.collect_linux_release_artifacts(
+                    artifacts_dir,
+                    out_dir,
+                    run_id="12345",
+                    run_attempt="1",
+                    commit_sha="a" * 40,
+                    release_tag="rust-v1.2.3",
+                    verification_job="go-sdk-linux-verification",
+                    verification_conclusion="success",
+                    verification_commit_sha="a" * 40,
+                )
+
+    def test_collect_linux_release_artifacts_rejects_missing_sandbox_smoke(self) -> None:
+        if shutil.which("tar") is None or shutil.which("zstd") is None:
+            self.skipTest("tar and zstd are required for package archive fixtures")
+
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            artifacts_dir = root / "artifacts"
+            out_dir = root / "shipping-release-readiness-metadata"
+            artifacts_dir.mkdir()
+            self.write_linux_release_artifacts(
+                artifacts_dir,
+                root,
+                run_id="12345",
+                run_attempt="1",
+                commit_sha="a" * 40,
+            )
+            evidence_path = next(artifacts_dir.rglob("go-sdk-release-smoke-*.json"))
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence.pop("sandboxSmoke")
+            evidence_path.write_text(
+                json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "sandbox smoke evidence"):
+                go_sdk_shipping_release_readiness.collect_linux_release_artifacts(
+                    artifacts_dir,
+                    out_dir,
+                    run_id="12345",
+                    run_attempt="1",
+                    commit_sha="a" * 40,
+                    release_tag="rust-v1.2.3",
+                    verification_job="go-sdk-linux-verification",
+                    verification_conclusion="success",
+                    verification_commit_sha="a" * 40,
+                )
+
     def test_build_fixture_artifacts_uses_shared_package_archive_script(self) -> None:
         if shutil.which("tar") is None or shutil.which("zstd") is None:
             self.skipTest("tar and zstd are required for package archive fixtures")
@@ -327,6 +549,74 @@ class GoSdkShippingReleaseReadinessTest(unittest.TestCase):
                         omitted_members,
                     ):
                         zip_file.writestr(member, member)
+
+    def write_linux_release_artifacts(
+        self,
+        artifacts_dir: Path,
+        root: Path,
+        *,
+        run_id: str,
+        run_attempt: str,
+        commit_sha: str,
+    ) -> None:
+        manifest_lines = []
+        for target in go_sdk_shipping_release_readiness.LINUX_TARGETS:
+            primary_dir = artifacts_dir / target
+            app_server_dir = artifacts_dir / f"{target}-app-server"
+            primary_dir.mkdir()
+            app_server_dir.mkdir()
+            codex_archive = primary_dir / f"codex-package-{target}.tar.zst"
+            app_server_archive = (
+                app_server_dir / f"codex-app-server-package-{target}.tar.zst"
+            )
+            self.write_tar_zst(
+                codex_archive,
+                root,
+                go_sdk_shipping_release_readiness.required_codex_package_paths(target),
+            )
+            self.write_tar_zst(
+                app_server_archive,
+                root,
+                go_sdk_shipping_release_readiness.required_app_server_package_paths(
+                    target
+                ),
+            )
+            codex_sha256 = go_sdk_shipping_release_readiness.sha256_file(codex_archive)
+            app_server_sha256 = go_sdk_shipping_release_readiness.sha256_file(
+                app_server_archive
+            )
+            manifest_lines.extend(
+                [
+                    f"{codex_sha256}  {codex_archive.name}",
+                    f"{app_server_sha256}  {app_server_archive.name}",
+                ]
+            )
+            architecture = "x86_64" if target.startswith("x86_64") else "aarch64"
+            (primary_dir / f"go-sdk-release-smoke-{target}.json").write_text(
+                json.dumps(
+                    {
+                        "sourceWorkflow": ".github/workflows/rust-release.yml",
+                        "workflowRunId": run_id,
+                        "workflowRunAttempt": run_attempt,
+                        "commitSha": commit_sha,
+                        "target": target,
+                        "jobConclusion": "success",
+                        "unameMachine": architecture,
+                        "packageArchiveFilename": codex_archive.name,
+                        "packageArchiveSha256": codex_sha256,
+                        "smokeTests": go_sdk_shipping_release_readiness.REQUIRED_PACKAGE_ARCHIVE_SMOKE_TESTS,
+                        "sandboxSmoke": go_sdk_shipping_release_readiness.REQUIRED_LINUX_SANDBOX_SMOKE,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        (artifacts_dir / "codex-package_SHA256SUMS").write_text(
+            "\n".join(sorted(manifest_lines)) + "\n",
+            encoding="utf-8",
+        )
 
     def filtered_members(
         self,

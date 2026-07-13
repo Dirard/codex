@@ -242,26 +242,14 @@ func (c *RealtimeClient) isSessionActive(threadID string, sessionID string) bool
 	return session != nil && session.id == sessionID && !session.stopping
 }
 
-func (c *RealtimeClient) releaseThreadSession(threadID string) {
+func (c *RealtimeClient) takeThreadSessionFromClosed(threadID string) []*NotificationStream {
 	c.mu.Lock()
-	var streams []*NotificationStream
+	defer c.mu.Unlock()
 	if session := c.activeByThread[threadID]; session != nil {
-		streams = drainRealtimeStreams(session)
+		delete(c.activeByThread, threadID)
+		return drainRealtimeStreams(session)
 	}
-	delete(c.activeByThread, threadID)
-	c.mu.Unlock()
-	closeRealtimeStreams(streams)
-}
-
-func (c *RealtimeClient) releaseThreadSessionFromClosed(threadID string) {
-	c.mu.Lock()
-	var streams []*NotificationStream
-	if session := c.activeByThread[threadID]; session != nil {
-		streams = drainRealtimeStreams(session)
-	}
-	delete(c.activeByThread, threadID)
-	c.mu.Unlock()
-	closeRealtimeStreams(streams)
+	return nil
 }
 
 func (c *RealtimeClient) registerSessionStream(threadID string, sessionID string, stream *NotificationStream) error {
@@ -318,12 +306,12 @@ func closeRealtimeStreams(streams []*NotificationStream) {
 	}
 }
 
-func (c *Client) observeRealtimeLifecycle(method string, params json.RawMessage) {
+func (c *Client) prepareRealtimeLifecycle(method string, params json.RawMessage) []*NotificationStream {
 	threadID, ok := realtimeClosedThreadID(method, params)
 	if c == nil || c.Realtime == nil || !ok {
-		return
+		return nil
 	}
-	c.Realtime.releaseThreadSessionFromClosed(threadID)
+	return c.Realtime.takeThreadSessionFromClosed(threadID)
 }
 
 func realtimeClosedThreadID(method string, params json.RawMessage) (string, bool) {

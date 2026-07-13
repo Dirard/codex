@@ -57,7 +57,9 @@ func TestSDKServerHandlerRegisteredSuccess(t *testing.T) {
 					if params.ThreadID != "thread-1" || params.TurnID != "turn-1" || params.ItemID != "item-1" {
 						t.Fatalf("params = %#v", params)
 					}
-					return protocol.CommandExecutionRequestApprovalResponse{}, nil
+					return protocol.CommandExecutionRequestApprovalResponse{
+						Decision: protocol.CommandExecutionApprovalDecisionAccept,
+					}, nil
 				},
 			},
 		},
@@ -111,7 +113,9 @@ func TestSDKServerHandlerBlockedHandlerDoesNotBlockUnrelatedResponse(t *testing.
 				ItemCommandExecutionRequestApproval: func(context.Context, protocol.CommandExecutionRequestApprovalParams) (protocol.CommandExecutionRequestApprovalResponse, error) {
 					close(started)
 					<-release
-					return protocol.CommandExecutionRequestApprovalResponse{}, nil
+					return protocol.CommandExecutionRequestApprovalResponse{
+						Decision: protocol.CommandExecutionApprovalDecisionAccept,
+					}, nil
 				},
 			},
 		},
@@ -156,7 +160,9 @@ func TestSDKServerHandlerCallbackIntoSameClientUsesNormalRequestPath(t *testing.
 					if _, err := client.Raw().AccountUsageRead(ctx); err != nil {
 						return protocol.CommandExecutionRequestApprovalResponse{}, err
 					}
-					return protocol.CommandExecutionRequestApprovalResponse{}, nil
+					return protocol.CommandExecutionRequestApprovalResponse{
+						Decision: protocol.CommandExecutionApprovalDecisionAccept,
+					}, nil
 				},
 			},
 		},

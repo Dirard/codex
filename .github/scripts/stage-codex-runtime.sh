@@ -39,7 +39,11 @@ windows_release_shaped_msvc=0
 windows_msvc_host_platform=0
 package_archive_gzip=""
 package_archive_zstd=""
+package_archive_sha256=""
+package_archive_inventory_path=""
 build_metadata_job=""
+seed_provenance=""
+bazel_compilation_mode="fastbuild"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -123,6 +127,9 @@ esac
 if [[ "$release_package_archive" -eq 1 && "$cargo_profile" != "release" ]]; then
   echo "--release-package-archive requires --cargo-profile release." >&2
   exit 1
+fi
+if [[ "$cargo_profile" == "release" ]]; then
+  bazel_compilation_mode="opt"
 fi
 
 default_target() {
@@ -311,6 +318,10 @@ seed_root_from_bazel() {
   local label
   local metadata
   local bazel_host_platform_args=()
+  local bazel_mode_args=()
+  if [[ "$cargo_profile" == "release" ]]; then
+    bazel_mode_args=(-c opt)
+  fi
   platform="$(target_platform "$target")"
   label="//codex-rs/cli:codex_go_sdk_runtime_layout_${platform}"
   if [[ "$windows_msvc_host_platform" -eq 1 ]]; then
@@ -324,21 +335,21 @@ seed_root_from_bazel() {
   if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
     "$repo_root/.github/scripts/run-bazel-ci.sh" \
       --remote-download-toplevel \
-      -- build "${bazel_host_platform_args[@]}" -- "$label"
+      -- build "${bazel_mode_args[@]}" "${bazel_host_platform_args[@]}" -- "$label"
   else
-    bazel build "${bazel_host_platform_args[@]}" "$label"
+    bazel build "${bazel_mode_args[@]}" "${bazel_host_platform_args[@]}" "$label"
   fi
 
   if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
     metadata="$(
       "$repo_root/.github/scripts/run-bazel-ci.sh" \
-        -- cquery "${bazel_host_platform_args[@]}" --output=files "$label" \
+        -- cquery "${bazel_mode_args[@]}" "${bazel_host_platform_args[@]}" --output=files "$label" \
         | grep '/codex-package.json$' \
         | head -n 1
     )"
   else
     metadata="$(
-      bazel cquery "${bazel_host_platform_args[@]}" --output=files "$label" \
+      bazel cquery "${bazel_mode_args[@]}" "${bazel_host_platform_args[@]}" --output=files "$label" \
         | grep '/codex-package.json$' \
         | head -n 1
     )"
@@ -423,7 +434,10 @@ preflight_zstd() {
 stage_from_seed() {
   seed_root="${CODEX_GO_SDK_TEST_LAYOUT_ROOT:-}"
   if [[ -z "$seed_root" ]]; then
+    seed_provenance="bazelOutput"
     seed_root="$(seed_root_from_bazel)"
+  else
+    seed_provenance="testFixture"
   fi
   if [[ ! -f "$seed_root/codex-package.json" ]]; then
     echo "Bazel runtime seed is missing codex-package.json: $seed_root" >&2
@@ -469,15 +483,16 @@ materialize_staged_binary() {
 stage_from_archive() {
   local seed_root
   local archive_root
-  local package_dir
   local archive_dir
   local gzip_archive
   local zstd_archive
-  local python
   local -a resource_args
   seed_root="${CODEX_GO_SDK_TEST_LAYOUT_ROOT:-}"
   if [[ -z "$seed_root" ]]; then
+    seed_provenance="bazelOutput"
     seed_root="$(seed_root_from_bazel)"
+  else
+    seed_provenance="testFixture"
   fi
   if [[ ! -x "$seed_root/bin/$(entrypoint_name)" ]]; then
     echo "Package archive staging requires executable seed entrypoint: $seed_root/bin/$(entrypoint_name)" >&2
@@ -490,13 +505,11 @@ stage_from_archive() {
 
   preflight_zstd
   archive_root="$(mktemp -d "${TMPDIR:-/tmp}/codex-go-sdk-package-archive.XXXXXX")"
-  package_dir="$archive_root/package"
   archive_dir="$archive_root/archives"
   gzip_archive="$archive_dir/codex-package-${target}.tar.gz"
   zstd_archive="$archive_dir/codex-package-${target}.tar.zst"
   package_archive_gzip="$gzip_archive"
   package_archive_zstd="$zstd_archive"
-  python="$(python_bin)"
   resource_args=(--rg-bin "$helper_target_root/$(rg_name)")
   if ! is_windows_target; then
     resource_args+=(--zsh-bin "$helper_target_root/zsh")
@@ -511,18 +524,23 @@ stage_from_archive() {
     )
   fi
 
-  "$python" "$repo_root/scripts/build_codex_package.py" \
+  bash "$repo_root/.github/scripts/build-codex-package-archive.sh" \
     --target "$target" \
-    --variant codex \
-    --entrypoint-bin "$seed_root/bin/$(entrypoint_name)" \
+    --bundle primary \
+    --entrypoint-dir "$seed_root/bin" \
+    --archive-dir "$archive_dir" \
     --code-mode-host-bin "$seed_root/bin/$(code_mode_host_name)" \
-    --cargo-profile release \
     --require-materialized-helper-sources \
-    --package-dir "$package_dir" \
-    --archive-output "$gzip_archive" \
-    --archive-output "$zstd_archive" \
     "${resource_args[@]}" \
-    --force >&2
+    >&2
+
+  package_archive_sha256="$(sha256sum "$zstd_archive" | awk '{print $1}')"
+  package_archive_inventory_path="$archive_root/package-archive-inventory.txt"
+  zstd -dc "$zstd_archive" | tar -tf - | sed 's#^\./##' | sort -u >"$package_archive_inventory_path"
+  if [[ ! -s "$package_archive_inventory_path" ]]; then
+    echo "Package archive inventory is empty: $zstd_archive" >&2
+    exit 1
+  fi
 
   rm -rf "$out"
   mkdir -p "$out"
@@ -562,12 +580,14 @@ import sys
 
 metadata = {
     "archiveFormats": ${archive_formats_json},
+    "bazelCompilationMode": "${bazel_compilation_mode}",
     "bazelTarget": "${target}",
     "buildMetadataJob": "${build_metadata_job}",
     "cargoProfile": "${cargo_profile}",
     "codeExecPath": os.path.abspath("${out}/bin/$(entrypoint_name)"),
     "layoutTarget": "${target}",
     "runtimeSource": "${runtime_source}",
+    "seedProvenance": "${seed_provenance}",
     "windowsMsvcHostPlatform": bool(${windows_msvc_host_platform}),
     "windowsReleaseShapedMsvc": bool(${windows_release_shaped_msvc}),
     "zstdSource": "${zstd_source_kind}",
@@ -588,10 +608,15 @@ if os.path.isfile(helper_manifest_path):
         "target": helper_manifest.get("target"),
     }
 if "${runtime_source}" == "packageArchive":
+    with open("${package_archive_inventory_path}", encoding="utf-8") as handle:
+        package_archive_inventory = [line.strip() for line in handle if line.strip()]
     metadata["packageArchive"] = {
         "archiveFormats": ${archive_formats_json},
+        "builder": ".github/scripts/build-codex-package-archive.sh",
         "gzipPath": os.path.abspath("${package_archive_gzip}"),
+        "inventory": package_archive_inventory,
         "path": os.path.abspath("${package_archive_zstd}"),
+        "sha256": "${package_archive_sha256}",
         "target": "${target}",
         "windowsMsvcHostPlatform": bool(${windows_msvc_host_platform}),
         "windowsReleaseShapedMsvc": bool(${windows_release_shaped_msvc}),

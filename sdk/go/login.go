@@ -55,6 +55,8 @@ func (h *LoginHandle) Wait(ctx context.Context) (*LoginResult, error) {
 	if err := h.client.ensureHighLevelEnabled("account login wait"); err != nil {
 		return nil, err
 	}
+	accountUpdates := h.client.router.subscribeGlobal()
+	defer accountUpdates.Close()
 	stream := h.client.router.subscribeKeys([]routerKey{
 		{domain: "account", identity: h.id},
 		{domain: "account", identity: ""},
@@ -80,7 +82,29 @@ func (h *LoginHandle) Wait(ctx context.Context) (*LoginResult, error) {
 			continue
 		}
 		errorText, _ := payload.Error.Value()
-		return &LoginResult{LoginID: loginID, Success: payload.Success, Error: errorText}, nil
+		result := &LoginResult{LoginID: loginID, Success: payload.Success, Error: errorText}
+		if !payload.Success {
+			return result, nil
+		}
+		account, err := h.client.Accounts.Read(ctx, false)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := account.Account.Value(); ok {
+			return result, nil
+		}
+		for {
+			notification, ok := accountUpdates.Next(ctx)
+			if !ok {
+				if err := accountUpdates.Err(); err != nil {
+					return nil, err
+				}
+				return nil, &ClosedError{}
+			}
+			if _, ok := notification.Payload.(protocol.AccountUpdatedNotification); ok {
+				return result, nil
+			}
+		}
 	}
 }
 
