@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/openai/codex/sdk/go/protocol"
 )
 
 func TestNotificationRouterRoutesCurrentDomains(t *testing.T) {
@@ -37,7 +41,7 @@ func TestNotificationRouterRoutesCurrentDomains(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			stream := router.subscribe(tt.domain, tt.identity)
 			defer stream.Close()
-			router.route(ctx, tt.method, tt.params, nil)
+			routeNotificationForTest(router, ctx, tt.method, tt.params, nil)
 			notification := nextNotificationForTest(t, stream)
 			if notification.Method != tt.method {
 				t.Fatalf("method = %q, want %q", notification.Method, tt.method)
@@ -53,12 +57,12 @@ func TestNotificationRouterRoutesGlobalOptionalAndUnknownNotifications(t *testin
 	warningsByThread := router.subscribe("warning", "thread-1")
 	defer warningsByThread.Close()
 
-	router.route(context.Background(), "skills/changed", json.RawMessage(`{}`), nil)
+	routeNotificationForTest(router, context.Background(), "skills/changed", json.RawMessage(`{}`), nil)
 	if got := nextNotificationForTest(t, global); got.Method != "skills/changed" {
 		t.Fatalf("global method = %q, want skills/changed", got.Method)
 	}
 
-	router.route(context.Background(), "warning", json.RawMessage(`{"threadId":"thread-1","message":"careful"}`), nil)
+	routeNotificationForTest(router, context.Background(), "warning", json.RawMessage(`{"threadId":"thread-1","message":"careful"}`), nil)
 	if got := nextNotificationForTest(t, warningsByThread); got.Method != "warning" {
 		t.Fatalf("warning method = %q, want warning", got.Method)
 	}
@@ -66,12 +70,12 @@ func TestNotificationRouterRoutesGlobalOptionalAndUnknownNotifications(t *testin
 		t.Fatalf("global warning method = %q, want warning", got.Method)
 	}
 
-	router.route(context.Background(), "warning", json.RawMessage(`{"message":"careful"}`), nil)
+	routeNotificationForTest(router, context.Background(), "warning", json.RawMessage(`{"message":"careful"}`), nil)
 	if got := nextNotificationForTest(t, global); got.Method != "warning" {
 		t.Fatalf("global fallback method = %q, want warning", got.Method)
 	}
 
-	router.route(context.Background(), "future/event", json.RawMessage(`{"value":1}`), json.RawMessage(`{"traceId":"trace-1"}`))
+	routeNotificationForTest(router, context.Background(), "future/event", json.RawMessage(`{"value":1}`), json.RawMessage(`{"traceId":"trace-1"}`))
 	unknown := nextNotificationForTest(t, global)
 	payload, ok := unknown.Payload.(UnknownNotification)
 	if !ok {
@@ -87,7 +91,7 @@ func TestNotificationRouterClosesTerminalDomainStream(t *testing.T) {
 	stream := router.subscribe("process", "handle-1")
 	defer stream.Close()
 
-	router.route(context.Background(), "process/exited", json.RawMessage(`{"processHandle":"handle-1","exitCode":0}`), nil)
+	routeNotificationForTest(router, context.Background(), "process/exited", json.RawMessage(`{"processHandle":"handle-1","exitCode":0}`), nil)
 	if got := nextNotificationForTest(t, stream); got.Method != "process/exited" {
 		t.Fatalf("method = %q, want process/exited", got.Method)
 	}
@@ -106,9 +110,9 @@ func TestNotificationRouterPendingQueueOverflowClosesOnlyAffectedHandle(t *testi
 	})
 	ctx := context.Background()
 
-	router.route(ctx, "turn/plan/updated", json.RawMessage(`{"threadId":"thread-1","turnId":"overflowed"}`), nil)
-	router.route(ctx, "turn/plan/updated", json.RawMessage(`{"threadId":"thread-1","turnId":"overflowed"}`), nil)
-	router.route(ctx, "turn/plan/updated", json.RawMessage(`{"threadId":"thread-1","turnId":"healthy"}`), nil)
+	routeNotificationForTest(router, ctx, "turn/plan/updated", json.RawMessage(`{"threadId":"thread-1","turnId":"overflowed"}`), nil)
+	routeNotificationForTest(router, ctx, "turn/plan/updated", json.RawMessage(`{"threadId":"thread-1","turnId":"overflowed"}`), nil)
+	routeNotificationForTest(router, ctx, "turn/plan/updated", json.RawMessage(`{"threadId":"thread-1","turnId":"healthy"}`), nil)
 
 	overflowed := router.subscribeTurn("thread-1", "overflowed")
 	defer overflowed.Close()
@@ -127,65 +131,197 @@ func TestNotificationRouterPendingQueueOverflowClosesOnlyAffectedHandle(t *testi
 	}
 }
 
-func TestNotificationRouterPendingMapOverflowClosesEvictedHandle(t *testing.T) {
+func TestNotificationRouterPendingNotificationBytesAreBounded(t *testing.T) {
+	router := newLimitedTestNotificationRouter(t, ClientLimits{
+		PendingTurnQueue:         4,
+		PendingTurnMap:           4,
+		PendingNotificationBytes: 512,
+	})
+	t.Cleanup(router.close)
+	params := json.RawMessage(fmt.Sprintf(
+		`{"processHandle":"large","delta":"%s"}`,
+		strings.Repeat("x", 512),
+	))
+	routeNotificationForTest(router, context.Background(), "process/outputDelta", params, nil)
+
+	stream := router.subscribe("process", "large")
+	defer stream.Close()
+	var overflowErr *OverflowError
+	if !errors.As(stream.Err(), &overflowErr) {
+		t.Fatalf("stream error = %T %[1]v, want *OverflowError", stream.Err())
+	}
+	router.mu.Lock()
+	defer router.mu.Unlock()
+	if router.pendingBytes > router.limits.PendingNotificationBytes {
+		t.Fatalf("pending bytes = %d, cap = %d", router.pendingBytes, router.limits.PendingNotificationBytes)
+	}
+}
+
+func TestNotificationRouterGlobalSubscriberBytesAreBounded(t *testing.T) {
+	router := newLimitedTestNotificationRouter(t, ClientLimits{
+		GlobalSubscriberQueue:      4,
+		GlobalSubscriberQueueBytes: 512,
+	})
+	t.Cleanup(router.close)
+	stream := router.subscribeGlobal()
+	defer stream.Close()
+	params := json.RawMessage(fmt.Sprintf(`{"value":"%s"}`, strings.Repeat("x", 512)))
+	routeNotificationForTest(router, context.Background(), "future/event", params, nil)
+
+	var overflowErr *OverflowError
+	if !errors.As(stream.Err(), &overflowErr) {
+		t.Fatalf("stream error = %T %[1]v, want *OverflowError", stream.Err())
+	}
+}
+
+func TestNotificationRouterPendingMapOverflowStateIsBounded(t *testing.T) {
+	router := newLimitedTestNotificationRouter(t, ClientLimits{
+		PendingTurnQueue: 4,
+		PendingTurnMap:   2,
+	})
+	t.Cleanup(router.close)
+
+	for i := range 1000 {
+		params := json.RawMessage(fmt.Sprintf(`{"processHandle":"process-%d","delta":"x"}`, i))
+		routeNotificationForTest(router, context.Background(), "process/outputDelta", params, nil)
+	}
+
+	router.mu.Lock()
+	defer router.mu.Unlock()
+	if got := len(router.pending); got > router.limits.PendingTurnMap {
+		t.Fatalf("pending entries = %d, cap = %d", got, router.limits.PendingTurnMap)
+	}
+	if got := len(router.overflow); got > router.limits.PendingTurnMap {
+		t.Fatalf("overflow entries = %d, cap = %d", got, router.limits.PendingTurnMap)
+	}
+	if got := len(router.timers); got > router.limits.PendingTurnMap+1 {
+		t.Fatalf("pending timers = %d, cap = %d", got, router.limits.PendingTurnMap+1)
+	}
+}
+
+func TestNotificationRouterMalformedKnownTerminalNotificationFailsClosed(t *testing.T) {
+	router := newTestNotificationRouter(t)
+	stream := router.subscribeTurn("thread-1", "turn-1")
+	t.Cleanup(func() { _ = stream.Close() })
+
+	router.route(
+		context.Background(),
+		"turn/completed",
+		json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":7}}`),
+		nil,
+	)
+	if notification, ok := stream.Next(context.Background()); ok {
+		t.Fatalf("unexpected notification: %#v", notification)
+	}
+	var decodeErr *DecodeError
+	if !errors.As(stream.Err(), &decodeErr) {
+		t.Fatalf("stream err = %T(%v), want *DecodeError", stream.Err(), stream.Err())
+	}
+	if errors.Unwrap(decodeErr) == nil {
+		t.Fatal("decode error does not preserve the generated decoder cause")
+	}
+}
+
+func TestNotificationRouterPendingMapOverflowPreservesTrackedHandle(t *testing.T) {
 	router := newLimitedTestNotificationRouter(t, ClientLimits{
 		PendingTurnQueue: 4,
 		PendingTurnMap:   1,
 	})
 	ctx := context.Background()
 
-	router.route(ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"evicted","delta":"a"}`), nil)
-	router.route(ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"retained","delta":"b"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"tracked","delta":"a"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"overflowed","delta":"b"}`), nil)
 
-	evicted := router.subscribe("process", "evicted")
-	defer evicted.Close()
+	tracked := router.subscribe("process", "tracked")
+	defer tracked.Close()
+	if tracked.Err() != nil {
+		t.Fatalf("tracked stream err = %v, want nil", tracked.Err())
+	}
+	if got := nextNotificationForTest(t, tracked); got.Method != "process/outputDelta" {
+		t.Fatalf("tracked method = %q, want process/outputDelta", got.Method)
+	}
+
+	overflowed := router.subscribe("process", "overflowed")
+	defer overflowed.Close()
 	var overflowErr *OverflowError
-	if !errors.As(evicted.Err(), &overflowErr) {
-		t.Fatalf("evicted stream err = %T %[1]v, want *OverflowError", evicted.Err())
+	if !errors.As(overflowed.Err(), &overflowErr) {
+		t.Fatalf("overflowed stream err = %T %[1]v, want *OverflowError", overflowed.Err())
 	}
+}
 
-	retained := router.subscribe("process", "retained")
-	defer retained.Close()
-	if retained.Err() != nil {
-		t.Fatalf("retained stream err = %v, want nil", retained.Err())
+func TestNotificationRouterPendingMapOverflowDoesNotPoisonUnrelatedHandle(t *testing.T) {
+	router := newLimitedTestNotificationRouter(t, ClientLimits{
+		PendingTurnQueue: 4,
+		PendingTurnMap:   1,
+	})
+	ctx := context.Background()
+
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"tracked","delta":"a"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"overflowed","delta":"b"}`), nil)
+
+	unrelated := router.subscribe("process", "unrelated")
+	defer unrelated.Close()
+	if err := unrelated.Err(); err != nil {
+		t.Fatalf("unrelated stream err = %v, want nil", err)
 	}
-	if got := nextNotificationForTest(t, retained); got.Method != "process/outputDelta" {
-		t.Fatalf("retained method = %q, want process/outputDelta", got.Method)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"unrelated","delta":"live"}`), nil)
+	if got := nextNotificationForTest(t, unrelated); got.Method != "process/outputDelta" {
+		t.Fatalf("unrelated method = %q, want process/outputDelta", got.Method)
 	}
 }
 
 func TestNotificationRouterOverflowSentinelsSurviveDistinctMapOverflows(t *testing.T) {
 	router := newLimitedTestNotificationRouter(t, ClientLimits{
 		PendingTurnQueue: 4,
+		PendingTurnMap:   2,
+	})
+	ctx := context.Background()
+
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"tracked-1","delta":"a"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"tracked-2","delta":"b"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"overflowed-1","delta":"b"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"overflowed-2","delta":"c"}`), nil)
+
+	for _, identity := range []string{"tracked-1", "tracked-2"} {
+		tracked := router.subscribe("process", identity)
+		defer tracked.Close()
+		if tracked.Err() != nil {
+			t.Fatalf("%s stream err = %v, want nil", identity, tracked.Err())
+		}
+		if got := nextNotificationForTest(t, tracked); got.Method != "process/outputDelta" {
+			t.Fatalf("%s method = %q, want process/outputDelta", identity, got.Method)
+		}
+	}
+
+	for _, identity := range []string{"overflowed-1", "overflowed-2"} {
+		overflowed := router.subscribe("process", identity)
+		defer overflowed.Close()
+		var overflowErr *OverflowError
+		if !errors.As(overflowed.Err(), &overflowErr) {
+			t.Fatalf("%s stream err = %T %[2]v, want *OverflowError", identity, overflowed.Err())
+		}
+	}
+}
+
+func TestNotificationRouterOverflowSentinelCapacityFailsClosed(t *testing.T) {
+	router := newLimitedTestNotificationRouter(t, ClientLimits{
+		PendingTurnQueue: 4,
 		PendingTurnMap:   1,
 	})
 	ctx := context.Background()
 
-	router.route(ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"evicted-1","delta":"a"}`), nil)
-	router.route(ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"evicted-2","delta":"b"}`), nil)
-	router.route(ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"retained","delta":"c"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"tracked","delta":"a"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"overflowed-1","delta":"b"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"overflowed-2","delta":"c"}`), nil)
 
-	evicted1 := router.subscribe("process", "evicted-1")
-	defer evicted1.Close()
+	stream := router.subscribe("process", "unrelated")
+	defer stream.Close()
 	var overflowErr *OverflowError
-	if !errors.As(evicted1.Err(), &overflowErr) {
-		t.Fatalf("evicted-1 stream err = %T %[1]v, want *OverflowError", evicted1.Err())
+	if !errors.As(stream.Err(), &overflowErr) {
+		t.Fatalf("router terminal err = %T %[1]v, want *OverflowError", stream.Err())
 	}
-
-	evicted2 := router.subscribe("process", "evicted-2")
-	defer evicted2.Close()
-	overflowErr = nil
-	if !errors.As(evicted2.Err(), &overflowErr) {
-		t.Fatalf("evicted-2 stream err = %T %[1]v, want *OverflowError", evicted2.Err())
-	}
-
-	retained := router.subscribe("process", "retained")
-	defer retained.Close()
-	if retained.Err() != nil {
-		t.Fatalf("retained stream err = %v, want nil", retained.Err())
-	}
-	if got := nextNotificationForTest(t, retained); got.Method != "process/outputDelta" {
-		t.Fatalf("retained method = %q, want process/outputDelta", got.Method)
+	if overflowErr.Reason != "pending overflow sentinel capacity exceeded" {
+		t.Fatalf("overflow reason = %q", overflowErr.Reason)
 	}
 }
 
@@ -198,8 +334,8 @@ func TestNotificationRouterLiveDeliveryDoesNotCreateAlternatePendingKeys(t *test
 
 	liveTurn := router.subscribeTurn("thread-1", "turn-live")
 	defer liveTurn.Close()
-	router.route(ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"process-waiting","delta":"before"}`), nil)
-	router.route(ctx, "turn/plan/updated", json.RawMessage(`{"threadId":"thread-1","turnId":"turn-live"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"process-waiting","delta":"before"}`), nil)
+	routeNotificationForTest(router, ctx, "turn/plan/updated", json.RawMessage(`{"threadId":"thread-1","turnId":"turn-live"}`), nil)
 
 	if got := nextNotificationForTest(t, liveTurn); got.Method != "turn/plan/updated" {
 		t.Fatalf("live turn method = %q, want turn/plan/updated", got.Method)
@@ -217,14 +353,14 @@ func TestNotificationRouterLiveDeliveryDoesNotCreateAlternatePendingKeys(t *test
 func TestNotificationRouterReplaysPendingBeforeLiveTerminalDelivery(t *testing.T) {
 	router := newTestNotificationRouter(t)
 	ctx := context.Background()
-	router.route(ctx, "turn/plan/updated", json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1"}`), nil)
+	routeNotificationForTest(router, ctx, "turn/plan/updated", json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1"}`), nil)
 
 	turnFilter := notificationTurnFilter("thread-1", "turn-1")
 	triggered := false
 	stream := router.subscribeKeys(turnScopedRouterKeys("turn-1"), func(notification Notification) bool {
 		if notification.Method == "turn/plan/updated" && !triggered {
 			triggered = true
-			router.route(ctx, "turn/completed", json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1"}}`), nil)
+			routeNotificationForTest(router, ctx, "turn/completed", json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1"}}`), nil)
 		}
 		return turnFilter(notification)
 	})
@@ -248,9 +384,9 @@ func TestNotificationRouterReplaysCrossDomainPendingInArrivalOrder(t *testing.T)
 	router := newTestNotificationRouter(t)
 	ctx := context.Background()
 
-	router.route(ctx, "turn/started", json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1"}}`), nil)
-	router.route(ctx, "item/completed", json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","item":{"id":"item-1","type":"agentMessage","text":"hello"}}`), nil)
-	router.route(ctx, "turn/completed", json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed","items":[]}}`), nil)
+	routeNotificationForTest(router, ctx, "turn/started", json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1"}}`), nil)
+	routeNotificationForTest(router, ctx, "item/completed", json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","item":{"id":"item-1","type":"agentMessage","text":"hello"}}`), nil)
+	routeNotificationForTest(router, ctx, "turn/completed", json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed","items":[]}}`), nil)
 
 	stream := router.subscribeTurn("thread-1", "turn-1")
 	defer stream.Close()
@@ -265,6 +401,60 @@ func TestNotificationRouterReplaysCrossDomainPendingInArrivalOrder(t *testing.T)
 	}
 	if err := stream.Err(); err != nil {
 		t.Fatalf("stream error = %v, want nil", err)
+	}
+}
+
+func TestNotificationRouterDoesNotBufferUnclaimableThreadNotifications(t *testing.T) {
+	router := newLimitedTestNotificationRouter(t, ClientLimits{
+		PendingTurnQueue: 4,
+		PendingTurnMap:   1,
+	})
+	ctx := context.Background()
+
+	routeNotificationForTest(router, ctx, "thread/started", json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil)
+	routeNotificationForTest(router, ctx, "thread/started", json.RawMessage(`{"thread":{"id":"thread-2"}}`), nil)
+	routeNotificationForTest(router, ctx, "mcpServer/startupStatus/updated", json.RawMessage(`{"name":"server-1"}`), nil)
+	routeNotificationForTest(router, ctx, "mcpServer/startupStatus/updated", json.RawMessage(`{"name":"server-2"}`), nil)
+	routeNotificationForTest(router, ctx, "turn/started", json.RawMessage(`{"threadId":"thread-3","turn":{"id":"turn-1"}}`), nil)
+
+	stream := router.subscribeTurn("thread-3", "turn-1")
+	defer stream.Close()
+	if got := nextNotificationForTest(t, stream); got.Method != "turn/started" {
+		t.Fatalf("method = %q, want turn/started", got.Method)
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream error = %v, want nil", err)
+	}
+}
+
+func TestNotificationRouterClaimRemovesPendingAliases(t *testing.T) {
+	router := newTestNotificationRouter(t)
+	notification := Notification{Method: "future/event"}
+	keys := []routerKey{
+		{domain: "process", identity: "resource-1"},
+		{domain: "command", identity: "resource-1"},
+	}
+	router.mu.Lock()
+	router.nextPendingSeq++
+	pending := pendingNotification{seq: router.nextPendingSeq, notification: notification}
+	for _, key := range keys {
+		router.appendPendingLocked(key, pending)
+	}
+	router.mu.Unlock()
+
+	stream := router.subscribe("process", "resource-1")
+	defer stream.Close()
+	if got := nextNotificationForTest(t, stream); got.Method != notification.Method {
+		t.Fatalf("method = %q, want %q", got.Method, notification.Method)
+	}
+
+	router.mu.Lock()
+	defer router.mu.Unlock()
+	if len(router.pending) != 0 {
+		t.Fatalf("pending aliases = %#v, want none", router.pending)
+	}
+	if router.pendingBytes != 0 {
+		t.Fatalf("pending bytes = %d, want 0", router.pendingBytes)
 	}
 }
 
@@ -295,4 +485,28 @@ func nextNotificationForTest(t *testing.T, stream *NotificationStream) Notificat
 		t.Fatalf("stream closed before notification: %v", stream.Err())
 	}
 	return notification
+}
+
+func routeNotificationForTest(router *notificationRouter, ctx context.Context, method string, params json.RawMessage, trace json.RawMessage) {
+	notification := Notification{
+		Method:    method,
+		RawParams: append([]byte(nil), params...),
+		Trace:     append([]byte(nil), trace...),
+	}
+	metadata, known := protocol.ServerNotificationRoutingByMethod[method]
+	if known {
+		notification.Payload = append(json.RawMessage(nil), params...)
+	} else {
+		notification.Payload = UnknownNotification{
+			Method: method,
+			Params: append([]byte(nil), params...),
+			Trace:  append([]byte(nil), trace...),
+		}
+	}
+	keys := routingKeys(metadata, params)
+	pendingKeys := pendingRoutingKeys(metadata, params)
+	realtimeKeys := realtimeRoutingKeys(method, params)
+	keys = append(keys, realtimeKeys...)
+	pendingKeys = append(pendingKeys, realtimeKeys...)
+	router.deliver(ctx, notification, keys, pendingKeys, true)
 }
