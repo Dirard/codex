@@ -32,6 +32,7 @@ pub(crate) enum ResponsesStreamRequest {
 pub(crate) struct ResponsesStreamRetryState {
     retries: u64,
     connection_retries: u64,
+    server_overloaded_retries: u64,
     connection_retry_delay: Duration,
 }
 
@@ -40,6 +41,7 @@ impl Default for ResponsesStreamRetryState {
         Self {
             retries: 0,
             connection_retries: 0,
+            server_overloaded_retries: 0,
             connection_retry_delay: INITIAL_CONNECTION_RETRY_DELAY,
         }
     }
@@ -84,7 +86,12 @@ pub(crate) async fn handle_response_stream_error(
         ResponsesStreamRequest::Sampling => RetryOperation::Sampling,
         ResponsesStreamRequest::RemoteCompactionV2 => RetryOperation::RemoteCompactionV2,
     };
-    let retry_count = retry_state.retries.saturating_add(1);
+    let (retries, max_retries) = if matches!(err.details(), CodexErrorDetails::ServerOverloaded) {
+        (&mut retry_state.server_overloaded_retries, max_retries.max(3))
+    } else {
+        (&mut retry_state.retries, max_retries)
+    };
+    let retry_count = retries.saturating_add(1);
     let Some(delay) = err.retry_delay(retry_count) else {
         return Err(err);
     };
@@ -117,7 +124,8 @@ pub(crate) async fn handle_response_stream_error(
         return Ok(());
     }
 
-    if retry_state.retries >= max_retries
+    // TODO(anp): Respect server retry advice before issuing the fallback HTTP request.
+    if *retries >= max_retries
         && client_session.try_switch_fallback_transport(
             &turn_context.session_telemetry,
             turn_context.model_info(),
@@ -134,12 +142,12 @@ pub(crate) async fn handle_response_stream_error(
             }),
         )
         .await;
-        retry_state.retries = 0;
+        *retries = 0;
         return Ok(());
     }
 
-    if retry_state.retries < max_retries {
-        retry_state.retries = retry_count;
+    if *retries < max_retries {
+        *retries = retry_count;
         log_retry(request, turn_context, &err, retry_count, max_retries, delay);
 
         // In release builds, hide the first websocket retry notification to reduce noisy
