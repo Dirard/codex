@@ -3787,6 +3787,71 @@ async fn incomplete_response_emits_content_filter_error_message() -> anyhow::Res
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_overloaded_uses_independent_retry_budget() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    let responses_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse_failed(
+                "resp-generic-before",
+                "server_error",
+                "temporary stream failure",
+            ),
+            sse_failed(
+                "resp-overloaded-1",
+                "server_is_overloaded",
+                "Selected model is at capacity. Please try different model.",
+            ),
+            sse_failed(
+                "resp-overloaded-2",
+                "server_is_overloaded",
+                "Selected model is at capacity. Please try different model.",
+            ),
+            sse_failed(
+                "resp-overloaded-3",
+                "server_is_overloaded",
+                "Selected model is at capacity. Please try different model.",
+            ),
+            sse(vec![
+                ev_response_created("resp-first-success"),
+                ev_completed("resp-first-success"),
+            ]),
+            sse_failed(
+                "resp-overloaded-4",
+                "server_is_overloaded",
+                "Selected model is at capacity. Please try different model.",
+            ),
+            sse_failed(
+                "resp-generic-after-1",
+                "server_error",
+                "temporary stream failure",
+            ),
+            sse_failed(
+                "resp-generic-after-2",
+                "server_error",
+                "temporary stream failure",
+            ),
+        ],
+    )
+    .await;
+
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(1);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("first").await?;
+    test.submit_turn("second").await?;
+
+    assert_eq!(responses_mock.requests().len(), 8);
+    Ok(())
+}
+
 /// We try to avoid setting env vars in tests because std::env::set_var() is
 /// process-wide and unsafe. Though for this test, we want to simulate the
 /// presence of an environment variable that the provider will read for auth, so

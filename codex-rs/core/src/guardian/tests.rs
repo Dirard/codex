@@ -2389,7 +2389,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_review_retries_transient_session_failure_then_approves() -> anyhow::Result<()> {
+async fn guardian_review_retries_overload_in_same_session() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -2426,7 +2426,7 @@ async fn guardian_review_retries_transient_session_failure_then_approves() -> an
         /*retry_reason*/ None,
         guardian_output_schema(),
         /*external_cancel*/ None,
-        /*max_attempts*/ 3,
+        /*max_attempts*/ 1,
     )
     .await;
 
@@ -2435,10 +2435,10 @@ async fn guardian_review_retries_transient_session_failure_then_approves() -> an
     };
     assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
     assert_eq!(assessment.rationale, "retry succeeded");
-    assert_eq!(metadata.attempt_count, 2);
+    assert_eq!(metadata.attempt_count, 1);
     assert!(matches!(
         metadata.guardian_session_kind,
-        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
+        Some(codex_analytics::GuardianReviewSessionKind::TrunkNew)
     ));
     assert_eq!(request_log.requests().len(), 2);
     Ok(())

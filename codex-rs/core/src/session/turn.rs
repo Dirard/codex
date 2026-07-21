@@ -1147,6 +1147,7 @@ async fn run_sampling_request(
     );
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
+    let mut server_overloaded_retries = 0;
     let mut initial_input = Some(input);
     let mut original_input = None;
     loop {
@@ -1201,9 +1202,14 @@ async fn run_sampling_request(
             return Err(err);
         }
 
+        let (retry_counter, retry_limit) = if matches!(&err, CodexErr::ServerOverloaded) {
+            (&mut server_overloaded_retries, max_retries.max(3))
+        } else {
+            (&mut retries, max_retries)
+        };
         handle_retryable_response_stream_error(
-            &mut retries,
-            max_retries,
+            retry_counter,
+            retry_limit,
             err,
             client_session,
             &sess,
