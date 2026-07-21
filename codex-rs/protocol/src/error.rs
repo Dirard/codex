@@ -377,9 +377,9 @@ impl CodexErr {
             | CodexErrorDetails::Spawn
             | CodexErrorDetails::SessionConfiguredNotFirstEvent
             | CodexErrorDetails::UsageLimitReached(_)
-            | CodexErrorDetails::ServerOverloaded
             | CodexErrorDetails::CyberPolicy { .. } => false,
             CodexErrorDetails::Stream(..)
+            | CodexErrorDetails::ServerOverloaded
             | CodexErrorDetails::Timeout
             | CodexErrorDetails::RequestTimeout
             | CodexErrorDetails::UnexpectedStatus(_)
