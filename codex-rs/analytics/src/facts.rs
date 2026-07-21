@@ -420,6 +420,7 @@ pub struct CodexCompactionEvent {
     pub retained_image_count: Option<usize>,
     pub compaction_summary_tokens: Option<i64>,
     pub cached_input_tokens: Option<i64>,
+    pub cache_write_input_tokens: Option<i64>,
     pub started_at: u64,
     pub completed_at: u64,
     pub duration_ms: Option<u64>,
@@ -590,11 +591,13 @@ pub(crate) struct PluginInstallFailedInput {
     pub plugin: PluginTelemetryMetadata,
     pub source: PluginInstallSource,
     pub error_type: String,
+    pub sub_error_type: Option<String>,
 }
 
 pub struct ExternalAgentConfigImportCompletedInput {
     pub import_id: String,
     pub source: String,
+    pub provider_id: String,
     pub item_type: String,
     pub success_count: usize,
     pub failed_count: usize,
@@ -603,9 +606,11 @@ pub struct ExternalAgentConfigImportCompletedInput {
 pub struct ExternalAgentConfigImportFailureInput {
     pub import_id: String,
     pub source: String,
+    pub provider_id: String,
     pub item_type: String,
     pub failure_stage: String,
     pub error_type: String,
+    pub sub_error_type: Option<String>,
 }
 
 #[derive(Clone, Copy)]

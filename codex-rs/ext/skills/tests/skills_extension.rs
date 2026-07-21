@@ -7,7 +7,6 @@ use std::sync::atomic::Ordering;
 use codex_core_skills::HostSkillsSnapshot;
 use codex_core_skills::SKILLS_INTRO_WITH_ABSOLUTE_PATHS;
 use codex_core_skills::SkillLoadOutcome;
-use codex_core_skills::SkillMetadata;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_extension_api::ConversationHistory;
 use codex_extension_api::ExtensionData;
@@ -31,6 +30,7 @@ use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
+use codex_skills::SkillMetadata;
 use codex_skills_extension::SkillProviders;
 use codex_skills_extension::SkillsExtensionConfig;
 use codex_skills_extension::catalog::SkillAuthority;
@@ -121,6 +121,7 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
             &session_store,
             &thread_store,
             &turn_store,
+            &ExtensionData::new("step"),
         )
         .await;
 
@@ -192,7 +193,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         .await;
 
     let prompt_fragments = registry.context_contributors()[0]
-        .contribute_thread_context(&session_store, &thread_store)
+        .contribute_thread_context(&session_store, &thread_store, &ExtensionData::new("step"))
         .await;
     assert!(prompt_fragments.is_empty());
 
@@ -200,6 +201,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
     let turn_environment = TurnEnvironmentSelection {
         environment_id: "turn-env".to_string(),
         cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
+        workspace_roots: Vec::new(),
     };
     let available_sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
@@ -207,9 +209,11 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             turn_id: "turn-1",
             environments: std::slice::from_ref(&turn_environment),
             ready_selected_capability_roots: &selected_roots,
+            executor_capability_discovery: None,
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &ExtensionData::new("step"),
         })
         .await;
     assert_eq!(1, available_sections.len());
@@ -237,6 +241,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             &session_store,
             &thread_store,
             &turn_store,
+            &ExtensionData::new("step"),
         )
         .await;
 
@@ -259,9 +264,11 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             turn_id: "turn-2",
             environments: &[],
             ready_selected_capability_roots: &[],
+            executor_capability_discovery: None,
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &unavailable_turn_store,
+            step_store: &ExtensionData::new("step"),
         })
         .await;
     let unavailable_snapshot = unavailable_sections[0].snapshot().clone();
@@ -281,9 +288,11 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             turn_id: "turn-3",
             environments: &[turn_environment],
             ready_selected_capability_roots: &selected_roots,
+            executor_capability_discovery: None,
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &restored_turn_store,
+            step_store: &ExtensionData::new("step"),
         })
         .await;
     let restored_snapshot = restored_sections[0].snapshot().clone();
@@ -308,9 +317,11 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             turn_id: "turn-4",
             environments: &[],
             ready_selected_capability_roots: &selected_roots,
+            executor_capability_discovery: None,
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &listing_disabled_turn_store,
+            step_store: &ExtensionData::new("step"),
         })
         .await;
     let listing_disabled_fragment = listing_disabled_sections[0]
@@ -375,7 +386,7 @@ async fn default_context_truncates_catalog_descriptions() -> TestResult {
         .await;
 
     let fragments = registry.context_contributors()[0]
-        .contribute_thread_context(&session_store, &thread_store)
+        .contribute_thread_context(&session_store, &thread_store, &ExtensionData::new("step"))
         .await;
     assert_eq!(1, fragments.len());
     let rendered = fragments[0].text();
@@ -424,7 +435,11 @@ async fn skills_list_truncates_catalog_descriptions_in_tool_output() -> TestResu
         })
         .await;
 
-    let tools = registry.tool_contributors()[0].tools(&session_store, &thread_store);
+    let tools = registry.tool_contributors()[0].tools(
+        &session_store,
+        &thread_store,
+        &ExtensionData::new("step"),
+    );
     let list_tool = tools
         .iter()
         .find(|tool| tool.tool_name().name == "list")
@@ -498,7 +513,7 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
         .await;
 
     let initial_fragments = registry.context_contributors()[0]
-        .contribute_thread_context(&session_store, &thread_store)
+        .contribute_thread_context(&session_store, &thread_store, &ExtensionData::new("step"))
         .await;
     assert!(initial_fragments.is_empty());
     let EventMsg::Warning(warning) = event_rx.try_recv()?.msg else {
@@ -523,6 +538,7 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
                 &session_store,
                 &thread_store,
                 &ExtensionData::new(turn_id),
+                &ExtensionData::new("step"),
             )
             .await;
         assert!(fragments.is_empty());
@@ -595,11 +611,14 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
             environments: &[TurnEnvironmentSelection {
                 environment_id: "env-1".to_string(),
                 cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
+                workspace_roots: Vec::new(),
             }],
             ready_selected_capability_roots: &selected_roots,
+            executor_capability_discovery: None,
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &ExtensionData::new("step"),
         })
         .await;
     let fragments = registry.turn_input_contributors()[0]
@@ -615,6 +634,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
             &session_store,
             &thread_store,
             &turn_store,
+            &ExtensionData::new("step"),
         )
         .await;
 
@@ -690,6 +710,7 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
             &session_store,
             &thread_store,
             &ExtensionData::new("turn-1"),
+            &ExtensionData::new("step"),
         )
         .await;
 

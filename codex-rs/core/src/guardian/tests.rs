@@ -6,6 +6,9 @@ use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::test_config;
 use crate::guardian::approval_request::guardian_request_target_item_id;
+use crate::guardian::prompt::BUNDLED_GUARDIAN_POLICY;
+use crate::guardian::prompt::BUNDLED_GUARDIAN_POLICY_TEMPLATE;
+use crate::guardian::prompt::guardian_policy_prompt_with_config_and_template;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
@@ -111,6 +114,7 @@ impl codex_extension_api::ContextContributor for GuardianMemoryContextProbe {
         &'a self,
         _session_store: &'a codex_extension_api::ExtensionData,
         thread_store: &'a codex_extension_api::ExtensionData,
+        _step_store: &'a codex_extension_api::ExtensionData,
     ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::PromptFragment>> {
         Box::pin(async move {
             if thread_store
@@ -342,7 +346,7 @@ fn response_item_contains_message_text(item: &ResponseItem, needle: &str) -> boo
     };
     content.iter().any(|item| match item {
         ContentItem::InputText { text } | ContentItem::OutputText { text } => text.contains(needle),
-        ContentItem::InputImage { .. } => false,
+        ContentItem::InputImage { .. } | ContentItem::InputAudio { .. } => false,
     })
 }
 
@@ -469,18 +473,21 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
                     value: codex_protocol::permissions::FileSystemSpecialPath::Root,
                 },
                 access: FileSystemAccessMode::Read,
+                missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
                     path: denied_root.clone(),
                 },
                 access: FileSystemAccessMode::Deny,
+                missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::GlobPattern {
                     pattern: denied_glob.clone(),
                 },
                 access: FileSystemAccessMode::Deny,
+                missing_path_behavior: None,
             },
         ]),
         NetworkSandboxPolicy::Restricted,
@@ -1743,6 +1750,16 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     ));
     let request = request_log.single_request();
     let request_body = request.body_json();
+    let guardian_tool_names = request_body["tools"]
+        .as_array()
+        .expect("guardian request tools")
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("guardian request tool name"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        guardian_tool_names,
+        vec!["exec_command", "write_stdin", "view_image"]
+    );
     let guardian_user_text = request.message_input_texts("user").join("\n");
     assert!(
         guardian_user_text.contains(&format!("${GUARDIAN_SKILL_NAME}")),
@@ -2324,7 +2341,9 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     )
     .await;
 
-    assert_eq!(decision, ReviewDecision::Denied);
+    let ReviewDecision::Denied { rejection } = decision else {
+        panic!("guardian error should deny the approval");
+    };
     assert_eq!(request_log.requests().len(), 1);
 
     let mut warnings = Vec::new();
@@ -2360,17 +2379,10 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
         }),
         "denial rationale should not fall back to the generic missing payload error"
     );
-    {
-        let rationales = session.services.guardian_rejections.lock().await;
-        assert!(rationales.contains_key("review-shell-guardian-error"));
-        assert!(!rationales.contains_key("shell-guardian-error"));
-    }
-    let rejection_message =
-        guardian_rejection_message(session.as_ref(), "review-shell-guardian-error").await;
     assert!(
-        rejection_message.contains("Reason: Automatic approval review failed:")
-            && rejection_message.contains(error_message),
-        "rejection message should include guardian rationale: {rejection_message}"
+        rejection.contains("Reason: Automatic approval review failed:")
+            && rejection.contains(error_message),
+        "rejection message should include guardian rationale: {rejection}"
     );
 
     Ok(())
@@ -2457,7 +2469,7 @@ async fn guardian_review_does_not_retry_missing_assessment_payload() -> anyhow::
     )
     .await;
 
-    assert_eq!(decision, ReviewDecision::Denied);
+    assert!(matches!(decision, ReviewDecision::Denied { .. }));
     assert_eq!(request_log.requests().len(), 1);
     Ok(())
 }
@@ -2561,7 +2573,7 @@ async fn guardian_review_exhausts_three_failures_with_one_terminal_event() -> an
     )
     .await;
 
-    assert_eq!(decision, ReviewDecision::Denied);
+    assert!(matches!(decision, ReviewDecision::Denied { .. }));
     assert_eq!(request_log.requests().len(), 3);
     let mut statuses = Vec::new();
     while let Ok(event) = rx.try_recv() {
@@ -2612,7 +2624,7 @@ async fn guardian_review_does_not_retry_valid_denial() -> anyhow::Result<()> {
     )
     .await;
 
-    assert_eq!(decision, ReviewDecision::Denied);
+    assert!(matches!(decision, ReviewDecision::Denied { .. }));
     assert_eq!(request_log.requests().len(), 1);
     Ok(())
 }
@@ -2898,6 +2910,7 @@ async fn guardian_review_session_config_preserves_parent_network_proxy() {
         /*live_network_config*/ None,
         "parent-active-model",
         Some(codex_protocol::openai_models::ReasoningEffort::Low),
+        /*model_messages*/ None,
     )
     .expect("guardian config");
 
@@ -2931,13 +2944,17 @@ async fn guardian_review_session_config_clears_parent_developer_instructions() {
         /*live_network_config*/ None,
         "active-model",
         /*reasoning_effort*/ None,
+        /*model_messages*/ None,
     )
     .expect("guardian config");
 
     assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
         guardian_config.base_instructions,
-        Some(guardian_policy_prompt())
+        Some(guardian_policy_prompt_with_config_and_template(
+            BUNDLED_GUARDIAN_POLICY,
+            BUNDLED_GUARDIAN_POLICY_TEMPLATE,
+        ))
     );
 }
 
@@ -2954,6 +2971,7 @@ async fn guardian_review_session_config_clears_legacy_notify() {
         /*live_network_config*/ None,
         "active-model",
         /*reasoning_effort*/ None,
+        /*model_messages*/ None,
     )
     .expect("guardian config");
 
@@ -2988,6 +3006,7 @@ async fn guardian_review_session_config_uses_live_network_proxy_state() {
         Some(live_network.clone()),
         "active-model",
         /*reasoning_effort*/ None,
+        /*model_messages*/ None,
     )
     .expect("guardian config");
 
@@ -3030,6 +3049,7 @@ async fn guardian_review_session_config_disables_mcp_apps_plugins_and_memories()
         /*live_network_config*/ None,
         "active-model",
         /*reasoning_effort*/ None,
+        /*model_messages*/ None,
     )
     .expect("guardian config");
 
@@ -3060,6 +3080,7 @@ async fn guardian_review_session_config_allows_pinned_disabled_feature() {
         /*live_network_config*/ None,
         "active-model",
         /*reasoning_effort*/ None,
+        /*model_messages*/ None,
     )
     .expect("guardian config should continue when a disabled feature is pinned on");
 
@@ -3078,6 +3099,7 @@ async fn guardian_review_session_config_uses_parent_active_model_instead_of_hard
         /*live_network_config*/ None,
         "active-model",
         /*reasoning_effort*/ None,
+        /*model_messages*/ None,
     )
     .expect("guardian config");
 
@@ -3096,6 +3118,7 @@ async fn guardian_review_session_config_keeps_bedrock_provider_for_bedrock_gpt_5
         /*live_network_config*/ None,
         AMAZON_BEDROCK_GPT_5_4_MODEL_ID,
         Some(ReasoningEffort::Low),
+        /*model_messages*/ None,
     )
     .expect("guardian config");
 
@@ -3150,14 +3173,16 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
         /*live_network_config*/ None,
         "active-model",
         /*reasoning_effort*/ None,
+        /*model_messages*/ None,
     )
     .expect("guardian config");
 
     assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
         guardian_config.base_instructions,
-        Some(guardian_policy_prompt_with_config(
-            "Use the workspace-managed guardian policy."
+        Some(guardian_policy_prompt_with_config_and_template(
+            "Use the workspace-managed guardian policy.",
+            BUNDLED_GUARDIAN_POLICY_TEMPLATE,
         ))
     );
 }
@@ -3188,12 +3213,16 @@ async fn guardian_review_session_config_uses_default_guardian_policy_without_req
         /*live_network_config*/ None,
         "active-model",
         /*reasoning_effort*/ None,
+        /*model_messages*/ None,
     )
     .expect("guardian config");
 
     assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
         guardian_config.base_instructions,
-        Some(guardian_policy_prompt())
+        Some(guardian_policy_prompt_with_config_and_template(
+            BUNDLED_GUARDIAN_POLICY,
+            BUNDLED_GUARDIAN_POLICY_TEMPLATE,
+        ))
     );
 }

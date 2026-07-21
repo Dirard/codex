@@ -207,6 +207,15 @@ where
                 return;
             }
 
+            if let Err(err) = self
+                .state_dbs
+                .thread_goals()
+                .clear_thread_goal_continuation_deferral(runtime.thread_id())
+                .await
+            {
+                tracing::warn!("failed to clear deferred goal continuation: {err}");
+            }
+
             let accounting = runtime.accounting_state();
             accounting.start_turn(
                 input.turn_id,
@@ -411,6 +420,7 @@ where
         &self,
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
+        _step_store: &ExtensionData,
     ) -> Vec<Arc<dyn codex_extension_api::ToolExecutor<codex_extension_api::ToolCall>>> {
         let Some(runtime) = goal_runtime_handle(thread_store) else {
             return Vec::new();

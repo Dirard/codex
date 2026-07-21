@@ -127,6 +127,26 @@ pub fn originator() -> Originator {
     get_originator_value(/*provided*/ None)
 }
 
+/// Adds a valid, non-default thread originator override to request headers.
+///
+/// The default client already supplies the process originator. Thread-scoped callers should use
+/// this helper to override that value only when the thread originator differs.
+pub fn add_originator_header(headers: &mut HeaderMap, originator_value: &str) {
+    let default_originator = originator();
+    if originator_value == default_originator.value.as_str() {
+        return;
+    }
+
+    match HeaderValue::from_str(originator_value) {
+        Ok(header_value) => {
+            headers.insert("originator", header_value);
+        }
+        Err(err) => {
+            tracing::warn!("ignoring invalid thread originator header value: {err}");
+        }
+    }
+}
+
 pub fn is_first_party_originator(originator_value: &str) -> bool {
     originator_value == DEFAULT_ORIGINATOR
         || originator_value == "codex-tui"
@@ -203,6 +223,15 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
 pub fn create_client() -> HttpClient {
     let inner = build_reqwest_client();
     HttpClient::new(inner)
+}
+
+/// Create the default HTTP client without request URL or response-header diagnostics.
+///
+/// This preserves the default client's legacy custom-CA fallback and reqwest proxy behavior while
+/// avoiding diagnostics that could expose credentials embedded in request URLs or headers.
+pub fn create_client_without_request_logging() -> HttpClient {
+    let inner = build_reqwest_client();
+    HttpClient::new_without_request_logging(inner)
 }
 
 /// Builds the default reqwest client used for ordinary Codex HTTP traffic.

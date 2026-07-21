@@ -140,12 +140,14 @@ fn workspace_write_with_read_only_root(read_only_root: AbsolutePathBuf) -> Permi
                 path: read_only_root,
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Write,
+            missing_path_behavior: None,
         },
     ]);
     PermissionProfile::from_runtime_permissions(
@@ -162,12 +164,14 @@ fn workspace_write_with_unreadable_path(unreadable_path: AbsolutePathBuf) -> Per
                 path: unreadable_path,
             },
             access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Write,
+            missing_path_behavior: None,
         },
     ]);
     PermissionProfile::from_runtime_permissions(
@@ -1653,6 +1657,7 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
         TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&shared_cwd),
+            workspace_roots: vec![PathUri::from_abs_path(&shared_cwd)],
         },
     ];
     test.codex

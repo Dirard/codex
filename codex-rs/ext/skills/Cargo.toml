@@ -19,6 +19,7 @@ codex-extension-api = { workspace = true }
 codex-mcp = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
+codex-skills = { workspace = true }
 codex-tools = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-string = { workspace = true }
@@ -31,6 +32,5 @@ url = { workspace = true }
 
 [dev-dependencies]
 codex-utils-absolute-path = { workspace = true }
-opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
