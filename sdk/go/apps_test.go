@@ -25,6 +25,20 @@ func TestAppsThinWrappers(t *testing.T) {
 		t.Fatalf("err = %T(%v), want *RPCError", err, err)
 	}
 	assertMethod(t, transport.lastFrame(t), "app/list")
+
+	failMethod(transport, "app/read")
+	_, err = client.Apps.Read(context.Background(), protocol.AppsReadParams{})
+	if !errors.As(err, &rpcErr) {
+		t.Fatalf("err = %T(%v), want *RPCError", err, err)
+	}
+	assertMethod(t, transport.lastFrame(t), "app/read")
+
+	failMethod(transport, "app/installed")
+	_, err = client.Apps.Installed(context.Background(), protocol.AppsInstalledParams{})
+	if !errors.As(err, &rpcErr) {
+		t.Fatalf("err = %T(%v), want *RPCError", err, err)
+	}
+	assertMethod(t, transport.lastFrame(t), "app/installed")
 }
 
 func TestAppsListUpdatedNotificationRoutes(t *testing.T) {

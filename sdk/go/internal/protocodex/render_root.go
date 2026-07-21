@@ -253,6 +253,7 @@ var stage5BImplementedResourceMethods = map[string]bool{
 	"thread/backgroundTerminals/list":      true,
 	"thread/backgroundTerminals/terminate": true,
 	"thread/search":                        true,
+	"thread/searchOccurrences":             true,
 	"thread/turns/list":                    true,
 	"thread/items/list":                    true,
 }
@@ -284,6 +285,8 @@ var stage5CImplementedResourceMethods = map[string]bool{
 
 var stage5DImplementedResourceMethods = map[string]bool{
 	"app/list":                   true,
+	"app/read":                   true,
+	"app/installed":              true,
 	"marketplace/add":            true,
 	"marketplace/remove":         true,
 	"marketplace/upgrade":        true,
@@ -310,6 +313,7 @@ var stage5EImplementedResourceMethods = map[string]bool{
 	"collaborationMode/list":                   true,
 	"environment/add":                          true,
 	"environment/info":                         true,
+	"environment/status":                       true,
 	"externalAgentConfig/detect":               true,
 	"externalAgentConfig/import":               true,
 	"externalAgentConfig/import/readHistories": true,

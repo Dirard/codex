@@ -33,6 +33,14 @@ func TestEnvironmentsThinWrappers(t *testing.T) {
 				return err
 			},
 		},
+		{
+			name:   "status",
+			method: "environment/status",
+			call: func(ctx context.Context, client *Client) error {
+				_, err := client.Environments.Status(ctx, protocol.EnvironmentStatusParams{EnvironmentID: "env-1"})
+				return err
+			},
+		},
 	}
 
 	for _, tt := range tests {
