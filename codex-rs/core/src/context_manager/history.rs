@@ -457,13 +457,13 @@ pub(crate) fn truncate_function_output_payload(
         FunctionCallOutputBody::Text(content) => {
             FunctionCallOutputBody::Text(truncate_text_with_config(content, truncation))
         }
-        FunctionCallOutputBody::ContentItems(items) => FunctionCallOutputBody::ContentItems(
-            truncate_function_output_items_with_config(
+        FunctionCallOutputBody::ContentItems(items) => {
+            FunctionCallOutputBody::ContentItems(truncate_function_output_items_with_config(
                 items,
                 truncation,
                 estimate_audio_token_count,
-            ),
-        ),
+            ))
+        }
     };
 
     FunctionCallOutputPayload {
