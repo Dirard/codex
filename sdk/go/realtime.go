@@ -10,18 +10,18 @@ import (
 )
 
 type RealtimeStartOptions struct {
-	ThreadID                   string
-	Model                      string
-	OutputModality             protocol.RealtimeOutputModality
-	Prompt                     string
-	Transport                  protocol.ThreadRealtimeStartTransport
-	Version                    protocol.RealtimeConversationVersion
-	Voice                      protocol.RealtimeVoice
-	IncludeStartupContext      *bool
-	ClientManagedHandoffs      *bool
-	CodexResponsesAsItems      *bool
-	CodexResponseHandoffPrefix string
-	CodexResponseItemPrefix    string
+	ThreadID                 string
+	Model                    string
+	OutputModality           protocol.RealtimeOutputModality
+	Prompt                   string
+	Transport                protocol.ThreadRealtimeStartTransport
+	Version                  protocol.RealtimeConversationVersion
+	Voice                    protocol.RealtimeVoice
+	IncludeStartupContext    *bool
+	ClientManagedHandoffs    *bool
+	CodexResponsesAsItems    *bool
+	CodexResponseHandoffMode protocol.CodexResponseHandoffMode
+	CodexResponseItemPrefix  string
 }
 
 type RealtimeSession struct {
@@ -359,8 +359,8 @@ func realtimeStartParams(opts RealtimeStartOptions, sessionID string) protocol.T
 	if opts.CodexResponsesAsItems != nil {
 		params.CodexResponsesAsItems = protocol.Some(*opts.CodexResponsesAsItems)
 	}
-	if opts.CodexResponseHandoffPrefix != "" {
-		params.CodexResponseHandoffPrefix = protocol.Some(opts.CodexResponseHandoffPrefix)
+	if opts.CodexResponseHandoffMode != "" {
+		params.CodexResponseHandoffMode = protocol.Some(opts.CodexResponseHandoffMode)
 	}
 	if opts.CodexResponseItemPrefix != "" {
 		params.CodexResponseItemPrefix = protocol.Some(opts.CodexResponseItemPrefix)
