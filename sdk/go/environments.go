@@ -19,3 +19,10 @@ func (c *EnvironmentsClient) Info(ctx context.Context, params protocol.Environme
 	}
 	return c.client.Raw().EnvironmentInfo(ctx, params)
 }
+
+func (c *EnvironmentsClient) Status(ctx context.Context, params protocol.EnvironmentStatusParams) (protocol.EnvironmentStatusResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.EnvironmentStatusResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().EnvironmentStatus(ctx, params)
+}
