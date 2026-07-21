@@ -11,9 +11,13 @@ import (
 func resources(ctx context.Context, client *codex.Client) error {
 	// codex-go-sdk-resource:Apps
 	// codex-go-sdk-docs:app/list
+	// codex-go-sdk-docs:app/read
+	// codex-go-sdk-docs:app/installed
 	if _, err := client.Apps.List(ctx, protocol.AppsListParams{}); err != nil {
 		return err
 	}
+	_, _ = client.Apps.Read(ctx, protocol.AppsReadParams{})
+	_, _ = client.Apps.Installed(ctx, protocol.AppsInstalledParams{})
 	// codex-go-sdk-resource:Commands
 	// codex-go-sdk-docs:command/exec
 	// codex-go-sdk-docs:command/exec/write
@@ -185,8 +189,10 @@ func resources(ctx context.Context, client *codex.Client) error {
 	// codex-go-sdk-resource:Environments
 	// codex-go-sdk-docs:environment/add
 	// codex-go-sdk-docs:environment/info
+	// codex-go-sdk-docs:environment/status
 	_, _ = client.Environments.Info(ctx, protocol.EnvironmentInfoParams{})
 	_, _ = client.Environments.Add(ctx, protocol.EnvironmentAddParams{})
+	_, _ = client.Environments.Status(ctx, protocol.EnvironmentStatusParams{})
 	// codex-go-sdk-resource:RemoteControl
 	// codex-go-sdk-docs:remoteControl/enable
 	// codex-go-sdk-docs:remoteControl/disable
@@ -255,6 +261,7 @@ func resources(ctx context.Context, client *codex.Client) error {
 	// codex-go-sdk-docs:thread/unarchive
 	// codex-go-sdk-docs:thread/list
 	// codex-go-sdk-docs:thread/search
+	// codex-go-sdk-docs:thread/searchOccurrences
 	thread, err := client.Threads.Resume(ctx, codex.ThreadResumeOptions{ThreadID: "thread-id"})
 	if err != nil {
 		return err
@@ -266,6 +273,7 @@ func resources(ctx context.Context, client *codex.Client) error {
 	_, _ = client.Threads.Unarchive(ctx, protocol.ThreadUnarchiveParams{})
 	_, _ = client.Threads.List(ctx, protocol.ThreadListParams{})
 	_, _ = client.Threads.Search(ctx, protocol.ThreadSearchParams{})
+	_, _ = client.Threads.SearchOccurrences(ctx, protocol.ThreadSearchOccurrencesParams{})
 	// codex-go-sdk-resource:WindowsSandbox
 	// codex-go-sdk-docs:windowsSandbox/setupStart
 	if _, err := client.WindowsSandbox.SetupStart(ctx, protocol.WindowsSandboxSetupStartParams{}); err != nil {

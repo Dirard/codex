@@ -126,6 +126,24 @@ var compiledResourceCallsites = map[string]compiledResourceCallsite{
 			_, _ = response, err
 		},
 	},
+	"app/read": {
+		wrapperName: "Apps.Read",
+		convention:  "thin",
+		callsite:    `client.Apps.Read(ctx, protocol.AppsReadParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Apps.Read(ctx, protocol.AppsReadParams{})
+			_, _ = response, err
+		},
+	},
+	"app/installed": {
+		wrapperName: "Apps.Installed",
+		convention:  "thin",
+		callsite:    `client.Apps.Installed(ctx, protocol.AppsInstalledParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Apps.Installed(ctx, protocol.AppsInstalledParams{})
+			_, _ = response, err
+		},
+	},
 	"marketplace/add": {
 		wrapperName: "Marketplace.Add",
 		convention:  "thin",
@@ -735,6 +753,15 @@ var compiledResourceCallsites = map[string]compiledResourceCallsite{
 			_, _ = response, err
 		},
 	},
+	"environment/status": {
+		wrapperName: "Environments.Status",
+		convention:  "thin",
+		callsite:    `client.Environments.Status(ctx, protocol.EnvironmentStatusParams{EnvironmentID: "env-1"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Environments.Status(ctx, protocol.EnvironmentStatusParams{EnvironmentID: "env-1"})
+			_, _ = response, err
+		},
+	},
 	"externalAgentConfig/detect": {
 		wrapperName: "ExternalAgents.DetectConfig",
 		convention:  "thin",
@@ -1136,6 +1163,15 @@ var compiledResourceCallsites = map[string]compiledResourceCallsite{
 		callsite:    `client.Threads.Search(ctx, protocol.ThreadSearchParams{})`,
 		compile: func(ctx context.Context, client *Client) {
 			response, err := client.Threads.Search(ctx, protocol.ThreadSearchParams{})
+			_, _ = response, err
+		},
+	},
+	"thread/searchOccurrences": {
+		wrapperName: "Threads.SearchOccurrences",
+		convention:  "thin",
+		callsite:    `client.Threads.SearchOccurrences(ctx, protocol.ThreadSearchOccurrencesParams{ThreadID: "thread-1"})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Threads.SearchOccurrences(ctx, protocol.ThreadSearchOccurrencesParams{ThreadID: "thread-1"})
 			_, _ = response, err
 		},
 	},
