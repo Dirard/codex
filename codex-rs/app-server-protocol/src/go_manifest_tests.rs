@@ -252,16 +252,15 @@ fn manifest_exception_rows_cover_reviewed_non_public_protocol_entries() {
         );
     }
 
-    let raw_completed = notification(
-        &manifest.experimental.server_notifications,
-        "rawResponseItem/completed",
-    );
-    assert_eq!(
-        raw_completed.sdk_visibility,
-        crate::go_manifest::SdkVisibility::GeneratedOnly
-    );
-    assert!(raw_completed.schema_excluded_reason.is_some());
-    assert!(raw_completed.exception.is_some());
+    for method in ["rawResponseItem/completed", "rawResponse/completed"] {
+        let raw_completed = notification(&manifest.experimental.server_notifications, method);
+        assert_eq!(
+            raw_completed.sdk_visibility,
+            crate::go_manifest::SdkVisibility::GeneratedOnly
+        );
+        assert!(raw_completed.schema_excluded_reason.is_some());
+        assert!(raw_completed.exception.is_some());
+    }
 }
 
 #[test]
@@ -360,13 +359,12 @@ fn server_notification_routing_matches_reviewed_seed_examples() {
         .routing_strategy,
         crate::go_manifest::NotificationRoutingStrategy::GlobalOnly { .. }
     ));
-    assert_routed_extractors(
-        notification(
-            &manifest.experimental.server_notifications,
-            "rawResponseItem/completed",
-        ),
-        &["threadId", "turnId"],
-    );
+    for method in ["rawResponseItem/completed", "rawResponse/completed"] {
+        assert_routed_extractors(
+            notification(&manifest.experimental.server_notifications, method),
+            &["threadId", "turnId"],
+        );
+    }
 }
 
 #[test]
@@ -2124,6 +2122,14 @@ fn expected_server_notification_routes() -> Vec<(&'static str, ExpectedRouting)>
             ExpectedRouting::Routed(&["threadId"]),
         ),
         (
+            "thread/environment/connected",
+            ExpectedRouting::Routed(&["threadId"]),
+        ),
+        (
+            "thread/environment/disconnected",
+            ExpectedRouting::Routed(&["threadId"]),
+        ),
+        (
             "thread/settings/updated",
             ExpectedRouting::Routed(&["threadId"]),
         ),
@@ -2173,6 +2179,10 @@ fn expected_server_notification_routes() -> Vec<(&'static str, ExpectedRouting)>
         ),
         (
             "rawResponseItem/completed",
+            ExpectedRouting::Routed(&["threadId", "turnId"]),
+        ),
+        (
+            "rawResponse/completed",
             ExpectedRouting::Routed(&["threadId", "turnId"]),
         ),
         (
