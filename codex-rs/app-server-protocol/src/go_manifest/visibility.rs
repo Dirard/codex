@@ -406,7 +406,7 @@ pub(crate) fn request_bounded_model_context_fields(
 
 pub(crate) fn notification_sdk_visibility(method: &'static str) -> SdkVisibility {
     match method {
-        "rawResponseItem/completed" => SdkVisibility::GeneratedOnly,
+        "rawResponseItem/completed" | "rawResponse/completed" => SdkVisibility::GeneratedOnly,
         _ => SdkVisibility::Public,
     }
 }

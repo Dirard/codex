@@ -166,6 +166,12 @@ func (c RawClient) ThreadSearch(ctx context.Context, params ThreadSearchParams) 
 	return result, err
 }
 
+func (c RawClient) ThreadSearchOccurrences(ctx context.Context, params ThreadSearchOccurrencesParams) (ThreadSearchOccurrencesResponse, error) {
+	var result ThreadSearchOccurrencesResponse
+	err := c.sender.Call(ctx, "thread/searchOccurrences", params, &result, MethodMetadataByMethod["thread/searchOccurrences"])
+	return result, err
+}
+
 func (c RawClient) ThreadLoadedList(ctx context.Context, params ThreadLoadedListParams) (ThreadLoadedListResponse, error) {
 	var result ThreadLoadedListResponse
 	err := c.sender.Call(ctx, "thread/loaded/list", params, &result, MethodMetadataByMethod["thread/loaded/list"])
@@ -286,9 +292,21 @@ func (c RawClient) PluginShareDelete(ctx context.Context, params PluginShareDele
 	return result, err
 }
 
+func (c RawClient) AppRead(ctx context.Context, params AppsReadParams) (AppsReadResponse, error) {
+	var result AppsReadResponse
+	err := c.sender.Call(ctx, "app/read", params, &result, MethodMetadataByMethod["app/read"])
+	return result, err
+}
+
 func (c RawClient) AppList(ctx context.Context, params AppsListParams) (AppsListResponse, error) {
 	var result AppsListResponse
 	err := c.sender.Call(ctx, "app/list", params, &result, MethodMetadataByMethod["app/list"])
+	return result, err
+}
+
+func (c RawClient) AppInstalled(ctx context.Context, params AppsInstalledParams) (AppsInstalledResponse, error) {
+	var result AppsInstalledResponse
+	err := c.sender.Call(ctx, "app/installed", params, &result, MethodMetadataByMethod["app/installed"])
 	return result, err
 }
 
@@ -511,6 +529,12 @@ func (c RawClient) EnvironmentAdd(ctx context.Context, params EnvironmentAddPara
 func (c RawClient) EnvironmentInfo(ctx context.Context, params EnvironmentInfoParams) (EnvironmentInfoResponse, error) {
 	var result EnvironmentInfoResponse
 	err := c.sender.Call(ctx, "environment/info", params, &result, MethodMetadataByMethod["environment/info"])
+	return result, err
+}
+
+func (c RawClient) EnvironmentStatus(ctx context.Context, params EnvironmentStatusParams) (EnvironmentStatusResponse, error) {
+	var result EnvironmentStatusResponse
+	err := c.sender.Call(ctx, "environment/status", params, &result, MethodMetadataByMethod["environment/status"])
 	return result, err
 }
 

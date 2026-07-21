@@ -677,6 +677,20 @@ func (v ClientRequest) ThreadSearchParams() (ThreadSearchParams, bool, error) {
 	return params, true, nil
 }
 
+func (v ClientRequest) ThreadSearchOccurrencesParams() (ThreadSearchOccurrencesParams, bool, error) {
+	if v.Method != "thread/searchOccurrences" {
+		return ThreadSearchOccurrencesParams{}, false, nil
+	}
+	var params ThreadSearchOccurrencesParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
 func (v ClientRequest) ThreadLoadedListParams() (ThreadLoadedListParams, bool, error) {
 	if v.Method != "thread/loaded/list" {
 		return ThreadLoadedListParams{}, false, nil
@@ -957,11 +971,39 @@ func (v ClientRequest) PluginShareDeleteParams() (PluginShareDeleteParams, bool,
 	return params, true, nil
 }
 
+func (v ClientRequest) AppReadParams() (AppsReadParams, bool, error) {
+	if v.Method != "app/read" {
+		return AppsReadParams{}, false, nil
+	}
+	var params AppsReadParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
 func (v ClientRequest) AppListParams() (AppsListParams, bool, error) {
 	if v.Method != "app/list" {
 		return AppsListParams{}, false, nil
 	}
 	var params AppsListParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) AppInstalledParams() (AppsInstalledParams, bool, error) {
+	if v.Method != "app/installed" {
+		return AppsInstalledParams{}, false, nil
+	}
+	var params AppsInstalledParams
 	if len(bytes.TrimSpace(v.Params)) == 0 {
 		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
 	}
@@ -1466,6 +1508,20 @@ func (v ClientRequest) EnvironmentInfoParams() (EnvironmentInfoParams, bool, err
 		return EnvironmentInfoParams{}, false, nil
 	}
 	var params EnvironmentInfoParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) EnvironmentStatusParams() (EnvironmentStatusParams, bool, error) {
+	if v.Method != "environment/status" {
+		return EnvironmentStatusParams{}, false, nil
+	}
+	var params EnvironmentStatusParams
 	if len(bytes.TrimSpace(v.Params)) == 0 {
 		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
 	}
@@ -5923,6 +5979,7 @@ func (v *PermissionsRequestApprovalResponse) UnmarshalJSON(data []byte) error {
 type ReviewDecision struct {
 	StringValue                 string                                      `json:"-"`
 	ApprovedExecpolicyAmendment OptionalNonNull[map[string]json.RawMessage] `json:"approved_execpolicy_amendment,omitempty"`
+	Denied                      OptionalNonNull[map[string]json.RawMessage] `json:"denied,omitempty"`
 	NetworkPolicyAmendment      OptionalNonNull[map[string]json.RawMessage] `json:"network_policy_amendment,omitempty"`
 	RawJSON                     json.RawMessage                             `json:"-"`
 }
@@ -5930,19 +5987,21 @@ type ReviewDecision struct {
 var (
 	ReviewDecisionApproved           = ReviewDecision{StringValue: "approved"}
 	ReviewDecisionApprovedForSession = ReviewDecision{StringValue: "approved_for_session"}
-	ReviewDecisionDenied             = ReviewDecision{StringValue: "denied"}
 	ReviewDecisionTimedOut           = ReviewDecision{StringValue: "timed_out"}
 	ReviewDecisionAbort              = ReviewDecision{StringValue: "abort"}
 )
 
 func (v ReviewDecision) IsSet() bool {
-	return v.StringValue != "" || len(bytes.TrimSpace(v.RawJSON)) > 0 || v.ApprovedExecpolicyAmendment.IsSet() || v.NetworkPolicyAmendment.IsSet()
+	return v.StringValue != "" || len(bytes.TrimSpace(v.RawJSON)) > 0 || v.ApprovedExecpolicyAmendment.IsSet() || v.Denied.IsSet() || v.NetworkPolicyAmendment.IsSet()
 }
 
 func (v ReviewDecision) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
 	if v.ApprovedExecpolicyAmendment.IsSet() {
 		out["approved_execpolicy_amendment"] = v.ApprovedExecpolicyAmendment
+	}
+	if v.Denied.IsSet() {
+		out["denied"] = v.Denied
 	}
 	if v.NetworkPolicyAmendment.IsSet() {
 		out["network_policy_amendment"] = v.NetworkPolicyAmendment
@@ -5952,7 +6011,7 @@ func (v ReviewDecision) MarshalJSON() ([]byte, error) {
 			return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
 		}
 		switch v.StringValue {
-		case "approved", "approved_for_session", "denied", "timed_out", "abort":
+		case "approved", "approved_for_session", "timed_out", "abort":
 			return json.Marshal(v.StringValue)
 		default:
 			return nil, DecodeError{Field: "", Reason: fmt.Sprintf("unsupported ReviewDecision string value %q", v.StringValue)}
@@ -5972,6 +6031,13 @@ func (v ReviewDecision) MarshalJSON() ([]byte, error) {
 		untaggedOneOfVariant1Matches = false
 	}
 	if untaggedOneOfVariant1Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant2Matches := true
+	if _, ok := out["denied"]; !ok {
+		untaggedOneOfVariant2Matches = false
+	}
+	if untaggedOneOfVariant2Matches {
 		untaggedOneOfMatches++
 	}
 	if untaggedOneOfMatches == 0 {
@@ -5997,7 +6063,7 @@ func (v *ReviewDecision) UnmarshalJSON(data []byte) error {
 	var stringValue string
 	if err := json.Unmarshal(trimmed, &stringValue); err == nil {
 		switch stringValue {
-		case "approved", "approved_for_session", "denied", "timed_out", "abort":
+		case "approved", "approved_for_session", "timed_out", "abort":
 			*v = ReviewDecision{StringValue: stringValue}
 		default:
 			*v = ReviewDecision{RawJSON: append(json.RawMessage(nil), data...)}
@@ -6013,6 +6079,12 @@ func (v *ReviewDecision) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawApprovedExecpolicyAmendment, &v.ApprovedExecpolicyAmendment); err != nil {
 			return fmt.Errorf("field approved_execpolicy_amendment: %w", err)
+		}
+	}
+	rawDenied, ok := raw["denied"]
+	if ok {
+		if err := json.Unmarshal(rawDenied, &v.Denied); err != nil {
+			return fmt.Errorf("field denied: %w", err)
 		}
 	}
 	rawNetworkPolicyAmendment, ok := raw["network_policy_amendment"]
@@ -6035,6 +6107,13 @@ func (v *ReviewDecision) UnmarshalJSON(data []byte) error {
 		untaggedOneOfVariant1Matches = false
 	}
 	if untaggedOneOfVariant1Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant2Matches := true
+	if rawValue, ok := raw["denied"]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		untaggedOneOfVariant2Matches = false
+	}
+	if untaggedOneOfVariant2Matches {
 		untaggedOneOfMatches++
 	}
 	if untaggedOneOfMatches == 0 {
@@ -6240,6 +6319,34 @@ func (v ServerNotification) ThreadGoalClearedParams() (ThreadGoalClearedNotifica
 	return params, true, nil
 }
 
+func (v ServerNotification) ThreadEnvironmentConnectedParams() (EnvironmentConnectionNotification, bool, error) {
+	if v.Method != "thread/environment/connected" {
+		return EnvironmentConnectionNotification{}, false, nil
+	}
+	var params EnvironmentConnectionNotification
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ServerNotification) ThreadEnvironmentDisconnectedParams() (EnvironmentConnectionNotification, bool, error) {
+	if v.Method != "thread/environment/disconnected" {
+		return EnvironmentConnectionNotification{}, false, nil
+	}
+	var params EnvironmentConnectionNotification
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
 func (v ServerNotification) ThreadSettingsUpdatedParams() (ThreadSettingsUpdatedNotification, bool, error) {
 	if v.Method != "thread/settings/updated" {
 		return ThreadSettingsUpdatedNotification{}, false, nil
@@ -6413,6 +6520,20 @@ func (v ServerNotification) RawResponseItemCompletedParams() (RawResponseItemCom
 		return RawResponseItemCompletedNotification{}, false, nil
 	}
 	var params RawResponseItemCompletedNotification
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ServerNotification) RawResponseCompletedParams() (RawResponseCompletedNotification, bool, error) {
+	if v.Method != "rawResponse/completed" {
+		return RawResponseCompletedNotification{}, false, nil
+	}
+	var params RawResponseCompletedNotification
 	if len(bytes.TrimSpace(v.Params)) == 0 {
 		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
 	}
@@ -7546,18 +7667,15 @@ func (v *W3cTraceContext) UnmarshalJSON(data []byte) error {
 type AbsolutePathBuf string
 
 type Account struct {
-	CredentialSource OptionalNonNull[AmazonBedrockCredentialSource] `json:"credentialSource,omitempty"`
-	Email            Optional[string]                               `json:"email,omitempty"`
-	PlanType         OptionalNonNull[PlanType]                      `json:"planType,omitempty"`
-	TypeValue        string                                         `json:"type,omitempty"`
-	RawJSON          json.RawMessage                                `json:"-"`
+	Email                       Optional[string]          `json:"email,omitempty"`
+	PlanType                    OptionalNonNull[PlanType] `json:"planType,omitempty"`
+	TypeValue                   string                    `json:"type,omitempty"`
+	UsesCodexManagedCredentials OptionalNonNull[bool]     `json:"usesCodexManagedCredentials,omitempty"`
+	RawJSON                     json.RawMessage           `json:"-"`
 }
 
 func (v Account) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
-	if v.CredentialSource.IsSet() {
-		out["credentialSource"] = v.CredentialSource
-	}
 	if v.Email.IsSet() {
 		out["email"] = v.Email
 	}
@@ -7565,6 +7683,9 @@ func (v Account) MarshalJSON() ([]byte, error) {
 		out["planType"] = v.PlanType
 	}
 	out["type"] = v.TypeValue
+	if v.UsesCodexManagedCredentials.IsSet() {
+		out["usesCodexManagedCredentials"] = v.UsesCodexManagedCredentials
+	}
 	switch v.TypeValue {
 	case "apiKey":
 	case "chatgpt":
@@ -7616,12 +7737,6 @@ func (v *Account) UnmarshalJSON(data []byte) error {
 		v.RawJSON = append(v.RawJSON[:0], data...)
 		return nil
 	}
-	rawCredentialSource, ok := raw["credentialSource"]
-	if ok {
-		if err := json.Unmarshal(rawCredentialSource, &v.CredentialSource); err != nil {
-			return fmt.Errorf("field credentialSource: %w", err)
-		}
-	}
 	rawEmail, ok := raw["email"]
 	if ok {
 		if err := json.Unmarshal(rawEmail, &v.Email); err != nil {
@@ -7643,6 +7758,12 @@ func (v *Account) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawTypeValue, &v.TypeValue); err != nil {
 		return fmt.Errorf("field type: %w", err)
+	}
+	rawUsesCodexManagedCredentials, ok := raw["usesCodexManagedCredentials"]
+	if ok {
+		if err := json.Unmarshal(rawUsesCodexManagedCredentials, &v.UsesCodexManagedCredentials); err != nil {
+			return fmt.Errorf("field usesCodexManagedCredentials: %w", err)
+		}
 	}
 	v.RawJSON = nil
 	switch v.TypeValue {
@@ -8282,13 +8403,6 @@ func (v *AgentMessageInputContent) UnmarshalJSON(data []byte) error {
 }
 
 type AgentPath string
-
-type AmazonBedrockCredentialSource string
-
-const (
-	AmazonBedrockCredentialSourceCodexManaged AmazonBedrockCredentialSource = "codexManaged"
-	AmazonBedrockCredentialSourceAwsManaged   AmazonBedrockCredentialSource = "awsManaged"
-)
 
 type AnalyticsConfig struct {
 	Enabled    Optional[bool]             `json:"enabled,omitempty"`
@@ -9203,6 +9317,60 @@ func (v *AppToolConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type AppToolSummary struct {
+	Description string           `json:"description,omitempty"`
+	Name        string           `json:"name,omitempty"`
+	Title       Optional[string] `json:"title,omitempty"`
+}
+
+func (v AppToolSummary) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["description"] = v.Description
+	out["name"] = v.Name
+	if v.Title.IsSet() {
+		out["title"] = v.Title
+	}
+	return json.Marshal(out)
+}
+
+func (v *AppToolSummary) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawDescription, ok := raw["description"]
+	if !ok {
+		return DecodeError{Field: "description", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawDescription, []byte("null")) {
+		return DecodeError{Field: "description", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawDescription, &v.Description); err != nil {
+		return fmt.Errorf("field description: %w", err)
+	}
+	rawName, ok := raw["name"]
+	if !ok {
+		return DecodeError{Field: "name", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawName, []byte("null")) {
+		return DecodeError{Field: "name", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawName, &v.Name); err != nil {
+		return fmt.Errorf("field name: %w", err)
+	}
+	rawTitle, ok := raw["title"]
+	if ok {
+		if err := json.Unmarshal(rawTitle, &v.Title); err != nil {
+			return fmt.Errorf("field title: %w", err)
+		}
+	}
+	return nil
+}
+
 type AppToolsConfig map[string]json.RawMessage
 
 func (v AppToolsConfig) MarshalJSON() ([]byte, error) {
@@ -9379,6 +9547,78 @@ func (v *AppsDefaultConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type AppsInstalledParams struct {
+	ForceRefresh OptionalNonNull[bool] `json:"forceRefresh,omitempty"`
+	ThreadID     Optional[string]      `json:"threadId,omitempty"`
+}
+
+func (v AppsInstalledParams) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if v.ForceRefresh.IsSet() {
+		out["forceRefresh"] = v.ForceRefresh
+	}
+	if v.ThreadID.IsSet() {
+		out["threadId"] = v.ThreadID
+	}
+	return json.Marshal(out)
+}
+
+func (v *AppsInstalledParams) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawForceRefresh, ok := raw["forceRefresh"]
+	if ok {
+		if err := json.Unmarshal(rawForceRefresh, &v.ForceRefresh); err != nil {
+			return fmt.Errorf("field forceRefresh: %w", err)
+		}
+	}
+	rawThreadID, ok := raw["threadId"]
+	if ok {
+		if err := json.Unmarshal(rawThreadID, &v.ThreadID); err != nil {
+			return fmt.Errorf("field threadId: %w", err)
+		}
+	}
+	return nil
+}
+
+type AppsInstalledResponse struct {
+	Apps []InstalledApp `json:"apps,omitempty"`
+}
+
+func (v AppsInstalledResponse) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["apps"] = v.Apps
+	return json.Marshal(out)
+}
+
+func (v *AppsInstalledResponse) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawApps, ok := raw["apps"]
+	if !ok {
+		return DecodeError{Field: "apps", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawApps, []byte("null")) {
+		return DecodeError{Field: "apps", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawApps, &v.Apps); err != nil {
+		return fmt.Errorf("field apps: %w", err)
+	}
+	return nil
+}
+
 type AppsListParams struct {
 	Cursor       Optional[string]      `json:"cursor,omitempty"`
 	ForceRefetch OptionalNonNull[bool] `json:"forceRefetch,omitempty"`
@@ -9488,6 +9728,92 @@ func (v *AppsListResponse) UnmarshalJSON(data []byte) error {
 		if err := json.Unmarshal(rawNextCursor, &v.NextCursor); err != nil {
 			return fmt.Errorf("field nextCursor: %w", err)
 		}
+	}
+	return nil
+}
+
+type AppsReadParams struct {
+	AppIDs       []string              `json:"appIds,omitempty"`
+	IncludeTools OptionalNonNull[bool] `json:"includeTools,omitempty"`
+}
+
+func (v AppsReadParams) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["appIds"] = v.AppIDs
+	if v.IncludeTools.IsSet() {
+		out["includeTools"] = v.IncludeTools
+	}
+	return json.Marshal(out)
+}
+
+func (v *AppsReadParams) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawAppIDs, ok := raw["appIds"]
+	if !ok {
+		return DecodeError{Field: "appIds", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawAppIDs, []byte("null")) {
+		return DecodeError{Field: "appIds", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawAppIDs, &v.AppIDs); err != nil {
+		return fmt.Errorf("field appIds: %w", err)
+	}
+	rawIncludeTools, ok := raw["includeTools"]
+	if ok {
+		if err := json.Unmarshal(rawIncludeTools, &v.IncludeTools); err != nil {
+			return fmt.Errorf("field includeTools: %w", err)
+		}
+	}
+	return nil
+}
+
+type AppsReadResponse struct {
+	Apps          []ConnectorMetadata `json:"apps,omitempty"`
+	MissingAppIDs []string            `json:"missingAppIds,omitempty"`
+}
+
+func (v AppsReadResponse) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["apps"] = v.Apps
+	out["missingAppIds"] = v.MissingAppIDs
+	return json.Marshal(out)
+}
+
+func (v *AppsReadResponse) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawApps, ok := raw["apps"]
+	if !ok {
+		return DecodeError{Field: "apps", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawApps, []byte("null")) {
+		return DecodeError{Field: "apps", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawApps, &v.Apps); err != nil {
+		return fmt.Errorf("field apps: %w", err)
+	}
+	rawMissingAppIDs, ok := raw["missingAppIds"]
+	if !ok {
+		return DecodeError{Field: "missingAppIds", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawMissingAppIDs, []byte("null")) {
+		return DecodeError{Field: "missingAppIds", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawMissingAppIDs, &v.MissingAppIDs); err != nil {
+		return fmt.Errorf("field missingAppIds: %w", err)
 	}
 	return nil
 }
@@ -10052,6 +10378,14 @@ func (v *CodexErrorInfo) UnmarshalJSON(data []byte) error {
 	v.RawJSON = nil
 	return nil
 }
+
+type CodexResponseHandoffMode string
+
+const (
+	CodexResponseHandoffModeThinking   CodexResponseHandoffMode = "thinking"
+	CodexResponseHandoffModeCommentary CodexResponseHandoffMode = "commentary"
+	CodexResponseHandoffModeBemTags    CodexResponseHandoffMode = "bemTags"
+)
 
 type CollabAgentState struct {
 	Message Optional[string]  `json:"message,omitempty"`
@@ -12046,6 +12380,7 @@ func (v *ConfigReadResponse) UnmarshalJSON(data []byte) error {
 
 type ConfigRequirements struct {
 	AllowAppshots                        Optional[bool]                      `json:"allowAppshots,omitempty"`
+	AllowLoginShell                      Optional[bool]                      `json:"allowLoginShell,omitempty"`
 	AllowManagedHooksOnly                Optional[bool]                      `json:"allowManagedHooksOnly,omitempty"`
 	AllowRemoteControl                   Optional[bool]                      `json:"allowRemoteControl,omitempty"`
 	AllowedApprovalPolicies              Optional[[]AskForApproval]          `json:"allowedApprovalPolicies,omitempty"`
@@ -12054,19 +12389,28 @@ type ConfigRequirements struct {
 	AllowedSandboxModes                  Optional[[]SandboxMode]             `json:"allowedSandboxModes,omitempty"`
 	AllowedWebSearchModes                Optional[[]WebSearchMode]           `json:"allowedWebSearchModes,omitempty"`
 	AllowedWindowsSandboxImplementations Optional[[]WindowsSandboxSetupMode] `json:"allowedWindowsSandboxImplementations,omitempty"`
+	CheckForUpdateOnStartup              Optional[bool]                      `json:"checkForUpdateOnStartup,omitempty"`
 	ComputerUse                          Optional[ComputerUseRequirements]   `json:"computerUse,omitempty"`
 	DefaultPermissions                   Optional[string]                    `json:"defaultPermissions,omitempty"`
 	EnforceResidency                     Optional[ResidencyRequirement]      `json:"enforceResidency,omitempty"`
 	FeatureRequirements                  Optional[map[string]bool]           `json:"featureRequirements,omitempty"`
+	Feedback                             Optional[FeedbackRequirements]      `json:"feedback,omitempty"`
 	Hooks                                Optional[ManagedHooksRequirements]  `json:"hooks,omitempty"`
+	LogDir                               Optional[string]                    `json:"logDir,omitempty"`
+	ModelCatalogJSON                     Optional[string]                    `json:"modelCatalogJson,omitempty"`
 	Models                               Optional[ModelsRequirements]        `json:"models,omitempty"`
 	Network                              Optional[NetworkRequirements]       `json:"network,omitempty"`
+	SqliteHome                           Optional[string]                    `json:"sqliteHome,omitempty"`
+	WindowsSandboxPrivateDesktop         Optional[bool]                      `json:"windowsSandboxPrivateDesktop,omitempty"`
 }
 
 func (v ConfigRequirements) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
 	if v.AllowAppshots.IsSet() {
 		out["allowAppshots"] = v.AllowAppshots
+	}
+	if v.AllowLoginShell.IsSet() {
+		out["allowLoginShell"] = v.AllowLoginShell
 	}
 	if v.AllowManagedHooksOnly.IsSet() {
 		out["allowManagedHooksOnly"] = v.AllowManagedHooksOnly
@@ -12092,6 +12436,9 @@ func (v ConfigRequirements) MarshalJSON() ([]byte, error) {
 	if v.AllowedWindowsSandboxImplementations.IsSet() {
 		out["allowedWindowsSandboxImplementations"] = v.AllowedWindowsSandboxImplementations
 	}
+	if v.CheckForUpdateOnStartup.IsSet() {
+		out["checkForUpdateOnStartup"] = v.CheckForUpdateOnStartup
+	}
 	if v.ComputerUse.IsSet() {
 		out["computerUse"] = v.ComputerUse
 	}
@@ -12104,14 +12451,29 @@ func (v ConfigRequirements) MarshalJSON() ([]byte, error) {
 	if v.FeatureRequirements.IsSet() {
 		out["featureRequirements"] = v.FeatureRequirements
 	}
+	if v.Feedback.IsSet() {
+		out["feedback"] = v.Feedback
+	}
 	if v.Hooks.IsSet() {
 		out["hooks"] = v.Hooks
+	}
+	if v.LogDir.IsSet() {
+		out["logDir"] = v.LogDir
+	}
+	if v.ModelCatalogJSON.IsSet() {
+		out["modelCatalogJson"] = v.ModelCatalogJSON
 	}
 	if v.Models.IsSet() {
 		out["models"] = v.Models
 	}
 	if v.Network.IsSet() {
 		out["network"] = v.Network
+	}
+	if v.SqliteHome.IsSet() {
+		out["sqliteHome"] = v.SqliteHome
+	}
+	if v.WindowsSandboxPrivateDesktop.IsSet() {
+		out["windowsSandboxPrivateDesktop"] = v.WindowsSandboxPrivateDesktop
 	}
 	return json.Marshal(out)
 }
@@ -12129,6 +12491,12 @@ func (v *ConfigRequirements) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawAllowAppshots, &v.AllowAppshots); err != nil {
 			return fmt.Errorf("field allowAppshots: %w", err)
+		}
+	}
+	rawAllowLoginShell, ok := raw["allowLoginShell"]
+	if ok {
+		if err := json.Unmarshal(rawAllowLoginShell, &v.AllowLoginShell); err != nil {
+			return fmt.Errorf("field allowLoginShell: %w", err)
 		}
 	}
 	rawAllowManagedHooksOnly, ok := raw["allowManagedHooksOnly"]
@@ -12179,6 +12547,12 @@ func (v *ConfigRequirements) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field allowedWindowsSandboxImplementations: %w", err)
 		}
 	}
+	rawCheckForUpdateOnStartup, ok := raw["checkForUpdateOnStartup"]
+	if ok {
+		if err := json.Unmarshal(rawCheckForUpdateOnStartup, &v.CheckForUpdateOnStartup); err != nil {
+			return fmt.Errorf("field checkForUpdateOnStartup: %w", err)
+		}
+	}
 	rawComputerUse, ok := raw["computerUse"]
 	if ok {
 		if err := json.Unmarshal(rawComputerUse, &v.ComputerUse); err != nil {
@@ -12203,10 +12577,28 @@ func (v *ConfigRequirements) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field featureRequirements: %w", err)
 		}
 	}
+	rawFeedback, ok := raw["feedback"]
+	if ok {
+		if err := json.Unmarshal(rawFeedback, &v.Feedback); err != nil {
+			return fmt.Errorf("field feedback: %w", err)
+		}
+	}
 	rawHooks, ok := raw["hooks"]
 	if ok {
 		if err := json.Unmarshal(rawHooks, &v.Hooks); err != nil {
 			return fmt.Errorf("field hooks: %w", err)
+		}
+	}
+	rawLogDir, ok := raw["logDir"]
+	if ok {
+		if err := json.Unmarshal(rawLogDir, &v.LogDir); err != nil {
+			return fmt.Errorf("field logDir: %w", err)
+		}
+	}
+	rawModelCatalogJSON, ok := raw["modelCatalogJson"]
+	if ok {
+		if err := json.Unmarshal(rawModelCatalogJSON, &v.ModelCatalogJSON); err != nil {
+			return fmt.Errorf("field modelCatalogJson: %w", err)
 		}
 	}
 	rawModels, ok := raw["models"]
@@ -12219,6 +12611,18 @@ func (v *ConfigRequirements) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawNetwork, &v.Network); err != nil {
 			return fmt.Errorf("field network: %w", err)
+		}
+	}
+	rawSqliteHome, ok := raw["sqliteHome"]
+	if ok {
+		if err := json.Unmarshal(rawSqliteHome, &v.SqliteHome); err != nil {
+			return fmt.Errorf("field sqliteHome: %w", err)
+		}
+	}
+	rawWindowsSandboxPrivateDesktop, ok := raw["windowsSandboxPrivateDesktop"]
+	if ok {
+		if err := json.Unmarshal(rawWindowsSandboxPrivateDesktop, &v.WindowsSandboxPrivateDesktop); err != nil {
+			return fmt.Errorf("field windowsSandboxPrivateDesktop: %w", err)
 		}
 	}
 	return nil
@@ -12456,17 +12860,21 @@ func (v *ConfigWriteResponse) UnmarshalJSON(data []byte) error {
 }
 
 type ConfiguredHookHandler struct {
-	Async          OptionalNonNull[bool]   `json:"async,omitempty"`
-	Command        OptionalNonNull[string] `json:"command,omitempty"`
-	CommandWindows Optional[string]        `json:"commandWindows,omitempty"`
-	StatusMessage  Optional[string]        `json:"statusMessage,omitempty"`
-	TimeoutSec     Optional[uint64]        `json:"timeoutSec,omitempty"`
-	TypeValue      string                  `json:"type,omitempty"`
-	RawJSON        json.RawMessage         `json:"-"`
+	AdditionalContextLimit Optional[uint64]        `json:"additionalContextLimit,omitempty"`
+	Async                  OptionalNonNull[bool]   `json:"async,omitempty"`
+	Command                OptionalNonNull[string] `json:"command,omitempty"`
+	CommandWindows         Optional[string]        `json:"commandWindows,omitempty"`
+	StatusMessage          Optional[string]        `json:"statusMessage,omitempty"`
+	TimeoutSec             Optional[uint64]        `json:"timeoutSec,omitempty"`
+	TypeValue              string                  `json:"type,omitempty"`
+	RawJSON                json.RawMessage         `json:"-"`
 }
 
 func (v ConfiguredHookHandler) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
+	if v.AdditionalContextLimit.IsSet() {
+		out["additionalContextLimit"] = v.AdditionalContextLimit
+	}
 	if v.Async.IsSet() {
 		out["async"] = v.Async
 	}
@@ -12530,6 +12938,17 @@ func (v *ConfiguredHookHandler) UnmarshalJSON(data []byte) error {
 		v.TypeValue = TypeValueDiscriminator
 		v.RawJSON = append(v.RawJSON[:0], data...)
 		return nil
+	}
+	rawAdditionalContextLimit, ok := raw["additionalContextLimit"]
+	if ok {
+		if err := json.Unmarshal(rawAdditionalContextLimit, &v.AdditionalContextLimit); err != nil {
+			return fmt.Errorf("field additionalContextLimit: %w", err)
+		}
+		if valueAdditionalContextLimit, ok := v.AdditionalContextLimit.Value(); ok {
+			if valueAdditionalContextLimit < 0 {
+				return DecodeError{Field: "additionalContextLimit", Reason: "below minimum 0"}
+			}
+		}
 	}
 	rawAsync, ok := raw["async"]
 	if ok {
@@ -12639,6 +13058,120 @@ func (v *ConfiguredHookMatcherGroup) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type ConnectorMetadata struct {
+	Description         Optional[string]           `json:"description,omitempty"`
+	DistributionChannel Optional[string]           `json:"distributionChannel,omitempty"`
+	IconURL             Optional[string]           `json:"iconUrl,omitempty"`
+	IconURLDark         Optional[string]           `json:"iconUrlDark,omitempty"`
+	ID                  string                     `json:"id,omitempty"`
+	InstallURL          Optional[string]           `json:"installUrl,omitempty"`
+	Name                string                     `json:"name,omitempty"`
+	PluginDisplayNames  OptionalNonNull[[]string]  `json:"pluginDisplayNames,omitempty"`
+	ToolSummaries       Optional[[]AppToolSummary] `json:"toolSummaries,omitempty"`
+}
+
+func (v ConnectorMetadata) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if v.Description.IsSet() {
+		out["description"] = v.Description
+	}
+	if v.DistributionChannel.IsSet() {
+		out["distributionChannel"] = v.DistributionChannel
+	}
+	if v.IconURL.IsSet() {
+		out["iconUrl"] = v.IconURL
+	}
+	if v.IconURLDark.IsSet() {
+		out["iconUrlDark"] = v.IconURLDark
+	}
+	out["id"] = v.ID
+	if v.InstallURL.IsSet() {
+		out["installUrl"] = v.InstallURL
+	}
+	out["name"] = v.Name
+	if v.PluginDisplayNames.IsSet() {
+		out["pluginDisplayNames"] = v.PluginDisplayNames
+	}
+	if v.ToolSummaries.IsSet() {
+		out["toolSummaries"] = v.ToolSummaries
+	}
+	return json.Marshal(out)
+}
+
+func (v *ConnectorMetadata) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawDescription, ok := raw["description"]
+	if ok {
+		if err := json.Unmarshal(rawDescription, &v.Description); err != nil {
+			return fmt.Errorf("field description: %w", err)
+		}
+	}
+	rawDistributionChannel, ok := raw["distributionChannel"]
+	if ok {
+		if err := json.Unmarshal(rawDistributionChannel, &v.DistributionChannel); err != nil {
+			return fmt.Errorf("field distributionChannel: %w", err)
+		}
+	}
+	rawIconURL, ok := raw["iconUrl"]
+	if ok {
+		if err := json.Unmarshal(rawIconURL, &v.IconURL); err != nil {
+			return fmt.Errorf("field iconUrl: %w", err)
+		}
+	}
+	rawIconURLDark, ok := raw["iconUrlDark"]
+	if ok {
+		if err := json.Unmarshal(rawIconURLDark, &v.IconURLDark); err != nil {
+			return fmt.Errorf("field iconUrlDark: %w", err)
+		}
+	}
+	rawID, ok := raw["id"]
+	if !ok {
+		return DecodeError{Field: "id", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawID, []byte("null")) {
+		return DecodeError{Field: "id", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawID, &v.ID); err != nil {
+		return fmt.Errorf("field id: %w", err)
+	}
+	rawInstallURL, ok := raw["installUrl"]
+	if ok {
+		if err := json.Unmarshal(rawInstallURL, &v.InstallURL); err != nil {
+			return fmt.Errorf("field installUrl: %w", err)
+		}
+	}
+	rawName, ok := raw["name"]
+	if !ok {
+		return DecodeError{Field: "name", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawName, []byte("null")) {
+		return DecodeError{Field: "name", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawName, &v.Name); err != nil {
+		return fmt.Errorf("field name: %w", err)
+	}
+	rawPluginDisplayNames, ok := raw["pluginDisplayNames"]
+	if ok {
+		if err := json.Unmarshal(rawPluginDisplayNames, &v.PluginDisplayNames); err != nil {
+			return fmt.Errorf("field pluginDisplayNames: %w", err)
+		}
+	}
+	rawToolSummaries, ok := raw["toolSummaries"]
+	if ok {
+		if err := json.Unmarshal(rawToolSummaries, &v.ToolSummaries); err != nil {
+			return fmt.Errorf("field toolSummaries: %w", err)
+		}
+	}
+	return nil
+}
+
 type ConsumeAccountRateLimitResetCreditOutcome string
 
 const (
@@ -12723,6 +13256,7 @@ func (v *ConsumeAccountRateLimitResetCreditResponse) UnmarshalJSON(data []byte) 
 }
 
 type ContentItem struct {
+	AudioURL  OptionalNonNull[string] `json:"audio_url,omitempty"`
 	Detail    Optional[ImageDetail]   `json:"detail,omitempty"`
 	ImageURL  OptionalNonNull[string] `json:"image_url,omitempty"`
 	Text      OptionalNonNull[string] `json:"text,omitempty"`
@@ -12732,6 +13266,9 @@ type ContentItem struct {
 
 func (v ContentItem) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
+	if v.AudioURL.IsSet() {
+		out["audio_url"] = v.AudioURL
+	}
 	if v.Detail.IsSet() {
 		out["detail"] = v.Detail
 	}
@@ -12750,6 +13287,10 @@ func (v ContentItem) MarshalJSON() ([]byte, error) {
 	case "input_image":
 		if !v.ImageURL.IsSet() {
 			return nil, DecodeError{Field: "image_url", Reason: "missing required field for type input_image"}
+		}
+	case "input_audio":
+		if !v.AudioURL.IsSet() {
+			return nil, DecodeError{Field: "audio_url", Reason: "missing required field for type input_audio"}
 		}
 	case "output_text":
 		if !v.Text.IsSet() {
@@ -12787,11 +13328,18 @@ func (v *ContentItem) UnmarshalJSON(data []byte) error {
 	switch TypeValueDiscriminator {
 	case "input_text":
 	case "input_image":
+	case "input_audio":
 	case "output_text":
 	default:
 		v.TypeValue = TypeValueDiscriminator
 		v.RawJSON = append(v.RawJSON[:0], data...)
 		return nil
+	}
+	rawAudioURL, ok := raw["audio_url"]
+	if ok {
+		if err := json.Unmarshal(rawAudioURL, &v.AudioURL); err != nil {
+			return fmt.Errorf("field audio_url: %w", err)
+		}
 	}
 	rawDetail, ok := raw["detail"]
 	if ok {
@@ -12834,6 +13382,12 @@ func (v *ContentItem) UnmarshalJSON(data []byte) error {
 			return DecodeError{Field: "image_url", Reason: "missing required field for type input_image"}
 		} else if bytes.Equal(rawValue, []byte("null")) {
 			return DecodeError{Field: "image_url", Reason: "cannot be null"}
+		}
+	case "input_audio":
+		if rawValue, ok := raw["audio_url"]; !ok {
+			return DecodeError{Field: "audio_url", Reason: "missing required field for type input_audio"}
+		} else if bytes.Equal(rawValue, []byte("null")) {
+			return DecodeError{Field: "audio_url", Reason: "cannot be null"}
 		}
 	case "output_text":
 		if rawValue, ok := raw["text"]; !ok {
@@ -12996,6 +13550,7 @@ func (v *DeprecationNoticeNotification) UnmarshalJSON(data []byte) error {
 }
 
 type DynamicToolCallOutputContentItem struct {
+	AudioURL  OptionalNonNull[string] `json:"audioUrl,omitempty"`
 	ImageURL  OptionalNonNull[string] `json:"imageUrl,omitempty"`
 	Text      OptionalNonNull[string] `json:"text,omitempty"`
 	TypeValue string                  `json:"type,omitempty"`
@@ -13004,6 +13559,9 @@ type DynamicToolCallOutputContentItem struct {
 
 func (v DynamicToolCallOutputContentItem) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
+	if v.AudioURL.IsSet() {
+		out["audioUrl"] = v.AudioURL
+	}
 	if v.ImageURL.IsSet() {
 		out["imageUrl"] = v.ImageURL
 	}
@@ -13019,6 +13577,10 @@ func (v DynamicToolCallOutputContentItem) MarshalJSON() ([]byte, error) {
 	case "inputImage":
 		if !v.ImageURL.IsSet() {
 			return nil, DecodeError{Field: "imageUrl", Reason: "missing required field for type inputImage"}
+		}
+	case "inputAudio":
+		if !v.AudioURL.IsSet() {
+			return nil, DecodeError{Field: "audioUrl", Reason: "missing required field for type inputAudio"}
 		}
 	default:
 		if len(v.RawJSON) > 0 {
@@ -13052,10 +13614,17 @@ func (v *DynamicToolCallOutputContentItem) UnmarshalJSON(data []byte) error {
 	switch TypeValueDiscriminator {
 	case "inputText":
 	case "inputImage":
+	case "inputAudio":
 	default:
 		v.TypeValue = TypeValueDiscriminator
 		v.RawJSON = append(v.RawJSON[:0], data...)
 		return nil
+	}
+	rawAudioURL, ok := raw["audioUrl"]
+	if ok {
+		if err := json.Unmarshal(rawAudioURL, &v.AudioURL); err != nil {
+			return fmt.Errorf("field audioUrl: %w", err)
+		}
 	}
 	rawImageURL, ok := raw["imageUrl"]
 	if ok {
@@ -13092,6 +13661,12 @@ func (v *DynamicToolCallOutputContentItem) UnmarshalJSON(data []byte) error {
 			return DecodeError{Field: "imageUrl", Reason: "missing required field for type inputImage"}
 		} else if bytes.Equal(rawValue, []byte("null")) {
 			return DecodeError{Field: "imageUrl", Reason: "cannot be null"}
+		}
+	case "inputAudio":
+		if rawValue, ok := raw["audioUrl"]; !ok {
+			return DecodeError{Field: "audioUrl", Reason: "missing required field for type inputAudio"}
+		} else if bytes.Equal(rawValue, []byte("null")) {
+			return DecodeError{Field: "audioUrl", Reason: "cannot be null"}
 		}
 	default:
 		v.RawJSON = append(v.RawJSON[:0], data...)
@@ -13488,6 +14063,50 @@ func (v *EnvironmentAddResponse) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type EnvironmentConnectionNotification struct {
+	EnvironmentID string `json:"environmentId,omitempty"`
+	ThreadID      string `json:"threadId,omitempty"`
+}
+
+func (v EnvironmentConnectionNotification) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["environmentId"] = v.EnvironmentID
+	out["threadId"] = v.ThreadID
+	return json.Marshal(out)
+}
+
+func (v *EnvironmentConnectionNotification) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawEnvironmentID, ok := raw["environmentId"]
+	if !ok {
+		return DecodeError{Field: "environmentId", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawEnvironmentID, []byte("null")) {
+		return DecodeError{Field: "environmentId", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawEnvironmentID, &v.EnvironmentID); err != nil {
+		return fmt.Errorf("field environmentId: %w", err)
+	}
+	rawThreadID, ok := raw["threadId"]
+	if !ok {
+		return DecodeError{Field: "threadId", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawThreadID, []byte("null")) {
+		return DecodeError{Field: "threadId", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawThreadID, &v.ThreadID); err != nil {
+		return fmt.Errorf("field threadId: %w", err)
+	}
+	return nil
+}
+
 type EnvironmentInfoParams struct {
 	EnvironmentID string `json:"environmentId,omitempty"`
 }
@@ -13602,6 +14221,89 @@ func (v *EnvironmentShellInfo) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawPath, &v.Path); err != nil {
 		return fmt.Errorf("field path: %w", err)
+	}
+	return nil
+}
+
+type EnvironmentStatusKind string
+
+const (
+	EnvironmentStatusKindReady        EnvironmentStatusKind = "ready"
+	EnvironmentStatusKindPending      EnvironmentStatusKind = "pending"
+	EnvironmentStatusKindDisconnected EnvironmentStatusKind = "disconnected"
+	EnvironmentStatusKindUnknown      EnvironmentStatusKind = "unknown"
+)
+
+type EnvironmentStatusParams struct {
+	EnvironmentID string `json:"environmentId,omitempty"`
+}
+
+func (v EnvironmentStatusParams) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["environmentId"] = v.EnvironmentID
+	return json.Marshal(out)
+}
+
+func (v *EnvironmentStatusParams) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawEnvironmentID, ok := raw["environmentId"]
+	if !ok {
+		return DecodeError{Field: "environmentId", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawEnvironmentID, []byte("null")) {
+		return DecodeError{Field: "environmentId", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawEnvironmentID, &v.EnvironmentID); err != nil {
+		return fmt.Errorf("field environmentId: %w", err)
+	}
+	return nil
+}
+
+type EnvironmentStatusResponse struct {
+	Error  Optional[string]      `json:"error,omitempty"`
+	Status EnvironmentStatusKind `json:"status,omitempty"`
+}
+
+func (v EnvironmentStatusResponse) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if v.Error.IsSet() {
+		out["error"] = v.Error
+	}
+	out["status"] = v.Status
+	return json.Marshal(out)
+}
+
+func (v *EnvironmentStatusResponse) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawError, ok := raw["error"]
+	if ok {
+		if err := json.Unmarshal(rawError, &v.Error); err != nil {
+			return fmt.Errorf("field error: %w", err)
+		}
+	}
+	rawStatus, ok := raw["status"]
+	if !ok {
+		return DecodeError{Field: "status", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawStatus, []byte("null")) {
+		return DecodeError{Field: "status", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawStatus, &v.Status); err != nil {
+		return fmt.Errorf("field status: %w", err)
 	}
 	return nil
 }
@@ -13944,8 +14646,12 @@ const (
 )
 
 type ExternalAgentConfigDetectParams struct {
-	Cwds        Optional[[]string]    `json:"cwds,omitempty"`
-	IncludeHome OptionalNonNull[bool] `json:"includeHome,omitempty"`
+	Cwds              Optional[[]string]    `json:"cwds,omitempty"`
+	IncludeHome       OptionalNonNull[bool] `json:"includeHome,omitempty"`
+	MaxSessionAgeDays Optional[uint32]      `json:"maxSessionAgeDays,omitempty"`
+	MaxSessions       Optional[uint32]      `json:"maxSessions,omitempty"`
+	MigrationSource   Optional[string]      `json:"migrationSource,omitempty"`
+	Source            Optional[string]      `json:"source,omitempty"`
 }
 
 func (v ExternalAgentConfigDetectParams) MarshalJSON() ([]byte, error) {
@@ -13957,6 +14663,18 @@ func (v ExternalAgentConfigDetectParams) MarshalJSON() ([]byte, error) {
 		if value, ok := v.IncludeHome.Value(); !ok || value {
 			out["includeHome"] = v.IncludeHome
 		}
+	}
+	if v.MaxSessionAgeDays.IsSet() {
+		out["maxSessionAgeDays"] = v.MaxSessionAgeDays
+	}
+	if v.MaxSessions.IsSet() {
+		out["maxSessions"] = v.MaxSessions
+	}
+	if v.MigrationSource.IsSet() {
+		out["migrationSource"] = v.MigrationSource
+	}
+	if v.Source.IsSet() {
+		out["source"] = v.Source
 	}
 	return json.Marshal(out)
 }
@@ -13984,6 +14702,40 @@ func (v *ExternalAgentConfigDetectParams) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawIncludeHome, &v.IncludeHome); err != nil {
 			return fmt.Errorf("field includeHome: %w", err)
+		}
+	}
+	rawMaxSessionAgeDays, ok := raw["maxSessionAgeDays"]
+	if ok {
+		if err := json.Unmarshal(rawMaxSessionAgeDays, &v.MaxSessionAgeDays); err != nil {
+			return fmt.Errorf("field maxSessionAgeDays: %w", err)
+		}
+		if valueMaxSessionAgeDays, ok := v.MaxSessionAgeDays.Value(); ok {
+			if valueMaxSessionAgeDays < 0 {
+				return DecodeError{Field: "maxSessionAgeDays", Reason: "below minimum 0"}
+			}
+		}
+	}
+	rawMaxSessions, ok := raw["maxSessions"]
+	if ok {
+		if err := json.Unmarshal(rawMaxSessions, &v.MaxSessions); err != nil {
+			return fmt.Errorf("field maxSessions: %w", err)
+		}
+		if valueMaxSessions, ok := v.MaxSessions.Value(); ok {
+			if valueMaxSessions < 0 {
+				return DecodeError{Field: "maxSessions", Reason: "below minimum 0"}
+			}
+		}
+	}
+	rawMigrationSource, ok := raw["migrationSource"]
+	if ok {
+		if err := json.Unmarshal(rawMigrationSource, &v.MigrationSource); err != nil {
+			return fmt.Errorf("field migrationSource: %w", err)
+		}
+	}
+	rawSource, ok := raw["source"]
+	if ok {
+		if err := json.Unmarshal(rawSource, &v.Source); err != nil {
+			return fmt.Errorf("field source: %w", err)
 		}
 	}
 	return nil
@@ -14066,11 +14818,13 @@ func (v *ExternalAgentConfigImportCompletedNotification) UnmarshalJSON(data []by
 }
 
 type ExternalAgentConfigImportHistoriesReadResponse struct {
-	Data []ExternalAgentConfigImportHistory `json:"data,omitempty"`
+	Connectors []ExternalAgentImportedConnectorCandidate `json:"connectors,omitempty"`
+	Data       []ExternalAgentConfigImportHistory        `json:"data,omitempty"`
 }
 
 func (v ExternalAgentConfigImportHistoriesReadResponse) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
+	out["connectors"] = v.Connectors
 	out["data"] = v.Data
 	return json.Marshal(out)
 }
@@ -14083,6 +14837,16 @@ func (v *ExternalAgentConfigImportHistoriesReadResponse) UnmarshalJSON(data []by
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
+	}
+	rawConnectors, ok := raw["connectors"]
+	if !ok {
+		return DecodeError{Field: "connectors", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawConnectors, []byte("null")) {
+		return DecodeError{Field: "connectors", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawConnectors, &v.Connectors); err != nil {
+		return fmt.Errorf("field connectors: %w", err)
 	}
 	rawData, ok := raw["data"]
 	if !ok {
@@ -14172,6 +14936,7 @@ type ExternalAgentConfigImportItemTypeFailure struct {
 	ItemType     ExternalAgentConfigMigrationItemType `json:"itemType,omitempty"`
 	Message      string                               `json:"message,omitempty"`
 	Source       Optional[string]                     `json:"source,omitempty"`
+	SubErrorType Optional[string]                     `json:"subErrorType,omitempty"`
 }
 
 func (v ExternalAgentConfigImportItemTypeFailure) MarshalJSON() ([]byte, error) {
@@ -14187,6 +14952,9 @@ func (v ExternalAgentConfigImportItemTypeFailure) MarshalJSON() ([]byte, error) 
 	out["message"] = v.Message
 	if v.Source.IsSet() {
 		out["source"] = v.Source
+	}
+	if v.SubErrorType.IsSet() {
+		out["subErrorType"] = v.SubErrorType
 	}
 	return json.Marshal(out)
 }
@@ -14246,6 +15014,12 @@ func (v *ExternalAgentConfigImportItemTypeFailure) UnmarshalJSON(data []byte) er
 	if ok {
 		if err := json.Unmarshal(rawSource, &v.Source); err != nil {
 			return fmt.Errorf("field source: %w", err)
+		}
+	}
+	rawSubErrorType, ok := raw["subErrorType"]
+	if ok {
+		if err := json.Unmarshal(rawSubErrorType, &v.SubErrorType); err != nil {
+			return fmt.Errorf("field subErrorType: %w", err)
 		}
 	}
 	return nil
@@ -14314,13 +15088,21 @@ func (v *ExternalAgentConfigImportItemTypeSuccess) UnmarshalJSON(data []byte) er
 }
 
 type ExternalAgentConfigImportParams struct {
-	MigrationItems []ExternalAgentConfigMigrationItem `json:"migrationItems,omitempty"`
-	Source         Optional[string]                   `json:"source,omitempty"`
+	MigrationItems  []ExternalAgentConfigMigrationItem `json:"migrationItems,omitempty"`
+	MigrationSource Optional[string]                   `json:"migrationSource,omitempty"`
+	ProviderID      Optional[string]                   `json:"providerId,omitempty"`
+	Source          Optional[string]                   `json:"source,omitempty"`
 }
 
 func (v ExternalAgentConfigImportParams) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
 	out["migrationItems"] = v.MigrationItems
+	if v.MigrationSource.IsSet() {
+		out["migrationSource"] = v.MigrationSource
+	}
+	if v.ProviderID.IsSet() {
+		out["providerId"] = v.ProviderID
+	}
 	if v.Source.IsSet() {
 		out["source"] = v.Source
 	}
@@ -14345,6 +15127,18 @@ func (v *ExternalAgentConfigImportParams) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawMigrationItems, &v.MigrationItems); err != nil {
 		return fmt.Errorf("field migrationItems: %w", err)
+	}
+	rawMigrationSource, ok := raw["migrationSource"]
+	if ok {
+		if err := json.Unmarshal(rawMigrationSource, &v.MigrationSource); err != nil {
+			return fmt.Errorf("field migrationSource: %w", err)
+		}
+	}
+	rawProviderID, ok := raw["providerId"]
+	if ok {
+		if err := json.Unmarshal(rawProviderID, &v.ProviderID); err != nil {
+			return fmt.Errorf("field providerId: %w", err)
+		}
 	}
 	rawSource, ok := raw["source"]
 	if ok {
@@ -14562,8 +15356,104 @@ const (
 	ExternalAgentConfigMigrationItemTypeSubagents       ExternalAgentConfigMigrationItemType = "SUBAGENTS"
 	ExternalAgentConfigMigrationItemTypeHooks           ExternalAgentConfigMigrationItemType = "HOOKS"
 	ExternalAgentConfigMigrationItemTypeCommands        ExternalAgentConfigMigrationItemType = "COMMANDS"
+	ExternalAgentConfigMigrationItemTypeMemory          ExternalAgentConfigMigrationItemType = "MEMORY"
 	ExternalAgentConfigMigrationItemTypeSessions        ExternalAgentConfigMigrationItemType = "SESSIONS"
 )
+
+type ExternalAgentImportedConnectorCandidate struct {
+	Name         string                               `json:"name,omitempty"`
+	SessionCount uint32                               `json:"sessionCount,omitempty"`
+	Source       ExternalAgentImportedConnectorSource `json:"source,omitempty"`
+}
+
+func (v ExternalAgentImportedConnectorCandidate) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["name"] = v.Name
+	out["sessionCount"] = v.SessionCount
+	out["source"] = v.Source
+	return json.Marshal(out)
+}
+
+func (v *ExternalAgentImportedConnectorCandidate) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawName, ok := raw["name"]
+	if !ok {
+		return DecodeError{Field: "name", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawName, []byte("null")) {
+		return DecodeError{Field: "name", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawName, &v.Name); err != nil {
+		return fmt.Errorf("field name: %w", err)
+	}
+	rawSessionCount, ok := raw["sessionCount"]
+	if !ok {
+		return DecodeError{Field: "sessionCount", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawSessionCount, []byte("null")) {
+		return DecodeError{Field: "sessionCount", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawSessionCount, &v.SessionCount); err != nil {
+		return fmt.Errorf("field sessionCount: %w", err)
+	}
+	if v.SessionCount < 0 {
+		return DecodeError{Field: "sessionCount", Reason: "below minimum 0"}
+	}
+	rawSource, ok := raw["source"]
+	if !ok {
+		return DecodeError{Field: "source", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawSource, []byte("null")) {
+		return DecodeError{Field: "source", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawSource, &v.Source); err != nil {
+		return fmt.Errorf("field source: %w", err)
+	}
+	return nil
+}
+
+type ExternalAgentImportedConnectorSource string
+
+const (
+	ExternalAgentImportedConnectorSourceRemoteMcpServersConfig ExternalAgentImportedConnectorSource = "remoteMcpServersConfig"
+)
+
+type FeedbackRequirements struct {
+	Enabled Optional[bool] `json:"enabled,omitempty"`
+}
+
+func (v FeedbackRequirements) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if v.Enabled.IsSet() {
+		out["enabled"] = v.Enabled
+	}
+	return json.Marshal(out)
+}
+
+func (v *FeedbackRequirements) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawEnabled, ok := raw["enabled"]
+	if ok {
+		if err := json.Unmarshal(rawEnabled, &v.Enabled); err != nil {
+			return fmt.Errorf("field enabled: %w", err)
+		}
+	}
+	return nil
+}
 
 type FeedbackUploadParams struct {
 	Classification string                      `json:"classification,omitempty"`
@@ -14999,10 +15889,10 @@ func (v *FileSystemSandboxEntry) UnmarshalJSON(data []byte) error {
 }
 
 type FileSystemSpecialPath struct {
-	Kind    string                  `json:"kind,omitempty"`
-	Path    OptionalNonNull[string] `json:"path,omitempty"`
-	Subpath Optional[string]        `json:"subpath,omitempty"`
-	RawJSON json.RawMessage         `json:"-"`
+	Kind    string                        `json:"kind,omitempty"`
+	Path    OptionalNonNull[string]       `json:"path,omitempty"`
+	Subpath Optional[LegacyAppPathString] `json:"subpath,omitempty"`
+	RawJSON json.RawMessage               `json:"-"`
 }
 
 func (v FileSystemSpecialPath) MarshalJSON() ([]byte, error) {
@@ -15931,6 +16821,7 @@ func (v *FsWriteFileResponse) UnmarshalJSON(data []byte) error {
 type FunctionCallOutputBody json.RawMessage
 
 type FunctionCallOutputContentItem struct {
+	AudioURL         OptionalNonNull[string] `json:"audio_url,omitempty"`
 	Detail           Optional[ImageDetail]   `json:"detail,omitempty"`
 	EncryptedContent OptionalNonNull[string] `json:"encrypted_content,omitempty"`
 	ImageURL         OptionalNonNull[string] `json:"image_url,omitempty"`
@@ -15941,6 +16832,9 @@ type FunctionCallOutputContentItem struct {
 
 func (v FunctionCallOutputContentItem) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
+	if v.AudioURL.IsSet() {
+		out["audio_url"] = v.AudioURL
+	}
 	if v.Detail.IsSet() {
 		out["detail"] = v.Detail
 	}
@@ -15962,6 +16856,10 @@ func (v FunctionCallOutputContentItem) MarshalJSON() ([]byte, error) {
 	case "input_image":
 		if !v.ImageURL.IsSet() {
 			return nil, DecodeError{Field: "image_url", Reason: "missing required field for type input_image"}
+		}
+	case "input_audio":
+		if !v.AudioURL.IsSet() {
+			return nil, DecodeError{Field: "audio_url", Reason: "missing required field for type input_audio"}
 		}
 	case "encrypted_content":
 		if !v.EncryptedContent.IsSet() {
@@ -15999,11 +16897,18 @@ func (v *FunctionCallOutputContentItem) UnmarshalJSON(data []byte) error {
 	switch TypeValueDiscriminator {
 	case "input_text":
 	case "input_image":
+	case "input_audio":
 	case "encrypted_content":
 	default:
 		v.TypeValue = TypeValueDiscriminator
 		v.RawJSON = append(v.RawJSON[:0], data...)
 		return nil
+	}
+	rawAudioURL, ok := raw["audio_url"]
+	if ok {
+		if err := json.Unmarshal(rawAudioURL, &v.AudioURL); err != nil {
+			return fmt.Errorf("field audio_url: %w", err)
+		}
 	}
 	rawDetail, ok := raw["detail"]
 	if ok {
@@ -16052,6 +16957,12 @@ func (v *FunctionCallOutputContentItem) UnmarshalJSON(data []byte) error {
 			return DecodeError{Field: "image_url", Reason: "missing required field for type input_image"}
 		} else if bytes.Equal(rawValue, []byte("null")) {
 			return DecodeError{Field: "image_url", Reason: "cannot be null"}
+		}
+	case "input_audio":
+		if rawValue, ok := raw["audio_url"]; !ok {
+			return DecodeError{Field: "audio_url", Reason: "missing required field for type input_audio"}
+		} else if bytes.Equal(rawValue, []byte("null")) {
+			return DecodeError{Field: "audio_url", Reason: "cannot be null"}
 		}
 	case "encrypted_content":
 		if rawValue, ok := raw["encrypted_content"]; !ok {
@@ -16962,6 +17873,7 @@ const (
 	HookEventNamePreCompact        HookEventName = "preCompact"
 	HookEventNamePostCompact       HookEventName = "postCompact"
 	HookEventNameSessionStart      HookEventName = "sessionStart"
+	HookEventNameSessionEnd        HookEventName = "sessionEnd"
 	HookEventNameUserPromptSubmit  HookEventName = "userPromptSubmit"
 	HookEventNameSubagentStart     HookEventName = "subagentStart"
 	HookEventNameSubagentStop      HookEventName = "subagentStop"
@@ -16984,25 +17896,29 @@ const (
 )
 
 type HookMetadata struct {
-	Command       Optional[string] `json:"command,omitempty"`
-	CurrentHash   string           `json:"currentHash,omitempty"`
-	DisplayOrder  int64            `json:"displayOrder,omitempty"`
-	Enabled       bool             `json:"enabled,omitempty"`
-	EventName     HookEventName    `json:"eventName,omitempty"`
-	HandlerType   HookHandlerType  `json:"handlerType,omitempty"`
-	IsManaged     bool             `json:"isManaged,omitempty"`
-	Key           string           `json:"key,omitempty"`
-	Matcher       Optional[string] `json:"matcher,omitempty"`
-	PluginID      Optional[string] `json:"pluginId,omitempty"`
-	Source        HookSource       `json:"source,omitempty"`
-	SourcePath    AbsolutePathBuf  `json:"sourcePath,omitempty"`
-	StatusMessage Optional[string] `json:"statusMessage,omitempty"`
-	TimeoutSec    uint64           `json:"timeoutSec,omitempty"`
-	TrustStatus   HookTrustStatus  `json:"trustStatus,omitempty"`
+	AdditionalContextLimit Optional[uint64] `json:"additionalContextLimit,omitempty"`
+	Command                Optional[string] `json:"command,omitempty"`
+	CurrentHash            string           `json:"currentHash,omitempty"`
+	DisplayOrder           int64            `json:"displayOrder,omitempty"`
+	Enabled                bool             `json:"enabled,omitempty"`
+	EventName              HookEventName    `json:"eventName,omitempty"`
+	HandlerType            HookHandlerType  `json:"handlerType,omitempty"`
+	IsManaged              bool             `json:"isManaged,omitempty"`
+	Key                    string           `json:"key,omitempty"`
+	Matcher                Optional[string] `json:"matcher,omitempty"`
+	PluginID               Optional[string] `json:"pluginId,omitempty"`
+	Source                 HookSource       `json:"source,omitempty"`
+	SourcePath             AbsolutePathBuf  `json:"sourcePath,omitempty"`
+	StatusMessage          Optional[string] `json:"statusMessage,omitempty"`
+	TimeoutSec             uint64           `json:"timeoutSec,omitempty"`
+	TrustStatus            HookTrustStatus  `json:"trustStatus,omitempty"`
 }
 
 func (v HookMetadata) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
+	if v.AdditionalContextLimit.IsSet() {
+		out["additionalContextLimit"] = v.AdditionalContextLimit
+	}
 	if v.Command.IsSet() {
 		out["command"] = v.Command
 	}
@@ -17037,6 +17953,17 @@ func (v *HookMetadata) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
+	}
+	rawAdditionalContextLimit, ok := raw["additionalContextLimit"]
+	if ok {
+		if err := json.Unmarshal(rawAdditionalContextLimit, &v.AdditionalContextLimit); err != nil {
+			return fmt.Errorf("field additionalContextLimit: %w", err)
+		}
+		if valueAdditionalContextLimit, ok := v.AdditionalContextLimit.Value(); ok {
+			if valueAdditionalContextLimit < 0 {
+				return DecodeError{Field: "additionalContextLimit", Reason: "below minimum 0"}
+			}
+		}
 	}
 	rawCommand, ok := raw["command"]
 	if ok {
@@ -17732,7 +18659,74 @@ type InputModality string
 const (
 	InputModalityText  InputModality = "text"
 	InputModalityImage InputModality = "image"
+	InputModalityAudio InputModality = "audio"
 )
+
+type InstalledApp struct {
+	Callable    bool             `json:"callable,omitempty"`
+	Enabled     bool             `json:"enabled,omitempty"`
+	ID          string           `json:"id,omitempty"`
+	RuntimeName Optional[string] `json:"runtimeName,omitempty"`
+}
+
+func (v InstalledApp) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["callable"] = v.Callable
+	out["enabled"] = v.Enabled
+	out["id"] = v.ID
+	if v.RuntimeName.IsSet() {
+		out["runtimeName"] = v.RuntimeName
+	}
+	return json.Marshal(out)
+}
+
+func (v *InstalledApp) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawCallable, ok := raw["callable"]
+	if !ok {
+		return DecodeError{Field: "callable", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawCallable, []byte("null")) {
+		return DecodeError{Field: "callable", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawCallable, &v.Callable); err != nil {
+		return fmt.Errorf("field callable: %w", err)
+	}
+	rawEnabled, ok := raw["enabled"]
+	if !ok {
+		return DecodeError{Field: "enabled", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawEnabled, []byte("null")) {
+		return DecodeError{Field: "enabled", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawEnabled, &v.Enabled); err != nil {
+		return fmt.Errorf("field enabled: %w", err)
+	}
+	rawID, ok := raw["id"]
+	if !ok {
+		return DecodeError{Field: "id", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawID, []byte("null")) {
+		return DecodeError{Field: "id", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawID, &v.ID); err != nil {
+		return fmt.Errorf("field id: %w", err)
+	}
+	rawRuntimeName, ok := raw["runtimeName"]
+	if ok {
+		if err := json.Unmarshal(rawRuntimeName, &v.RuntimeName); err != nil {
+			return fmt.Errorf("field runtimeName: %w", err)
+		}
+	}
+	return nil
+}
 
 type InternalChatMessageMetadataPassthrough struct {
 	TurnID Optional[string] `json:"turn_id,omitempty"`
@@ -18762,18 +19756,19 @@ func (v *LogoutAccountResponse) UnmarshalJSON(data []byte) error {
 }
 
 type ManagedHooksRequirements struct {
-	PermissionRequest []ConfiguredHookMatcherGroup `json:"PermissionRequest,omitempty"`
-	PostCompact       []ConfiguredHookMatcherGroup `json:"PostCompact,omitempty"`
-	PostToolUse       []ConfiguredHookMatcherGroup `json:"PostToolUse,omitempty"`
-	PreCompact        []ConfiguredHookMatcherGroup `json:"PreCompact,omitempty"`
-	PreToolUse        []ConfiguredHookMatcherGroup `json:"PreToolUse,omitempty"`
-	SessionStart      []ConfiguredHookMatcherGroup `json:"SessionStart,omitempty"`
-	Stop              []ConfiguredHookMatcherGroup `json:"Stop,omitempty"`
-	SubagentStart     []ConfiguredHookMatcherGroup `json:"SubagentStart,omitempty"`
-	SubagentStop      []ConfiguredHookMatcherGroup `json:"SubagentStop,omitempty"`
-	UserPromptSubmit  []ConfiguredHookMatcherGroup `json:"UserPromptSubmit,omitempty"`
-	ManagedDir        Optional[string]             `json:"managedDir,omitempty"`
-	WindowsManagedDir Optional[string]             `json:"windowsManagedDir,omitempty"`
+	PermissionRequest []ConfiguredHookMatcherGroup                  `json:"PermissionRequest,omitempty"`
+	PostCompact       []ConfiguredHookMatcherGroup                  `json:"PostCompact,omitempty"`
+	PostToolUse       []ConfiguredHookMatcherGroup                  `json:"PostToolUse,omitempty"`
+	PreCompact        []ConfiguredHookMatcherGroup                  `json:"PreCompact,omitempty"`
+	PreToolUse        []ConfiguredHookMatcherGroup                  `json:"PreToolUse,omitempty"`
+	SessionEnd        OptionalNonNull[[]ConfiguredHookMatcherGroup] `json:"SessionEnd,omitempty"`
+	SessionStart      []ConfiguredHookMatcherGroup                  `json:"SessionStart,omitempty"`
+	Stop              []ConfiguredHookMatcherGroup                  `json:"Stop,omitempty"`
+	SubagentStart     []ConfiguredHookMatcherGroup                  `json:"SubagentStart,omitempty"`
+	SubagentStop      []ConfiguredHookMatcherGroup                  `json:"SubagentStop,omitempty"`
+	UserPromptSubmit  []ConfiguredHookMatcherGroup                  `json:"UserPromptSubmit,omitempty"`
+	ManagedDir        Optional[string]                              `json:"managedDir,omitempty"`
+	WindowsManagedDir Optional[string]                              `json:"windowsManagedDir,omitempty"`
 }
 
 func (v ManagedHooksRequirements) MarshalJSON() ([]byte, error) {
@@ -18783,6 +19778,9 @@ func (v ManagedHooksRequirements) MarshalJSON() ([]byte, error) {
 	out["PostToolUse"] = v.PostToolUse
 	out["PreCompact"] = v.PreCompact
 	out["PreToolUse"] = v.PreToolUse
+	if v.SessionEnd.IsSet() {
+		out["SessionEnd"] = v.SessionEnd
+	}
 	out["SessionStart"] = v.SessionStart
 	out["Stop"] = v.Stop
 	out["SubagentStart"] = v.SubagentStart
@@ -18855,6 +19853,12 @@ func (v *ManagedHooksRequirements) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawPreToolUse, &v.PreToolUse); err != nil {
 		return fmt.Errorf("field PreToolUse: %w", err)
+	}
+	rawSessionEnd, ok := raw["SessionEnd"]
+	if ok {
+		if err := json.Unmarshal(rawSessionEnd, &v.SessionEnd); err != nil {
+			return fmt.Errorf("field SessionEnd: %w", err)
+		}
 	}
 	rawSessionStart, ok := raw["SessionStart"]
 	if !ok {
@@ -20027,7 +21031,6 @@ type McpToolCallAppContext struct {
 	ConnectorID string           `json:"connectorId,omitempty"`
 	LinkID      Optional[string] `json:"linkId,omitempty"`
 	ResourceUri Optional[string] `json:"resourceUri,omitempty"`
-	TemplateID  Optional[string] `json:"templateId,omitempty"`
 }
 
 func (v McpToolCallAppContext) MarshalJSON() ([]byte, error) {
@@ -20044,9 +21047,6 @@ func (v McpToolCallAppContext) MarshalJSON() ([]byte, error) {
 	}
 	if v.ResourceUri.IsSet() {
 		out["resourceUri"] = v.ResourceUri
-	}
-	if v.TemplateID.IsSet() {
-		out["templateId"] = v.TemplateID
 	}
 	return json.Marshal(out)
 }
@@ -20092,12 +21092,6 @@ func (v *McpToolCallAppContext) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawResourceUri, &v.ResourceUri); err != nil {
 			return fmt.Errorf("field resourceUri: %w", err)
-		}
-	}
-	rawTemplateID, ok := raw["templateId"]
-	if ok {
-		if err := json.Unmarshal(rawTemplateID, &v.TemplateID); err != nil {
-			return fmt.Errorf("field templateId: %w", err)
 		}
 	}
 	return nil
@@ -20420,6 +21414,7 @@ type MigrationDetails struct {
 	Commands   OptionalNonNull[[]CommandMigration]   `json:"commands,omitempty"`
 	Hooks      OptionalNonNull[[]HookMigration]      `json:"hooks,omitempty"`
 	McpServers OptionalNonNull[[]McpServerMigration] `json:"mcpServers,omitempty"`
+	Memory     OptionalNonNull[[]string]             `json:"memory,omitempty"`
 	Plugins    OptionalNonNull[[]PluginsMigration]   `json:"plugins,omitempty"`
 	Sessions   OptionalNonNull[[]SessionMigration]   `json:"sessions,omitempty"`
 	Skills     OptionalNonNull[[]SkillMigration]     `json:"skills,omitempty"`
@@ -20436,6 +21431,9 @@ func (v MigrationDetails) MarshalJSON() ([]byte, error) {
 	}
 	if v.McpServers.IsSet() {
 		out["mcpServers"] = v.McpServers
+	}
+	if v.Memory.IsSet() {
+		out["memory"] = v.Memory
 	}
 	if v.Plugins.IsSet() {
 		out["plugins"] = v.Plugins
@@ -20489,6 +21487,12 @@ func (v *MigrationDetails) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawMcpServers, &v.McpServers); err != nil {
 			return fmt.Errorf("field mcpServers: %w", err)
+		}
+	}
+	rawMemory, ok := raw["memory"]
+	if ok {
+		if err := json.Unmarshal(rawMemory, &v.Memory); err != nil {
+			return fmt.Errorf("field memory: %w", err)
 		}
 	}
 	rawPlugins, ok := raw["plugins"]
@@ -22743,6 +23747,7 @@ const (
 
 type PluginListParams struct {
 	Cwds             Optional[[]AbsolutePathBuf]           `json:"cwds,omitempty"`
+	ForceRefetch     OptionalNonNull[bool]                 `json:"forceRefetch,omitempty"`
 	MarketplaceKinds Optional[[]PluginListMarketplaceKind] `json:"marketplaceKinds,omitempty"`
 }
 
@@ -22750,6 +23755,9 @@ func (v PluginListParams) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
 	if v.Cwds.IsSet() {
 		out["cwds"] = v.Cwds
+	}
+	if v.ForceRefetch.IsSet() {
+		out["forceRefetch"] = v.ForceRefetch
 	}
 	if v.MarketplaceKinds.IsSet() {
 		out["marketplaceKinds"] = v.MarketplaceKinds
@@ -22770,6 +23778,12 @@ func (v *PluginListParams) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawCwds, &v.Cwds); err != nil {
 			return fmt.Errorf("field cwds: %w", err)
+		}
+	}
+	rawForceRefetch, ok := raw["forceRefetch"]
+	if ok {
+		if err := json.Unmarshal(rawForceRefetch, &v.ForceRefetch); err != nil {
+			return fmt.Errorf("field forceRefetch: %w", err)
 		}
 	}
 	rawMarketplaceKinds, ok := raw["marketplaceKinds"]
@@ -23633,6 +24647,7 @@ type PluginShareUpdateDiscoverability string
 const (
 	PluginShareUpdateDiscoverabilityUnlisted PluginShareUpdateDiscoverability = "UNLISTED"
 	PluginShareUpdateDiscoverabilityPrivate  PluginShareUpdateDiscoverability = "PRIVATE"
+	PluginShareUpdateDiscoverabilityListed   PluginShareUpdateDiscoverability = "LISTED"
 )
 
 type PluginShareUpdateTargetsParams struct {
@@ -23990,21 +25005,22 @@ func (v *PluginSource) UnmarshalJSON(data []byte) error {
 }
 
 type PluginSummary struct {
-	AuthPolicy          PluginAuthPolicy                    `json:"authPolicy,omitempty"`
-	Availability        OptionalNonNull[PluginAvailability] `json:"availability,omitempty"`
-	Enabled             bool                                `json:"enabled,omitempty"`
-	ID                  string                              `json:"id,omitempty"`
-	InstallPolicy       PluginInstallPolicy                 `json:"installPolicy,omitempty"`
-	InstallPolicySource Optional[PluginInstallPolicySource] `json:"installPolicySource,omitempty"`
-	Installed           bool                                `json:"installed,omitempty"`
-	InterfaceValue      Optional[PluginInterface]           `json:"interface,omitempty"`
-	Keywords            OptionalNonNull[[]string]           `json:"keywords,omitempty"`
-	LocalVersion        Optional[string]                    `json:"localVersion,omitempty"`
-	Name                string                              `json:"name,omitempty"`
-	RemotePluginID      Optional[string]                    `json:"remotePluginId,omitempty"`
-	ShareContext        Optional[PluginShareContext]        `json:"shareContext,omitempty"`
-	Source              PluginSource                        `json:"source,omitempty"`
-	Version             Optional[string]                    `json:"version,omitempty"`
+	AuthPolicy                       PluginAuthPolicy                    `json:"authPolicy,omitempty"`
+	Availability                     OptionalNonNull[PluginAvailability] `json:"availability,omitempty"`
+	Enabled                          bool                                `json:"enabled,omitempty"`
+	ID                               string                              `json:"id,omitempty"`
+	InstallPolicy                    PluginInstallPolicy                 `json:"installPolicy,omitempty"`
+	InstallPolicySource              Optional[PluginInstallPolicySource] `json:"installPolicySource,omitempty"`
+	Installed                        bool                                `json:"installed,omitempty"`
+	InterfaceValue                   Optional[PluginInterface]           `json:"interface,omitempty"`
+	Keywords                         OptionalNonNull[[]string]           `json:"keywords,omitempty"`
+	LocalVersion                     Optional[string]                    `json:"localVersion,omitempty"`
+	MustShowInstallationInterstitial Optional[bool]                      `json:"mustShowInstallationInterstitial,omitempty"`
+	Name                             string                              `json:"name,omitempty"`
+	RemotePluginID                   Optional[string]                    `json:"remotePluginId,omitempty"`
+	ShareContext                     Optional[PluginShareContext]        `json:"shareContext,omitempty"`
+	Source                           PluginSource                        `json:"source,omitempty"`
+	Version                          Optional[string]                    `json:"version,omitempty"`
 }
 
 func (v PluginSummary) MarshalJSON() ([]byte, error) {
@@ -24028,6 +25044,9 @@ func (v PluginSummary) MarshalJSON() ([]byte, error) {
 	}
 	if v.LocalVersion.IsSet() {
 		out["localVersion"] = v.LocalVersion
+	}
+	if v.MustShowInstallationInterstitial.IsSet() {
+		out["mustShowInstallationInterstitial"] = v.MustShowInstallationInterstitial
 	}
 	out["name"] = v.Name
 	if v.RemotePluginID.IsSet() {
@@ -24142,6 +25161,12 @@ func (v *PluginSummary) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawLocalVersion, &v.LocalVersion); err != nil {
 			return fmt.Errorf("field localVersion: %w", err)
+		}
+	}
+	rawMustShowInstallationInterstitial, ok := raw["mustShowInstallationInterstitial"]
+	if ok {
+		if err := json.Unmarshal(rawMustShowInstallationInterstitial, &v.MustShowInstallationInterstitial); err != nil {
+			return fmt.Errorf("field mustShowInstallationInterstitial: %w", err)
 		}
 	}
 	rawName, ok := raw["name"]
@@ -25041,6 +26066,7 @@ type RateLimitSnapshot struct {
 	Primary              Optional[RateLimitWindow]           `json:"primary,omitempty"`
 	RateLimitReachedType Optional[RateLimitReachedType]      `json:"rateLimitReachedType,omitempty"`
 	Secondary            Optional[RateLimitWindow]           `json:"secondary,omitempty"`
+	SpendControlReached  Optional[bool]                      `json:"spendControlReached,omitempty"`
 }
 
 func (v RateLimitSnapshot) MarshalJSON() ([]byte, error) {
@@ -25068,6 +26094,9 @@ func (v RateLimitSnapshot) MarshalJSON() ([]byte, error) {
 	}
 	if v.Secondary.IsSet() {
 		out["secondary"] = v.Secondary
+	}
+	if v.SpendControlReached.IsSet() {
+		out["spendControlReached"] = v.SpendControlReached
 	}
 	return json.Marshal(out)
 }
@@ -25129,6 +26158,12 @@ func (v *RateLimitSnapshot) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field secondary: %w", err)
 		}
 	}
+	rawSpendControlReached, ok := raw["spendControlReached"]
+	if ok {
+		if err := json.Unmarshal(rawSpendControlReached, &v.SpendControlReached); err != nil {
+			return fmt.Errorf("field spendControlReached: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -25179,6 +26214,72 @@ func (v *RateLimitWindow) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawWindowDurationMins, &v.WindowDurationMins); err != nil {
 			return fmt.Errorf("field windowDurationMins: %w", err)
+		}
+	}
+	return nil
+}
+
+type RawResponseCompletedNotification struct {
+	ResponseID string                        `json:"responseId,omitempty"`
+	ThreadID   string                        `json:"threadId,omitempty"`
+	TurnID     string                        `json:"turnId,omitempty"`
+	Usage      Optional[TokenUsageBreakdown] `json:"usage,omitempty"`
+}
+
+func (v RawResponseCompletedNotification) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["responseId"] = v.ResponseID
+	out["threadId"] = v.ThreadID
+	out["turnId"] = v.TurnID
+	if v.Usage.IsSet() {
+		out["usage"] = v.Usage
+	}
+	return json.Marshal(out)
+}
+
+func (v *RawResponseCompletedNotification) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawResponseID, ok := raw["responseId"]
+	if !ok {
+		return DecodeError{Field: "responseId", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawResponseID, []byte("null")) {
+		return DecodeError{Field: "responseId", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawResponseID, &v.ResponseID); err != nil {
+		return fmt.Errorf("field responseId: %w", err)
+	}
+	rawThreadID, ok := raw["threadId"]
+	if !ok {
+		return DecodeError{Field: "threadId", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawThreadID, []byte("null")) {
+		return DecodeError{Field: "threadId", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawThreadID, &v.ThreadID); err != nil {
+		return fmt.Errorf("field threadId: %w", err)
+	}
+	rawTurnID, ok := raw["turnId"]
+	if !ok {
+		return DecodeError{Field: "turnId", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawTurnID, []byte("null")) {
+		return DecodeError{Field: "turnId", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawTurnID, &v.TurnID); err != nil {
+		return fmt.Errorf("field turnId: %w", err)
+	}
+	rawUsage, ok := raw["usage"]
+	if ok {
+		if err := json.Unmarshal(rawUsage, &v.Usage); err != nil {
+			return fmt.Errorf("field usage: %w", err)
 		}
 	}
 	return nil
@@ -25245,6 +26346,7 @@ type RealtimeConversationVersion string
 const (
 	RealtimeConversationVersionV1 RealtimeConversationVersion = "v1"
 	RealtimeConversationVersionV2 RealtimeConversationVersion = "v2"
+	RealtimeConversationVersionV3 RealtimeConversationVersion = "v3"
 )
 
 type RealtimeOutputModality string
@@ -29790,29 +30892,30 @@ func (v *TextRange) UnmarshalJSON(data []byte) error {
 }
 
 type Thread struct {
-	AgentNickname  Optional[string]                   `json:"agentNickname,omitempty"`
-	AgentRole      Optional[string]                   `json:"agentRole,omitempty"`
-	CliVersion     string                             `json:"cliVersion,omitempty"`
-	CreatedAt      int64                              `json:"createdAt,omitempty"`
-	Cwd            AbsolutePathBuf                    `json:"cwd,omitempty"`
-	Ephemeral      bool                               `json:"ephemeral,omitempty"`
-	Extra          Optional[ThreadExtra]              `json:"extra,omitempty"`
-	ForkedFromID   Optional[string]                   `json:"forkedFromId,omitempty"`
-	GitInfo        Optional[GitInfo]                  `json:"gitInfo,omitempty"`
-	HistoryMode    OptionalNonNull[ThreadHistoryMode] `json:"historyMode,omitempty"`
-	ID             string                             `json:"id,omitempty"`
-	ModelProvider  string                             `json:"modelProvider,omitempty"`
-	Name           Optional[string]                   `json:"name,omitempty"`
-	ParentThreadID Optional[string]                   `json:"parentThreadId,omitempty"`
-	Path           Optional[string]                   `json:"path,omitempty"`
-	Preview        string                             `json:"preview,omitempty"`
-	RecencyAt      Optional[int64]                    `json:"recencyAt,omitempty"`
-	SessionID      string                             `json:"sessionId,omitempty"`
-	Source         SessionSource                      `json:"source,omitempty"`
-	Status         ThreadStatus                       `json:"status,omitempty"`
-	ThreadSource   Optional[ThreadSource]             `json:"threadSource,omitempty"`
-	Turns          []Turn                             `json:"turns,omitempty"`
-	UpdatedAt      int64                              `json:"updatedAt,omitempty"`
+	AgentNickname        Optional[string]                   `json:"agentNickname,omitempty"`
+	AgentRole            Optional[string]                   `json:"agentRole,omitempty"`
+	CanAcceptDirectInput Optional[bool]                     `json:"canAcceptDirectInput,omitempty"`
+	CliVersion           string                             `json:"cliVersion,omitempty"`
+	CreatedAt            int64                              `json:"createdAt,omitempty"`
+	Cwd                  AbsolutePathBuf                    `json:"cwd,omitempty"`
+	Ephemeral            bool                               `json:"ephemeral,omitempty"`
+	Extra                Optional[ThreadExtra]              `json:"extra,omitempty"`
+	ForkedFromID         Optional[string]                   `json:"forkedFromId,omitempty"`
+	GitInfo              Optional[GitInfo]                  `json:"gitInfo,omitempty"`
+	HistoryMode          OptionalNonNull[ThreadHistoryMode] `json:"historyMode,omitempty"`
+	ID                   string                             `json:"id,omitempty"`
+	ModelProvider        string                             `json:"modelProvider,omitempty"`
+	Name                 Optional[string]                   `json:"name,omitempty"`
+	ParentThreadID       Optional[string]                   `json:"parentThreadId,omitempty"`
+	Path                 Optional[string]                   `json:"path,omitempty"`
+	Preview              string                             `json:"preview,omitempty"`
+	RecencyAt            Optional[int64]                    `json:"recencyAt,omitempty"`
+	SessionID            string                             `json:"sessionId,omitempty"`
+	Source               SessionSource                      `json:"source,omitempty"`
+	Status               ThreadStatus                       `json:"status,omitempty"`
+	ThreadSource         Optional[ThreadSource]             `json:"threadSource,omitempty"`
+	Turns                []Turn                             `json:"turns,omitempty"`
+	UpdatedAt            int64                              `json:"updatedAt,omitempty"`
 }
 
 func (v Thread) MarshalJSON() ([]byte, error) {
@@ -29822,6 +30925,9 @@ func (v Thread) MarshalJSON() ([]byte, error) {
 	}
 	if v.AgentRole.IsSet() {
 		out["agentRole"] = v.AgentRole
+	}
+	if v.CanAcceptDirectInput.IsSet() {
+		out["canAcceptDirectInput"] = v.CanAcceptDirectInput
 	}
 	out["cliVersion"] = v.CliVersion
 	out["createdAt"] = v.CreatedAt
@@ -29884,6 +30990,12 @@ func (v *Thread) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawAgentRole, &v.AgentRole); err != nil {
 			return fmt.Errorf("field agentRole: %w", err)
+		}
+	}
+	rawCanAcceptDirectInput, ok := raw["canAcceptDirectInput"]
+	if ok {
+		if err := json.Unmarshal(rawCanAcceptDirectInput, &v.CanAcceptDirectInput); err != nil {
+			return fmt.Errorf("field canAcceptDirectInput: %w", err)
 		}
 	}
 	rawCliVersion, ok := raw["cliVersion"]
@@ -30831,8 +31943,10 @@ type ThreadForkParams struct {
 	ApprovalPolicy        Optional[AskForApproval]             `json:"approvalPolicy,omitempty"`
 	ApprovalsReviewer     Optional[ApprovalsReviewer]          `json:"approvalsReviewer,omitempty"`
 	BaseInstructions      Optional[string]                     `json:"baseInstructions,omitempty"`
+	BeforeTurnID          Optional[string]                     `json:"beforeTurnId,omitempty"`
 	Config                Optional[map[string]json.RawMessage] `json:"config,omitempty"`
 	Cwd                   Optional[string]                     `json:"cwd,omitempty"`
+	DeferGoalContinuation OptionalNonNull[bool]                `json:"deferGoalContinuation,omitempty"`
 	DeveloperInstructions Optional[string]                     `json:"developerInstructions,omitempty"`
 	Ephemeral             OptionalNonNull[bool]                `json:"ephemeral,omitempty"`
 	ExcludeTurns          OptionalNonNull[bool]                `json:"excludeTurns,omitempty"`
@@ -30859,11 +31973,17 @@ func (v ThreadForkParams) MarshalJSON() ([]byte, error) {
 	if v.BaseInstructions.IsSet() {
 		out["baseInstructions"] = v.BaseInstructions
 	}
+	if v.BeforeTurnID.IsSet() {
+		out["beforeTurnId"] = v.BeforeTurnID
+	}
 	if v.Config.IsSet() {
 		out["config"] = v.Config
 	}
 	if v.Cwd.IsSet() {
 		out["cwd"] = v.Cwd
+	}
+	if v.DeferGoalContinuation.IsSet() {
+		out["deferGoalContinuation"] = v.DeferGoalContinuation
 	}
 	if v.DeveloperInstructions.IsSet() {
 		out["developerInstructions"] = v.DeveloperInstructions
@@ -30936,6 +32056,12 @@ func (v *ThreadForkParams) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field baseInstructions: %w", err)
 		}
 	}
+	rawBeforeTurnID, ok := raw["beforeTurnId"]
+	if ok {
+		if err := json.Unmarshal(rawBeforeTurnID, &v.BeforeTurnID); err != nil {
+			return fmt.Errorf("field beforeTurnId: %w", err)
+		}
+	}
 	rawConfig, ok := raw["config"]
 	if ok {
 		if err := json.Unmarshal(rawConfig, &v.Config); err != nil {
@@ -30946,6 +32072,12 @@ func (v *ThreadForkParams) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawCwd, &v.Cwd); err != nil {
 			return fmt.Errorf("field cwd: %w", err)
+		}
+	}
+	rawDeferGoalContinuation, ok := raw["deferGoalContinuation"]
+	if ok {
+		if err := json.Unmarshal(rawDeferGoalContinuation, &v.DeferGoalContinuation); err != nil {
+			return fmt.Errorf("field deferGoalContinuation: %w", err)
 		}
 	}
 	rawDeveloperInstructions, ok := raw["developerInstructions"]
@@ -31836,6 +32968,7 @@ type ThreadItem struct {
 	ReasoningEffort   Optional[ReasoningEffort]                    `json:"reasoningEffort,omitempty"`
 	ReceiverThreadIDs OptionalNonNull[[]string]                    `json:"receiverThreadIds,omitempty"`
 	Result            Optional[McpToolCallResult]                  `json:"result,omitempty"`
+	Results           Optional[[]json.RawMessage]                  `json:"results,omitempty"`
 	Review            OptionalNonNull[string]                      `json:"review,omitempty"`
 	RevisedPrompt     Optional[string]                             `json:"revisedPrompt,omitempty"`
 	SavedPath         Optional[AbsolutePathBuf]                    `json:"savedPath,omitempty"`
@@ -31951,6 +33084,9 @@ func (v ThreadItem) MarshalJSON() ([]byte, error) {
 	}
 	if v.Result.IsSet() {
 		out["result"] = v.Result
+	}
+	if v.Results.IsSet() {
+		out["results"] = v.Results
 	}
 	if v.Review.IsSet() {
 		out["review"] = v.Review
@@ -32418,6 +33554,12 @@ func (v *ThreadItem) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field result: %w", err)
 		}
 	}
+	rawResults, ok := raw["results"]
+	if ok {
+		if err := json.Unmarshal(rawResults, &v.Results); err != nil {
+			return fmt.Errorf("field results: %w", err)
+		}
+	}
 	rawReview, ok := raw["review"]
 	if ok {
 		if err := json.Unmarshal(rawReview, &v.Review); err != nil {
@@ -32770,6 +33912,50 @@ func (v *ThreadItem) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type ThreadItemEntry struct {
+	Item   ThreadItem `json:"item,omitempty"`
+	TurnID string     `json:"turnId,omitempty"`
+}
+
+func (v ThreadItemEntry) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["item"] = v.Item
+	out["turnId"] = v.TurnID
+	return json.Marshal(out)
+}
+
+func (v *ThreadItemEntry) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawItem, ok := raw["item"]
+	if !ok {
+		return DecodeError{Field: "item", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawItem, []byte("null")) {
+		return DecodeError{Field: "item", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawItem, &v.Item); err != nil {
+		return fmt.Errorf("field item: %w", err)
+	}
+	rawTurnID, ok := raw["turnId"]
+	if !ok {
+		return DecodeError{Field: "turnId", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawTurnID, []byte("null")) {
+		return DecodeError{Field: "turnId", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawTurnID, &v.TurnID); err != nil {
+		return fmt.Errorf("field turnId: %w", err)
+	}
+	return nil
+}
+
 type ThreadItemsListParams struct {
 	Cursor        Optional[string]        `json:"cursor,omitempty"`
 	Limit         Optional[uint32]        `json:"limit,omitempty"`
@@ -32848,9 +34034,9 @@ func (v *ThreadItemsListParams) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadItemsListResponse struct {
-	BackwardsCursor Optional[string] `json:"backwardsCursor,omitempty"`
-	Data            []ThreadItem     `json:"data,omitempty"`
-	NextCursor      Optional[string] `json:"nextCursor,omitempty"`
+	BackwardsCursor Optional[string]  `json:"backwardsCursor,omitempty"`
+	Data            []ThreadItemEntry `json:"data,omitempty"`
+	NextCursor      Optional[string]  `json:"nextCursor,omitempty"`
 }
 
 func (v ThreadItemsListResponse) MarshalJSON() ([]byte, error) {
@@ -33891,6 +35077,50 @@ func (v *ThreadRealtimeErrorNotification) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type ThreadRealtimeInitialItem struct {
+	Role ConversationTextRole `json:"role,omitempty"`
+	Text string               `json:"text,omitempty"`
+}
+
+func (v ThreadRealtimeInitialItem) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["role"] = v.Role
+	out["text"] = v.Text
+	return json.Marshal(out)
+}
+
+func (v *ThreadRealtimeInitialItem) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawRole, ok := raw["role"]
+	if !ok {
+		return DecodeError{Field: "role", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawRole, []byte("null")) {
+		return DecodeError{Field: "role", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawRole, &v.Role); err != nil {
+		return fmt.Errorf("field role: %w", err)
+	}
+	rawText, ok := raw["text"]
+	if !ok {
+		return DecodeError{Field: "text", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawText, []byte("null")) {
+		return DecodeError{Field: "text", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawText, &v.Text); err != nil {
+		return fmt.Errorf("field text: %w", err)
+	}
+	return nil
+}
+
 type ThreadRealtimeItemAddedNotification struct {
 	Item     json.RawMessage `json:"item,omitempty"`
 	ThreadID string          `json:"threadId,omitempty"`
@@ -34075,11 +35305,12 @@ func (v *ThreadRealtimeSdpNotification) UnmarshalJSON(data []byte) error {
 
 type ThreadRealtimeStartParams struct {
 	ClientManagedHandoffs           Optional[bool]                         `json:"clientManagedHandoffs,omitempty"`
-	CodexResponseHandoffPrefix      Optional[string]                       `json:"codexResponseHandoffPrefix,omitempty"`
+	CodexResponseHandoffMode        Optional[CodexResponseHandoffMode]     `json:"codexResponseHandoffMode,omitempty"`
 	CodexResponseItemPrefix         Optional[string]                       `json:"codexResponseItemPrefix,omitempty"`
 	CodexResponsesAsItems           Optional[bool]                         `json:"codexResponsesAsItems,omitempty"`
 	FlushTranscriptTailOnSessionEnd Optional[bool]                         `json:"flushTranscriptTailOnSessionEnd,omitempty"`
 	IncludeStartupContext           Optional[bool]                         `json:"includeStartupContext,omitempty"`
+	InitialItems                    Optional[[]ThreadRealtimeInitialItem]  `json:"initialItems,omitempty"`
 	Model                           Optional[string]                       `json:"model,omitempty"`
 	OutputModality                  RealtimeOutputModality                 `json:"outputModality,omitempty"`
 	Prompt                          Optional[string]                       `json:"prompt,omitempty"`
@@ -34095,8 +35326,8 @@ func (v ThreadRealtimeStartParams) MarshalJSON() ([]byte, error) {
 	if v.ClientManagedHandoffs.IsSet() {
 		out["clientManagedHandoffs"] = v.ClientManagedHandoffs
 	}
-	if v.CodexResponseHandoffPrefix.IsSet() {
-		out["codexResponseHandoffPrefix"] = v.CodexResponseHandoffPrefix
+	if v.CodexResponseHandoffMode.IsSet() {
+		out["codexResponseHandoffMode"] = v.CodexResponseHandoffMode
 	}
 	if v.CodexResponseItemPrefix.IsSet() {
 		out["codexResponseItemPrefix"] = v.CodexResponseItemPrefix
@@ -34109,6 +35340,9 @@ func (v ThreadRealtimeStartParams) MarshalJSON() ([]byte, error) {
 	}
 	if v.IncludeStartupContext.IsSet() {
 		out["includeStartupContext"] = v.IncludeStartupContext
+	}
+	if v.InitialItems.IsSet() {
+		out["initialItems"] = v.InitialItems
 	}
 	if v.Model.IsSet() {
 		out["model"] = v.Model
@@ -34148,10 +35382,10 @@ func (v *ThreadRealtimeStartParams) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field clientManagedHandoffs: %w", err)
 		}
 	}
-	rawCodexResponseHandoffPrefix, ok := raw["codexResponseHandoffPrefix"]
+	rawCodexResponseHandoffMode, ok := raw["codexResponseHandoffMode"]
 	if ok {
-		if err := json.Unmarshal(rawCodexResponseHandoffPrefix, &v.CodexResponseHandoffPrefix); err != nil {
-			return fmt.Errorf("field codexResponseHandoffPrefix: %w", err)
+		if err := json.Unmarshal(rawCodexResponseHandoffMode, &v.CodexResponseHandoffMode); err != nil {
+			return fmt.Errorf("field codexResponseHandoffMode: %w", err)
 		}
 	}
 	rawCodexResponseItemPrefix, ok := raw["codexResponseItemPrefix"]
@@ -34176,6 +35410,12 @@ func (v *ThreadRealtimeStartParams) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawIncludeStartupContext, &v.IncludeStartupContext); err != nil {
 			return fmt.Errorf("field includeStartupContext: %w", err)
+		}
+	}
+	rawInitialItems, ok := raw["initialItems"]
+	if ok {
+		if err := json.Unmarshal(rawInitialItems, &v.InitialItems); err != nil {
+			return fmt.Errorf("field initialItems: %w", err)
 		}
 	}
 	rawModel, ok := raw["model"]
@@ -34833,6 +36073,7 @@ type ThreadResumeResponse struct {
 	Cwd                     AbsolutePathBuf                        `json:"cwd,omitempty"`
 	InitialTurnsPage        Optional[TurnsPage]                    `json:"initialTurnsPage,omitempty"`
 	InstructionSources      OptionalNonNull[[]LegacyAppPathString] `json:"instructionSources,omitempty"`
+	ItemsBackwardsCursor    Optional[string]                       `json:"itemsBackwardsCursor,omitempty"`
 	Model                   string                                 `json:"model,omitempty"`
 	ModelProvider           string                                 `json:"modelProvider,omitempty"`
 	MultiAgentMode          OptionalNonNull[MultiAgentMode]        `json:"multiAgentMode,omitempty"`
@@ -34841,6 +36082,7 @@ type ThreadResumeResponse struct {
 	Sandbox                 SandboxPolicy                          `json:"sandbox,omitempty"`
 	ServiceTier             Optional[string]                       `json:"serviceTier,omitempty"`
 	Thread                  Thread                                 `json:"thread,omitempty"`
+	TurnsBackwardsCursor    Optional[string]                       `json:"turnsBackwardsCursor,omitempty"`
 }
 
 func (v ThreadResumeResponse) MarshalJSON() ([]byte, error) {
@@ -34856,6 +36098,9 @@ func (v ThreadResumeResponse) MarshalJSON() ([]byte, error) {
 	}
 	if v.InstructionSources.IsSet() {
 		out["instructionSources"] = v.InstructionSources
+	}
+	if v.ItemsBackwardsCursor.IsSet() {
+		out["itemsBackwardsCursor"] = v.ItemsBackwardsCursor
 	}
 	out["model"] = v.Model
 	out["modelProvider"] = v.ModelProvider
@@ -34873,6 +36118,9 @@ func (v ThreadResumeResponse) MarshalJSON() ([]byte, error) {
 		out["serviceTier"] = v.ServiceTier
 	}
 	out["thread"] = v.Thread
+	if v.TurnsBackwardsCursor.IsSet() {
+		out["turnsBackwardsCursor"] = v.TurnsBackwardsCursor
+	}
 	return json.Marshal(out)
 }
 
@@ -34943,6 +36191,12 @@ func (v *ThreadResumeResponse) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawInstructionSources, &v.InstructionSources); err != nil {
 			return fmt.Errorf("field instructionSources: %w", err)
+		}
+	}
+	rawItemsBackwardsCursor, ok := raw["itemsBackwardsCursor"]
+	if ok {
+		if err := json.Unmarshal(rawItemsBackwardsCursor, &v.ItemsBackwardsCursor); err != nil {
+			return fmt.Errorf("field itemsBackwardsCursor: %w", err)
 		}
 	}
 	rawModel, ok := raw["model"]
@@ -35016,6 +36270,12 @@ func (v *ThreadResumeResponse) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawThread, &v.Thread); err != nil {
 		return fmt.Errorf("field thread: %w", err)
+	}
+	rawTurnsBackwardsCursor, ok := raw["turnsBackwardsCursor"]
+	if ok {
+		if err := json.Unmarshal(rawTurnsBackwardsCursor, &v.TurnsBackwardsCursor); err != nil {
+			return fmt.Errorf("field turnsBackwardsCursor: %w", err)
+		}
 	}
 	return nil
 }
@@ -35095,6 +36355,197 @@ func (v *ThreadRollbackResponse) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawThread, &v.Thread); err != nil {
 		return fmt.Errorf("field thread: %w", err)
+	}
+	return nil
+}
+
+type ThreadSearchOccurrence struct {
+	ItemID            string                `json:"itemId,omitempty"`
+	Snippet           string                `json:"snippet,omitempty"`
+	SnippetMatchRange ThreadSearchTextRange `json:"snippetMatchRange,omitempty"`
+	TurnCursor        string                `json:"turnCursor,omitempty"`
+	TurnID            string                `json:"turnId,omitempty"`
+}
+
+func (v ThreadSearchOccurrence) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["itemId"] = v.ItemID
+	out["snippet"] = v.Snippet
+	out["snippetMatchRange"] = v.SnippetMatchRange
+	out["turnCursor"] = v.TurnCursor
+	out["turnId"] = v.TurnID
+	return json.Marshal(out)
+}
+
+func (v *ThreadSearchOccurrence) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawItemID, ok := raw["itemId"]
+	if !ok {
+		return DecodeError{Field: "itemId", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawItemID, []byte("null")) {
+		return DecodeError{Field: "itemId", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawItemID, &v.ItemID); err != nil {
+		return fmt.Errorf("field itemId: %w", err)
+	}
+	rawSnippet, ok := raw["snippet"]
+	if !ok {
+		return DecodeError{Field: "snippet", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawSnippet, []byte("null")) {
+		return DecodeError{Field: "snippet", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawSnippet, &v.Snippet); err != nil {
+		return fmt.Errorf("field snippet: %w", err)
+	}
+	rawSnippetMatchRange, ok := raw["snippetMatchRange"]
+	if !ok {
+		return DecodeError{Field: "snippetMatchRange", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawSnippetMatchRange, []byte("null")) {
+		return DecodeError{Field: "snippetMatchRange", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawSnippetMatchRange, &v.SnippetMatchRange); err != nil {
+		return fmt.Errorf("field snippetMatchRange: %w", err)
+	}
+	rawTurnCursor, ok := raw["turnCursor"]
+	if !ok {
+		return DecodeError{Field: "turnCursor", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawTurnCursor, []byte("null")) {
+		return DecodeError{Field: "turnCursor", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawTurnCursor, &v.TurnCursor); err != nil {
+		return fmt.Errorf("field turnCursor: %w", err)
+	}
+	rawTurnID, ok := raw["turnId"]
+	if !ok {
+		return DecodeError{Field: "turnId", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawTurnID, []byte("null")) {
+		return DecodeError{Field: "turnId", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawTurnID, &v.TurnID); err != nil {
+		return fmt.Errorf("field turnId: %w", err)
+	}
+	return nil
+}
+
+type ThreadSearchOccurrencesParams struct {
+	Cursor     Optional[string] `json:"cursor,omitempty"`
+	Limit      Optional[uint32] `json:"limit,omitempty"`
+	SearchTerm string           `json:"searchTerm,omitempty"`
+	ThreadID   string           `json:"threadId,omitempty"`
+}
+
+func (v ThreadSearchOccurrencesParams) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if v.Cursor.IsSet() {
+		out["cursor"] = v.Cursor
+	}
+	if v.Limit.IsSet() {
+		out["limit"] = v.Limit
+	}
+	out["searchTerm"] = v.SearchTerm
+	out["threadId"] = v.ThreadID
+	return json.Marshal(out)
+}
+
+func (v *ThreadSearchOccurrencesParams) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawCursor, ok := raw["cursor"]
+	if ok {
+		if err := json.Unmarshal(rawCursor, &v.Cursor); err != nil {
+			return fmt.Errorf("field cursor: %w", err)
+		}
+	}
+	rawLimit, ok := raw["limit"]
+	if ok {
+		if err := json.Unmarshal(rawLimit, &v.Limit); err != nil {
+			return fmt.Errorf("field limit: %w", err)
+		}
+		if valueLimit, ok := v.Limit.Value(); ok {
+			if valueLimit < 0 {
+				return DecodeError{Field: "limit", Reason: "below minimum 0"}
+			}
+		}
+	}
+	rawSearchTerm, ok := raw["searchTerm"]
+	if !ok {
+		return DecodeError{Field: "searchTerm", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawSearchTerm, []byte("null")) {
+		return DecodeError{Field: "searchTerm", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawSearchTerm, &v.SearchTerm); err != nil {
+		return fmt.Errorf("field searchTerm: %w", err)
+	}
+	rawThreadID, ok := raw["threadId"]
+	if !ok {
+		return DecodeError{Field: "threadId", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawThreadID, []byte("null")) {
+		return DecodeError{Field: "threadId", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawThreadID, &v.ThreadID); err != nil {
+		return fmt.Errorf("field threadId: %w", err)
+	}
+	return nil
+}
+
+type ThreadSearchOccurrencesResponse struct {
+	Data       []ThreadSearchOccurrence `json:"data,omitempty"`
+	NextCursor Optional[string]         `json:"nextCursor,omitempty"`
+}
+
+func (v ThreadSearchOccurrencesResponse) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["data"] = v.Data
+	if v.NextCursor.IsSet() {
+		out["nextCursor"] = v.NextCursor
+	}
+	return json.Marshal(out)
+}
+
+func (v *ThreadSearchOccurrencesResponse) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawData, ok := raw["data"]
+	if !ok {
+		return DecodeError{Field: "data", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawData, []byte("null")) {
+		return DecodeError{Field: "data", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawData, &v.Data); err != nil {
+		return fmt.Errorf("field data: %w", err)
+	}
+	rawNextCursor, ok := raw["nextCursor"]
+	if ok {
+		if err := json.Unmarshal(rawNextCursor, &v.NextCursor); err != nil {
+			return fmt.Errorf("field nextCursor: %w", err)
+		}
 	}
 	return nil
 }
@@ -35288,6 +36739,56 @@ func (v *ThreadSearchResult) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawThread, &v.Thread); err != nil {
 		return fmt.Errorf("field thread: %w", err)
+	}
+	return nil
+}
+
+type ThreadSearchTextRange struct {
+	End   uint32 `json:"end,omitempty"`
+	Start uint32 `json:"start,omitempty"`
+}
+
+func (v ThreadSearchTextRange) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["end"] = v.End
+	out["start"] = v.Start
+	return json.Marshal(out)
+}
+
+func (v *ThreadSearchTextRange) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawEnd, ok := raw["end"]
+	if !ok {
+		return DecodeError{Field: "end", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawEnd, []byte("null")) {
+		return DecodeError{Field: "end", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawEnd, &v.End); err != nil {
+		return fmt.Errorf("field end: %w", err)
+	}
+	if v.End < 0 {
+		return DecodeError{Field: "end", Reason: "below minimum 0"}
+	}
+	rawStart, ok := raw["start"]
+	if !ok {
+		return DecodeError{Field: "start", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawStart, []byte("null")) {
+		return DecodeError{Field: "start", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawStart, &v.Start); err != nil {
+		return fmt.Errorf("field start: %w", err)
+	}
+	if v.Start < 0 {
+		return DecodeError{Field: "start", Reason: "below minimum 0"}
 	}
 	return nil
 }
@@ -36887,15 +38388,19 @@ const (
 )
 
 type TokenUsageBreakdown struct {
-	CachedInputTokens     int64 `json:"cachedInputTokens,omitempty"`
-	InputTokens           int64 `json:"inputTokens,omitempty"`
-	OutputTokens          int64 `json:"outputTokens,omitempty"`
-	ReasoningOutputTokens int64 `json:"reasoningOutputTokens,omitempty"`
-	TotalTokens           int64 `json:"totalTokens,omitempty"`
+	CacheWriteInputTokens OptionalNonNull[int64] `json:"cacheWriteInputTokens,omitempty"`
+	CachedInputTokens     int64                  `json:"cachedInputTokens,omitempty"`
+	InputTokens           int64                  `json:"inputTokens,omitempty"`
+	OutputTokens          int64                  `json:"outputTokens,omitempty"`
+	ReasoningOutputTokens int64                  `json:"reasoningOutputTokens,omitempty"`
+	TotalTokens           int64                  `json:"totalTokens,omitempty"`
 }
 
 func (v TokenUsageBreakdown) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
+	if v.CacheWriteInputTokens.IsSet() {
+		out["cacheWriteInputTokens"] = v.CacheWriteInputTokens
+	}
 	out["cachedInputTokens"] = v.CachedInputTokens
 	out["inputTokens"] = v.InputTokens
 	out["outputTokens"] = v.OutputTokens
@@ -36912,6 +38417,12 @@ func (v *TokenUsageBreakdown) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
+	}
+	rawCacheWriteInputTokens, ok := raw["cacheWriteInputTokens"]
+	if ok {
+		if err := json.Unmarshal(rawCacheWriteInputTokens, &v.CacheWriteInputTokens); err != nil {
+			return fmt.Errorf("field cacheWriteInputTokens: %w", err)
+		}
 	}
 	rawCachedInputTokens, ok := raw["cachedInputTokens"]
 	if !ok {
@@ -37308,14 +38819,18 @@ func (v *TurnDiffUpdatedNotification) UnmarshalJSON(data []byte) error {
 }
 
 type TurnEnvironmentParams struct {
-	Cwd           LegacyAppPathString `json:"cwd,omitempty"`
-	EnvironmentID string              `json:"environmentId,omitempty"`
+	Cwd                   LegacyAppPathString             `json:"cwd,omitempty"`
+	EnvironmentID         string                          `json:"environmentId,omitempty"`
+	RuntimeWorkspaceRoots Optional[[]LegacyAppPathString] `json:"runtimeWorkspaceRoots,omitempty"`
 }
 
 func (v TurnEnvironmentParams) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
 	out["cwd"] = v.Cwd
 	out["environmentId"] = v.EnvironmentID
+	if v.RuntimeWorkspaceRoots.IsSet() {
+		out["runtimeWorkspaceRoots"] = v.RuntimeWorkspaceRoots
+	}
 	return json.Marshal(out)
 }
 
@@ -37347,6 +38862,12 @@ func (v *TurnEnvironmentParams) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawEnvironmentID, &v.EnvironmentID); err != nil {
 		return fmt.Errorf("field environmentId: %w", err)
+	}
+	rawRuntimeWorkspaceRoots, ok := raw["runtimeWorkspaceRoots"]
+	if ok {
+		if err := json.Unmarshal(rawRuntimeWorkspaceRoots, &v.RuntimeWorkspaceRoots); err != nil {
+			return fmt.Errorf("field runtimeWorkspaceRoots: %w", err)
+		}
 	}
 	return nil
 }
@@ -38175,6 +39696,14 @@ func (v UserInput) MarshalJSON() ([]byte, error) {
 		if !v.Path.IsSet() {
 			return nil, DecodeError{Field: "path", Reason: "missing required field for type localImage"}
 		}
+	case "audio":
+		if !v.URL.IsSet() {
+			return nil, DecodeError{Field: "url", Reason: "missing required field for type audio"}
+		}
+	case "localAudio":
+		if !v.Path.IsSet() {
+			return nil, DecodeError{Field: "path", Reason: "missing required field for type localAudio"}
+		}
 	case "skill":
 		if !v.Name.IsSet() {
 			return nil, DecodeError{Field: "name", Reason: "missing required field for type skill"}
@@ -38222,6 +39751,8 @@ func (v *UserInput) UnmarshalJSON(data []byte) error {
 	case "text":
 	case "image":
 	case "localImage":
+	case "audio":
+	case "localAudio":
 	case "skill":
 	case "mention":
 	default:
@@ -38292,6 +39823,18 @@ func (v *UserInput) UnmarshalJSON(data []byte) error {
 	case "localImage":
 		if rawValue, ok := raw["path"]; !ok {
 			return DecodeError{Field: "path", Reason: "missing required field for type localImage"}
+		} else if bytes.Equal(rawValue, []byte("null")) {
+			return DecodeError{Field: "path", Reason: "cannot be null"}
+		}
+	case "audio":
+		if rawValue, ok := raw["url"]; !ok {
+			return DecodeError{Field: "url", Reason: "missing required field for type audio"}
+		} else if bytes.Equal(rawValue, []byte("null")) {
+			return DecodeError{Field: "url", Reason: "cannot be null"}
+		}
+	case "localAudio":
+		if rawValue, ok := raw["path"]; !ok {
+			return DecodeError{Field: "path", Reason: "missing required field for type localAudio"}
 		} else if bytes.Equal(rawValue, []byte("null")) {
 			return DecodeError{Field: "path", Reason: "cannot be null"}
 		}
