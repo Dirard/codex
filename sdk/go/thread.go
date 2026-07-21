@@ -71,6 +71,8 @@ type ThreadForkOptions struct {
 	Config                map[string]json.RawMessage
 	BaseInstructions      string
 	DeveloperInstructions string
+	BeforeTurnID          string
+	DeferGoalContinuation *bool
 	Ephemeral             *bool
 	ExcludeTurns          *bool
 	LastTurnID            string
@@ -358,6 +360,13 @@ func (c *ThreadsClient) Search(ctx context.Context, params protocol.ThreadSearch
 	return c.client.Raw().ThreadSearch(ctx, params)
 }
 
+func (c *ThreadsClient) SearchOccurrences(ctx context.Context, params protocol.ThreadSearchOccurrencesParams) (protocol.ThreadSearchOccurrencesResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.ThreadSearchOccurrencesResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().ThreadSearchOccurrences(ctx, params)
+}
+
 func (c *ThreadsClient) ListTurns(ctx context.Context, params protocol.ThreadTurnsListParams) (protocol.ThreadTurnsListResponse, error) {
 	if c == nil || c.client == nil {
 		return protocol.ThreadTurnsListResponse{}, &ClosedError{}
@@ -580,6 +589,12 @@ func threadForkParams(opts ThreadForkOptions) protocol.ThreadForkParams {
 	}
 	if opts.DeveloperInstructions != "" {
 		params.DeveloperInstructions = protocol.Some(opts.DeveloperInstructions)
+	}
+	if opts.BeforeTurnID != "" {
+		params.BeforeTurnID = protocol.Some(opts.BeforeTurnID)
+	}
+	if opts.DeferGoalContinuation != nil {
+		params.DeferGoalContinuation = protocol.SomeNonNull(*opts.DeferGoalContinuation)
 	}
 	if opts.Ephemeral != nil {
 		params.Ephemeral = protocol.SomeNonNull(*opts.Ephemeral)
