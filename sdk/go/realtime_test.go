@@ -16,9 +16,10 @@ func TestRealtimeSessionInjectsThreadIdentity(t *testing.T) {
 	transport.responses["thread/realtime/start"] = json.RawMessage(`{}`)
 
 	session, _, err := client.Realtime.Start(ctx, RealtimeStartOptions{
-		ThreadID: "thread-1",
-		Model:    "gpt-5.4",
-		Prompt:   "speak plainly",
+		ThreadID:                 "thread-1",
+		Model:                    "gpt-5.4",
+		Prompt:                   "speak plainly",
+		CodexResponseHandoffMode: protocol.CodexResponseHandoffModeCommentary,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -30,6 +31,7 @@ func TestRealtimeSessionInjectsThreadIdentity(t *testing.T) {
 	assertRequestThreadID(t, startParams, "thread-1")
 	assertRealtimeSessionID(t, startParams, session.ID())
 	assertRealtimeOutputModality(t, startParams, "audio")
+	assertRealtimeHandoffMode(t, startParams, "commentary")
 
 	calls := []struct {
 		name   string
@@ -547,6 +549,19 @@ func assertRealtimeOutputModality(t *testing.T, params json.RawMessage, want str
 	}
 	if raw.OutputModality != want {
 		t.Fatalf("outputModality = %q, want %q; params = %s", raw.OutputModality, want, params)
+	}
+}
+
+func assertRealtimeHandoffMode(t *testing.T, params json.RawMessage, want string) {
+	t.Helper()
+	var raw struct {
+		CodexResponseHandoffMode string `json:"codexResponseHandoffMode"`
+	}
+	if err := json.Unmarshal(params, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw.CodexResponseHandoffMode != want {
+		t.Fatalf("codexResponseHandoffMode = %q, want %q", raw.CodexResponseHandoffMode, want)
 	}
 }
 
