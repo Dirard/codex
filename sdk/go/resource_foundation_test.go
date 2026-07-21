@@ -93,6 +93,8 @@ var expectedResourceSignalsByOwner = map[string]expectedResourceSignals{
 			"thread/closed",
 			"thread/compacted",
 			"thread/deleted",
+			"thread/environment/connected",
+			"thread/environment/disconnected",
 			"thread/goal/cleared",
 			"thread/goal/updated",
 			"thread/name/updated",
