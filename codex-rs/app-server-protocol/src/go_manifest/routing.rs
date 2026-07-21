@@ -5,13 +5,16 @@ pub(crate) fn notification_schema_excluded_reason(method: &'static str) -> Optio
         "rawResponseItem/completed" => Some(
             "raw response item completion is stripped from the generated JSON ServerNotification method union",
         ),
+        "rawResponse/completed" => Some(
+            "raw response completion is stripped from the generated JSON ServerNotification method union",
+        ),
         _ => None,
     }
 }
 
 pub(crate) fn notification_exception(method: &'static str) -> Option<ExceptionReview> {
     match method {
-        "rawResponseItem/completed" => Some(ExceptionReview {
+        "rawResponseItem/completed" | "rawResponse/completed" => Some(ExceptionReview {
             reason: "JSON ServerNotification method-union exclusion",
             owner: "app-server-protocol",
             review_note: "The payload schema exists, but the method-union exclusion must stay explicit for SDK generators.",
@@ -22,7 +25,7 @@ pub(crate) fn notification_exception(method: &'static str) -> Option<ExceptionRe
 
 pub(crate) fn notification_routing_strategy(method: &'static str) -> NotificationRoutingStrategy {
     match method {
-        "rawResponseItem/completed" => {
+        "rawResponseItem/completed" | "rawResponse/completed" => {
             routed_notification(method, &[("threadId", false), ("turnId", false)])
         }
         "skills/changed" => global_notification("skills cache invalidation"),
@@ -58,6 +61,9 @@ pub(crate) fn notification_routing_strategy(method: &'static str) -> Notificatio
         | "thread/realtime/sdp"
         | "thread/realtime/error"
         | "thread/realtime/closed" => routed_notification(method, &[("threadId", false)]),
+        "thread/environment/connected" | "thread/environment/disconnected" => {
+            routed_notification(method, &[("threadId", false)])
+        }
         "thread/goal/updated" => {
             routed_notification(method, &[("threadId", false), ("turnId", true)])
         }
