@@ -23,6 +23,8 @@ serverNotifications=app/list/updated
 serverHandlers=
 
 - `app/list` status=implemented-stage5d raw=AppList wrapper=Apps.List file=apps.go signature= convention=thin callsite=client.Apps.List(ctx, protocol.AppsListParams{}) unitTest=apps_test.go safeIntegration=real_app_server_test.go docs=examples/resources exception= review=SDK-public thin wrapper
+- `app/read` status=implemented-stage5d raw=AppRead wrapper=Apps.Read file=apps.go signature= convention=thin callsite=client.Apps.Read(ctx, protocol.AppsReadParams{}) unitTest=apps_test.go safeIntegration=live app-server coverage exercises safe app, MCP status, plugin, and skill listing; remaining methods require external services or mutate persisted plugin state docs=examples/resources exception= review=SDK-public thin wrapper
+- `app/installed` status=implemented-stage5d raw=AppInstalled wrapper=Apps.Installed file=apps.go signature= convention=thin callsite=client.Apps.Installed(ctx, protocol.AppsInstalledParams{}) unitTest=apps_test.go safeIntegration=live app-server coverage exercises safe app, MCP status, plugin, and skill listing; remaining methods require external services or mutate persisted plugin state docs=examples/resources exception= review=SDK-public thin wrapper
 
 ### CollaborationModes
 
@@ -59,6 +61,7 @@ serverHandlers=
 
 - `environment/add` status=implemented-stage5e raw=EnvironmentAdd wrapper=Environments.Add file=environments.go signature= convention=thin callsite=client.Environments.Add(ctx, protocol.EnvironmentAddParams{EnvironmentID: "env-1", ExecServerURL: "http://127.0.0.1:9876"}) unitTest=environments_test.go safeIntegration=live app-server coverage exercises safe model, remote-control, review, and account-read paths; remaining methods require external state unavailable in the hermetic fixture docs=examples/resources exception= review=SDK-public thin wrapper
 - `environment/info` status=implemented-stage5e raw=EnvironmentInfo wrapper=Environments.Info file=environments.go signature= convention=thin callsite=client.Environments.Info(ctx, protocol.EnvironmentInfoParams{EnvironmentID: "env-1"}) unitTest=environments_test.go safeIntegration=live app-server coverage exercises safe model, remote-control, review, and account-read paths; remaining methods require external state unavailable in the hermetic fixture docs=examples/resources exception= review=SDK-public thin wrapper
+- `environment/status` status=implemented-stage5e raw=EnvironmentStatus wrapper=Environments.Status file=environments.go signature= convention=thin callsite=client.Environments.Status(ctx, protocol.EnvironmentStatusParams{EnvironmentID: "env-1"}) unitTest=environments_test.go safeIntegration=live app-server coverage exercises safe model, remote-control, review, and account-read paths; remaining methods require external state unavailable in the hermetic fixture docs=examples/resources exception= review=SDK-public thin wrapper
 
 ### ExperimentalFeatures
 
@@ -227,7 +230,7 @@ serverHandlers=
 
 ### Threads
 
-serverNotifications=deprecationNotice,error,guardianWarning,serverRequest/resolved,thread/archived,thread/closed,thread/compacted,thread/deleted,thread/goal/cleared,thread/goal/updated,thread/name/updated,thread/realtime/closed,thread/realtime/error,thread/realtime/itemAdded,thread/realtime/outputAudio/delta,thread/realtime/sdp,thread/realtime/started,thread/realtime/transcript/delta,thread/realtime/transcript/done,thread/settings/updated,thread/started,thread/status/changed,thread/tokenUsage/updated,thread/unarchived,warning
+serverNotifications=deprecationNotice,error,guardianWarning,serverRequest/resolved,thread/archived,thread/closed,thread/compacted,thread/deleted,thread/environment/connected,thread/environment/disconnected,thread/goal/cleared,thread/goal/updated,thread/name/updated,thread/realtime/closed,thread/realtime/error,thread/realtime/itemAdded,thread/realtime/outputAudio/delta,thread/realtime/sdp,thread/realtime/started,thread/realtime/transcript/delta,thread/realtime/transcript/done,thread/settings/updated,thread/started,thread/status/changed,thread/tokenUsage/updated,thread/unarchived,warning
 serverHandlers=currentTime/read(current-time-read)
 
 - `thread/start` status=implemented-stage4 raw=ThreadStart wrapper=Threads.Start file=thread.go signature= convention=high-level callsite=client.Threads.Start(ctx, codex.ThreadStartOptions{CWD: "/repo", Permissions: "workspace-write"}) unitTest=workflows_test.go safeIntegration=real_app_server_test.go docs=examples/run exception= review=high-level ergonomic workflow using root SDK options plus raw generated method
@@ -258,6 +261,7 @@ serverHandlers=currentTime/read(current-time-read)
 - `thread/backgroundTerminals/list` status=implemented-stage5b raw=ThreadBackgroundTerminalsList wrapper=Threads.ListBackgroundTerminals file=thread.go signature= convention=thin callsite=client.Threads.ListBackgroundTerminals(ctx, protocol.ThreadBackgroundTerminalsListParams{}) unitTest=thread_test.go safeIntegration=real app-server tests exercise thread/start, thread/list, and turn/start; remaining thread and turn methods mutate lifecycle state or require pre-existing session data, so package tests own those variants docs=README thread lifecycle exception= review=SDK-public thin wrapper
 - `thread/backgroundTerminals/terminate` status=implemented-stage5b raw=ThreadBackgroundTerminalsTerminate wrapper=Threads.TerminateBackgroundTerminal file=thread.go signature= convention=thin callsite=client.Threads.TerminateBackgroundTerminal(ctx, protocol.ThreadBackgroundTerminalsTerminateParams{}) unitTest=thread_test.go safeIntegration=real app-server tests exercise thread/start, thread/list, and turn/start; remaining thread and turn methods mutate lifecycle state or require pre-existing session data, so package tests own those variants docs=README thread lifecycle exception= review=SDK-public thin wrapper
 - `thread/search` status=implemented-stage5b raw=ThreadSearch wrapper=Threads.Search file=thread.go signature= convention=thin callsite=client.Threads.Search(ctx, protocol.ThreadSearchParams{}) unitTest=thread_test.go safeIntegration=real app-server tests exercise thread/start, thread/list, and turn/start; remaining thread and turn methods mutate lifecycle state or require pre-existing session data, so package tests own those variants docs=examples/resources exception= review=SDK-public thin wrapper
+- `thread/searchOccurrences` status=implemented-stage5b raw=ThreadSearchOccurrences wrapper=Threads.SearchOccurrences file=thread.go signature= convention=thin callsite=client.Threads.SearchOccurrences(ctx, protocol.ThreadSearchOccurrencesParams{ThreadID: "thread-1"}) unitTest=thread_test.go safeIntegration=real app-server tests exercise thread/start, thread/list, and turn/start; remaining thread and turn methods mutate lifecycle state or require pre-existing session data, so package tests own those variants docs=examples/resources exception= review=SDK-public thin wrapper
 - `thread/turns/list` status=implemented-stage5b raw=ThreadTurnsList wrapper=Threads.ListTurns file=thread.go signature= convention=thin callsite=client.Threads.ListTurns(ctx, protocol.ThreadTurnsListParams{}) unitTest=thread_test.go safeIntegration=real app-server tests exercise thread/start, thread/list, and turn/start; remaining thread and turn methods mutate lifecycle state or require pre-existing session data, so package tests own those variants docs=README thread lifecycle exception= review=SDK-public thin wrapper
 - `thread/items/list` status=implemented-stage5b raw=ThreadItemsList wrapper=Threads.ListItems file=thread.go signature= convention=thin callsite=client.Threads.ListItems(ctx, protocol.ThreadItemsListParams{}) unitTest=thread_test.go safeIntegration=real app-server tests exercise thread/start, thread/list, and turn/start; remaining thread and turn methods mutate lifecycle state or require pre-existing session data, so package tests own those variants docs=README thread lifecycle exception= review=SDK-public thin wrapper
 
@@ -329,6 +333,8 @@ serverHandlers=
 - `thread/name/updated` payload=ThreadNameUpdatedNotification visibility=public routing=routed routeDomains=thread
 - `thread/goal/updated` payload=ThreadGoalUpdatedNotification visibility=public routing=routed routeDomains=thread
 - `thread/goal/cleared` payload=ThreadGoalClearedNotification visibility=public routing=routed routeDomains=thread
+- `thread/environment/connected` payload=EnvironmentConnectionNotification visibility=public routing=routed routeDomains=thread
+- `thread/environment/disconnected` payload=EnvironmentConnectionNotification visibility=public routing=routed routeDomains=thread
 - `thread/settings/updated` payload=ThreadSettingsUpdatedNotification visibility=public routing=routed routeDomains=thread
 - `thread/tokenUsage/updated` payload=ThreadTokenUsageUpdatedNotification visibility=public routing=routed routeDomains=thread
 - `turn/started` payload=TurnStartedNotification visibility=public routing=routed routeDomains=turn
@@ -342,6 +348,7 @@ serverHandlers=
 - `item/autoApprovalReview/completed` payload=ItemGuardianApprovalReviewCompletedNotification visibility=public routing=routed routeDomains=item
 - `item/completed` payload=ItemCompletedNotification visibility=public routing=routed routeDomains=item
 - `rawResponseItem/completed` payload=RawResponseItemCompletedNotification visibility=generatedOnly routing=routed routeDomains=rawResponseItem
+- `rawResponse/completed` payload=RawResponseCompletedNotification visibility=generatedOnly routing=routed routeDomains=rawResponse
 - `item/agentMessage/delta` payload=AgentMessageDeltaNotification visibility=public routing=routed routeDomains=item
 - `item/plan/delta` payload=PlanDeltaNotification visibility=public routing=routed routeDomains=item
 - `command/exec/outputDelta` payload=CommandExecOutputDeltaNotification visibility=public routing=routed routeDomains=command

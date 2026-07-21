@@ -13,6 +13,7 @@ func TestThreadsResourceWrappersSendMatrixMethods(t *testing.T) {
 	ctx := context.Background()
 	client, transport := newStage5Client(t)
 	thread := &Thread{client: client, id: "thread-1"}
+	deferGoalContinuation := true
 
 	calls := []struct {
 		name     string
@@ -30,7 +31,11 @@ func TestThreadsResourceWrappersSendMatrixMethods(t *testing.T) {
 		{
 			name: "fork", method: "thread/fork", threadID: "thread-1",
 			call: func() error {
-				_, err := client.Threads.Fork(ctx, ThreadForkOptions{ThreadID: "thread-1"})
+				_, err := client.Threads.Fork(ctx, ThreadForkOptions{
+					ThreadID:              "thread-1",
+					BeforeTurnID:          "turn-before",
+					DeferGoalContinuation: &deferGoalContinuation,
+				})
 				return err
 			},
 		},
@@ -221,6 +226,13 @@ func TestThreadsResourceWrappersSendMatrixMethods(t *testing.T) {
 			},
 		},
 		{
+			name: "search occurrences", method: "thread/searchOccurrences", threadID: "thread-1",
+			call: func() error {
+				_, err := client.Threads.SearchOccurrences(ctx, protocol.ThreadSearchOccurrencesParams{ThreadID: "thread-1"})
+				return err
+			},
+		},
+		{
 			name: "list turns", method: "thread/turns/list", threadID: "thread-1",
 			call: func() error {
 				_, err := client.Threads.ListTurns(ctx, protocol.ThreadTurnsListParams{ThreadID: "thread-1"})
@@ -246,7 +258,20 @@ func TestThreadsResourceWrappersSendMatrixMethods(t *testing.T) {
 			}
 			assertMethod(t, transport.lastFrame(t), tt.method)
 			if tt.threadID != "" {
-				assertRequestThreadID(t, requestParamsForMethod(t, transport, tt.method), tt.threadID)
+				params := requestParamsForMethod(t, transport, tt.method)
+				assertRequestThreadID(t, params, tt.threadID)
+				if tt.method == "thread/fork" {
+					var raw struct {
+						BeforeTurnID          string `json:"beforeTurnId"`
+						DeferGoalContinuation bool   `json:"deferGoalContinuation"`
+					}
+					if err := json.Unmarshal(params, &raw); err != nil {
+						t.Fatal(err)
+					}
+					if raw.BeforeTurnID != "turn-before" || !raw.DeferGoalContinuation {
+						t.Fatalf("thread/fork boundary params = %#v", raw)
+					}
+				}
 			}
 		})
 	}
