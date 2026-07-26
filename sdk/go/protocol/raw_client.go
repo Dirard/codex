@@ -700,6 +700,12 @@ func (c RawClient) ExternalAgentConfigImport(ctx context.Context, params Externa
 	return result, err
 }
 
+func (c RawClient) ExternalAgentConfigImportRecordHistory(ctx context.Context, params ExternalAgentConfigImportHistoryRecordParams) (ExternalAgentConfigImportHistoryRecordResponse, error) {
+	var result ExternalAgentConfigImportHistoryRecordResponse
+	err := c.sender.Call(ctx, "externalAgentConfig/import/recordHistory", params, &result, MethodMetadataByMethod["externalAgentConfig/import/recordHistory"])
+	return result, err
+}
+
 func (c RawClient) ExternalAgentConfigImportReadHistories(ctx context.Context) (ExternalAgentConfigImportHistoriesReadResponse, error) {
 	var result ExternalAgentConfigImportHistoriesReadResponse
 	err := c.sender.Call(ctx, "externalAgentConfig/import/readHistories", nil, &result, MethodMetadataByMethod["externalAgentConfig/import/readHistories"])

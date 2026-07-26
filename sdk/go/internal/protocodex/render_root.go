@@ -316,6 +316,7 @@ var stage5EImplementedResourceMethods = map[string]bool{
 	"environment/status":                       true,
 	"externalAgentConfig/detect":               true,
 	"externalAgentConfig/import":               true,
+	"externalAgentConfig/import/recordHistory": true,
 	"externalAgentConfig/import/readHistories": true,
 	"model/list":                               true,
 	"modelProvider/capabilities/read":          true,
