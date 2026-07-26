@@ -218,12 +218,14 @@ func resources(ctx context.Context, client *codex.Client) error {
 	// codex-go-sdk-resource:ExternalAgents
 	// codex-go-sdk-docs:externalAgentConfig/detect
 	// codex-go-sdk-docs:externalAgentConfig/import
+	// codex-go-sdk-docs:externalAgentConfig/import/recordHistory
 	// codex-go-sdk-docs:externalAgentConfig/import/readHistories
 	_, _ = client.ExternalAgents.DetectConfig(ctx, protocol.ExternalAgentConfigDetectParams{
 		Cwds:        protocol.Some([]string{"/repo"}),
 		IncludeHome: protocol.SomeNonNull(true),
 	})
 	_, _ = client.ExternalAgents.ImportConfig(ctx, protocol.ExternalAgentConfigImportParams{})
+	_, _ = client.ExternalAgents.RecordImportHistory(ctx, protocol.ExternalAgentConfigImportHistoryRecordParams{})
 	_, _ = client.ExternalAgents.ReadImportHistories(ctx)
 	// codex-go-sdk-resource:Marketplace
 	// codex-go-sdk-docs:marketplace/add
