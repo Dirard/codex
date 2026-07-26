@@ -1,11 +1,11 @@
 package protocol
 
-const StableProtocolDigest = "095a0c660ae10e95bb876aff9f731dcf8479d08e5885c4b22a2a4d3ab85b1bbb"
-const StableSchemaDigest = "a332cd0906b7ea5333756d7b4dac8f13cac332cdead87b56df14f48a792e3202"
-const StableManifestDigest = "6ab40f68b3f3711c0bcd7ed9098f82f2d4d7fb8306d3a47fc38dc64fe24eb5e7"
-const ExperimentalProtocolDigest = "ebfefe14c72727b2bb13d3fd7a33710532c185a09d0a9c1d20552d40da5ab3a0"
-const ExperimentalSchemaDigest = "24e8ff770efa1693ac77ee17d02e2267e9debcd9d52441bb6979ecde2a70a851"
-const ExperimentalManifestDigest = "8dfaef059c7d56406480358934e390a25418ef320c61222a2b0aa17b59bc4b43"
+const StableProtocolDigest = "c66cdf6b3c0e5d68a30097ccf412b185f7d1807ab0d6b14ce899f155ea5938d4"
+const StableSchemaDigest = "2d8afa5cfebeef8b643c8fab5a644f87868471087bcb96e663cb48796d1b2b7e"
+const StableManifestDigest = "c53c8cd075ad9f8325fc7a84bac50c834d44b95c095225c59e3c1a7e56341565"
+const ExperimentalProtocolDigest = "172b3da414d9d353a68d25cb3478f07d94793338658efde9e982559e6959f401"
+const ExperimentalSchemaDigest = "295817bd68d73ab4a041ad5c748e951e1c99516524b41469c8d72929ea65657f"
+const ExperimentalManifestDigest = "8e2805a85483d565cb9e3021d682837bd0eee968007624ac7e90f53f2596df80"
 
 const MaxAdditionalContextEntries = 8
 const MaxAdditionalContextKeyBytes = 128
@@ -159,6 +159,7 @@ var MethodMetadataByMethod = map[string]MethodMetadata{
 	"config/read":                              {Method: "config/read", Visibility: "public", ParamsType: "ConfigReadParams", ResponseType: "ConfigReadResponse", ParamsSchemaRef: "#/definitions/ConfigReadParams", ResponseSchemaRef: "#/definitions/ConfigReadResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite", ExperimentalFields: []ExperimentalFieldMetadata{{ContainingType: "ConfigReadResponse", FieldPath: "config", Reason: "nested", InspectParams: false, DiscriminatorJSON: ""}, {ContainingType: "Config", FieldPath: "config.approval_policy", Reason: "nested", InspectParams: false, DiscriminatorJSON: ""}, {ContainingType: "Config", FieldPath: "config.approvals_reviewer", Reason: "config/read.approvalsReviewer", InspectParams: false, DiscriminatorJSON: ""}, {ContainingType: "Config", FieldPath: "config.apps", Reason: "config/read.apps", InspectParams: false, DiscriminatorJSON: ""}}},
 	"externalAgentConfig/detect":               {Method: "externalAgentConfig/detect", Visibility: "public", ParamsType: "ExternalAgentConfigDetectParams", ResponseType: "ExternalAgentConfigDetectResponse", ParamsSchemaRef: "#/definitions/ExternalAgentConfigDetectParams", ResponseSchemaRef: "#/definitions/ExternalAgentConfigDetectResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"externalAgentConfig/import":               {Method: "externalAgentConfig/import", Visibility: "public", ParamsType: "ExternalAgentConfigImportParams", ResponseType: "ExternalAgentConfigImportResponse", ParamsSchemaRef: "#/definitions/ExternalAgentConfigImportParams", ResponseSchemaRef: "#/definitions/ExternalAgentConfigImportResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
+	"externalAgentConfig/import/recordHistory": {Method: "externalAgentConfig/import/recordHistory", Visibility: "public", ParamsType: "ExternalAgentConfigImportHistoryRecordParams", ResponseType: "ExternalAgentConfigImportHistoryRecordResponse", ParamsSchemaRef: "#/definitions/ExternalAgentConfigImportHistoryRecordParams", ResponseSchemaRef: "#/definitions/ExternalAgentConfigImportHistoryRecordResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"externalAgentConfig/import/readHistories": {Method: "externalAgentConfig/import/readHistories", Visibility: "public", ParamsType: "Option<()>", ResponseType: "ExternalAgentConfigImportHistoriesReadResponse", ParamsSchemaRef: "", ResponseSchemaRef: "#/definitions/ExternalAgentConfigImportHistoriesReadResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"config/value/write":                       {Method: "config/value/write", Visibility: "public", ParamsType: "ConfigValueWriteParams", ResponseType: "ConfigWriteResponse", ParamsSchemaRef: "#/definitions/ConfigValueWriteParams", ResponseSchemaRef: "#/definitions/ConfigWriteResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "manual response payload conversion", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"config/batchWrite":                        {Method: "config/batchWrite", Visibility: "public", ParamsType: "ConfigBatchWriteParams", ResponseType: "ConfigWriteResponse", ParamsSchemaRef: "#/definitions/ConfigBatchWriteParams", ResponseSchemaRef: "#/definitions/ConfigWriteResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "manual response payload conversion", Experimental: false, Retry: "neverRetryAfterWrite"},
