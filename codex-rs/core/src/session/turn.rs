@@ -1254,11 +1254,12 @@ async fn run_sampling_request(
             return Err(err);
         }
 
-        let (retry_counter, retry_limit) = if matches!(&err, CodexErr::ServerOverloaded) {
-            (&mut server_overloaded_retries, max_retries.max(3))
-        } else {
-            (&mut retries, max_retries)
-        };
+        let (retry_counter, retry_limit) =
+            if matches!(err.details(), CodexErrorDetails::ServerOverloaded) {
+                (&mut server_overloaded_retries, max_retries.max(3))
+            } else {
+                (&mut retries, max_retries)
+            };
         handle_retryable_response_stream_error(
             retry_counter,
             retry_limit,
