@@ -37,6 +37,17 @@ func TestExternalAgentsThinWrappers(t *testing.T) {
 			},
 		},
 		{
+			name:   "record-import-history",
+			method: "externalAgentConfig/import/recordHistory",
+			call: func(ctx context.Context, client *Client) error {
+				_, err := client.ExternalAgents.RecordImportHistory(ctx, protocol.ExternalAgentConfigImportHistoryRecordParams{
+					ProviderID:      "codex",
+					ItemTypeResults: []protocol.ExternalAgentConfigImportTypeResult{},
+				})
+				return err
+			},
+		},
+		{
 			name:   "read-import-histories",
 			method: "externalAgentConfig/import/readHistories",
 			call: func(ctx context.Context, client *Client) error {
