@@ -513,6 +513,18 @@ var resourceAPIMappings = []ResourceAPIMapping{
 		ReviewNote:            "SDK-public thin wrapper",
 	},
 	{
+		Method:                "externalAgentConfig/import/recordHistory",
+		ResourceOwner:         "ExternalAgents",
+		WrapperName:           "ExternalAgents.RecordImportHistory",
+		WrapperFile:           "external_agents.go",
+		SignatureConventionID: "thin",
+		CompileCallsite:       "client.ExternalAgents.RecordImportHistory(ctx, protocol.ExternalAgentConfigImportHistoryRecordParams{ProviderID: \"codex\", ItemTypeResults: []protocol.ExternalAgentConfigImportTypeResult{}})",
+		UnitTestOwner:         "external_agents_test.go",
+		SafeIntegrationReason: stage5eSafeIntegrationReason,
+		DocsExampleOwner:      "examples/resources",
+		ReviewNote:            "SDK-public thin wrapper",
+	},
+	{
 		Method:                "externalAgentConfig/import/readHistories",
 		ResourceOwner:         "ExternalAgents",
 		WrapperName:           "ExternalAgents.ReadImportHistories",

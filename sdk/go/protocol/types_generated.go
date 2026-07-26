@@ -1825,6 +1825,20 @@ func (v ClientRequest) ExternalAgentConfigImportParams() (ExternalAgentConfigImp
 	return params, true, nil
 }
 
+func (v ClientRequest) ExternalAgentConfigImportRecordHistoryParams() (ExternalAgentConfigImportHistoryRecordParams, bool, error) {
+	if v.Method != "externalAgentConfig/import/recordHistory" {
+		return ExternalAgentConfigImportHistoryRecordParams{}, false, nil
+	}
+	var params ExternalAgentConfigImportHistoryRecordParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
 func (v ClientRequest) ConfigValueWriteParams() (ConfigValueWriteParams, bool, error) {
 	if v.Method != "config/value/write" {
 		return ConfigValueWriteParams{}, false, nil
@@ -8845,7 +8859,6 @@ type AppMetadata struct {
 	Categories                 Optional[[]string]        `json:"categories,omitempty"`
 	Developer                  Optional[string]          `json:"developer,omitempty"`
 	FirstPartyRequiresInstall  Optional[bool]            `json:"firstPartyRequiresInstall,omitempty"`
-	FirstPartyType             Optional[string]          `json:"firstPartyType,omitempty"`
 	Review                     Optional[AppReview]       `json:"review,omitempty"`
 	Screenshots                Optional[[]AppScreenshot] `json:"screenshots,omitempty"`
 	SeoDescription             Optional[string]          `json:"seoDescription,omitempty"`
@@ -8866,9 +8879,6 @@ func (v AppMetadata) MarshalJSON() ([]byte, error) {
 	}
 	if v.FirstPartyRequiresInstall.IsSet() {
 		out["firstPartyRequiresInstall"] = v.FirstPartyRequiresInstall
-	}
-	if v.FirstPartyType.IsSet() {
-		out["firstPartyType"] = v.FirstPartyType
 	}
 	if v.Review.IsSet() {
 		out["review"] = v.Review
@@ -8922,12 +8932,6 @@ func (v *AppMetadata) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawFirstPartyRequiresInstall, &v.FirstPartyRequiresInstall); err != nil {
 			return fmt.Errorf("field firstPartyRequiresInstall: %w", err)
-		}
-	}
-	rawFirstPartyType, ok := raw["firstPartyType"]
-	if ok {
-		if err := json.Unmarshal(rawFirstPartyType, &v.FirstPartyType); err != nil {
-			return fmt.Errorf("field firstPartyType: %w", err)
 		}
 	}
 	rawReview, ok := raw["review"]
@@ -9318,14 +9322,26 @@ func (v *AppToolConfig) UnmarshalJSON(data []byte) error {
 }
 
 type AppToolSummary struct {
-	Description string           `json:"description,omitempty"`
-	Name        string           `json:"name,omitempty"`
-	Title       Optional[string] `json:"title,omitempty"`
+	Description    string                `json:"description,omitempty"`
+	DisabledReason Optional[string]      `json:"disabledReason,omitempty"`
+	IsEnabled      OptionalNonNull[bool] `json:"isEnabled,omitempty"`
+	IsReadOnly     OptionalNonNull[bool] `json:"isReadOnly,omitempty"`
+	Name           string                `json:"name,omitempty"`
+	Title          Optional[string]      `json:"title,omitempty"`
 }
 
 func (v AppToolSummary) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
 	out["description"] = v.Description
+	if v.DisabledReason.IsSet() {
+		out["disabledReason"] = v.DisabledReason
+	}
+	if v.IsEnabled.IsSet() {
+		out["isEnabled"] = v.IsEnabled
+	}
+	if v.IsReadOnly.IsSet() {
+		out["isReadOnly"] = v.IsReadOnly
+	}
 	out["name"] = v.Name
 	if v.Title.IsSet() {
 		out["title"] = v.Title
@@ -9351,6 +9367,24 @@ func (v *AppToolSummary) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawDescription, &v.Description); err != nil {
 		return fmt.Errorf("field description: %w", err)
+	}
+	rawDisabledReason, ok := raw["disabledReason"]
+	if ok {
+		if err := json.Unmarshal(rawDisabledReason, &v.DisabledReason); err != nil {
+			return fmt.Errorf("field disabledReason: %w", err)
+		}
+	}
+	rawIsEnabled, ok := raw["isEnabled"]
+	if ok {
+		if err := json.Unmarshal(rawIsEnabled, &v.IsEnabled); err != nil {
+			return fmt.Errorf("field isEnabled: %w", err)
+		}
+	}
+	rawIsReadOnly, ok := raw["isReadOnly"]
+	if ok {
+		if err := json.Unmarshal(rawIsReadOnly, &v.IsReadOnly); err != nil {
+			return fmt.Errorf("field isReadOnly: %w", err)
+		}
 	}
 	rawName, ok := raw["name"]
 	if !ok {
@@ -9947,6 +9981,36 @@ type AutoReviewDecisionSource string
 const (
 	AutoReviewDecisionSourceAgent AutoReviewDecisionSource = "agent"
 )
+
+type BrowserUseRequirements struct {
+	DisableAutoReview Optional[bool] `json:"disableAutoReview,omitempty"`
+}
+
+func (v BrowserUseRequirements) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if v.DisableAutoReview.IsSet() {
+		out["disableAutoReview"] = v.DisableAutoReview
+	}
+	return json.Marshal(out)
+}
+
+func (v *BrowserUseRequirements) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawDisableAutoReview, ok := raw["disableAutoReview"]
+	if ok {
+		if err := json.Unmarshal(rawDisableAutoReview, &v.DisableAutoReview); err != nil {
+			return fmt.Errorf("field disableAutoReview: %w", err)
+		}
+	}
+	return nil
+}
 
 type ByteRange struct {
 	End   uint64 `json:"end,omitempty"`
@@ -12389,6 +12453,7 @@ type ConfigRequirements struct {
 	AllowedSandboxModes                  Optional[[]SandboxMode]             `json:"allowedSandboxModes,omitempty"`
 	AllowedWebSearchModes                Optional[[]WebSearchMode]           `json:"allowedWebSearchModes,omitempty"`
 	AllowedWindowsSandboxImplementations Optional[[]WindowsSandboxSetupMode] `json:"allowedWindowsSandboxImplementations,omitempty"`
+	BrowserUse                           Optional[BrowserUseRequirements]    `json:"browserUse,omitempty"`
 	CheckForUpdateOnStartup              Optional[bool]                      `json:"checkForUpdateOnStartup,omitempty"`
 	ComputerUse                          Optional[ComputerUseRequirements]   `json:"computerUse,omitempty"`
 	DefaultPermissions                   Optional[string]                    `json:"defaultPermissions,omitempty"`
@@ -12435,6 +12500,9 @@ func (v ConfigRequirements) MarshalJSON() ([]byte, error) {
 	}
 	if v.AllowedWindowsSandboxImplementations.IsSet() {
 		out["allowedWindowsSandboxImplementations"] = v.AllowedWindowsSandboxImplementations
+	}
+	if v.BrowserUse.IsSet() {
+		out["browserUse"] = v.BrowserUse
 	}
 	if v.CheckForUpdateOnStartup.IsSet() {
 		out["checkForUpdateOnStartup"] = v.CheckForUpdateOnStartup
@@ -12545,6 +12613,12 @@ func (v *ConfigRequirements) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawAllowedWindowsSandboxImplementations, &v.AllowedWindowsSandboxImplementations); err != nil {
 			return fmt.Errorf("field allowedWindowsSandboxImplementations: %w", err)
+		}
+	}
+	rawBrowserUse, ok := raw["browserUse"]
+	if ok {
+		if err := json.Unmarshal(rawBrowserUse, &v.BrowserUse); err != nil {
+			return fmt.Errorf("field browserUse: %w", err)
 		}
 	}
 	rawCheckForUpdateOnStartup, ok := raw["checkForUpdateOnStartup"]
@@ -14865,6 +14939,7 @@ type ExternalAgentConfigImportHistory struct {
 	CompletedAtMs int64                                      `json:"completedAtMs,omitempty"`
 	Failures      []ExternalAgentConfigImportItemTypeFailure `json:"failures,omitempty"`
 	ImportID      string                                     `json:"importId,omitempty"`
+	ProviderID    Optional[string]                           `json:"providerId,omitempty"`
 	Successes     []ExternalAgentConfigImportItemTypeSuccess `json:"successes,omitempty"`
 }
 
@@ -14873,6 +14948,9 @@ func (v ExternalAgentConfigImportHistory) MarshalJSON() ([]byte, error) {
 	out["completedAtMs"] = v.CompletedAtMs
 	out["failures"] = v.Failures
 	out["importId"] = v.ImportID
+	if v.ProviderID.IsSet() {
+		out["providerId"] = v.ProviderID
+	}
 	out["successes"] = v.Successes
 	return json.Marshal(out)
 }
@@ -14916,6 +14994,12 @@ func (v *ExternalAgentConfigImportHistory) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(rawImportID, &v.ImportID); err != nil {
 		return fmt.Errorf("field importId: %w", err)
 	}
+	rawProviderID, ok := raw["providerId"]
+	if ok {
+		if err := json.Unmarshal(rawProviderID, &v.ProviderID); err != nil {
+			return fmt.Errorf("field providerId: %w", err)
+		}
+	}
 	rawSuccesses, ok := raw["successes"]
 	if !ok {
 		return DecodeError{Field: "successes", Reason: "missing required field"}
@@ -14925,6 +15009,82 @@ func (v *ExternalAgentConfigImportHistory) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawSuccesses, &v.Successes); err != nil {
 		return fmt.Errorf("field successes: %w", err)
+	}
+	return nil
+}
+
+type ExternalAgentConfigImportHistoryRecordParams struct {
+	ItemTypeResults []ExternalAgentConfigImportTypeResult `json:"itemTypeResults,omitempty"`
+	ProviderID      string                                `json:"providerId,omitempty"`
+}
+
+func (v ExternalAgentConfigImportHistoryRecordParams) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["itemTypeResults"] = v.ItemTypeResults
+	out["providerId"] = v.ProviderID
+	return json.Marshal(out)
+}
+
+func (v *ExternalAgentConfigImportHistoryRecordParams) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawItemTypeResults, ok := raw["itemTypeResults"]
+	if !ok {
+		return DecodeError{Field: "itemTypeResults", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawItemTypeResults, []byte("null")) {
+		return DecodeError{Field: "itemTypeResults", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawItemTypeResults, &v.ItemTypeResults); err != nil {
+		return fmt.Errorf("field itemTypeResults: %w", err)
+	}
+	rawProviderID, ok := raw["providerId"]
+	if !ok {
+		return DecodeError{Field: "providerId", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawProviderID, []byte("null")) {
+		return DecodeError{Field: "providerId", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawProviderID, &v.ProviderID); err != nil {
+		return fmt.Errorf("field providerId: %w", err)
+	}
+	return nil
+}
+
+type ExternalAgentConfigImportHistoryRecordResponse struct {
+	ImportID string `json:"importId,omitempty"`
+}
+
+func (v ExternalAgentConfigImportHistoryRecordResponse) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["importId"] = v.ImportID
+	return json.Marshal(out)
+}
+
+func (v *ExternalAgentConfigImportHistoryRecordResponse) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawImportID, ok := raw["importId"]
+	if !ok {
+		return DecodeError{Field: "importId", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawImportID, []byte("null")) {
+		return DecodeError{Field: "importId", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawImportID, &v.ImportID); err != nil {
+		return fmt.Errorf("field importId: %w", err)
 	}
 	return nil
 }
@@ -23091,6 +23251,7 @@ const (
 	PlanTypeTeam                        PlanType = "team"
 	PlanTypeSelfServeBusinessUsageBased PlanType = "self_serve_business_usage_based"
 	PlanTypeBusiness                    PlanType = "business"
+	PlanTypeEnt26                       PlanType = "ent26"
 	PlanTypeEnterpriseCbpUsageBased     PlanType = "enterprise_cbp_usage_based"
 	PlanTypeEnterprise                  PlanType = "enterprise"
 	PlanTypeEdu                         PlanType = "edu"
@@ -24138,17 +24299,21 @@ func (v *PluginShareCheckoutResponse) UnmarshalJSON(data []byte) error {
 }
 
 type PluginShareContext struct {
-	CreatorAccountUserID Optional[string]                     `json:"creatorAccountUserId,omitempty"`
-	CreatorName          Optional[string]                     `json:"creatorName,omitempty"`
-	Discoverability      Optional[PluginShareDiscoverability] `json:"discoverability,omitempty"`
-	RemotePluginID       string                               `json:"remotePluginId,omitempty"`
-	RemoteVersion        Optional[string]                     `json:"remoteVersion,omitempty"`
-	SharePrincipals      Optional[[]PluginSharePrincipal]     `json:"sharePrincipals,omitempty"`
-	ShareURL             Optional[string]                     `json:"shareUrl,omitempty"`
+	CanPublishToWorkspace Optional[bool]                       `json:"canPublishToWorkspace,omitempty"`
+	CreatorAccountUserID  Optional[string]                     `json:"creatorAccountUserId,omitempty"`
+	CreatorName           Optional[string]                     `json:"creatorName,omitempty"`
+	Discoverability       Optional[PluginShareDiscoverability] `json:"discoverability,omitempty"`
+	RemotePluginID        string                               `json:"remotePluginId,omitempty"`
+	RemoteVersion         Optional[string]                     `json:"remoteVersion,omitempty"`
+	SharePrincipals       Optional[[]PluginSharePrincipal]     `json:"sharePrincipals,omitempty"`
+	ShareURL              Optional[string]                     `json:"shareUrl,omitempty"`
 }
 
 func (v PluginShareContext) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
+	if v.CanPublishToWorkspace.IsSet() {
+		out["canPublishToWorkspace"] = v.CanPublishToWorkspace
+	}
 	if v.CreatorAccountUserID.IsSet() {
 		out["creatorAccountUserId"] = v.CreatorAccountUserID
 	}
@@ -24179,6 +24344,12 @@ func (v *PluginShareContext) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
+	}
+	rawCanPublishToWorkspace, ok := raw["canPublishToWorkspace"]
+	if ok {
+		if err := json.Unmarshal(rawCanPublishToWorkspace, &v.CanPublishToWorkspace); err != nil {
+			return fmt.Errorf("field canPublishToWorkspace: %w", err)
+		}
 	}
 	rawCreatorAccountUserID, ok := raw["creatorAccountUserId"]
 	if ok {
@@ -24536,12 +24707,16 @@ func (v *PluginShareSaveParams) UnmarshalJSON(data []byte) error {
 }
 
 type PluginShareSaveResponse struct {
-	RemotePluginID string `json:"remotePluginId,omitempty"`
-	ShareURL       string `json:"shareUrl,omitempty"`
+	CanPublishToWorkspace Optional[bool] `json:"canPublishToWorkspace,omitempty"`
+	RemotePluginID        string         `json:"remotePluginId,omitempty"`
+	ShareURL              string         `json:"shareUrl,omitempty"`
 }
 
 func (v PluginShareSaveResponse) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
+	if v.CanPublishToWorkspace.IsSet() {
+		out["canPublishToWorkspace"] = v.CanPublishToWorkspace
+	}
 	out["remotePluginId"] = v.RemotePluginID
 	out["shareUrl"] = v.ShareURL
 	return json.Marshal(out)
@@ -24555,6 +24730,12 @@ func (v *PluginShareSaveResponse) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
+	}
+	rawCanPublishToWorkspace, ok := raw["canPublishToWorkspace"]
+	if ok {
+		if err := json.Unmarshal(rawCanPublishToWorkspace, &v.CanPublishToWorkspace); err != nil {
+			return fmt.Errorf("field canPublishToWorkspace: %w", err)
+		}
 	}
 	rawRemotePluginID, ok := raw["remotePluginId"]
 	if !ok {
@@ -29739,7 +29920,9 @@ type SkillInterface struct {
 	DefaultPrompt    Optional[string]          `json:"defaultPrompt,omitempty"`
 	DisplayName      Optional[string]          `json:"displayName,omitempty"`
 	IconLarge        Optional[AbsolutePathBuf] `json:"iconLarge,omitempty"`
+	IconLargeURL     Optional[string]          `json:"iconLargeUrl,omitempty"`
 	IconSmall        Optional[AbsolutePathBuf] `json:"iconSmall,omitempty"`
+	IconSmallURL     Optional[string]          `json:"iconSmallUrl,omitempty"`
 	ShortDescription Optional[string]          `json:"shortDescription,omitempty"`
 }
 
@@ -29757,8 +29940,14 @@ func (v SkillInterface) MarshalJSON() ([]byte, error) {
 	if v.IconLarge.IsSet() {
 		out["iconLarge"] = v.IconLarge
 	}
+	if v.IconLargeURL.IsSet() {
+		out["iconLargeUrl"] = v.IconLargeURL
+	}
 	if v.IconSmall.IsSet() {
 		out["iconSmall"] = v.IconSmall
+	}
+	if v.IconSmallURL.IsSet() {
+		out["iconSmallUrl"] = v.IconSmallURL
 	}
 	if v.ShortDescription.IsSet() {
 		out["shortDescription"] = v.ShortDescription
@@ -29799,10 +29988,22 @@ func (v *SkillInterface) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field iconLarge: %w", err)
 		}
 	}
+	rawIconLargeURL, ok := raw["iconLargeUrl"]
+	if ok {
+		if err := json.Unmarshal(rawIconLargeURL, &v.IconLargeURL); err != nil {
+			return fmt.Errorf("field iconLargeUrl: %w", err)
+		}
+	}
 	rawIconSmall, ok := raw["iconSmall"]
 	if ok {
 		if err := json.Unmarshal(rawIconSmall, &v.IconSmall); err != nil {
 			return fmt.Errorf("field iconSmall: %w", err)
+		}
+	}
+	rawIconSmallURL, ok := raw["iconSmallUrl"]
+	if ok {
+		if err := json.Unmarshal(rawIconSmallURL, &v.IconSmallURL); err != nil {
+			return fmt.Errorf("field iconSmallUrl: %w", err)
 		}
 	}
 	rawShortDescription, ok := raw["shortDescription"]
@@ -30904,6 +31105,7 @@ type Thread struct {
 	GitInfo              Optional[GitInfo]                  `json:"gitInfo,omitempty"`
 	HistoryMode          OptionalNonNull[ThreadHistoryMode] `json:"historyMode,omitempty"`
 	ID                   string                             `json:"id,omitempty"`
+	IsPinned             OptionalNonNull[bool]              `json:"isPinned,omitempty"`
 	ModelProvider        string                             `json:"modelProvider,omitempty"`
 	Name                 Optional[string]                   `json:"name,omitempty"`
 	ParentThreadID       Optional[string]                   `json:"parentThreadId,omitempty"`
@@ -30946,6 +31148,9 @@ func (v Thread) MarshalJSON() ([]byte, error) {
 		out["historyMode"] = v.HistoryMode
 	}
 	out["id"] = v.ID
+	if v.IsPinned.IsSet() {
+		out["isPinned"] = v.IsPinned
+	}
 	out["modelProvider"] = v.ModelProvider
 	if v.Name.IsSet() {
 		out["name"] = v.Name
@@ -31075,6 +31280,12 @@ func (v *Thread) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawID, &v.ID); err != nil {
 		return fmt.Errorf("field id: %w", err)
+	}
+	rawIsPinned, ok := raw["isPinned"]
+	if ok {
+		if err := json.Unmarshal(rawIsPinned, &v.IsPinned); err != nil {
+			return fmt.Errorf("field isPinned: %w", err)
+		}
 	}
 	rawModelProvider, ok := raw["modelProvider"]
 	if !ok {
@@ -32972,6 +33183,7 @@ type ThreadItem struct {
 	Review            OptionalNonNull[string]                      `json:"review,omitempty"`
 	RevisedPrompt     Optional[string]                             `json:"revisedPrompt,omitempty"`
 	SavedPath         Optional[AbsolutePathBuf]                    `json:"savedPath,omitempty"`
+	ScriptPath        Optional[string]                             `json:"scriptPath,omitempty"`
 	SenderThreadID    OptionalNonNull[string]                      `json:"senderThreadId,omitempty"`
 	Server            OptionalNonNull[string]                      `json:"server,omitempty"`
 	Source            OptionalNonNull[CommandExecutionSource]      `json:"source,omitempty"`
@@ -33096,6 +33308,9 @@ func (v ThreadItem) MarshalJSON() ([]byte, error) {
 	}
 	if v.SavedPath.IsSet() {
 		out["savedPath"] = v.SavedPath
+	}
+	if v.ScriptPath.IsSet() {
+		out["scriptPath"] = v.ScriptPath
 	}
 	if v.SenderThreadID.IsSet() {
 		out["senderThreadId"] = v.SenderThreadID
@@ -33576,6 +33791,12 @@ func (v *ThreadItem) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawSavedPath, &v.SavedPath); err != nil {
 			return fmt.Errorf("field savedPath: %w", err)
+		}
+	}
+	rawScriptPath, ok := raw["scriptPath"]
+	if ok {
+		if err := json.Unmarshal(rawScriptPath, &v.ScriptPath); err != nil {
+			return fmt.Errorf("field scriptPath: %w", err)
 		}
 	}
 	rawSenderThreadID, ok := raw["senderThreadId"]
@@ -34092,6 +34313,7 @@ type ThreadListParams struct {
 	Archived         Optional[bool]                `json:"archived,omitempty"`
 	Cursor           Optional[string]              `json:"cursor,omitempty"`
 	Cwd              Optional[ThreadListCwdFilter] `json:"cwd,omitempty"`
+	IsPinned         Optional[bool]                `json:"isPinned,omitempty"`
 	Limit            Optional[uint32]              `json:"limit,omitempty"`
 	ModelProviders   Optional[[]string]            `json:"modelProviders,omitempty"`
 	ParentThreadID   Optional[string]              `json:"parentThreadId,omitempty"`
@@ -34115,6 +34337,9 @@ func (v ThreadListParams) MarshalJSON() ([]byte, error) {
 	}
 	if v.Cwd.IsSet() {
 		out["cwd"] = v.Cwd
+	}
+	if v.IsPinned.IsSet() {
+		out["isPinned"] = v.IsPinned
 	}
 	if v.Limit.IsSet() {
 		out["limit"] = v.Limit
@@ -34176,6 +34401,12 @@ func (v *ThreadListParams) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawCwd, &v.Cwd); err != nil {
 			return fmt.Errorf("field cwd: %w", err)
+		}
+	}
+	rawIsPinned, ok := raw["isPinned"]
+	if ok {
+		if err := json.Unmarshal(rawIsPinned, &v.IsPinned); err != nil {
+			return fmt.Errorf("field isPinned: %w", err)
 		}
 	}
 	rawLimit, ok := raw["limit"]
@@ -34501,6 +34732,7 @@ func (v *ThreadMetadataGitInfoUpdateParams) UnmarshalJSON(data []byte) error {
 
 type ThreadMetadataUpdateParams struct {
 	GitInfo  Optional[ThreadMetadataGitInfoUpdateParams] `json:"gitInfo,omitempty"`
+	IsPinned Optional[bool]                              `json:"isPinned,omitempty"`
 	ThreadID string                                      `json:"threadId,omitempty"`
 }
 
@@ -34508,6 +34740,9 @@ func (v ThreadMetadataUpdateParams) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
 	if v.GitInfo.IsSet() {
 		out["gitInfo"] = v.GitInfo
+	}
+	if v.IsPinned.IsSet() {
+		out["isPinned"] = v.IsPinned
 	}
 	out["threadId"] = v.ThreadID
 	return json.Marshal(out)
@@ -34526,6 +34761,12 @@ func (v *ThreadMetadataUpdateParams) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawGitInfo, &v.GitInfo); err != nil {
 			return fmt.Errorf("field gitInfo: %w", err)
+		}
+	}
+	rawIsPinned, ok := raw["isPinned"]
+	if ok {
+		if err := json.Unmarshal(rawIsPinned, &v.IsPinned); err != nil {
+			return fmt.Errorf("field isPinned: %w", err)
 		}
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -35304,27 +35545,31 @@ func (v *ThreadRealtimeSdpNotification) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadRealtimeStartParams struct {
-	ClientManagedHandoffs           Optional[bool]                         `json:"clientManagedHandoffs,omitempty"`
-	CodexResponseHandoffMode        Optional[CodexResponseHandoffMode]     `json:"codexResponseHandoffMode,omitempty"`
-	CodexResponseItemPrefix         Optional[string]                       `json:"codexResponseItemPrefix,omitempty"`
-	CodexResponsesAsItems           Optional[bool]                         `json:"codexResponsesAsItems,omitempty"`
-	FlushTranscriptTailOnSessionEnd Optional[bool]                         `json:"flushTranscriptTailOnSessionEnd,omitempty"`
-	IncludeStartupContext           Optional[bool]                         `json:"includeStartupContext,omitempty"`
-	InitialItems                    Optional[[]ThreadRealtimeInitialItem]  `json:"initialItems,omitempty"`
-	Model                           Optional[string]                       `json:"model,omitempty"`
-	OutputModality                  RealtimeOutputModality                 `json:"outputModality,omitempty"`
-	Prompt                          Optional[string]                       `json:"prompt,omitempty"`
-	RealtimeSessionID               Optional[string]                       `json:"realtimeSessionId,omitempty"`
-	ThreadID                        string                                 `json:"threadId,omitempty"`
-	Transport                       Optional[ThreadRealtimeStartTransport] `json:"transport,omitempty"`
-	Version                         Optional[RealtimeConversationVersion]  `json:"version,omitempty"`
-	Voice                           Optional[RealtimeVoice]                `json:"voice,omitempty"`
+	ClientManagedHandoffs               Optional[bool]                         `json:"clientManagedHandoffs,omitempty"`
+	CodexResponseHandoffChannelPrefixes Optional[map[string][]string]          `json:"codexResponseHandoffChannelPrefixes,omitempty"`
+	CodexResponseHandoffMode            Optional[CodexResponseHandoffMode]     `json:"codexResponseHandoffMode,omitempty"`
+	CodexResponseItemPrefix             Optional[string]                       `json:"codexResponseItemPrefix,omitempty"`
+	CodexResponsesAsItems               Optional[bool]                         `json:"codexResponsesAsItems,omitempty"`
+	FlushTranscriptTailOnSessionEnd     Optional[bool]                         `json:"flushTranscriptTailOnSessionEnd,omitempty"`
+	IncludeStartupContext               Optional[bool]                         `json:"includeStartupContext,omitempty"`
+	InitialItems                        Optional[[]ThreadRealtimeInitialItem]  `json:"initialItems,omitempty"`
+	Model                               Optional[string]                       `json:"model,omitempty"`
+	OutputModality                      RealtimeOutputModality                 `json:"outputModality,omitempty"`
+	Prompt                              Optional[string]                       `json:"prompt,omitempty"`
+	RealtimeSessionID                   Optional[string]                       `json:"realtimeSessionId,omitempty"`
+	ThreadID                            string                                 `json:"threadId,omitempty"`
+	Transport                           Optional[ThreadRealtimeStartTransport] `json:"transport,omitempty"`
+	Version                             Optional[RealtimeConversationVersion]  `json:"version,omitempty"`
+	Voice                               Optional[RealtimeVoice]                `json:"voice,omitempty"`
 }
 
 func (v ThreadRealtimeStartParams) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
 	if v.ClientManagedHandoffs.IsSet() {
 		out["clientManagedHandoffs"] = v.ClientManagedHandoffs
+	}
+	if v.CodexResponseHandoffChannelPrefixes.IsSet() {
+		out["codexResponseHandoffChannelPrefixes"] = v.CodexResponseHandoffChannelPrefixes
 	}
 	if v.CodexResponseHandoffMode.IsSet() {
 		out["codexResponseHandoffMode"] = v.CodexResponseHandoffMode
@@ -35380,6 +35625,12 @@ func (v *ThreadRealtimeStartParams) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawClientManagedHandoffs, &v.ClientManagedHandoffs); err != nil {
 			return fmt.Errorf("field clientManagedHandoffs: %w", err)
+		}
+	}
+	rawCodexResponseHandoffChannelPrefixes, ok := raw["codexResponseHandoffChannelPrefixes"]
+	if ok {
+		if err := json.Unmarshal(rawCodexResponseHandoffChannelPrefixes, &v.CodexResponseHandoffChannelPrefixes); err != nil {
+			return fmt.Errorf("field codexResponseHandoffChannelPrefixes: %w", err)
 		}
 	}
 	rawCodexResponseHandoffMode, ok := raw["codexResponseHandoffMode"]
