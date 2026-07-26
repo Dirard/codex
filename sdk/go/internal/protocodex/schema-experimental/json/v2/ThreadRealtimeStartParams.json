@@ -124,6 +124,19 @@
         "null"
       ]
     },
+    "codexResponseHandoffChannelPrefixes": {
+      "additionalProperties": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "description": "Overrides BEM channel prefixes by `analysis`, `commentary`, or `final`. Omitted channels retain their default uppercase bracketed prefixes.",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "codexResponseHandoffMode": {
       "anyOf": [
         {
