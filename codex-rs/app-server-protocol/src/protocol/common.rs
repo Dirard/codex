@@ -728,7 +728,7 @@ macro_rules! client_request_definitions {
         ) -> Vec<crate::go_manifest::RequestManifestEntry> {
             let mut entries = Vec::new();
             $(
-                let method = go_manifest_method_name!($variant $(=> $wire)?);
+                let method = $wire;
                 entries.push(crate::go_manifest::RequestManifestEntry {
                     variant: stringify!($variant),
                     method,

@@ -780,6 +780,15 @@ var compiledResourceCallsites = map[string]compiledResourceCallsite{
 			_, _ = response, err
 		},
 	},
+	"externalAgentConfig/import/recordHistory": {
+		wrapperName: "ExternalAgents.RecordImportHistory",
+		convention:  "thin",
+		callsite:    `client.ExternalAgents.RecordImportHistory(ctx, protocol.ExternalAgentConfigImportHistoryRecordParams{ProviderID: "codex", ItemTypeResults: []protocol.ExternalAgentConfigImportTypeResult{}})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.ExternalAgents.RecordImportHistory(ctx, protocol.ExternalAgentConfigImportHistoryRecordParams{ProviderID: "codex", ItemTypeResults: []protocol.ExternalAgentConfigImportTypeResult{}})
+			_, _ = response, err
+		},
+	},
 	"externalAgentConfig/import/readHistories": {
 		wrapperName: "ExternalAgents.ReadImportHistories",
 		convention:  "thin",
