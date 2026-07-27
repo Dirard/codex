@@ -397,7 +397,7 @@ fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
         output_schema,
         ..
     }) = create_wait_agent_tool_v2(WaitAgentTimeoutOptions {
-        default_timeout_ms: 30_000,
+        default_timeout_ms: 1_800_000,
         min_timeout_ms: 10_000,
         max_timeout_ms: 3_600_000,
     })
@@ -417,11 +417,15 @@ fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
     assert!(description.contains(
         "Does not return the content; returns either a summary of which agents have updates (if any)"
     ));
+    assert!(description.contains("For normal background work, omit `timeout_ms`"));
+    assert!(description.contains("Passing `0` performs one immediate check"));
     assert_eq!(
         properties
             .get("timeout_ms")
             .and_then(|schema| schema.description.as_deref()),
-        Some("Timeout in milliseconds. Defaults to 30000, min 10000, max 3600000.")
+        Some(
+            "Absolute deadline in milliseconds. Omit for the 1800000 ms default; pass 0 for one immediate check. Positive values below 10000 are clamped and values above 3600000 are rejected. Prefer longer waits (minutes) to avoid busy polling."
+        )
     );
     assert_eq!(parameters.required.as_ref(), None);
     assert_eq!(

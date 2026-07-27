@@ -12,6 +12,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::MultiAgentRoleInstructions;
 use crate::context::SubagentNotification;
 use crate::init_state_db;
+use crate::session::TurnInput;
 use crate::thread_manager::StartThreadOptions;
 use assert_matches::assert_matches;
 use codex_extension_api::ExtensionDataInit;
@@ -38,6 +39,7 @@ use codex_protocol::models::MessagePhase;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -2887,15 +2889,25 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
+async fn multi_agent_v2_terminal_status_is_published_after_parent_mailbox() {
     let harness = AgentControlHarness::new().await;
-    let (_root_thread_id, root_thread) = harness.start_thread().await;
-    let (worker_thread_id, _worker_thread) = harness.start_thread().await;
+    let (worker_thread_id, worker_thread) = harness.start_thread().await;
     let mut tester_config = harness.config.clone();
     let _ = tester_config.features.enable(Feature::MultiAgentV2);
+    let worker_path = AgentPath::root().join("worker_a").expect("worker path");
+    let tester_path = worker_path.join("tester").expect("tester path");
     let tester_thread_id = harness
         .manager
-        .start_thread(StartThreadOptions::new(tester_config.clone()))
+        .start_thread(StartThreadOptions {
+            session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: worker_thread_id,
+                depth: 2,
+                agent_path: Some(tester_path.clone()),
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+            ..StartThreadOptions::new(tester_config)
+        })
         .await
         .expect("tester thread should start")
         .thread_id;
@@ -2904,21 +2916,27 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
         .get_thread(tester_thread_id)
         .await
         .expect("tester thread should exist");
-    let worker_path = AgentPath::root().join("worker_a").expect("worker path");
-    let tester_path = worker_path.join("tester").expect("tester path");
-    harness.control.maybe_start_completion_watcher(
-        tester_thread_id,
-        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id: worker_thread_id,
-            depth: 2,
-            agent_path: Some(tester_path.clone()),
-            agent_nickname: None,
-            agent_role: Some("explorer".to_string()),
-        })),
-        tester_path.to_string(),
-        Some(tester_path.clone()),
-    );
     let tester_turn = tester_thread.session.new_default_turn().await;
+    let mut status_rx = tester_thread.subscribe_status();
+    let status_waiter = tokio::spawn({
+        let parent_session = Arc::clone(&worker_thread.session);
+        async move {
+            timeout(Duration::from_secs(5), async {
+                status_rx
+                    .changed()
+                    .await
+                    .expect("tester status channel should stay open");
+                let status = status_rx.borrow_and_update().clone();
+                assert!(
+                    parent_session.input_queue.has_pending_mailbox_items().await,
+                    "parent mailbox should be durable before terminal status is visible"
+                );
+                status
+            })
+            .await
+            .expect("tester should publish terminal status")
+        }
+    });
     tester_thread
         .session
         .send_event(
@@ -2935,52 +2953,166 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
         )
         .await;
 
+    let expected_status = AgentStatus::Completed(Some("done".to_string()));
+    assert_eq!(
+        status_waiter.await.expect("status waiter should join"),
+        expected_status
+    );
     let expected_message = crate::session_prefix::format_inter_agent_completion_message(
         worker_path.clone(),
         tester_path.clone(),
-        &AgentStatus::Completed(Some("done".to_string())),
+        &expected_status,
     )
     .expect("completed status should render");
-    let expected = (
-        worker_thread_id,
-        Op::InterAgentCommunication {
-            communication: InterAgentCommunication::new(
-                tester_path.clone(),
-                worker_path.clone(),
+    assert_eq!(
+        worker_thread
+            .session
+            .input_queue
+            .drain_mailbox_input_items()
+            .await,
+        vec![TurnInput::InterAgentCommunication(
+            InterAgentCommunication::new(
+                tester_path,
+                worker_path,
                 Vec::new(),
-                expected_message.clone(),
+                expected_message,
                 /*trigger_turn*/ false,
-            ),
-        },
+            )
+        )]
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_terminal_error_is_published_after_parent_mailbox() {
+    let harness = AgentControlHarness::new().await;
+    let (worker_thread_id, worker_thread) = harness.start_thread().await;
+    let mut tester_config = harness.config.clone();
+    let _ = tester_config.features.enable(Feature::MultiAgentV2);
+    let worker_path = AgentPath::root().join("worker_a").expect("worker path");
+    let tester_path = worker_path.join("tester").expect("tester path");
+    let tester_thread_id = harness
+        .manager
+        .start_thread(StartThreadOptions {
+            session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: worker_thread_id,
+                depth: 2,
+                agent_path: Some(tester_path.clone()),
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+            ..StartThreadOptions::new(tester_config)
+        })
+        .await
+        .expect("tester thread should start")
+        .thread_id;
+    let tester_thread = harness
+        .manager
+        .get_thread(tester_thread_id)
+        .await
+        .expect("tester thread should exist");
+    let tester_turn = tester_thread.session.new_default_turn().await;
+    let mut status_rx = tester_thread.subscribe_status();
+
+    tester_thread
+        .session
+        .send_event(
+            tester_turn.as_ref(),
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: tester_turn.sub_id.clone(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: ModeKind::Default,
+            }),
+        )
+        .await;
+    status_rx
+        .changed()
+        .await
+        .expect("tester status channel should stay open");
+    assert_eq!(status_rx.borrow_and_update().clone(), AgentStatus::Running);
+
+    tester_thread
+        .session
+        .send_event(
+            tester_turn.as_ref(),
+            EventMsg::Error(ErrorEvent {
+                message: "terminal-error-marker".to_string(),
+                codex_error_info: Some(CodexErrorInfo::InternalServerError),
+            }),
+        )
+        .await;
+    assert_eq!(status_rx.borrow().clone(), AgentStatus::Running);
+    assert!(
+        !worker_thread
+            .session
+            .input_queue
+            .has_pending_mailbox_items()
+            .await
     );
 
-    timeout(Duration::from_secs(5), async {
-        loop {
-            let captured = harness
-                .manager
-                .captured_ops()
-                .into_iter()
-                .find(|entry| captured_op_matches(entry, &expected));
-            if captured.is_some() {
-                break;
-            }
-            sleep(Duration::from_millis(10)).await;
+    let status_waiter = tokio::spawn({
+        let parent_session = Arc::clone(&worker_thread.session);
+        async move {
+            timeout(Duration::from_secs(5), async {
+                status_rx
+                    .changed()
+                    .await
+                    .expect("tester status channel should stay open");
+                let status = status_rx.borrow_and_update().clone();
+                assert!(
+                    parent_session.input_queue.has_pending_mailbox_items().await,
+                    "parent mailbox should be durable before terminal status is visible"
+                );
+                status
+            })
+            .await
+            .expect("tester should publish terminal status")
         }
-    })
-    .await
-    .expect("completion watcher should queue a direct-parent message");
-
-    let root_history = root_thread.session.clone_history().await;
-    assert!(!history_contains_assistant_inter_agent_communication(
-        root_history.raw_items(),
-        &InterAgentCommunication::new(
-            tester_path,
-            AgentPath::root(),
-            Vec::new(),
-            expected_message,
-            /*trigger_turn*/ false,
+    });
+    tester_thread
+        .session
+        .send_event(
+            tester_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: tester_turn.sub_id.clone(),
+                started_at: None,
+                last_agent_message: Some("done".to_string()),
+                error: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
         )
-    ));
+        .await;
+
+    let expected_status = AgentStatus::Errored("terminal-error-marker".to_string());
+    assert_eq!(
+        status_waiter.await.expect("status waiter should join"),
+        expected_status
+    );
+    let expected_message = crate::session_prefix::format_inter_agent_completion_message(
+        worker_path.clone(),
+        tester_path.clone(),
+        &expected_status,
+    )
+    .expect("errored status should render");
+    assert_eq!(
+        worker_thread
+            .session
+            .input_queue
+            .drain_mailbox_input_items()
+            .await,
+        vec![TurnInput::InterAgentCommunication(
+            InterAgentCommunication::new(
+                tester_path,
+                worker_path,
+                Vec::new(),
+                expected_message,
+                /*trigger_turn*/ false,
+            )
+        )]
+    );
 }
 
 #[tokio::test]

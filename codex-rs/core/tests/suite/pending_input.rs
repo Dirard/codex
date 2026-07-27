@@ -494,24 +494,73 @@ async fn queue_only_agent_mail_wakes_sleeping_root_and_persists_message() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
+    const SPAWN_CALL_ID: &str = "spawn-call";
     const WAIT_CALL_ID: &str = "wait-call";
     const INITIAL_PROMPT: &str = "wait for an agent";
     const STEER_PROMPT: &str = "stop waiting and continue";
+    const CHILD_PROMPT: &str = "stay active while the parent waits";
     const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 
-    let first_chunks = vec![
-        chunk(ev_response_created("resp-1")),
-        chunk(ev_function_call_with_namespace(
-            WAIT_CALL_ID,
-            MULTI_AGENT_V2_NAMESPACE,
-            "wait_agent",
-            r#"{"timeout_ms":10000}"#,
-        )),
-        chunk(ev_completed("resp-1")),
-    ];
-    let (server, _completions) =
-        start_streaming_sse_server(vec![first_chunks, response_completed_chunks("resp-2")]).await;
-    let codex = test_codex()
+    let server = responses::start_mock_server().await;
+    let spawn_args = json!({
+        "task_name": "worker",
+        "message": CHILD_PROMPT,
+        "fork_turns": "none",
+    })
+    .to_string();
+    let spawn_response = responses::mount_sse_once_match(
+        &server,
+        wiremock::matchers::body_string_contains(INITIAL_PROMPT),
+        responses::sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let _child_response = responses::mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            let body = String::from_utf8_lossy(&request.body);
+            body.contains(CHILD_PROMPT) && !body.contains(SPAWN_CALL_ID)
+        },
+        responses::sse_response(responses::sse(vec![
+            ev_response_created("resp-child"),
+            ev_completed("resp-child"),
+        ]))
+        .set_delay(std::time::Duration::from_secs(30)),
+    )
+    .await;
+    let wait_response = responses::mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            let body = String::from_utf8_lossy(&request.body);
+            body.contains(SPAWN_CALL_ID) && !body.contains(WAIT_CALL_ID)
+        },
+        responses::sse(vec![
+            ev_response_created("resp-2"),
+            ev_function_call_with_namespace(
+                WAIT_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "wait_agent",
+                r#"{"timeout_ms":10000}"#,
+            ),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+    let follow_up_response = responses::mount_sse_once_match(
+        &server,
+        wiremock::matchers::body_string_contains(WAIT_CALL_ID),
+        responses::sse(vec![ev_response_created("resp-3"), ev_completed("resp-3")]),
+    )
+    .await;
+    let test = test_codex()
         .with_model("gpt-5.4")
         .with_config(|config| {
             config
@@ -519,10 +568,10 @@ async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
                 .enable(Feature::MultiAgentV2)
                 .expect("test config should allow feature update");
         })
-        .build_with_streaming_server(&server)
+        .build(&server)
         .await
-        .expect("build Codex test session")
-        .codex;
+        .expect("build Codex test session");
+    let codex = Arc::clone(&test.codex);
 
     submit_user_input(&codex, INITIAL_PROMPT).await;
     wait_for_event(&codex, |event| {
@@ -533,10 +582,10 @@ async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
     steer_user_input(&codex, STEER_PROMPT).await;
     wait_for_turn_complete(&codex).await;
 
-    let requests = server.requests().await;
-    assert_eq!(requests.len(), 2);
-    let second: Value = from_slice(&requests[1]).expect("parse second request");
-    let relevant_user_input = message_input_texts(&second, "user")
+    let _ = spawn_response.single_request();
+    let _ = wait_response.single_request();
+    let follow_up = follow_up_response.single_request().body_json();
+    let relevant_user_input = message_input_texts(&follow_up, "user")
         .into_iter()
         .filter(|text| text == INITIAL_PROMPT || text == STEER_PROMPT)
         .collect::<Vec<_>>();
@@ -544,16 +593,17 @@ async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
         relevant_user_input,
         vec![INITIAL_PROMPT.to_string(), STEER_PROMPT.to_string()]
     );
-    let wait_output = function_call_output_text(&second, WAIT_CALL_ID).expect("wait_agent output");
+    let wait_output =
+        function_call_output_text(&follow_up, WAIT_CALL_ID).expect("wait_agent output");
+    let wait_output = serde_json::from_str::<Value>(wait_output)
+        .unwrap_or_else(|error| panic!("parse wait_agent output {wait_output:?}: {error}"));
     assert_eq!(
-        serde_json::from_str::<Value>(wait_output).expect("parse wait_agent output"),
+        wait_output,
         json!({
             "message": "Wait interrupted by new input.",
             "timed_out": false,
         })
     );
-
-    server.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
