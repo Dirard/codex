@@ -338,15 +338,22 @@ pub(crate) async fn process_annotated_compacted_history(
     // Mid-turn compaction is the only path that must inject initial context above the last user
     // message in the replacement history. Pre-turn compaction instead injects context after the
     // compaction item, but mid-turn compaction keeps the compaction item last for model training.
-    let (initial_context, world_state_baseline) =
-        build_compaction_initial_context(sess, initial_context_injection).await;
+    let (initial_context, world_state_baseline) = build_compaction_initial_context(
+        sess,
+        initial_context_injection,
+        /*auto_compact_window_ids*/ None,
+    )
+    .await;
 
     let compacted_history = history_item_groups(compacted_history)
         .filter(|group| should_keep_compacted_history_item(&group.source.item))
         .flat_map(HistoryItemGroup::into_items)
         .collect();
     (
-        insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context),
+        insert_initial_context_before_last_real_user_or_summary(
+            compacted_history,
+            initial_context,
+        ),
         world_state_baseline,
     )
 }

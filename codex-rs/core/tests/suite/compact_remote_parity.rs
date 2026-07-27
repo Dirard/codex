@@ -344,7 +344,7 @@ async fn run_pre_turn_auto_session(mode: Mode) -> Result<Capture> {
                 responses::ev_assistant_message("pre-turn-first-message", "PRE_TURN_FIRST_REPLY"),
                 responses::ev_completed_with_tokens(
                     "pre-turn-first-response",
-                    /*total_tokens*/ 500,
+                    /*total_tokens*/ 200_000,
                 ),
             ]),
             after_compact_response_body("pre_turn_auto"),
@@ -354,7 +354,7 @@ async fn run_pre_turn_auto_session(mode: Mode) -> Result<Capture> {
                 responses::ev_assistant_message("pre-turn-first-message", "PRE_TURN_FIRST_REPLY"),
                 responses::ev_completed_with_tokens(
                     "pre-turn-first-response",
-                    /*total_tokens*/ 500,
+                    /*total_tokens*/ 200_000,
                 ),
             ]),
             compaction_v2_response_body(),
@@ -402,7 +402,7 @@ async fn run_mid_turn_auto_session(mode: Mode) -> Result<Capture> {
                 responses::ev_function_call("mid-turn-call", DUMMY_FUNCTION_NAME, "{}"),
                 responses::ev_completed_with_tokens(
                     "mid-turn-call-response",
-                    /*total_tokens*/ 500,
+                    /*total_tokens*/ 200_000,
                 ),
             ]),
             after_compact_response_body("mid_turn_auto"),
@@ -412,7 +412,7 @@ async fn run_mid_turn_auto_session(mode: Mode) -> Result<Capture> {
                 responses::ev_function_call("mid-turn-call", DUMMY_FUNCTION_NAME, "{}"),
                 responses::ev_completed_with_tokens(
                     "mid-turn-call-response",
-                    /*total_tokens*/ 500,
+                    /*total_tokens*/ 200_000,
                 ),
             ]),
             compaction_v2_response_body(),
@@ -493,7 +493,7 @@ async fn build_auto_harness(mode: Mode) -> Result<TestCodexHarness> {
         mode,
         RunSettings::default(),
         /*hooks*/ false,
-        Some(200),
+        Some(100_000),
     )
     .await
 }
