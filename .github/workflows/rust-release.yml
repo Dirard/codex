@@ -20,6 +20,7 @@ concurrency:
 
 jobs:
   tag-check:
+    if: github.repository == 'openai/codex'
     runs-on: ubuntu-latest
     outputs:
       commit_sha: ${{ steps.validate-tag.outputs.commit_sha }}
@@ -1448,6 +1449,8 @@ jobs:
 
   build-windows:
     needs: tag-check
+    permissions:
+      id-token: write
     uses: ./.github/workflows/rust-release-windows.yml
     secrets: inherit
 
