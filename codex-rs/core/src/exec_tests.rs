@@ -27,6 +27,34 @@ fn make_exec_output(
     }
 }
 
+async fn read_test_output(input: Vec<u8>, max_bytes: Option<usize>) -> CapturedStreamOutput {
+    let (mut writer, reader) = tokio::io::duplex(1024);
+    tokio::spawn(async move {
+        writer.write_all(&input).await.expect("write test output");
+    });
+    read_output(
+        reader,
+        /*stream*/ None,
+        /*is_stderr*/ false,
+        max_bytes,
+        CancellationToken::new(),
+    )
+    .await
+    .expect("read test output")
+}
+
+fn complete_captured_stream(input: Vec<u8>) -> CapturedStreamOutput {
+    let observed_bytes = input.len();
+    CapturedStreamOutput {
+        retained: StreamOutput {
+            text: input[..observed_bytes.min(EXEC_OUTPUT_MAX_BYTES)].to_vec(),
+            truncated_after_lines: None,
+        },
+        observed_bytes,
+        capture_incomplete: false,
+    }
+}
+
 #[test]
 fn sandbox_detection_requires_keywords() {
     let output = make_exec_output(/*exit_code*/ 1, "", "", "");
@@ -110,10 +138,72 @@ async fn read_output_limits_retained_bytes_for_shell_capture() {
         /*stream*/ None,
         /*is_stderr*/ false,
         Some(EXEC_OUTPUT_MAX_BYTES),
+        CancellationToken::new(),
     )
     .await
     .expect("read");
-    assert_eq!(out.text.len(), EXEC_OUTPUT_MAX_BYTES);
+    assert_eq!(out.retained.text.len(), EXEC_OUTPUT_MAX_BYTES);
+}
+
+#[tokio::test]
+async fn read_output_reports_observed_bytes_beyond_retained_cap() {
+    let input = vec![b'x'; EXEC_OUTPUT_MAX_BYTES + 37];
+    let captured = read_test_output(input.clone(), Some(EXEC_OUTPUT_MAX_BYTES)).await;
+
+    assert_eq!(captured.retained.text.len(), EXEC_OUTPUT_MAX_BYTES);
+    assert_eq!(captured.observed_bytes, input.len());
+    assert!(!captured.capture_incomplete);
+}
+
+#[test]
+fn aggregate_output_reports_exact_omitted_bytes_for_equal_sized_large_streams() {
+    let stdout = complete_captured_stream(vec![b'o'; EXEC_OUTPUT_MAX_BYTES + 11]);
+    let stderr = complete_captured_stream(vec![b'e'; EXEC_OUTPUT_MAX_BYTES + 29]);
+    let captured = aggregate_captured_output(&stdout, &stderr, Some(EXEC_OUTPUT_MAX_BYTES));
+
+    assert_eq!(captured.retained.text.len(), EXEC_OUTPUT_MAX_BYTES);
+    assert_eq!(
+        captured.metadata.observed_bytes,
+        2 * EXEC_OUTPUT_MAX_BYTES + 40,
+    );
+    assert_eq!(captured.metadata.omitted_bytes, EXEC_OUTPUT_MAX_BYTES + 40,);
+}
+
+#[tokio::test(start_paused = true)]
+async fn drain_timeout_returns_partial_output_with_incomplete_metadata() {
+    let (mut writer, reader) = tokio::io::duplex(64);
+    writer
+        .write_all(b"partial")
+        .await
+        .expect("write partial output");
+    let cancellation = CancellationToken::new();
+    let mut handle = tokio::spawn(read_output(
+        reader,
+        /*stream*/ None,
+        /*is_stderr*/ false,
+        Some(EXEC_OUTPUT_MAX_BYTES),
+        cancellation.clone(),
+    ));
+
+    let captured = await_output(&mut handle, Duration::from_millis(1), &cancellation)
+        .await
+        .expect("drain returns accumulated output");
+
+    assert_eq!(captured.retained.text, b"partial");
+    assert_eq!(captured.observed_bytes, 7);
+    assert!(captured.capture_incomplete);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_capture_counts_bytes_before_truncation() {
+    let captured = captured_windows_stream(
+        vec![b'x'; EXEC_OUTPUT_MAX_BYTES + 19],
+        Some(EXEC_OUTPUT_MAX_BYTES),
+    );
+    assert_eq!(captured.observed_bytes, EXEC_OUTPUT_MAX_BYTES + 19);
+    assert_eq!(captured.retained.text.len(), EXEC_OUTPUT_MAX_BYTES);
+    assert!(!captured.capture_incomplete);
 }
 
 #[test]
@@ -207,11 +297,15 @@ async fn read_output_retains_all_bytes_for_full_buffer_capture() {
     });
 
     let out = read_output(
-        reader, /*stream*/ None, /*is_stderr*/ false, /*max_bytes*/ None,
+        reader,
+        /*stream*/ None,
+        /*is_stderr*/ false,
+        /*max_bytes*/ None,
+        CancellationToken::new(),
     )
     .await
     .expect("read");
-    assert_eq!(out.text.len(), expected_len);
+    assert_eq!(out.retained.text.len(), expected_len);
 }
 
 #[test]
@@ -287,7 +381,10 @@ async fn exec_full_buffer_capture_ignores_expiration() -> Result<()> {
     )
     .await?;
 
-    assert_eq!(output.stdout.from_utf8_lossy().text.trim(), "hello");
+    assert_eq!(
+        output.stdout.retained.from_utf8_lossy().text.trim(),
+        "hello"
+    );
     assert!(!output.timed_out);
 
     Ok(())
@@ -1135,7 +1232,7 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
     .await?;
     assert!(output.timed_out);
 
-    let stdout = output.stdout.from_utf8_lossy().text;
+    let stdout = output.stdout.retained.from_utf8_lossy().text;
     let pid_line = stdout.lines().next().unwrap_or("").trim();
     let pid: i32 = pid_line.parse().map_err(|error| {
         io::Error::new(
