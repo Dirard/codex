@@ -42,6 +42,7 @@ impl Handler {
             turn,
             payload,
             call_id,
+            step_context,
             ..
         } = invocation;
         let arguments = function_arguments(payload)?;
@@ -58,7 +59,12 @@ impl Handler {
             let resume_config = build_agent_resume_config(turn.as_ref())
                 .map_err(FunctionCallError::RespondToModel)?;
             local_agent_control
-                .ensure_v2_agent_loaded(resume_config, receiver_thread_id, /*parent*/ None)
+                .ensure_v2_agent_loaded(
+                    resume_config,
+                    receiver_thread_id,
+                    /*parent*/ None,
+                    Some(step_context.turn_spawn_budget.clone()),
+                )
                 .await
                 .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
         }

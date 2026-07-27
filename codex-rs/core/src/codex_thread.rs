@@ -396,6 +396,7 @@ impl CodexThread {
             .submit_with_trace(
                 op, trace, /*parent_turn_id*/ None, /*root_turn_id*/ None,
                 /*residency_guard*/ None,
+                /*turn_spawn_budget*/ None,
             )
             .await
     }
@@ -409,7 +410,11 @@ impl CodexThread {
         &self,
         request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
     ) -> CodexResult<TurnInputSubmission> {
-        self.submit_turn_input_with_mode(request, TurnInputMode::StartOrSteer)
+        self.submit_turn_input_with_mode(
+            request,
+            TurnInputMode::StartOrSteer,
+            /*turn_spawn_budget*/ None,
+        )
             .await
     }
 
@@ -422,7 +427,11 @@ impl CodexThread {
         request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
     ) -> CodexResult<StartIfIdleSubmission> {
         match self
-            .submit_turn_input_with_mode(request, TurnInputMode::StartIfIdle)
+            .submit_turn_input_with_mode(
+                request,
+                TurnInputMode::StartIfIdle,
+                /*turn_spawn_budget*/ None,
+            )
             .await?
         {
             TurnInputSubmission::Started { turn_id } => {
@@ -450,6 +459,7 @@ impl CodexThread {
             TurnInputMode::ContinueIfIdle {
                 expected_previous_turn_id,
             },
+            /*turn_spawn_budget*/ None,
         )
         .await
     }
@@ -538,6 +548,7 @@ impl CodexThread {
                 trace: current_span_w3c_trace_context(),
                 parent_turn_id: None,
                 root_turn_id: None,
+                turn_spawn_budget: None,
                 residency_guard: None,
             })
             .await
@@ -558,7 +569,11 @@ impl CodexThread {
         expected_turn_id: String,
     ) -> CodexResult<SteerSubmission> {
         match self
-            .submit_turn_input_with_mode(request, TurnInputMode::Steer { expected_turn_id })
+            .submit_turn_input_with_mode(
+                request,
+                TurnInputMode::Steer { expected_turn_id },
+                /*turn_spawn_budget*/ None,
+            )
             .await?
         {
             TurnInputSubmission::Steered { turn_id } => Ok(SteerSubmission::Steered { turn_id }),
@@ -571,10 +586,11 @@ impl CodexThread {
         }
     }
 
-    async fn submit_turn_input_with_mode(
+    pub(crate) async fn submit_turn_input_with_mode(
         &self,
         request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
         mode: TurnInputMode,
+        turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
     ) -> CodexResult<TurnInputSubmission> {
         if !matches!(mode, TurnInputMode::Steer { .. }) {
             self.ensure_execution_capacity_for_turn_start(
@@ -582,7 +598,9 @@ impl CodexThread {
             )
             .await?;
         }
-        self.io.submit_turn_input(request, mode).await
+        self.io
+            .submit_turn_input(request, mode, turn_spawn_budget)
+            .await
     }
 
     /// Persist whether this thread is eligible for future memory generation.

@@ -218,10 +218,13 @@ pub(super) async fn handle(
     request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
     mode: TurnInputMode,
     submission_id: String,
+    turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
 ) -> CodexResult<TurnInputSubmission> {
     let request = request.into();
     let result = match mode {
-        TurnInputMode::StartOrSteer => start_or_steer(session, request, submission_id).await,
+        TurnInputMode::StartOrSteer => {
+            start_or_steer(session, request, submission_id, turn_spawn_budget).await
+        }
         TurnInputMode::StartIfIdle => {
             let kind = match &request.request.input {
                 SubmittedTurnInput::UserInput { content, .. } if !content.is_empty() => {
@@ -313,6 +316,7 @@ async fn start_or_steer(
     session: &Arc<Session>,
     request: WithTurnExtensionData<TurnInputRequest>,
     submission_id: String,
+    turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
 ) -> CodexResult<TurnInputSubmission> {
     let WithTurnExtensionData {
         request,
@@ -393,6 +397,13 @@ async fn start_or_steer(
             else {
                 unreachable!("explicit user input can enter Plan mode");
             };
+            if !matches!(&turn_context.session_source, SessionSource::SubAgent(_)) {
+                session
+                    .start_turn_spawn_budget(turn_context.config.max_spawned_threads_per_turn)
+                    .await;
+            } else if let Some(turn_spawn_budget) = turn_spawn_budget {
+                session.set_turn_spawn_budget(turn_spawn_budget).await;
+            }
             if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
                 turn_context
                     .turn_metadata_state
@@ -538,6 +549,11 @@ async fn start_if_idle(
             return Err(error);
         }
     };
+    if has_user_input && !matches!(&turn_context.session_source, SessionSource::SubAgent(_)) {
+        session
+            .start_turn_spawn_budget(turn_context.config.max_spawned_threads_per_turn)
+            .await;
+    }
     if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
         turn_context
             .turn_metadata_state

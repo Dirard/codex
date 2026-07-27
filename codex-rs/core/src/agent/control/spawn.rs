@@ -251,7 +251,8 @@ impl LocalAgentControl {
                     .map_err(|err| {
                         CodexErr::InvalidRequest(format!("invalid stored agent path: {err}"))
                     })?;
-                let mut reservation = registry.reserve_spawn_slot(/*max_threads*/ None)?;
+                let mut reservation =
+                    registry.reserve_spawn_slot(/*max_threads*/ None, /*turn_spawn_budget*/ None)?;
                 let mut metadata = self.prepare_agent_metadata(
                     &mut reservation,
                     config,
@@ -318,6 +319,7 @@ impl LocalAgentControl {
         mut config: Config,
         thread_id: ThreadId,
         parent: Option<Arc<CodexThread>>,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
     ) -> CodexResult<()> {
         let membership = self.runtime.admit_start()?;
         let state = self.runtime.upgrade()?;
@@ -614,6 +616,13 @@ impl LocalAgentControl {
                     self.validate_loaded_v2_child(&reloaded_thread.thread, parent_thread_id)?;
                 }
                 self.runtime.registry.clear_evicted_environments(thread_id);
+                if let Some(turn_spawn_budget) = turn_spawn_budget {
+                    reloaded_thread
+                        .thread
+                        .session
+                        .set_turn_spawn_budget(turn_spawn_budget)
+                        .await;
+                }
                 residency_slot.commit(reloaded_thread.thread_id);
                 state.notify_thread_created(reloaded_thread.thread_id);
                 Ok(())
@@ -686,7 +695,7 @@ impl LocalAgentControl {
         let mut reservation = self
             .runtime
             .registry
-            .reserve_spawn_slot(reservation_max_threads)?;
+            .reserve_spawn_slot(reservation_max_threads, options.turn_spawn_budget.as_ref())?;
         let inheritance = SpawnAgentThreadInheritance {
             environments: match &options.environments {
                 Some(environments) => Some(environments.clone()),
@@ -797,6 +806,13 @@ impl LocalAgentControl {
                 }
             }
         };
+        if let Some(turn_spawn_budget) = options.turn_spawn_budget.clone() {
+            new_thread
+                .thread
+                .session
+                .set_turn_spawn_budget(turn_spawn_budget)
+                .await;
+        }
         agent_metadata.agent_id = Some(new_thread.thread_id);
         let mut pending_spawn =
             PendingSpawn::new(Arc::clone(&state), new_thread.thread_id, membership);
@@ -881,6 +897,7 @@ impl LocalAgentControl {
                     communication,
                     context,
                     start_options,
+                    /*turn_spawn_budget*/ None,
                 )
                 .await?;
             }
@@ -1395,7 +1412,7 @@ impl LocalAgentControl {
         let mut reservation = self
             .runtime
             .registry
-            .reserve_spawn_slot(agent_max_threads)?;
+            .reserve_spawn_slot(agent_max_threads, /*turn_spawn_budget*/ None)?;
         let (session_source, agent_metadata) = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,

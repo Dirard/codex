@@ -1,4 +1,6 @@
 use crate::agent::types::AgentMetadata;
+use crate::agent::types::TurnSpawnBudget;
+use crate::agent::types::TurnSpawnReservation;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
@@ -89,7 +91,11 @@ impl AgentRegistry {
     pub(crate) fn reserve_spawn_slot(
         self: &Arc<Self>,
         max_threads: Option<usize>,
+        turn_spawn_budget: Option<&TurnSpawnBudget>,
     ) -> Result<SpawnReservation> {
+        let turn_spawn_reservation = turn_spawn_budget
+            .map(TurnSpawnBudget::reserve)
+            .transpose()?;
         if let Some(max_threads) = max_threads {
             if !self.try_increment_spawned(max_threads) {
                 return Err(CodexErr::new(CodexErrorDetails::AgentLimitReached {
@@ -104,6 +110,7 @@ impl AgentRegistry {
             active: true,
             reserved_agent_nickname: None,
             reserved_agent_path: None,
+            turn_spawn_reservation,
         })
     }
 
@@ -351,6 +358,7 @@ pub(crate) struct SpawnReservation {
     active: bool,
     reserved_agent_nickname: Option<String>,
     reserved_agent_path: Option<AgentPath>,
+    turn_spawn_reservation: Option<TurnSpawnReservation>,
 }
 
 impl SpawnReservation {
@@ -376,6 +384,9 @@ impl SpawnReservation {
     }
 
     pub(crate) fn commit(mut self, agent_metadata: AgentMetadata) {
+        if let Some(turn_spawn_reservation) = self.turn_spawn_reservation.take() {
+            turn_spawn_reservation.commit();
+        }
         self.reserved_agent_nickname = None;
         self.reserved_agent_path = None;
         self.state.register_spawned_thread(agent_metadata);
