@@ -206,6 +206,7 @@ fn save_config_resolved_fields(
     let agents = lock_config.agents.get_or_insert_with(Default::default);
     agents.enabled = Some(config.agents_enabled);
     agents.max_concurrent_threads_per_session = config.agent_max_threads;
+    agents.max_spawned_threads_per_turn = Some(config.max_spawned_threads_per_turn);
     agents.max_depth = Some(config.agent_max_depth);
     agents.default_subagent_model = config.agent_default_subagent_model.clone();
     agents.default_subagent_reasoning_effort =

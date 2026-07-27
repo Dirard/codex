@@ -1076,7 +1076,7 @@ enum FullHistoryV2ModelSelection {
 #[test_case(FullHistoryV2ModelSelection::ExplicitOverride; "explicit override with fork_turns all")]
 #[test_case(FullHistoryV2ModelSelection::WorldStateIdentity; "world state appends context window when agent identity changes")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_context(
+async fn multi_agent_v2_spawn_omitted_fork_turns_keeps_full_history(
     selection: FullHistoryV2ModelSelection,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));

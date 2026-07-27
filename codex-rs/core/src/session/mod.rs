@@ -13,6 +13,7 @@ use std::time::UNIX_EPOCH;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
+use crate::agent::control::TurnSpawnBudget;
 use crate::agent::status::is_final;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
@@ -1562,6 +1563,18 @@ impl Session {
     async fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
         let state = self.state.lock().await;
         state.previous_turn_settings()
+    }
+
+    pub(crate) async fn start_turn_spawn_budget(&self, limit: usize) {
+        self.state.lock().await.start_turn_spawn_budget(limit);
+    }
+
+    pub(crate) async fn set_turn_spawn_budget(&self, budget: TurnSpawnBudget) {
+        self.state.lock().await.set_turn_spawn_budget(budget);
+    }
+
+    pub(crate) async fn current_turn_spawn_budget(&self, limit: usize) -> TurnSpawnBudget {
+        self.state.lock().await.current_turn_spawn_budget(limit)
     }
 
     #[tracing::instrument(level = "trace", skip_all)]
@@ -3219,8 +3232,12 @@ impl Session {
         )
         .or_cancel(cancellation_token)
         .await??;
+        let turn_spawn_budget = self
+            .current_turn_spawn_budget(turn_context.config.max_spawned_threads_per_turn)
+            .await;
         Ok(Arc::new(StepContext {
             turn: turn_context,
+            turn_spawn_budget,
             environments,
             selected_capability_roots,
             executor_capability_discovery,

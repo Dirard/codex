@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::agent::control::TurnSpawnBudget;
 use crate::agents_md::LoadedAgentsMd;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::turn_context::TurnContext;
@@ -11,6 +12,7 @@ use codex_mcp::McpBinding;
 /// Request-scoped state that may change between model sampling requests.
 pub(crate) struct StepContext {
     pub(crate) turn: Arc<TurnContext>,
+    pub(crate) turn_spawn_budget: TurnSpawnBudget,
     pub(crate) environments: TurnEnvironmentSnapshot,
     /// Capability roots bound to ready environments in this exact step.
     pub(crate) selected_capability_roots: Vec<ResolvedSelectedCapabilityRoot>,

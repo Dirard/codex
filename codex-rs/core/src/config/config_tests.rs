@@ -7803,6 +7803,7 @@ async fn load_config_rejects_missing_agent_role_config_file() -> std::io::Result
         agents: Some(AgentsToml {
             enabled: None,
             max_concurrent_threads_per_session: None,
+            max_spawned_threads_per_turn: None,
             max_depth: None,
             default_subagent_model: None,
             default_subagent_reasoning_effort: None,
@@ -8785,6 +8786,68 @@ async fn load_config_resolves_agent_controls() -> std::io::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn load_config_defaults_max_spawned_threads_per_turn() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.max_spawned_threads_per_turn,
+        DEFAULT_MAX_SPAWNED_THREADS_PER_TURN
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_resolves_max_spawned_threads_per_turn_override() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            agents: Some(AgentsToml {
+                max_spawned_threads_per_turn: Some(7),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.max_spawned_threads_per_turn, 7);
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_zero_max_spawned_threads_per_turn() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let result = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            agents: Some(AgentsToml {
+                max_spawned_threads_per_turn: Some(0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await;
+
+    let err = result.expect_err("zero cumulative spawn limit should be rejected");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "agents.max_spawned_threads_per_turn must be at least 1"
+    );
+    Ok(())
+}
+
 #[test]
 fn agents_max_threads_alias_matches_canonical_config() {
     let canonical: ConfigToml = toml::from_str(
@@ -8813,6 +8876,7 @@ async fn load_config_normalizes_agent_role_nickname_candidates() -> std::io::Res
         agents: Some(AgentsToml {
             enabled: None,
             max_concurrent_threads_per_session: None,
+            max_spawned_threads_per_turn: None,
             max_depth: None,
             default_subagent_model: None,
             default_subagent_reasoning_effort: None,
@@ -8859,6 +8923,7 @@ async fn load_config_rejects_empty_agent_role_nickname_candidates() -> std::io::
         agents: Some(AgentsToml {
             enabled: None,
             max_concurrent_threads_per_session: None,
+            max_spawned_threads_per_turn: None,
             max_depth: None,
             default_subagent_model: None,
             default_subagent_reasoning_effort: None,
@@ -8899,6 +8964,7 @@ async fn load_config_rejects_duplicate_agent_role_nickname_candidates() -> std::
         agents: Some(AgentsToml {
             enabled: None,
             max_concurrent_threads_per_session: None,
+            max_spawned_threads_per_turn: None,
             max_depth: None,
             default_subagent_model: None,
             default_subagent_reasoning_effort: None,
@@ -8939,6 +9005,7 @@ async fn load_config_rejects_unsafe_agent_role_nickname_candidates() -> std::io:
         agents: Some(AgentsToml {
             enabled: None,
             max_concurrent_threads_per_session: None,
+            max_spawned_threads_per_turn: None,
             max_depth: None,
             default_subagent_model: None,
             default_subagent_reasoning_effort: None,
