@@ -3,6 +3,7 @@
 //! Target checks precede reload, and queue-only messages retain their non-waking semantics.
 
 use super::LocalAgentControl;
+use super::TurnSpawnBudget;
 use crate::TurnStartOptions;
 use crate::agent::child_config::build_agent_resume_config;
 use crate::agent::types::AgentMessage;
@@ -71,6 +72,7 @@ impl LocalAgentControl {
         target: ThreadId,
         message: AgentMessage,
         mode: MessageDeliveryMode,
+        turn_spawn_budget: TurnSpawnBudget,
     ) -> Result<AgentPath, MessageDeliveryError> {
         let receiver_agent = self
             .ensure_agent_known(target)
@@ -92,7 +94,12 @@ impl LocalAgentControl {
         })?;
         let resume_config =
             build_agent_resume_config(turn).map_err(MessageDeliveryError::InvalidRequest)?;
-        self.ensure_v2_agent_loaded(resume_config, target, /*parent*/ None)
+        self.ensure_v2_agent_loaded(
+            resume_config,
+            target,
+            /*parent*/ None,
+            turn_spawn_budget,
+        )
             .await
             .map_err(MessageDeliveryError::Agent)?;
         let author = turn

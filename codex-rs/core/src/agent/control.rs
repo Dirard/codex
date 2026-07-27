@@ -3,6 +3,7 @@ use crate::TurnInputSubmission;
 use crate::TurnStartOptions;
 use crate::agent::AgentStatus;
 use crate::agent::registry::AgentRegistry;
+pub(crate) use crate::agent::registry::TurnSpawnBudget;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;

@@ -201,7 +201,7 @@ pub enum Feature {
     RespectSystemProxy,
     /// Retry eligible bootstrap requests through the system proxy after normal routing fails.
     SystemProxyFallback,
-    /// Enable collab tools.
+    /// Select the V1 fallback backend when multi-agent tools are enabled.
     Collab,
     /// Enable task-path-based multi-agent routing.
     MultiAgentV2,
