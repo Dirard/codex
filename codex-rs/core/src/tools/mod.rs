@@ -16,8 +16,13 @@ pub(crate) mod sandboxing;
 pub(crate) mod spec_plan;
 pub(crate) mod tool_dispatch_trace;
 
+#[cfg(test)]
+#[path = "format_exec_output_tests.rs"]
+mod tests;
+
 use std::borrow::Cow;
 
+use crate::exec::ExecCaptureMetadata;
 use crate::session::turn_context::TurnContext;
 use codex_features::Feature;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -100,6 +105,35 @@ pub fn format_exec_output_for_model(
     sections.push(formatted_output);
 
     sections.join("\n")
+}
+
+pub(crate) fn format_captured_exec_output_for_model(
+    exec_output: &ExecToolCallOutput,
+    metadata: Option<&ExecCaptureMetadata>,
+    truncation: OutputTruncation,
+) -> String {
+    let formatted = format_exec_output_for_model(exec_output, truncation);
+    let Some(metadata) =
+        metadata.filter(|metadata| metadata.omitted_bytes > 0 || metadata.capture_incomplete)
+    else {
+        return formatted;
+    };
+    let warning = if metadata.capture_incomplete {
+        format!(
+            "Capture warning: observed bytes lower bound: {}; observed omitted bytes lower bound: {}; estimated observed token count lower bound: approximately {}; full size unknown.",
+            metadata.observed_bytes,
+            metadata.omitted_bytes,
+            metadata.estimated_original_token_count,
+        )
+    } else {
+        format!(
+            "Capture warning: observed total bytes: {}; bytes omitted: {}; estimated original token count: approximately {}.",
+            metadata.observed_bytes,
+            metadata.omitted_bytes,
+            metadata.estimated_original_token_count,
+        )
+    };
+    format!("{warning}\n{formatted}")
 }
 
 pub fn format_exec_output_str(

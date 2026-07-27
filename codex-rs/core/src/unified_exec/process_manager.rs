@@ -274,6 +274,7 @@ fn network_approval_error_message(err: ToolError) -> String {
     match err {
         ToolError::Rejected(message) => message,
         ToolError::Codex(err) => err.to_string(),
+        ToolError::CapturedExec(captured) => captured.error.to_string(),
     }
 }
 
@@ -1245,8 +1246,15 @@ impl UnifiedExecProcessManager {
             )
             .await
             .map(|result| (result.output, result.deferred_network_approval))
-            .map_err(|err| match err {
-                ToolError::Codex(err) => match err.details() {
+            .map_err(|tool_error| {
+                let err = match &tool_error {
+                    ToolError::Codex(err) => err,
+                    ToolError::CapturedExec(captured) => &captured.error,
+                    ToolError::Rejected(_) => {
+                        return UnifiedExecError::create_process(format!("{tool_error:?}"));
+                    }
+                };
+                match err.details() {
                     CodexErrorDetails::Sandbox(SandboxErr::Denied { output, .. }) => {
                         let output = output.as_ref().clone();
                         let message = if output.aggregated_output.text.is_empty() {
@@ -1258,8 +1266,7 @@ impl UnifiedExecProcessManager {
                         UnifiedExecError::sandbox_denied(message, output)
                     }
                     _ => UnifiedExecError::create_process(format!("{err:?}")),
-                },
-                other => UnifiedExecError::create_process(format!("{other:?}")),
+                }
             })
     }
 

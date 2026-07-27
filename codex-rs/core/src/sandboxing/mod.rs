@@ -7,10 +7,13 @@ the exec-only metadata and translates transformed sandbox commands back into
 ExecRequest for execution.
 */
 
+use crate::exec::CapturedExecError;
+use crate::exec::CapturedExecToolCallOutput;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::StdoutStream;
 use crate::exec::execute_exec_request;
+use crate::exec::execute_exec_request_with_capture;
 #[cfg(target_os = "macos")]
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
@@ -182,6 +185,13 @@ pub async fn execute_env(
     stdout_stream: Option<StdoutStream>,
 ) -> codex_protocol::error::Result<ExecToolCallOutput> {
     execute_exec_request(exec_request, stdout_stream, /*after_spawn*/ None).await
+}
+
+pub(crate) async fn execute_env_with_capture(
+    exec_request: ExecRequest,
+    stdout_stream: Option<StdoutStream>,
+) -> Result<CapturedExecToolCallOutput, CapturedExecError> {
+    execute_exec_request_with_capture(exec_request, stdout_stream, /*after_spawn*/ None).await
 }
 
 pub async fn execute_exec_request_with_after_spawn(
