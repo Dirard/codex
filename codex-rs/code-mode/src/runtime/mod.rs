@@ -146,6 +146,7 @@ struct RuntimeConfig {
 pub(super) struct RuntimeState {
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
     pending_tool_calls: HashMap<String, v8::Global<v8::PromiseResolver>>,
+    settled_tool_outcomes_since_sink: usize,
     pending_timeouts: HashMap<u64, timers::ScheduledTimeout>,
     stored_values: HashMap<String, JsonValue>,
     stored_value_writes: HashMap<String, JsonValue>,
@@ -157,11 +158,46 @@ pub(super) struct RuntimeState {
     exit_requested: bool,
 }
 
+impl RuntimeState {
+    fn completion_diagnostic(&self) -> Option<FunctionCallOutputContentItem> {
+        let settled = self.settled_tool_outcomes_since_sink;
+        let pending = self.pending_tool_calls.len();
+        if settled == 0 && pending == 0 {
+            return None;
+        }
+
+        let mut text = String::new();
+        if settled > 0 {
+            let outcome = if settled == 1 { "outcome" } else { "outcomes" };
+            text.push_str(&format!(
+                "Code mode completed with {settled} settled nested tool {outcome} not passed to an output helper after the last successful sink.\nPass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`."
+            ));
+        }
+        if pending > 0 {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            let call = if pending == 1 { "call" } else { "calls" };
+            let verb = if pending == 1 { "is" } else { "are" };
+            text.push_str(&format!(
+                "{pending} started nested tool {call} {verb} still unsettled; the runtime does not wait for them automatically, and they may already have produced side effects."
+            ));
+        }
+
+        Some(FunctionCallOutputContentItem::InputText { text })
+    }
+
+    fn clear_settled_tool_outcomes(&mut self) {
+        self.settled_tool_outcomes_since_sink = 0;
+    }
+}
+
 pub(super) enum CompletionState {
     Pending,
     Completed {
         stored_value_writes: HashMap<String, JsonValue>,
         error_text: Option<String>,
+        diagnostic: Option<FunctionCallOutputContentItem>,
     },
 }
 
@@ -188,6 +224,7 @@ fn run_runtime(
     scope.set_slot(RuntimeState {
         event_tx: event_tx.clone(),
         pending_tool_calls: HashMap::new(),
+        settled_tool_outcomes_since_sink: 0,
         pending_timeouts: HashMap::new(),
         stored_values: config.stored_values,
         stored_value_writes: HashMap::new(),
@@ -200,7 +237,7 @@ fn run_runtime(
     });
 
     if let Err(error_text) = globals::install_globals(scope) {
-        send_result(&event_tx, HashMap::new(), Some(error_text));
+        send_result(&event_tx, None, HashMap::new(), Some(error_text));
         return;
     }
 
@@ -218,8 +255,9 @@ fn run_runtime(
         CompletionState::Completed {
             stored_value_writes,
             error_text,
+            diagnostic,
         } => {
-            send_result(&event_tx, stored_value_writes, error_text);
+            send_result(&event_tx, diagnostic, stored_value_writes, error_text);
             return;
         }
         CompletionState::Pending => {}
@@ -261,8 +299,9 @@ fn run_runtime(
             CompletionState::Completed {
                 stored_value_writes,
                 error_text,
+                diagnostic,
             } => {
-                send_result(&event_tx, stored_value_writes, error_text);
+                send_result(&event_tx, diagnostic, stored_value_writes, error_text);
                 return;
             }
             CompletionState::Pending => {}
@@ -308,23 +347,44 @@ fn capture_scope_send_error(
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
     error_text: Option<String>,
 ) {
-    let stored_value_writes = scope
+    let (stored_value_writes, diagnostic) = scope
         .get_slot::<RuntimeState>()
-        .map(|state| state.stored_value_writes.clone())
+        .map(|state| {
+            (
+                state.stored_value_writes.clone(),
+                state.completion_diagnostic(),
+            )
+        })
         .unwrap_or_default();
 
-    send_result(event_tx, stored_value_writes, error_text);
+    send_result(event_tx, diagnostic, stored_value_writes, error_text);
+}
+
+fn send_runtime_event(
+    event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
+    event: RuntimeEvent,
+) -> Result<(), String> {
+    event_tx
+        .send(event)
+        .map_err(|_| "code mode runtime event queue is closed".to_string())
 }
 
 fn send_result(
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
+    diagnostic: Option<FunctionCallOutputContentItem>,
     stored_value_writes: HashMap<String, JsonValue>,
     error_text: Option<String>,
 ) {
-    let _ = event_tx.send(RuntimeEvent::Result {
-        stored_value_writes,
-        error_text,
-    });
+    if let Some(diagnostic) = diagnostic {
+        let _ = send_runtime_event(event_tx, RuntimeEvent::ContentItem(diagnostic));
+    }
+    let _ = send_runtime_event(
+        event_tx,
+        RuntimeEvent::Result {
+            stored_value_writes,
+            error_text,
+        },
+    );
 }
 
 #[cfg(test)]
@@ -340,9 +400,21 @@ mod tests {
     use super::RuntimeCommand;
     use super::RuntimeControlCommand;
     use super::RuntimeEvent;
+    use super::send_runtime_event;
     use super::spawn_runtime;
     use super::spawn_supervised_runtime_thread;
     use crate::FunctionCallOutputContentItem;
+
+    #[test]
+    fn closed_runtime_event_queue_is_reported() {
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        drop(event_rx);
+
+        assert_eq!(
+            send_runtime_event(&event_tx, RuntimeEvent::Pending),
+            Err("code mode runtime event queue is closed".to_string())
+        );
+    }
 
     fn execute_request(source: &str) -> ExecuteRequest {
         ExecuteRequest {
