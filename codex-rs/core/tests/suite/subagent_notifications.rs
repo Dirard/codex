@@ -1,6 +1,10 @@
 use anyhow::Result;
+use chrono::Utc;
+use codex_core::SleepFuture;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadConfigSnapshot;
+use codex_core::TimeFuture;
+use codex_core::TimeProvider;
 use codex_core::config::AgentRoleConfig;
 use codex_features::Feature;
 use codex_models_manager::bundled_models_response;
@@ -46,9 +50,13 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use test_case::test_case;
+use tokio::sync::Notify;
 use tokio::time::Instant;
 use tokio::time::sleep;
 use tracing::Level;
@@ -75,6 +83,26 @@ const ROLE_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::High;
 const SUBAGENT_START_CONTEXT: &str = "subagent start context reaches child";
 const SUBAGENT_STOP_CONTINUATION: &str = "continue only the child";
 const INTERNAL_SUBAGENT_PROMPT: &str = "internal subagent: review";
+
+#[derive(Default)]
+struct PausedSleepTimeProvider {
+    sleep_started: Notify,
+    sleep_completed: Notify,
+}
+
+impl TimeProvider for PausedSleepTimeProvider {
+    fn current_time(&self, _thread_id: ThreadId) -> TimeFuture<'_> {
+        Box::pin(async { Ok(Utc::now()) })
+    }
+
+    fn sleep(&self, _thread_id: ThreadId, _duration: Duration) -> SleepFuture<'_> {
+        Box::pin(async move {
+            self.sleep_started.notify_one();
+            self.sleep_completed.notified().await;
+            Ok(())
+        })
+    }
+}
 
 fn body_contains(req: &wiremock::Request, text: &str) -> bool {
     decoded_body(req)
@@ -1848,6 +1876,228 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
             "content": [{
                 "type": "input_text",
                 "text": notification,
+            }],
+        })])
+    );
+
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn multi_agent_v2_wait_agent_does_not_resample_before_long_child_mailbox_delivery()
+-> Result<()> {
+    const PROMPT: &str = "spawn and wait for a long child";
+    const WAIT_CALL_ID: &str = "wait-agent-long-child";
+    const CHILD_SLEEP_CALL_ID: &str = "sleep-long-child";
+    const CHILD_OUTPUT: &str = "long child done";
+
+    tokio::time::resume();
+    let server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": "finish after 31 seconds",
+        "task_name": "worker",
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, PROMPT),
+        sse(vec![
+            ev_response_created("resp-parent-long-1"),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
+            ev_completed("resp-parent-long-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| request_has_input_type(req, "agent_message"),
+        sse(vec![
+            ev_response_created("resp-child-long"),
+            ev_function_call_with_namespace(
+                CHILD_SLEEP_CALL_ID,
+                "clock",
+                "sleep",
+                r#"{"duration_ms":31000}"#,
+            ),
+            ev_completed("resp-child-long"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, CHILD_SLEEP_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-child-long-follow-up"),
+            ev_assistant_message("msg-child-long", CHILD_OUTPUT),
+            ev_completed("resp-child-long-follow-up"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, SPAWN_CALL_ID) && !body_contains(req, "Message Type: FINAL_ANSWER")
+        },
+        sse(vec![
+            ev_response_created("resp-parent-long-2"),
+            ev_function_call_with_namespace(
+                WAIT_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "wait_agent",
+                "{}",
+            ),
+            ev_completed("resp-parent-long-2"),
+        ]),
+    )
+    .await;
+    let early_response_count = Arc::new(AtomicUsize::new(0));
+    let early_response_count_for_matcher = Arc::clone(&early_response_count);
+    let _early_response = mount_sse_once_match(
+        &server,
+        move |req: &wiremock::Request| {
+            let matched = decoded_body(req)
+                .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+                .and_then(|body| body.get("input").and_then(Value::as_array).cloned())
+                .and_then(|items| {
+                    items
+                        .into_iter()
+                        .find(|item| {
+                            item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                                && item.get("call_id").and_then(Value::as_str) == Some(WAIT_CALL_ID)
+                        })
+                        .and_then(|item| {
+                            item.get("output")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                        })
+                })
+                .and_then(|output| serde_json::from_str::<Value>(&output).ok())
+                .and_then(|output| output.get("timed_out").and_then(Value::as_bool))
+                == Some(true);
+            if matched {
+                early_response_count_for_matcher.fetch_add(1, Ordering::Relaxed);
+            }
+            matched
+        },
+        sse(vec![
+            ev_response_created("resp-parent-too-early"),
+            ev_assistant_message("msg-parent-too-early", "premature wait timeout"),
+            ev_completed("resp-parent-too-early"),
+        ]),
+    )
+    .await;
+    let final_response = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, WAIT_CALL_ID)
+                && body_contains(req, "Message Type: FINAL_ANSWER")
+                && body_contains(req, CHILD_OUTPUT)
+        },
+        sse(vec![
+            ev_response_created("resp-parent-long-3"),
+            ev_assistant_message("msg-parent-long-3", "done"),
+            ev_completed("resp-parent-long-3"),
+        ]),
+    )
+    .await;
+    let time_provider = Arc::new(PausedSleepTimeProvider::default());
+    let test = test_codex()
+        .with_model("koffing")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::CurrentTimeReminder)
+                .expect("test config should allow feature update");
+            config.current_time_reminder = Some(codex_core::config::CurrentTimeReminderConfig {
+                clock_source: codex_features::CurrentTimeSource::External,
+                sleep_tool: true,
+                ..Default::default()
+            });
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
+            config.model_provider.supports_websockets = false;
+        })
+        .with_external_time_provider(time_provider.clone())
+        .build(&server)
+        .await?;
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, test.cwd_path());
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: PROMPT.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(test.config.cwd.clone())),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+    time_provider.sleep_started.notified().await;
+    wait_for_event_match(&test.codex, |event| {
+        matches!(event, EventMsg::CollabWaitingBegin(_)).then_some(())
+    })
+    .await;
+    tokio::time::pause();
+    let time_provider_for_completion = Arc::clone(&time_provider);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(31)).await;
+        time_provider_for_completion.sleep_completed.notify_one();
+        tokio::time::resume();
+    });
+    loop {
+        let event = test
+            .codex
+            .next_event()
+            .await
+            .expect("event stream should remain open");
+        if matches!(event.msg, EventMsg::TurnComplete(_)) {
+            break;
+        }
+    }
+
+    assert_eq!(early_response_count.load(Ordering::Relaxed), 0);
+    let request = final_response.single_request();
+    assert_eq!(
+        strip_response_item_ids_from_json(strip_metadata_from_json(Value::Array(
+            request.inputs_of_type("agent_message"),
+        ))),
+        Value::Array(vec![json!({
+            "type": "agent_message",
+            "author": "/root/worker",
+            "recipient": "/root",
+            "content": [{
+                "type": "input_text",
+                "text": format!(
+                    "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\n{CHILD_OUTPUT}"
+                ),
             }],
         })])
     );
