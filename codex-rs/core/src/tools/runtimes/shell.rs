@@ -8,11 +8,12 @@ builds sandbox transform inputs, and runs them under the current SandboxAttempt.
 pub(crate) mod unix_escalation;
 pub(crate) mod zsh_fork_backend;
 
+use crate::exec::CapturedExecToolCallOutput;
 use crate::exec::ExecCapturePolicy;
 use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
-use crate::sandboxing::execute_env;
+use crate::sandboxing::execute_env_with_capture;
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::ShellType;
 use crate::tools::flat_tool_name;
@@ -36,7 +37,6 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
 use crate::tools::sandboxing::sandbox_permissions_preserving_denied_reads;
 use codex_network_proxy::NetworkProxy;
-use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
@@ -148,7 +148,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
     }
 }
 
-impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
+impl ToolRuntime<ShellRequest, CapturedExecToolCallOutput> for ShellRuntime {
     fn turn_environment<'a>(&self, req: &'a ShellRequest) -> &'a TurnEnvironment {
         &req.turn_environment
     }
@@ -192,7 +192,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         req: &ShellRequest,
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
-    ) -> Result<ExecToolCallOutput, ToolError> {
+    ) -> Result<CapturedExecToolCallOutput, ToolError> {
         let session_shell = ctx.session.user_shell();
         let shell = req
             .turn_environment
@@ -248,7 +248,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
 
         if self.backend == ShellRuntimeBackend::ShellCommandZshFork {
             match zsh_fork_backend::maybe_run_shell_command(req, attempt, ctx, &command).await? {
-                Some(out) => return Ok(out),
+                Some(output) => {
+                    return Ok(CapturedExecToolCallOutput {
+                        output,
+                        capture_metadata: None,
+                    });
+                }
                 None => {
                     tracing::warn!(
                         "ZshFork backend specified, but conditions for using it were not met, falling back to normal execution",
@@ -276,9 +281,9 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
                 Some(&req.turn_environment.environment_id),
             )
             .map_err(ToolError::Codex)?;
-        let out = execute_env(env, Self::stdout_stream(ctx))
+        let out = execute_env_with_capture(env, Self::stdout_stream(ctx))
             .await
-            .map_err(ToolError::Codex)?;
+            .map_err(ToolError::CapturedExec)?;
         Ok(out)
     }
 }

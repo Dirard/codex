@@ -4,6 +4,7 @@ use core_test_support::test_codex::local_selections;
 use std::fs;
 
 use assert_matches::assert_matches;
+use codex_features::Feature;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::plan_tool::StepStatus;
@@ -130,6 +131,101 @@ async fn shell_command_tool_executes_command_and_streams_output() -> anyhow::Res
         r"(?s)^Exit code: 0\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\ntool harness\n?$",
         &output_text,
     );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_shell_timeout_preserves_capture_warning_end_to_end() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model("test-gpt-5-codex")
+        .with_config(|config| {
+            config
+                .features
+                .disable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .disable(Feature::ShellZshFork)
+                .expect("test config should allow feature update");
+        });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "legacy-shell-timeout";
+    let command_args = json!({
+        "command": "head -c 1048613 /dev/zero | tr '\\0' x; sleep 60",
+        "login": false,
+        "timeout_ms": 2000,
+    })
+    .to_string();
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell_command", &command_args),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "all done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let session_model = session_configured.model.clone();
+    let cwd_path = cwd.abs();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run the timeout regression".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(cwd_path)),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let request = second_mock.single_request();
+    let (output_text, success) = call_output(&request, call_id);
+    assert_eq!(success, None);
+    assert!(
+        output_text
+            .starts_with("Capture warning: observed total bytes: 1048613; bytes omitted: 37;")
+    );
+    assert!(output_text.contains("Exit code: 124"));
 
     Ok(())
 }

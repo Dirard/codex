@@ -291,14 +291,19 @@ impl ToolOrchestrator {
                     deferred_network_approval: first_deferred_network_approval,
                 })
             }
-            Err(ToolError::Codex(err)) => {
+            Err(tool_error @ ToolError::Codex(_))
+            | Err(tool_error @ ToolError::CapturedExec(_)) => {
+                let err = match &tool_error {
+                    ToolError::Codex(err) => err,
+                    ToolError::CapturedExec(captured) => &captured.error,
+                    ToolError::Rejected(_) => unreachable!(),
+                };
                 let CodexErrorDetails::Sandbox(SandboxErr::Denied {
                     output,
                     network_policy_decision,
                 }) = err.details()
                 else {
-                    let err = ToolError::Codex(err);
-                    if let Some(outcome) = sandbox_outcome_from_tool_error(&err) {
+                    if let Some(outcome) = sandbox_outcome_from_tool_error(&tool_error) {
                         otel.sandbox_outcome(
                             &otel_tn,
                             otel_ci,
@@ -307,7 +312,7 @@ impl ToolOrchestrator {
                             /*escalated_duration*/ None,
                         );
                     }
-                    return Err(err);
+                    return Err(tool_error);
                 };
                 let network_approval_context = if managed_network_active {
                     network_policy_decision
@@ -324,7 +329,7 @@ impl ToolOrchestrator {
                         initial_duration,
                         /*escalated_duration*/ None,
                     );
-                    return Err(ToolError::Codex(err));
+                    return Err(tool_error);
                 }
                 if !tool.escalate_on_failure() {
                     otel.sandbox_outcome(
@@ -334,7 +339,7 @@ impl ToolOrchestrator {
                         initial_duration,
                         /*escalated_duration*/ None,
                     );
-                    return Err(ToolError::Codex(err));
+                    return Err(tool_error);
                 }
                 let unsandboxed_allowed =
                     unsandboxed_execution_allowed(&file_system_sandbox_policy);
@@ -360,7 +365,7 @@ impl ToolOrchestrator {
                             initial_duration,
                             /*escalated_duration*/ None,
                         );
-                        return Err(ToolError::Codex(err));
+                        return Err(tool_error);
                     }
                 }
                 if !unsandboxed_allowed && network_approval_context.is_none() {
@@ -371,7 +376,7 @@ impl ToolOrchestrator {
                         initial_duration,
                         /*escalated_duration*/ None,
                     );
-                    return Err(ToolError::Codex(err));
+                    return Err(tool_error);
                 }
                 let retry_reason =
                     if let Some(network_approval_context) = network_approval_context.as_ref() {
@@ -508,14 +513,16 @@ impl ToolOrchestrator {
 }
 
 fn sandbox_outcome_from_tool_error(err: &ToolError) -> Option<&'static str> {
-    match err {
-        ToolError::Codex(err) => match err.details() {
-            CodexErrorDetails::Sandbox(SandboxErr::Denied { .. }) => Some("denied"),
-            CodexErrorDetails::Sandbox(SandboxErr::Timeout { .. }) => Some("timed_out"),
-            CodexErrorDetails::Sandbox(SandboxErr::Signal(_)) => Some("signal"),
-            _ => None,
-        },
-        ToolError::Rejected(_) => None,
+    let err = match err {
+        ToolError::Codex(err) => err,
+        ToolError::CapturedExec(captured) => &captured.error,
+        ToolError::Rejected(_) => return None,
+    };
+    match err.details() {
+        CodexErrorDetails::Sandbox(SandboxErr::Denied { .. }) => Some("denied"),
+        CodexErrorDetails::Sandbox(SandboxErr::Timeout { .. }) => Some("timed_out"),
+        CodexErrorDetails::Sandbox(SandboxErr::Signal(_)) => Some("signal"),
+        _ => None,
     }
 }
 
