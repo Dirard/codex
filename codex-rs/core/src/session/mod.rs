@@ -463,6 +463,7 @@ pub(crate) struct SessionSpawnArgs {
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
     pub(crate) inherited_environments: Option<TurnEnvironmentSnapshot>,
+    pub(crate) turn_spawn_budget: Option<TurnSpawnBudget>,
     /// Parent rollout trace used only to derive fresh spawned child traces.
     ///
     /// Root sessions and non-thread-spawn subagents pass a disabled context;
@@ -571,6 +572,7 @@ impl Session {
             user_shell_override,
             inherited_exec_policy,
             inherited_environments,
+            turn_spawn_budget,
             parent_rollout_thread_trace,
             parent_trace: _,
             environment_selections,
@@ -927,6 +929,9 @@ impl Session {
                 Err(error) => map_session_init_error(&error, &config.codex_home),
             }
         })?;
+        if let Some(turn_spawn_budget) = turn_spawn_budget {
+            session.set_turn_spawn_budget(turn_spawn_budget).await;
+        }
         if let Some(message) = initial_service_tier_warning {
             session
                 .send_event_raw(Event {

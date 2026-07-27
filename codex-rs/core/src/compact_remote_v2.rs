@@ -1317,6 +1317,8 @@ mod tests {
         let truncated = truncate_without_metadata(retained, /*max_tokens*/ 2);
 
         assert_eq!(truncated, vec![image_only_message, newest]);
+}
+
     #[test]
     fn retained_history_truncates_text_only_message_to_full_item_budget() {
         let original_text = "latest context ".repeat(64);
@@ -1337,7 +1339,8 @@ mod tests {
         assert!(
             estimate_item_token_count(&retained[0])
                 <= i64::try_from(budget).expect("budget fits in i64")
-        );    }
+        );
+    }
 
     #[test]
     fn retained_history_keeps_mixed_fixed_content_that_exactly_fits() {
