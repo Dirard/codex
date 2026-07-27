@@ -16,6 +16,7 @@ use crate::compact_model_fallback::should_retry_with_current_model;
 use crate::compact_remote::should_keep_compacted_history_item;
 use crate::compact_remote_history::HistoryItemGroup;
 use crate::compact_remote_history::history_item_groups;
+use crate::context_manager::estimate_history_token_count;
 use crate::context_manager::estimate_item_token_count;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
@@ -26,6 +27,7 @@ use crate::responses_metadata::CompactionTurnMetadata;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::ResponsesStreamRetryState;
 use crate::responses_retry::handle_retryable_response_stream_error;
+use crate::session::context_window::context_window_token_status_for_usage;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
@@ -39,6 +41,7 @@ use codex_features::Feature;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::ResponseUsageMetadata;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
@@ -79,6 +82,40 @@ const MAX_RETAINED_AGENT_MESSAGE_TOKENS: i64 = 10_000;
 // Compact attempts can run much longer than normal turns, so keep the per-transport
 // retry budget smaller than the general Responses stream retry budget.
 const MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES: u64 = 2;
+
+fn required_headroom(limit: i64) -> i64 {
+    RETAINED_MESSAGE_TOKEN_BUDGET
+        .min(usize::try_from(limit.saturating_div(4).max(0)).unwrap_or(usize::MAX))
+        .try_into()
+        .unwrap_or(i64::MAX)
+}
+
+fn overflow(used: i64, limit: Option<i64>) -> i64 {
+    limit.map_or(0, |limit| {
+        used.saturating_sub(limit.saturating_sub(required_headroom(limit)))
+            .max(0)
+    })
+}
+
+fn compaction_candidate_overflow(
+    status: &crate::session::context_window::ContextWindowTokenStatus,
+    scope: AutoCompactTokenLimitScope,
+) -> i64 {
+    match scope {
+        AutoCompactTokenLimitScope::Total => overflow(
+            status.auto_compact_scope_tokens,
+            status.auto_compact_scope_limit,
+        )
+        .max(overflow(
+            status.active_context_tokens,
+            status.full_context_window_limit,
+        )),
+        AutoCompactTokenLimitScope::BodyAfterPrefix => overflow(
+            status.active_context_tokens,
+            status.full_context_window_limit,
+        ),
+    }
+}
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
@@ -308,23 +345,112 @@ async fn run_remote_compact_task_inner_impl(
         analytics_details.cached_input_tokens = Some(token_usage.cached_input_tokens);
         analytics_details.cache_write_input_tokens = Some(token_usage.cache_write_input_tokens);
     }
-    let (compacted_history, retained_images) = build_v2_compacted_history(
-        prompt_input,
-        prompt_input_metadata,
-        compaction_output,
-        sess.enabled(Feature::RetainClientDeveloperMessages),
-        if sess.enabled(Feature::CompactionImageBudget) {
-            RetainedImageBudget::Enabled
-        } else {
-            RetainedImageBudget::Disabled
-        },
-    );
+    let prepared_window = sess.prepare_auto_compact_window().await;
+    let (initial_context, world_state_baseline) = build_compaction_initial_context(
+        sess.as_ref(),
+        &initial_context_injection,
+        Some(prepared_window.ids),
+    )
+    .await;
+    let base_instructions = sess.get_base_instructions().await;
+    let retain_client_developer_messages =
+        sess.enabled(Feature::RetainClientDeveloperMessages);
+    let retained_image_budget = if sess.enabled(Feature::CompactionImageBudget) {
+        RetainedImageBudget::Enabled
+    } else {
+        RetainedImageBudget::Disabled
+    };
+    let mut retained_message_token_budget = RETAINED_MESSAGE_TOKEN_BUDGET;
+    let mut validated_candidate = None;
+
+    for _ in 0..3 {
+        let (compacted_history, retained_images) = build_v2_compacted_history(
+            &prompt_input,
+            &prompt_input_metadata,
+            compaction_output.clone(),
+            retain_client_developer_messages,
+            retained_message_token_budget,
+            retained_image_budget,
+        );
+        let new_history = insert_initial_context_before_last_real_user_or_summary(
+            compacted_history,
+            initial_context.clone(),
+        );
+        let candidate_tokens = estimate_history_token_count(&new_history, &base_instructions);
+        let status = context_window_token_status_for_usage(
+            compaction_turn_context,
+            candidate_tokens,
+            matches!(
+                compaction_turn_context
+                    .config
+                    .model_auto_compact_token_limit_scope,
+                AutoCompactTokenLimitScope::BodyAfterPrefix
+            )
+            .then_some(candidate_tokens),
+        );
+        let overflow = compaction_candidate_overflow(
+            &status,
+            compaction_turn_context
+                .config
+                .model_auto_compact_token_limit_scope,
+        );
+        if overflow == 0 {
+            validated_candidate = Some((new_history, retained_images));
+            break;
+        }
+        retained_message_token_budget = retained_message_token_budget
+            .saturating_sub(usize::try_from(overflow).unwrap_or(usize::MAX));
+    }
+
+    let (new_history, retained_images) = match validated_candidate {
+        Some(candidate) => candidate,
+        None => {
+            let (compacted_history, retained_images) = build_v2_compacted_history(
+                &prompt_input,
+                &prompt_input_metadata,
+                compaction_output,
+                retain_client_developer_messages,
+                /*retained_message_token_budget*/ 0,
+                retained_image_budget,
+            );
+            let new_history = insert_initial_context_before_last_real_user_or_summary(
+                compacted_history,
+                initial_context,
+            );
+            let candidate_tokens = estimate_history_token_count(&new_history, &base_instructions);
+            let status = context_window_token_status_for_usage(
+                compaction_turn_context,
+                candidate_tokens,
+                matches!(
+                    compaction_turn_context
+                        .config
+                        .model_auto_compact_token_limit_scope,
+                    AutoCompactTokenLimitScope::BodyAfterPrefix
+                )
+                .then_some(candidate_tokens),
+            );
+            if compaction_candidate_overflow(
+                &status,
+                compaction_turn_context
+                    .config
+                    .model_auto_compact_token_limit_scope,
+            ) > 0
+            {
+                return Err(CodexErr::ContextWindowExceeded);
+            }
+            (new_history, retained_images)
+        }
+    };
     analytics_details.retained_image_count = Some(retained_images);
-    let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
-    let (initial_context, world_state_baseline) =
-        build_compaction_initial_context(sess.as_ref(), &initial_context_injection).await;
-    let new_history =
-        insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context);
+
+    if !sess
+        .commit_prepared_auto_compact_window(prepared_window)
+        .await
+    {
+        return Err(CodexErr::Fatal(
+            "auto-compact window changed while validating replacement history".to_string(),
+        ));
+    }
 
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
@@ -348,12 +474,26 @@ async fn run_remote_compact_task_inner_impl(
         world_state_baseline,
         CompactedHistoryMetadata {
             message: String::new(),
-            window_number: new_window_number,
-            window_ids: new_window_ids,
+            window_number: prepared_window.window_number,
+            window_ids: prepared_window.ids,
         },
     )
     .await;
     sess.recompute_token_usage(compaction_turn_context).await;
+    let installed_status = crate::session::context_window::context_window_token_status(
+        sess.as_ref(),
+        compaction_turn_context,
+    )
+    .await;
+    debug_assert_eq!(
+        compaction_candidate_overflow(
+            &installed_status,
+            compaction_turn_context
+                .config
+                .model_auto_compact_token_limit_scope,
+        ),
+        0,
+    );
 
     sess.emit_turn_item_completed(compaction_turn_context, compaction_item)
         .await;
@@ -482,16 +622,18 @@ async fn collect_compaction_output(
 }
 
 fn build_v2_compacted_history(
-    prompt_input: Vec<ResponseItem>,
-    prompt_input_metadata: Vec<Option<CodexHarnessMetadata>>,
+    prompt_input: &[ResponseItem],
+    prompt_input_metadata: &[Option<CodexHarnessMetadata>],
     compaction_output: ResponseItem,
     retain_client_developer_messages: bool,
+    retained_message_token_budget: usize,
     image_budget: RetainedImageBudget,
 ) -> (Vec<ResponseItemEnvelope>, usize) {
     debug_assert_eq!(prompt_input.len(), prompt_input_metadata.len());
     let prompt_input = prompt_input
-        .into_iter()
-        .zip(prompt_input_metadata)
+        .iter()
+        .cloned()
+        .zip(prompt_input_metadata.iter().cloned())
         .map(|(item, metadata)| ResponseItemEnvelope { item, metadata })
         .collect::<Vec<_>>();
     let retained = v2_history_item_groups(prompt_input)
@@ -504,7 +646,7 @@ fn build_v2_compacted_history(
         .flat_map(HistoryItemGroup::into_items)
         .collect::<Vec<_>>();
     let mut retained =
-        truncate_retained_messages(retained, RETAINED_MESSAGE_TOKEN_BUDGET, image_budget);
+        truncate_retained_messages(retained, retained_message_token_budget, image_budget);
     let retained_image_count = retained
         .iter()
         .map(|envelope| retained_input_image_count(&envelope.item))
@@ -775,16 +917,13 @@ mod tests {
     ) -> (Vec<ResponseItemEnvelope>, usize) {
         let metadata = vec![None; input.len()];
         build_v2_compacted_history(
-            input,
-            metadata,
+            &input,
+            &metadata,
             output,
             /*retain_client_developer_messages*/ false,
+            RETAINED_MESSAGE_TOKEN_BUDGET,
             RetainedImageBudget::Disabled,
         )
-    }
-
-    fn annotated(items: Vec<ResponseItem>) -> Vec<ResponseItemEnvelope> {
-        items.into_iter().map(ResponseItemEnvelope::new).collect()
     }
 
     fn raw(items: Vec<ResponseItemEnvelope>) -> Vec<ResponseItem> {
@@ -794,11 +933,35 @@ mod tests {
             .collect()
     }
 
-    fn truncate_without_metadata(items: Vec<ResponseItem>, max_tokens: usize) -> Vec<ResponseItem> {
-        raw(truncate_retained_messages_for_remote_compaction(
-            annotated(items),
-            max_tokens,
-        ))
+    fn image_message(image_url: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputImage {
+                image_url: image_url.to_string(),
+                detail: None,
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }
+    }
+
+    fn mixed_text_image_message(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: text.to_string(),
+                },
+                ContentItem::InputImage {
+                    image_url: "data:image/png;base64,AAAA".to_string(),
+                    detail: None,
+                },
+            ],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }
     }
 
     fn response_stream(events: Vec<CodexResult<ResponseEvent>>) -> ResponseStream {
@@ -874,13 +1037,13 @@ mod tests {
 
         for enabled in [false, true] {
             let (history, _) = build_v2_compacted_history(
-                vec![
+                &[
                     harness.clone(),
                     client.clone(),
                     retained.clone(),
                     generated_notice.clone(),
                 ],
-                vec![
+                &[
                     None,
                     Some(CodexHarnessMetadata {
                         client_authored: true,
@@ -891,6 +1054,7 @@ mod tests {
                 ],
                 output.clone(),
                 enabled,
+                RETAINED_MESSAGE_TOKEN_BUDGET,
                 RetainedImageBudget::Disabled,
             );
             let mut expected = vec![
@@ -990,36 +1154,14 @@ mod tests {
     }
 
     #[test]
-    fn retained_history_truncation_keeps_newest_messages_first() {
-        let middle = message("user", "middle1234", /*phase*/ None);
-        let new = message("user", "new", /*phase*/ None);
-        let retained = vec![
-            message("user", "old-old", /*phase*/ None),
-            middle,
-            new.clone(),
-        ];
-
-        let truncated = truncate_without_metadata(retained, /*max_tokens*/ 3);
+    fn retained_history_budget_uses_full_item_estimator_for_image_only_message() {
+        let image_only = ResponseItemEnvelope::new(image_message("data:image/png;base64,AAAA"));
+        let budget = usize::try_from(estimate_item_token_count(&image_only.item) - 1)
+            .expect("positive image estimate");
 
         assert_eq!(
-            truncated,
-            vec![
-                ResponseItem::Message {
-                    id: None,
-                    role: "user".to_string(),
-                    content: vec![ContentItem::InputText {
-                        text: "midd…1 tokens truncated…1234".to_string(),
-                    }],
-                    phase: None,
-                    internal_chat_message_metadata_passthrough: Some(
-                        InternalChatMessageMetadataPassthrough {
-                            content_item_kinds: Some(vec![ContentItemKind("unknown".to_string())]),
-                            ..Default::default()
-                        },
-                    ),
-                },
-                new,
-            ]
+            truncate_retained_messages_for_remote_compaction(vec![image_only], budget),
+            Vec::<ResponseItemEnvelope>::new(),
         );
     }
 
@@ -1104,47 +1246,26 @@ mod tests {
     }
 
     #[test]
-    fn retained_history_truncation_charges_image_only_messages() {
-        let image_only_message = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputImage {
-                image_url: "data:image/png;base64,abc".to_string(),
-                detail: None,
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        };
-        let newest = message("user", "new", /*phase*/ None);
-        let retained = vec![
-            message("user", "old", /*phase*/ None),
-            image_only_message.clone(),
-            newest.clone(),
-        ];
+    fn retained_history_keeps_mixed_fixed_content_that_exactly_fits() {
+        let mixed =
+            ResponseItemEnvelope::new(mixed_text_image_message("keep only what fits"));
+        let text_free = truncate_message_text_to_token_budget(mixed.clone(), 0)
+            .expect("the image remains after text is removed");
+        let fixed_cost = usize::try_from(estimate_item_token_count(&text_free.item))
+            .expect("positive fixed-content estimate");
+        let retained = truncate_retained_messages_for_remote_compaction(vec![mixed], fixed_cost);
 
-        let truncated = truncate_without_metadata(retained, /*max_tokens*/ 2);
-
-        assert_eq!(truncated, vec![image_only_message, newest]);
+        assert_eq!(retained, vec![text_free]);
     }
 
     #[test]
-    fn retained_history_truncation_drops_image_only_messages_after_budget_is_spent() {
-        let image_only_message = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputImage {
-                image_url: "data:image/png;base64,abc".to_string(),
-                detail: None,
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        };
-        let newest = message("user", "new", /*phase*/ None);
-        let retained = vec![image_only_message, newest.clone()];
+    fn retained_history_truncation_rechecks_final_item_cost() {
+        let item = ResponseItemEnvelope::new(mixed_text_image_message(
+            "text that crosses the estimator rounding boundary",
+        ));
+        let retained = truncate_retained_messages_for_remote_compaction(vec![item], 1);
 
-        let truncated = truncate_without_metadata(retained, /*max_tokens*/ 1);
-
-        assert_eq!(truncated, vec![newest]);
+        assert!(retained.is_empty());
     }
 
     #[tokio::test]
