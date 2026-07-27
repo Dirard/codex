@@ -4,6 +4,7 @@
 //! `ApprovalCtx`, `Approvable`) together with the sandbox orchestration traits
 //! and helpers (`Sandboxable`, `ToolRuntime`, `SandboxAttempt`, etc.).
 
+use crate::exec::CapturedExecError;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
@@ -384,6 +385,7 @@ pub(crate) struct ToolCtx {
 pub(crate) enum ToolError {
     Rejected(String),
     Codex(CodexErr),
+    CapturedExec(CapturedExecError),
 }
 
 pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
