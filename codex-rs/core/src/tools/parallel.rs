@@ -48,6 +48,11 @@ pub(crate) struct ToolCallRuntime {
     parallel_execution: Arc<RwLock<()>>,
 }
 
+pub(crate) struct ToolCallResult {
+    pub(crate) response: ResponseInputItem,
+    pub(crate) made_progress: bool,
+}
+
 impl ToolCallRuntime {
     pub(crate) fn new(
         router: Arc<ToolRouter>,
@@ -76,15 +81,24 @@ impl ToolCallRuntime {
         self,
         call: ToolCall,
         cancellation_token: CancellationToken,
-    ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
+    ) -> impl std::future::Future<Output = Result<ToolCallResult, CodexErr>> {
         let error_call = call.clone();
         let future =
             self.handle_tool_call_with_source(call, ToolCallSource::Direct, cancellation_token);
         async move {
             match future.await {
-                Ok(response) => Ok(response.into_response()),
+                Ok(response) => {
+                    let made_progress = response.result.success_for_logging();
+                    Ok(ToolCallResult {
+                        response: response.into_response(),
+                        made_progress,
+                    })
+                }
                 Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
-                Err(other) => Ok(Self::failure_response(error_call, other)),
+                Err(other) => Ok(ToolCallResult {
+                    response: Self::failure_response(error_call, other),
+                    made_progress: false,
+                }),
             }
         }
         .in_current_span()
@@ -715,7 +729,8 @@ mod tests {
                 success: Some(true),
             },
         };
-        assert_eq!(expected_response, response);
+        assert_eq!(expected_response, response.response);
+        assert!(response.made_progress);
 
         let actual = records
             .lock()
@@ -781,7 +796,7 @@ mod tests {
             .await
             .expect("timed out waiting for tool response")
             .expect("tool response task should join")?;
-        let ResponseInputItem::FunctionCallOutput { output, .. } = response else {
+        let ResponseInputItem::FunctionCallOutput { output, .. } = response.response else {
             anyhow::bail!("cancelled tool should return function output");
         };
         let FunctionCallOutputBody::Text(text) = output.body else {
