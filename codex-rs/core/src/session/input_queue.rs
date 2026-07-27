@@ -1,5 +1,6 @@
 use crate::agent::api::AgentControl;
 use crate::agent_communication::PENDING_MAILBOX_MESSAGES;
+use crate::agent::types::TurnSpawnBudget;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
 use crate::state::TurnState;
@@ -103,6 +104,7 @@ pub(crate) struct InputQueue {
 pub(crate) struct PendingMailboxCommunication {
     pub(crate) communication: crate::PendingAgentMessage,
     start_options: TurnStartOptions,
+    turn_spawn_budget: Option<TurnSpawnBudget>,
     _diagnostics_guard: GaugeGuard,
 }
 
@@ -143,6 +145,7 @@ impl InputQueue {
                     .map(|communication| PendingMailboxCommunication {
                         communication,
                         start_options: TurnStartOptions::default(),
+                        turn_spawn_budget: None,
                         _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
                     }),
             );
@@ -208,6 +211,7 @@ impl InputQueue {
         &self,
         communication: crate::PendingAgentMessage,
         start_options: TurnStartOptions,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
     ) {
         let mut pending = self.mailbox_pending_mails.lock().await;
         // Mail retained while unloaded precedes new submissions to the loaded session.
@@ -215,6 +219,7 @@ impl InputQueue {
         pending.push_back(PendingMailboxCommunication {
             communication,
             start_options,
+            turn_spawn_budget,
             _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
         });
         self.activity_tx.send_replace(InputQueueActivity::Mailbox);
@@ -242,9 +247,16 @@ impl InputQueue {
         pending.drain(..).collect()
     }
 
-    pub(crate) async fn drain_mailbox_input_items(&self) -> (Vec<TurnInput>, TurnStartOptions) {
+    pub(crate) async fn drain_mailbox_input_items(
+        &self,
+    ) -> (Vec<TurnInput>, TurnStartOptions, Option<TurnSpawnBudget>) {
         let pending_mails = self.drain_mailbox().await;
         // A later follow-up supersedes the earlier choice, including an omitted choice.
+        let turn_spawn_budget = pending_mails
+            .iter()
+            .rev()
+            .find(|mail| mail.communication.trigger_turn)
+            .and_then(|mail| mail.turn_spawn_budget.clone());
         let mut start_options = pending_mails
             .iter()
             .rev()
@@ -273,7 +285,7 @@ impl InputQueue {
             .into_iter()
             .map(|mail| TurnInput::InterAgentCommunication(mail.communication))
             .collect();
-        (items, start_options)
+        (items, start_options, turn_spawn_budget)
     }
 
     pub(crate) async fn turn_state_for_sub_id(
@@ -408,7 +420,7 @@ impl InputQueue {
     pub(crate) async fn get_pending_input(
         &self,
         active_turn: &Mutex<Option<ActiveTurn>>,
-    ) -> (Vec<TurnInput>, TurnStartOptions) {
+    ) -> (Vec<TurnInput>, TurnStartOptions, Option<TurnSpawnBudget>) {
         let (pending_input, accepts_mailbox_delivery) = {
             let mut active = active_turn.lock().await;
             match active.as_mut() {
@@ -427,15 +439,16 @@ impl InputQueue {
             }
         };
         if !accepts_mailbox_delivery {
-            return (pending_input, TurnStartOptions::default());
+            return (pending_input, TurnStartOptions::default(), None);
         }
-        let (mailbox_items, start_options) = self.drain_mailbox_input_items().await;
+        let (mailbox_items, start_options, turn_spawn_budget) =
+            self.drain_mailbox_input_items().await;
         if pending_input.is_empty() {
-            (mailbox_items, start_options)
+            (mailbox_items, start_options, turn_spawn_budget)
         } else {
             let mut pending_input = pending_input;
             pending_input.extend(mailbox_items);
-            (pending_input, start_options)
+            (pending_input, start_options, turn_spawn_budget)
         }
     }
 

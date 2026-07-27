@@ -15,6 +15,7 @@ use crate::agent::LocalAgentControl;
 use crate::agent::api::AgentConfigUpdate;
 use crate::agent::api::AgentControl;
 use crate::agent::control::AgentControlInit;
+use crate::agent::types::TurnSpawnBudget;
 use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
@@ -1834,6 +1835,26 @@ impl ThreadManagerState {
         root_turn_id: Option<String>,
         message_delivery: Option<crate::agent_communication::MessageDelivery>,
     ) -> CodexResult<String> {
+        self.send_op_with_spawn_budget(
+            thread_id,
+            op,
+            parent_turn_id,
+            root_turn_id,
+            /*turn_spawn_budget*/ None,
+            message_delivery,
+        )
+        .await
+    }
+
+    pub(crate) async fn send_op_with_spawn_budget(
+        &self,
+        thread_id: ThreadId,
+        op: Op,
+        parent_turn_id: Option<String>,
+        root_turn_id: Option<String>,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
+        message_delivery: Option<crate::agent_communication::MessageDelivery>,
+    ) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
         let residency_guard = if matches!(op, Op::InterAgentCommunication { .. }) {
             thread
@@ -1859,6 +1880,7 @@ impl ThreadManagerState {
                 parent_turn_id,
                 root_turn_id,
                 residency_guard,
+                turn_spawn_budget,
                 message_delivery,
             )
             .await

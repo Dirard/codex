@@ -311,6 +311,7 @@ pub(crate) async fn run_codex_thread_one_shot(
                         trace: None,
                         parent_turn_id: None,
                         root_turn_id: None,
+                        turn_spawn_budget: None,
                         residency_guard: None,
                         message_delivery: None,
                     })

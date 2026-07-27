@@ -2,6 +2,7 @@ use crate::TurnInputRequest;
 use crate::TurnInputSubmission;
 use crate::TurnStartOptions;
 use crate::agent::AgentStatus;
+pub(crate) use crate::agent::types::TurnSpawnBudget;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
@@ -142,10 +143,30 @@ impl LocalAgentControl {
         input: Vec<UserInput>,
         start_options: TurnStartOptions,
     ) -> CodexResult<String> {
+        self.send_input_with_spawn_budget(
+            agent_id,
+            input,
+            start_options,
+            /*turn_spawn_budget*/ None,
+        )
+        .await
+    }
+
+    pub(crate) async fn send_input_with_spawn_budget(
+        &self,
+        agent_id: ThreadId,
+        input: Vec<UserInput>,
+        start_options: TurnStartOptions,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
+    ) -> CodexResult<String> {
         let state = self.runtime.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
         let result = match thread
-            .start_or_steer_turn(TurnInputRequest::user_input(input).on_start(start_options))
+            .submit_turn_input_with_mode(
+                TurnInputRequest::user_input(input).on_start(start_options),
+                codex_protocol::turn_input::TurnInputMode::StartOrSteer,
+                turn_spawn_budget,
+            )
             .await
         {
             Ok(TurnInputSubmission::Started { turn_id, .. }) => Ok(turn_id),
@@ -172,6 +193,24 @@ impl LocalAgentControl {
         agent_communication_context: AgentCommunicationContext,
         start_options: TurnStartOptions,
     ) -> CodexResult<String> {
+        self.send_inter_agent_communication_with_spawn_budget(
+            agent_id,
+            communication,
+            agent_communication_context,
+            start_options,
+            /*turn_spawn_budget*/ None,
+        )
+        .await
+    }
+
+    pub(crate) async fn send_inter_agent_communication_with_spawn_budget(
+        &self,
+        agent_id: ThreadId,
+        communication: InterAgentCommunication,
+        agent_communication_context: AgentCommunicationContext,
+        start_options: TurnStartOptions,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
+    ) -> CodexResult<String> {
         let state = self.runtime.upgrade()?;
         if communication.trigger_turn {
             let thread = state.get_thread(agent_id).await?;
@@ -185,6 +224,7 @@ impl LocalAgentControl {
             communication,
             agent_communication_context,
             start_options,
+            turn_spawn_budget,
         )
         .await
     }
@@ -244,7 +284,7 @@ impl LocalAgentControl {
         communication: InterAgentCommunication,
         context: AgentCommunicationContext,
     ) -> CodexResult<String> {
-        let state = self.upgrade()?;
+        let state = self.runtime.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
         if communication.trigger_turn {
             self.ensure_execution_capacity_for_turn_start(&thread)
@@ -274,6 +314,7 @@ impl LocalAgentControl {
         communication: InterAgentCommunication,
         context: AgentCommunicationContext,
         start_options: TurnStartOptions,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
     ) -> CodexResult<String> {
         self.submit_inter_agent_communication(
             agent_id,
@@ -281,6 +322,7 @@ impl LocalAgentControl {
             communication,
             context,
             start_options,
+            turn_spawn_budget,
         )
         .await
     }
@@ -292,6 +334,7 @@ impl LocalAgentControl {
         mut communication: InterAgentCommunication,
         context: AgentCommunicationContext,
         start_options: TurnStartOptions,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
     ) -> CodexResult<String> {
         let observers = state.extensions.message_lifecycle_contributors();
         let delivery = (!observers.is_empty()).then(|| {
@@ -342,7 +385,7 @@ impl LocalAgentControl {
                 agent_id,
                 state,
                 state
-                    .send_op(
+                    .send_op_with_spawn_budget(
                         agent_id,
                         Op::InterAgentCommunication {
                             communication,
@@ -350,6 +393,7 @@ impl LocalAgentControl {
                         },
                         parent_turn_id,
                         root_turn_id,
+                        turn_spawn_budget,
                         delivery,
                     )
                     .await,
