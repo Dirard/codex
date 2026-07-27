@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::status::is_final;
 use crate::session::InputQueueActivity;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
@@ -51,9 +52,10 @@ impl Handler {
         let max_timeout_ms = turn.config.multi_agent_v2.max_wait_timeout_ms;
         let default_timeout_ms = turn.config.multi_agent_v2.default_wait_timeout_ms;
         let timeout_ms = match args.timeout_ms {
+            Some(0) => 0,
             Some(ms) if ms < min_timeout_ms => {
                 return Err(FunctionCallError::RespondToModel(format!(
-                    "timeout_ms must be at least {min_timeout_ms}"
+                    "timeout_ms must be at least {min_timeout_ms}, or 0 for one immediate check"
                 )));
             }
             Some(ms) if ms > max_timeout_ms => {
@@ -64,6 +66,7 @@ impl Handler {
             Some(ms) => ms,
             None => default_timeout_ms,
         };
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
 
         let turn_state = session
             .input_queue
@@ -92,8 +95,25 @@ impl Handler {
             )
             .await;
 
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-        let outcome = wait_for_activity(&mut activity_rx, pending_activity, deadline).await;
+        let outcome = if let Some(outcome) = ready_activity(&mut activity_rx, pending_activity) {
+            outcome
+        } else {
+            let snapshot = active_descendant_snapshot(session.as_ref(), turn.as_ref()).await?;
+            if snapshot == ActiveAgentSnapshot::default() {
+                recheck_activity(session.as_ref(), turn_state.as_deref())
+                    .await
+                    .unwrap_or(WaitOutcome::NoActiveAgents)
+            } else {
+                wait_for_activity(
+                    session.as_ref(),
+                    turn.as_ref(),
+                    turn_state.as_deref(),
+                    &mut activity_rx,
+                    deadline,
+                )
+                .await?
+            }
+        };
         let result = WaitAgentResult::from_outcome(outcome);
 
         session
@@ -138,15 +158,19 @@ pub(crate) struct WaitAgentResult {
 
 impl WaitAgentResult {
     fn from_outcome(outcome: WaitOutcome) -> Self {
-        let message = match outcome {
-            WaitOutcome::MailboxActivity => "Wait completed.",
-            WaitOutcome::Steered => "Wait interrupted by new input.",
-            WaitOutcome::TimedOut => "Wait timed out.",
+        let (message, timed_out) = match outcome {
+            WaitOutcome::MailboxActivity => ("Wait completed.".to_string(), false),
+            WaitOutcome::Steered => ("Wait interrupted by new input.".to_string(), false),
+            WaitOutcome::NoActiveAgents => ("No active agents.".to_string(), false),
+            WaitOutcome::TimedOut(snapshot) => (
+                format!(
+                    "Wait timed out. Active agents: pending_init={}, running={}, interrupted={}.",
+                    snapshot.pending_init, snapshot.running, snapshot.interrupted
+                ),
+                true,
+            ),
         };
-        Self {
-            message: message.to_string(),
-            timed_out: outcome == WaitOutcome::TimedOut,
-        }
+        Self { message, timed_out }
     }
 }
 
@@ -168,29 +192,108 @@ impl ToolOutput for WaitAgentResult {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ActiveAgentSnapshot {
+    pending_init: usize,
+    running: usize,
+    interrupted: usize,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WaitOutcome {
     MailboxActivity,
     Steered,
-    TimedOut,
+    NoActiveAgents,
+    TimedOut(ActiveAgentSnapshot),
+}
+
+async fn active_descendant_snapshot(
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
+) -> Result<ActiveAgentSnapshot, FunctionCallError> {
+    session
+        .services
+        .agent_control
+        .register_session_root(session.thread_id, turn.parent_thread_id);
+    let current_agent_path = turn
+        .session_source
+        .get_agent_path()
+        .unwrap_or_else(AgentPath::root);
+    let current_agent_name = current_agent_path.to_string();
+    let agents = session
+        .services
+        .agent_control
+        .list_agents(&turn.session_source, Some(&current_agent_name))
+        .await
+        .map_err(collab_spawn_error)?;
+    let mut snapshot = ActiveAgentSnapshot::default();
+    for agent in agents {
+        if agent.agent_name == current_agent_name {
+            continue;
+        }
+        match &agent.agent_status {
+            AgentStatus::PendingInit => snapshot.pending_init += 1,
+            AgentStatus::Running => snapshot.running += 1,
+            AgentStatus::Interrupted => snapshot.interrupted += 1,
+            status @ (AgentStatus::Completed(_)
+            | AgentStatus::Errored(_)
+            | AgentStatus::Shutdown
+            | AgentStatus::NotFound) => debug_assert!(is_final(status)),
+        }
+    }
+    Ok(snapshot)
+}
+
+fn ready_activity(
+    activity_rx: &mut tokio::sync::watch::Receiver<InputQueueActivity>,
+    pending_activity: Option<InputQueueActivity>,
+) -> Option<WaitOutcome> {
+    if let Some(activity) = pending_activity {
+        return Some(wait_outcome_for_activity(activity));
+    }
+    match activity_rx.has_changed() {
+        Ok(true) => Some(wait_outcome_for_activity(*activity_rx.borrow_and_update())),
+        Ok(false) | Err(_) => None,
+    }
+}
+
+async fn recheck_activity(
+    session: &crate::session::session::Session,
+    turn_state: Option<&tokio::sync::Mutex<crate::state::TurnState>>,
+) -> Option<WaitOutcome> {
+    let (mut activity_rx, pending_activity) =
+        session.input_queue.subscribe_activity(turn_state).await;
+    ready_activity(&mut activity_rx, pending_activity)
 }
 
 async fn wait_for_activity(
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
+    turn_state: Option<&tokio::sync::Mutex<crate::state::TurnState>>,
     activity_rx: &mut tokio::sync::watch::Receiver<InputQueueActivity>,
-    pending_activity: Option<InputQueueActivity>,
     deadline: Instant,
-) -> WaitOutcome {
-    if let Some(activity) = pending_activity {
-        return match activity {
-            InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
-            InputQueueActivity::Steer => WaitOutcome::Steered,
-        };
+) -> Result<WaitOutcome, FunctionCallError> {
+    if let Some(outcome) = ready_activity(activity_rx, /*pending_activity*/ None) {
+        return Ok(outcome);
     }
     match timeout_at(deadline, activity_rx.changed()).await {
-        Ok(Ok(())) => match *activity_rx.borrow_and_update() {
-            InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
-            InputQueueActivity::Steer => WaitOutcome::Steered,
-        },
-        Ok(Err(_)) | Err(_) => WaitOutcome::TimedOut,
+        Ok(Ok(())) => Ok(wait_outcome_for_activity(*activity_rx.borrow_and_update())),
+        Ok(Err(_)) | Err(_) => {
+            if let Some(outcome) = ready_activity(activity_rx, /*pending_activity*/ None) {
+                return Ok(outcome);
+            }
+            let snapshot = active_descendant_snapshot(session, turn).await?;
+            if let Some(outcome) = recheck_activity(session, turn_state).await {
+                return Ok(outcome);
+            }
+            Ok(WaitOutcome::TimedOut(snapshot))
+        }
+    }
+}
+
+fn wait_outcome_for_activity(activity: InputQueueActivity) -> WaitOutcome {
+    match activity {
+        InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
+        InputQueueActivity::Steer => WaitOutcome::Steered,
     }
 }
