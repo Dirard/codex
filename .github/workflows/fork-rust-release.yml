@@ -1,6 +1,12 @@
 name: fork-rust-release
 
 on:
+  push:
+    branches:
+      - codex/fork
+    paths:
+      - .github/workflows/fork-rust-release.yml
+      - codex-rs/Cargo.toml
   workflow_dispatch:
     inputs:
       checkout_ref:
@@ -8,16 +14,12 @@ on:
         required: true
         default: codex/fork
         type: string
-      version:
-        description: Release version without a prefix
-        required: true
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: fork-rust-release-${{ inputs.version }}
+  group: fork-rust-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -46,17 +48,17 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.checkout_ref }}
+          ref: ${{ inputs.checkout_ref || github.sha }}
           persist-credentials: false
 
       - name: Validate version
-        env:
-          EXPECTED_VERSION: ${{ inputs.version }}
+        id: release
         shell: bash
         run: |
           set -euo pipefail
           actual_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | head -1)"
-          test "$actual_version" = "$EXPECTED_VERSION"
+          [[ "$actual_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "version=${actual_version}" >> "$GITHUB_OUTPUT"
 
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
@@ -129,7 +131,7 @@ jobs:
       - name: Stage release binaries
         env:
           TARGET: ${{ matrix.target }}
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.release.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
@@ -173,6 +175,6 @@ jobs:
       - name: Upload release binaries
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: codex-${{ inputs.version }}-${{ matrix.target }}
+          name: codex-${{ steps.release.outputs.version }}-${{ matrix.target }}
           path: dist/${{ matrix.target }}
           if-no-files-found: error
