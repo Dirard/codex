@@ -27,6 +27,7 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::NonSteerableTurnKind;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::turn_input::NotSubmittedReason;
 use codex_protocol::turn_input::TurnInput as SubmittedTurnInput;
@@ -212,6 +213,11 @@ async fn start_or_steer(
             let turn_context = settings
                 .apply_started(session, submission_id.clone())
                 .await?;
+            if !matches!(&turn_context.session_source, SessionSource::SubAgent(_)) {
+                session
+                    .start_turn_spawn_budget(turn_context.config.max_spawned_threads_per_turn)
+                    .await;
+            }
             if can_start_root_turn
                 && !items.is_empty()
                 && turn_context
@@ -321,6 +327,11 @@ async fn start_if_idle(
             return Err(error);
         }
     };
+    if has_user_input && !matches!(&turn_context.session_source, SessionSource::SubAgent(_)) {
+        session
+            .start_turn_spawn_budget(turn_context.config.max_spawned_threads_per_turn)
+            .await;
+    }
     if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
         turn_context
             .turn_metadata_state

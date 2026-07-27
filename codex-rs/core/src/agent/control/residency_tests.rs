@@ -1,6 +1,7 @@
 use crate::StartThreadOptions;
 use crate::ThreadManager;
 use crate::agent::AgentControl;
+use crate::agent::control::TurnSpawnBudget;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::config::test_config;
@@ -114,7 +115,11 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
     mark_thread_completed(second.thread.as_ref()).await;
 
     let err = control
-        .ensure_v2_agent_loaded(config, first.thread_id)
+        .ensure_v2_agent_loaded(
+            config.clone(),
+            first.thread_id,
+            TurnSpawnBudget::new(config.max_spawned_threads_per_turn),
+        )
         .await
         .expect_err("evicted interrupted agent should stay lost");
     match err.details() {
