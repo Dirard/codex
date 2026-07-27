@@ -118,6 +118,11 @@ use wiremock::matchers::path;
 use super::rmcp_client::remote_aware_environment_id;
 use super::rmcp_client::remote_aware_stdio_server_bin;
 
+const UNOBSERVED_NESTED_TOOL_OUTCOME_DIAGNOSTIC: &str = concat!(
+    "Code mode completed with 1 settled nested tool outcome not passed to an output helper after the last successful sink.\n",
+    "Pass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`."
+);
+
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
     match req.custom_tool_call_output(call_id).get("output") {
         Some(Value::Array(items)) => items.clone(),
@@ -2861,7 +2866,6 @@ text("phase 2");
 
     let second_request = second_completion.single_request();
     let second_items = function_tool_output_items(&second_request, "call-2");
-    assert_eq!(second_items.len(), 1);
     assert_regex_match(
         concat!(
             r"(?s)\A",
@@ -2869,6 +2873,14 @@ text("phase 2");
         ),
         text_item(&second_items, /*index*/ 0),
     );
+    match second_items.len() {
+        1 => {}
+        2 => assert_eq!(
+            text_item(&second_items, /*index*/ 1),
+            UNOBSERVED_NESTED_TOOL_OUTCOME_DIAGNOSTIC
+        ),
+        other => panic!("unexpected number of content items: {other}"),
+    }
 
     responses::mount_sse_once(
         &server,
@@ -3151,7 +3163,7 @@ text("session b done");
                 text_item(&fourth_items, /*index*/ 0),
             );
         }
-        2 => {
+        3 => {
             assert_regex_match(
                 concat!(
                     r"(?s)\A",
@@ -3160,6 +3172,10 @@ text("session b done");
                 text_item(&fourth_items, /*index*/ 0),
             );
             assert_eq!(text_item(&fourth_items, /*index*/ 1), "session a done");
+            assert_eq!(
+                text_item(&fourth_items, /*index*/ 2),
+                UNOBSERVED_NESTED_TOOL_OUTCOME_DIAGNOSTIC
+            );
         }
         other => panic!("unexpected number of content items: {other}"),
     }
