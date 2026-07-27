@@ -173,6 +173,42 @@ impl CodeModeSessionDelegate for ReleasableToolDelegate {
     fn cell_closed(&self, _cell_id: &CellId) {}
 }
 
+struct ImmediateToolDelegate;
+
+impl CodeModeSessionDelegate for ImmediateToolDelegate {
+    fn invoke_tool<'a>(
+        &'a self,
+        invocation: CodeModeNestedToolCall,
+        _cancellation_token: CancellationToken,
+    ) -> ToolInvocationFuture<'a> {
+        Box::pin(async move {
+            if invocation
+                .input
+                .as_ref()
+                .and_then(|input| input.get("reject"))
+                .and_then(JsonValue::as_bool)
+                == Some(true)
+            {
+                Err("nested-secret-marker".to_string())
+            } else {
+                Ok(invocation.input.unwrap_or(JsonValue::Null))
+            }
+        })
+    }
+
+    fn notify<'a>(
+        &'a self,
+        _call_id: String,
+        _cell_id: CellId,
+        _text: String,
+        _cancellation_token: CancellationToken,
+    ) -> NotificationFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn cell_closed(&self, _cell_id: &CellId) {}
+}
+
 fn execute_request(source: &str) -> ExecuteRequest {
     ExecuteRequest {
         tool_call_id: "call_1".to_string(),
@@ -268,6 +304,378 @@ text(JSON.stringify(results.map(({ status, value, reason }) => ({
                         .to_string(),
             }],
             error_text: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn settled_nested_tool_result_without_sink_emits_one_note() {
+    let service = InProcessCodeModeSession::with_delegate(Arc::new(ImmediateToolDelegate));
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            enabled_tools: vec![echo_tool()],
+            source: r#"await tools.echo({ value: "nested-secret-marker" });"#.to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+
+    let RuntimeResponse::Result { content_items, .. } = &response else {
+        panic!("expected a completed runtime response");
+    };
+    let [FunctionCallOutputContentItem::InputText { text: note }] = content_items.as_slice() else {
+        panic!("expected exactly one text diagnostic item");
+    };
+    assert_eq!(
+        response,
+        RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "Code mode completed with 1 settled nested tool outcome not passed to an output helper after the last successful sink.\nPass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`.".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+    assert!(note.contains("1 settled nested tool outcome"));
+    assert!(
+        note.to_lowercase()
+            .contains("pass needed values to an output helper")
+    );
+    assert!(!note.contains("nested-secret-marker"));
+}
+
+#[tokio::test]
+async fn rejected_nested_tool_result_without_sink_emits_one_note() {
+    let service = InProcessCodeModeSession::with_delegate(Arc::new(ImmediateToolDelegate));
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            enabled_tools: vec![echo_tool()],
+            source: r#"
+try {
+  await tools.echo({ reject: true });
+} catch {}
+"#
+            .to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+
+    let RuntimeResponse::Result { content_items, .. } = &response else {
+        panic!("expected a completed runtime response");
+    };
+    let [FunctionCallOutputContentItem::InputText { text: note }] = content_items.as_slice() else {
+        panic!("expected exactly one text diagnostic item");
+    };
+    assert_eq!(
+        response,
+        RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "Code mode completed with 1 settled nested tool outcome not passed to an output helper after the last successful sink.\nPass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`.".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+    assert!(note.contains("1 settled nested tool outcome"));
+    assert!(
+        note.to_lowercase()
+            .contains("pass needed values to an output helper")
+    );
+    assert!(!note.contains("nested-secret-marker"));
+}
+
+#[tokio::test]
+async fn multiple_unobserved_outcomes_produce_one_note() {
+    let service = InProcessCodeModeSession::with_delegate(Arc::new(ImmediateToolDelegate));
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            enabled_tools: vec![echo_tool()],
+            source: r#"
+await Promise.allSettled([
+  tools.echo({ value: "first nested result" }),
+  tools.echo({ value: "second nested result" }),
+]);
+"#
+            .to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+
+    let RuntimeResponse::Result { content_items, .. } = &response else {
+        panic!("expected a completed runtime response");
+    };
+    let [FunctionCallOutputContentItem::InputText { text: note }] = content_items.as_slice() else {
+        panic!("expected exactly one text diagnostic item");
+    };
+    assert_eq!(content_items.len(), 1);
+    assert_eq!(
+        response,
+        RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "Code mode completed with 2 settled nested tool outcomes not passed to an output helper after the last successful sink.\nPass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`.".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+    assert!(note.contains("2 settled nested tool outcomes"));
+}
+
+#[tokio::test]
+async fn completion_note_contains_counts_but_not_nested_result_content() {
+    let service = InProcessCodeModeSession::with_delegate(Arc::new(ImmediateToolDelegate));
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            enabled_tools: vec![echo_tool()],
+            source: r#"await tools.echo({ value: "nested-secret-marker" });"#.to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+
+    let RuntimeResponse::Result { content_items, .. } = &response else {
+        panic!("expected a completed runtime response");
+    };
+    let [FunctionCallOutputContentItem::InputText { text: note }] = content_items.as_slice() else {
+        panic!("expected exactly one text diagnostic item");
+    };
+    assert_eq!(
+        response,
+        RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "Code mode completed with 1 settled nested tool outcome not passed to an output helper after the last successful sink.\nPass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`.".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+    assert!(note.contains("1 settled nested tool outcome"));
+    assert!(
+        note.to_lowercase()
+            .contains("pass needed values to an output helper")
+    );
+    assert!(!note.contains("nested-secret-marker"));
+}
+
+#[tokio::test]
+async fn successful_sink_clears_settled_outcome_count() {
+    for (sink, content_items) in [
+        (
+            r#"text("done");"#,
+            vec![FunctionCallOutputContentItem::InputText {
+                text: "done".to_string(),
+            }],
+        ),
+        (
+            r#"image("data:image/png;base64,AAA");"#,
+            vec![FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+                detail: Some(crate::DEFAULT_IMAGE_DETAIL),
+            }],
+        ),
+        (
+            r#"audio("data:audio/wav;base64,AAA");"#,
+            vec![FunctionCallOutputContentItem::InputAudio {
+                audio_url: "data:audio/wav;base64,AAA".to_string(),
+            }],
+        ),
+        (
+            r#"generatedImage({ image_url: "data:image/png;base64,AAA", output_hint: "saved" });"#,
+            vec![
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,AAA".to_string(),
+                    detail: Some(crate::DEFAULT_IMAGE_DETAIL),
+                },
+                FunctionCallOutputContentItem::InputText {
+                    text: "saved".to_string(),
+                },
+            ],
+        ),
+        (r#"notify("done");"#, Vec::new()),
+        (r#"store("saved", { ok: true });"#, Vec::new()),
+    ] {
+        let service = InProcessCodeModeSession::with_delegate(Arc::new(ImmediateToolDelegate));
+        let response = execute(
+            &service,
+            ExecuteRequest {
+                enabled_tools: vec![echo_tool()],
+                source: format!("await tools.echo({{ value: \"nested-secret-marker\" }}); {sink}"),
+                yield_time_ms: None,
+                ..execute_request("")
+            },
+        )
+        .await;
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: cell_id("1"),
+                content_items,
+                error_text: None,
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn sink_before_later_tool_call_does_not_hide_later_outcome() {
+    let service = InProcessCodeModeSession::with_delegate(Arc::new(ImmediateToolDelegate));
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            enabled_tools: vec![echo_tool()],
+            source: r#"
+text("before");
+await tools.echo({ value: "nested-secret-marker" });
+"#
+            .to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+
+    assert_eq!(
+        response,
+        RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "before".to_string(),
+                },
+                FunctionCallOutputContentItem::InputText {
+                    text: "Code mode completed with 1 settled nested tool outcome not passed to an output helper after the last successful sink.\nPass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`.".to_string(),
+                },
+            ],
+            error_text: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn invalid_sink_does_not_clear_settled_outcome_count() {
+    let service = InProcessCodeModeSession::with_delegate(Arc::new(ImmediateToolDelegate));
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            enabled_tools: vec![echo_tool()],
+            source: r#"
+await tools.echo({ value: "nested-secret-marker" });
+try {
+  notify("");
+} catch {}
+"#
+            .to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+
+    assert_eq!(
+        response,
+        RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "Code mode completed with 1 settled nested tool outcome not passed to an output helper after the last successful sink.\nPass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`.".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn started_but_unsettled_tool_call_emits_side_effect_warning() {
+    let delegate = Arc::new(ReleasableToolDelegate::default());
+    let service = InProcessCodeModeSession::with_delegate(delegate.clone());
+    let started = service
+        .execute(ExecuteRequest {
+            enabled_tools: vec![echo_tool()],
+            source: r#"tools.echo({ value: "side effect probe" });"#.to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        })
+        .await
+        .unwrap();
+    let response = tokio::spawn(started.initial_response());
+    wait_until_tool_started(&delegate).await;
+    let response = response.await.unwrap().unwrap();
+
+    assert_eq!(
+        response,
+        RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "1 started nested tool call is still unsettled; the runtime does not wait for them automatically, and they may already have produced side effects.".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn top_level_error_preserves_error_text_and_adds_note() {
+    let service = InProcessCodeModeSession::with_delegate(Arc::new(ImmediateToolDelegate));
+    let baseline_service = InProcessCodeModeSession::new();
+    let baseline_response = execute(
+        &baseline_service,
+        ExecuteRequest {
+            source: r#"
+await Promise.resolve();
+throw new Error("top-level-marker");
+"#
+            .to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+    let RuntimeResponse::Result {
+        error_text: baseline_error_text,
+        ..
+    } = baseline_response
+    else {
+        panic!("expected a completed baseline response");
+    };
+    assert!(
+        baseline_error_text
+            .as_deref()
+            .is_some_and(|error_text| error_text.starts_with("Error: top-level-marker"))
+    );
+
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            enabled_tools: vec![echo_tool()],
+            source: r#"
+await tools.echo({ value: "nested-secret-marker" });
+throw new Error("top-level-marker");
+"#
+            .to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+
+    assert_eq!(
+        response,
+        RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "Code mode completed with 1 settled nested tool outcome not passed to an output helper after the last successful sink.\nPass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`.".to_string(),
+            }],
+            error_text: baseline_error_text,
         }
     );
 }
