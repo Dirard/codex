@@ -204,6 +204,7 @@ async fn handle_spawn_agent(
                 disabled_plugin_ids: Some(turn.disabled_plugin_ids.clone()),
                 multi_agent_v2_usage_hints,
                 cyber_access_program: turn.cyber_access_program,
+                turn_spawn_budget: Some(step_context.turn_spawn_budget.clone()),
             },
         })
         .await

@@ -16,6 +16,7 @@ use crate::agent::agent_status_from_event;
 use crate::agent::api::AgentConfigUpdate;
 use crate::agent::api::AgentTurnOutcome;
 use crate::agent::control::AgentControlInit;
+use crate::agent::control::TurnSpawnBudget;
 use crate::agent::status::is_final;
 use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
@@ -1014,6 +1015,7 @@ impl SessionIo {
         self.submit_with_trace(
             op, /*trace*/ None, /*parent_turn_id*/ None, /*root_turn_id*/ None,
             /*residency_guard*/ None,
+            /*turn_spawn_budget*/ None,
         )
         .await
     }
@@ -1025,6 +1027,7 @@ impl SessionIo {
         parent_turn_id: Option<String>,
         root_turn_id: Option<String>,
         residency_guard: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
     ) -> CodexResult<String> {
         let id = new_submission_id();
         let WithTurnExtensionData {
@@ -1038,6 +1041,7 @@ impl SessionIo {
             trace,
             parent_turn_id,
             root_turn_id,
+            turn_spawn_budget,
             residency_guard,
         };
         self.submit_with_id(sub).await?;
@@ -1064,6 +1068,7 @@ impl SessionIo {
         &self,
         request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
         mode: TurnInputMode,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
     ) -> CodexResult<TurnInputSubmission> {
         let id = new_submission_id();
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -1083,6 +1088,7 @@ impl SessionIo {
             turn_extension_init,
             parent_turn_id: None,
             root_turn_id: None,
+            turn_spawn_budget,
             residency_guard: None,
         })
         .await?;
@@ -1109,6 +1115,7 @@ impl SessionIo {
             turn_extension_init,
             parent_turn_id: None,
             root_turn_id: None,
+            turn_spawn_budget: None,
             residency_guard: None,
         })
         .await?;
@@ -1914,6 +1921,18 @@ impl Session {
         state.previous_turn_settings()
     }
 
+    pub(crate) async fn start_turn_spawn_budget(&self, limit: usize) {
+        self.state.lock().await.start_turn_spawn_budget(limit);
+    }
+
+    pub(crate) async fn set_turn_spawn_budget(&self, budget: TurnSpawnBudget) {
+        self.state.lock().await.set_turn_spawn_budget(budget);
+    }
+
+    pub(crate) async fn current_turn_spawn_budget(&self, limit: usize) -> TurnSpawnBudget {
+        self.state.lock().await.current_turn_spawn_budget(limit)
+    }
+
     #[tracing::instrument(level = "trace", skip_all)]
     pub(crate) async fn set_previous_turn_settings(
         &self,
@@ -2374,8 +2393,8 @@ impl Session {
                 self,
                 id.clone(),
                 communication,
-                /*parent_turn_id*/ None,
-                /*root_turn_id*/ None,
+                TurnStartOptions::default(),
+                /*turn_spawn_budget*/ None,
             )
             .await;
             id
@@ -3984,6 +4003,9 @@ impl Session {
             tool_router,
             extension_data,
         ) = prepared_tools??;
+        let turn_spawn_budget = self
+            .current_turn_spawn_budget(turn_context.config.max_spawned_threads_per_turn)
+            .await;
         Ok(Arc::new(StepContext {
             preempt: turn_context
                 .config
@@ -3995,6 +4017,7 @@ impl Session {
             token_budget,
             session_telemetry,
             turn: turn_context,
+            turn_spawn_budget,
             environments,
             selected_capability_roots,
             executor_capability_discovery,

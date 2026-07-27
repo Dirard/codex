@@ -13,6 +13,7 @@ use super::auto_compact_window::AutoCompactWindowIds;
 use super::auto_compact_window::AutoCompactWindowSnapshot;
 use crate::TurnStartOptions;
 use super::auto_compact_window::PreparedAutoCompactWindow;
+use crate::agent::control::TurnSpawnBudget;
 use crate::context_manager::ContextManager;
 use crate::context_manager::HistoryReplacement;
 use crate::session::PreviousTurnSettings;
@@ -104,6 +105,7 @@ pub(crate) struct SessionState {
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
     next_turn_is_first: bool,
+    turn_spawn_budget: Option<TurnSpawnBudget>,
 }
 
 impl SessionState {
@@ -145,9 +147,23 @@ impl SessionState {
             active_connector_selection: HashSet::new(),
             pending_session_start_sources: VecDeque::new(),
             next_turn_is_first: true,
+            turn_spawn_budget: None,
         }
     }
 
+    pub(crate) fn start_turn_spawn_budget(&mut self, limit: usize) {
+        self.turn_spawn_budget = Some(TurnSpawnBudget::new(limit));
+    }
+
+    pub(crate) fn set_turn_spawn_budget(&mut self, budget: TurnSpawnBudget) {
+        self.turn_spawn_budget = Some(budget);
+    }
+
+    pub(crate) fn current_turn_spawn_budget(&mut self, limit: usize) -> TurnSpawnBudget {
+        self.turn_spawn_budget
+            .get_or_insert_with(|| TurnSpawnBudget::new(limit))
+            .clone()
+    }
     pub(crate) fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
         self.previous_turn_settings.clone()
     }
