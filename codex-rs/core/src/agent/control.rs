@@ -2,8 +2,9 @@ use crate::TurnInputRequest;
 use crate::TurnInputSubmission;
 use crate::TurnStartOptions;
 use crate::agent::AgentStatus;
-use crate::agent::registry::AgentMetadata;
-use crate::agent::registry::AgentRegistry;
+pub(crate) use crate::agent::registry::AgentMetadata;
+pub(crate) use crate::agent::registry::AgentRegistry;
+pub(crate) use crate::agent::registry::TurnSpawnBudget;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
@@ -81,6 +82,7 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) root_turn_id: Option<String>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
     pub(crate) multi_agent_v2_usage_hints: Option<ResolvedMultiAgentV2UsageHints>,
+    pub(crate) turn_spawn_budget: Option<TurnSpawnBudget>,
 }
 
 #[derive(Clone, Debug)]

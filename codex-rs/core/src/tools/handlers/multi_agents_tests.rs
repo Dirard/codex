@@ -39,6 +39,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::BaseInstructions;
@@ -80,6 +81,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::sync::broadcast::error::TryRecvError;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
@@ -90,6 +92,16 @@ fn invocation(
     payload: ToolPayload,
 ) -> ToolInvocation {
     let step_context = StepContext::for_test(Arc::clone(&turn));
+    invocation_with_step_context(session, turn, step_context, tool_name, payload)
+}
+
+fn invocation_with_step_context(
+    session: Arc<crate::session::session::Session>,
+    turn: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
+    tool_name: &str,
+    payload: ToolPayload,
+) -> ToolInvocation {
     ToolInvocation {
         session,
         step_context,
@@ -343,6 +355,140 @@ async fn spawn_agent_rejects_when_message_and_items_are_both_set() {
             "Provide either message or items, but not both".to_string()
         )
     );
+}
+
+#[tokio::test]
+async fn seventeenth_spawn_is_rejected_after_sixteen_closed_children_in_one_turn() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let mut config = turn.config.as_ref().clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    root.thread.session.new_default_turn().await;
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let mut created_threads = manager.subscribe_thread_created();
+
+    for index in 0..16 {
+        let task_name = format!("worker_{index}");
+        SpawnAgentHandlerV2::default()
+            .handle(invocation_with_step_context(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                Arc::clone(&step_context),
+                "spawn_agent",
+                function_payload(json!({
+                    "message": format!("boot {task_name}"),
+                    "task_name": task_name,
+                })),
+            ))
+            .await
+            .expect("spawn within the turn budget should succeed");
+        let child_id = session
+            .services
+            .agent_control
+            .resolve_agent_reference(session.thread_id, &turn.session_source, &task_name)
+            .await
+            .expect("spawned child should resolve");
+        assert_eq!(
+            created_threads
+                .recv()
+                .await
+                .expect("spawn should emit a creation notification"),
+            child_id
+        );
+        session
+            .services
+            .agent_control
+            .close_agent(child_id)
+            .await
+            .expect("child should close");
+    }
+
+    let thread_ids_before = manager.list_thread_ids().await;
+    let captured_ops_before = manager.captured_ops();
+    let err = match SpawnAgentHandlerV2::default()
+        .handle(invocation_with_step_context(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            Arc::clone(&step_context),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "boot rejected worker",
+                "task_name": "rejected_worker",
+            })),
+        ))
+        .await
+    {
+        Ok(_) => panic!("the seventeenth spawn should exceed the turn budget"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "collab spawn failed: agent thread limit reached".to_string()
+        )
+    );
+    assert_eq!(manager.list_thread_ids().await, thread_ids_before);
+    assert_eq!(manager.captured_ops(), captured_ops_before);
+    assert!(matches!(
+        created_threads.try_recv(),
+        Err(TryRecvError::Empty)
+    ));
+    assert!(
+        session
+            .services
+            .agent_control
+            .resolve_agent_reference(session.thread_id, &turn.session_source, "rejected_worker")
+            .await
+            .is_err()
+    );
+
+    let rejected_path = AgentPath::root()
+        .join("typed_rejection")
+        .expect("test agent path should be valid");
+    let error = session
+        .services
+        .agent_control
+        .spawn_agent_with_communication(
+            (*turn.config).clone(),
+            InterAgentCommunication::new(
+                AgentPath::root(),
+                rejected_path.clone(),
+                Vec::new(),
+                "boot rejected worker".to_string(),
+                /*trigger_turn*/ false,
+            ),
+            AgentCommunicationContext::new(AgentCommunicationKind::Spawn, session.thread_id),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: session.thread_id,
+                depth: 1,
+                agent_path: Some(rejected_path),
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            SpawnAgentOptions {
+                turn_spawn_budget: Some(step_context.turn_spawn_budget.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("the exhausted budget should return a typed limit error");
+    let CodexErrorDetails::AgentLimitReached { max_threads } = error.details() else {
+        panic!("expected AgentLimitReached");
+    };
+    assert_eq!(*max_threads, 16);
 }
 
 #[tokio::test]
@@ -2070,6 +2216,116 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
             )),
         ]
     );
+}
+
+#[tokio::test]
+async fn live_followup_does_not_replace_child_turn_spawn_budget_epoch() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let mut config = turn.config.as_ref().clone();
+    config.max_spawned_threads_per_turn = 1;
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    root.thread.session.new_default_turn().await;
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "boot worker",
+                "task_name": "worker",
+            })),
+        ))
+        .await
+        .expect("the sole turn slot should spawn the worker");
+    let worker_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
+        .await
+        .expect("worker should resolve");
+    let worker = manager
+        .get_thread(worker_id)
+        .await
+        .expect("worker thread should remain live");
+    let worker_turn = worker.session.new_default_turn().await;
+    let worker_step_before = worker
+        .session
+        .capture_step_context(Arc::clone(&worker_turn), &CancellationToken::new())
+        .await
+        .expect("worker should capture its inherited turn budget");
+    let before_error = match SpawnAgentHandlerV2::default()
+        .handle(invocation_with_step_context(
+            worker.session.clone(),
+            Arc::clone(&worker_turn),
+            worker_step_before,
+            "spawn_agent",
+            function_payload(json!({
+                "message": "boot grandchild",
+                "task_name": "before_followup",
+            })),
+        ))
+        .await
+    {
+        Ok(_) => panic!("the worker should inherit the exhausted root epoch"),
+        Err(error) => error,
+    };
+
+    FollowupTaskHandlerV2
+        .handle(invocation(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            "followup_task",
+            function_payload(json!({
+                "target": "worker",
+                "message": "continue",
+            })),
+        ))
+        .await
+        .expect("followup_task should reach the live worker");
+
+    let worker_step_after = worker
+        .session
+        .capture_step_context(Arc::clone(&worker_turn), &CancellationToken::new())
+        .await
+        .expect("worker should retain a turn budget after followup");
+    let after_error = match SpawnAgentHandlerV2::default()
+        .handle(invocation_with_step_context(
+            worker.session.clone(),
+            worker_turn,
+            worker_step_after,
+            "spawn_agent",
+            function_payload(json!({
+                "message": "boot grandchild",
+                "task_name": "after_followup",
+            })),
+        ))
+        .await
+    {
+        Ok(_) => panic!("the live followup must not replace the exhausted worker epoch"),
+        Err(error) => error,
+    };
+
+    assert_eq!(
+        before_error,
+        FunctionCallError::RespondToModel(
+            "collab spawn failed: agent thread limit reached".to_string()
+        )
+    );
+    assert_eq!(after_error, before_error);
 }
 
 #[tokio::test]

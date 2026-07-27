@@ -261,6 +261,7 @@ pub(crate) const HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS: i64 = 0;
 pub(crate) const HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS: i64 =
     DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS;
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
+pub const DEFAULT_MAX_SPAWNED_THREADS_PER_TURN: usize = 16;
 const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
@@ -872,6 +873,9 @@ pub struct Config {
 
     /// User-configured maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
+
+    /// Maximum cumulative child threads created by one external root user input.
+    pub max_spawned_threads_per_turn: usize,
 
     /// Default model for spawned subagents when the spawn call does not select one.
     pub agent_default_subagent_model: Option<String>,
@@ -1517,10 +1521,10 @@ impl Config {
     }
 
     pub(crate) fn multi_agent_version_override(&self) -> Option<MultiAgentVersion> {
-        if self.features.enabled(Feature::MultiAgentV2) {
-            Some(MultiAgentVersion::V2)
-        } else if !self.agents_enabled {
+        if !self.agents_enabled {
             Some(MultiAgentVersion::Disabled)
+        } else if self.features.enabled(Feature::MultiAgentV2) {
+            Some(MultiAgentVersion::V2)
         } else {
             None
         }
@@ -3753,6 +3757,17 @@ impl Config {
                 "agents.max_concurrent_threads_per_session must be at least 1",
             ));
         }
+        let max_spawned_threads_per_turn = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.max_spawned_threads_per_turn)
+            .unwrap_or(DEFAULT_MAX_SPAWNED_THREADS_PER_TURN);
+        if max_spawned_threads_per_turn == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.max_spawned_threads_per_turn must be at least 1",
+            ));
+        }
         let agent_max_depth = cfg
             .agents
             .as_ref()
@@ -4131,6 +4146,7 @@ impl Config {
             ),
             agents_enabled,
             agent_max_threads,
+            max_spawned_threads_per_turn,
             agent_default_subagent_model,
             agent_default_subagent_reasoning_effort,
             agent_max_depth,
