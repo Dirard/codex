@@ -22,6 +22,11 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - `yield_time_ms` asks `exec` to yield early if the script is still running. Defaults to 10000 ms.
 - `max_output_tokens` sets the token budget for direct `exec` results. Defaults to 10000 tokens.
 - When the JS code is fully evaluated, the isolate's lifetime ends and unawaited promises are silently discarded.
+- Batch only already-known independent calls, using the smallest group that covers them.
+- Prefer `Promise.allSettled` when partial results are useful. Use `Promise.all` only when the whole group is all-or-nothing; it is fail-fast and does not cancel calls already started.
+- Keep discovery → adaptive follow-up, approvals, waits/resumes, and conflicting writes sequential. Runtime tool eligibility still decides whether calls actually overlap.
+- Request narrow fields and ranges because every nested result shares the outer `exec` `max_output_tokens` budget.
+- Before the module ends, pass needed values to `text`, `image`, `audio`, `generatedImage`, or `notify`, or save them with `store`.
 
 - Global helpers:
 - `exit()`: Immediately ends the current script successfully (like an early return from the top level).
@@ -912,6 +917,38 @@ bar"
         assert!(description.contains("`audio(audioUrlOrItem:"));
         assert!(description.contains("`setTimeout(callback: () => void, delayMs?: number)`"));
         assert!(description.contains("`clearTimeout(timeoutId?: number)`"));
+    }
+
+    #[test]
+    fn exec_description_documents_bounded_nested_tool_batching() {
+        let description = build_exec_tool_description(
+            &[],
+            &[],
+            &BTreeMap::new(),
+            crate::DEFAULT_EXEC_YIELD_TIME_MS,
+            /*code_mode_only*/ false,
+        );
+
+        for expected in [
+            "already-known independent calls",
+            "`Promise.allSettled` when partial results are useful",
+            "`Promise.all` only when the whole group is all-or-nothing",
+            "smallest group",
+            "discovery",
+            "approvals",
+            "waits/resumes",
+            "conflicting writes",
+            "Runtime tool eligibility still decides whether calls actually overlap",
+            "outer `exec` `max_output_tokens` budget",
+            "Before the module ends",
+            "`text`, `image`, `audio`, `generatedImage`, or `notify`",
+            "`store`",
+        ] {
+            assert!(
+                description.contains(expected),
+                "missing batching guidance {expected:?}: {description}"
+            );
+        }
     }
 
     #[test]
