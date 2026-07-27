@@ -42,6 +42,7 @@ async fn handle_spawn_agent(
     let ToolInvocation {
         session,
         turn,
+        step_context,
         payload,
         call_id,
         ..
@@ -119,6 +120,7 @@ async fn handle_spawn_agent(
                     fork_mode,
                     parent_thread_id: Some(session.thread_id),
                     environments: Some(turn.environments.to_selections()),
+                    turn_spawn_budget: Some(step_context.turn_spawn_budget.clone()),
                 },
             ),
     )

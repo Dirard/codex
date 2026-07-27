@@ -1,6 +1,7 @@
 use crate::agent::AgentStatus;
-use crate::agent::registry::AgentMetadata;
-use crate::agent::registry::AgentRegistry;
+pub(crate) use crate::agent::registry::AgentMetadata;
+pub(crate) use crate::agent::registry::AgentRegistry;
+pub(crate) use crate::agent::registry::TurnSpawnBudget;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
@@ -71,6 +72,7 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_mode: Option<SpawnAgentForkMode>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
+    pub(crate) turn_spawn_budget: Option<TurnSpawnBudget>,
 }
 
 #[derive(Clone, Debug)]

@@ -125,6 +125,36 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
 }
 
 #[test]
+fn spawn_agent_tool_v2_guides_self_contained_tasks_away_from_full_history() {
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) =
+        create_spawn_agent_tool_v2(SpawnAgentToolOptions {
+            available_models: Vec::new(),
+            agent_type_description: "role help".to_string(),
+            expose_agent_type: true,
+            hide_agent_type_model_reasoning: false,
+            expose_spawn_agent_model_overrides: true,
+            multi_agent_version: MultiAgentVersion::V2,
+            usage_hint_text: None,
+        })
+    else {
+        panic!("spawn_agent should be a function tool");
+    };
+    let fork_description = parameters
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.get("fork_turns"))
+        .and_then(|schema| schema.description.as_deref())
+        .expect("fork_turns description");
+    assert!(
+        fork_description.contains("Choose `none` or a positive integer for a self-contained task")
+    );
+    assert!(
+        fork_description
+            .contains("Use `all` only when the child depends on the full conversation history")
+    );
+}
+
+#[test]
 fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
     let tool = create_spawn_agent_tool_v1(SpawnAgentToolOptions {
         available_models: Vec::new(),

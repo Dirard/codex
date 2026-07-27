@@ -162,6 +162,34 @@ max_concurrent_threads_per_session = 7
 }
 
 #[test]
+fn merge_toml_values_preserves_max_spawned_threads_per_turn_across_layers() {
+    let mut base = parse_toml(
+        r#"
+[agents]
+max_spawned_threads_per_turn = 7
+"#,
+    );
+    let overlay = parse_toml(
+        r#"
+[agents]
+enabled = false
+"#,
+    );
+
+    merge_toml_values(&mut base, &overlay);
+
+    let config: ConfigToml = base.try_into().expect("merged config should deserialize");
+    assert_eq!(
+        config.agents,
+        Some(AgentsToml {
+            enabled: Some(false),
+            max_spawned_threads_per_turn: Some(7),
+            ..Default::default()
+        })
+    );
+}
+
+#[test]
 fn merge_toml_values_normalizes_permission_network_domains_before_overlaying() {
     let mut base = parse_toml(
         r#"
