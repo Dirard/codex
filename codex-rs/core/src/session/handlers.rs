@@ -38,6 +38,7 @@ use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
@@ -203,6 +204,10 @@ pub(super) async fn user_input_or_turn_inner(
         // new_turn_with_sub_id already emits the error event.
         return;
     };
+    if !matches!(current_context.session_source, SessionSource::SubAgent(_)) {
+        sess.start_turn_spawn_budget(current_context.config.max_spawned_threads_per_turn)
+            .await;
+    }
     if emit_thread_settings_applied {
         sess.send_event_raw_without_materializing_rollout(Event {
             id: sub_id.clone(),

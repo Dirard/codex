@@ -59,6 +59,7 @@ pub(crate) async fn handle_message_string_tool(
     let ToolInvocation {
         session,
         turn,
+        step_context,
         call_id,
         source,
         ..
@@ -86,7 +87,11 @@ pub(crate) async fn handle_message_string_tool(
     session
         .services
         .agent_control
-        .ensure_v2_agent_loaded(resume_config, receiver_thread_id)
+        .ensure_v2_agent_loaded(
+            resume_config,
+            receiver_thread_id,
+            step_context.turn_spawn_budget.clone(),
+        )
         .await
         .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
     let author = turn

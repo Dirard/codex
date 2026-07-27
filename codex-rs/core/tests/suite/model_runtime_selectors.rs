@@ -321,7 +321,7 @@ async fn unsupported_code_mode_warning_is_emitted_each_turn() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn multi_agent_config_precedence_overrides_remote_model_selector() -> Result<()> {
+async fn agents_disabled_overrides_multi_agent_v2_and_model_selector() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let mut v2_model = remote_model("test-multi-agent-v2");
@@ -373,7 +373,15 @@ async fn multi_agent_config_precedence_overrides_remote_model_selector() -> Resu
             .expect("test config should allow feature update");
     })
     .await?;
-    assert!(tool_names(&v2_body).contains(&MULTI_AGENT_V2_NAMESPACE.to_string()));
+    assert!(tool_names(&v2_body).iter().all(|name| !matches!(
+        name.as_str(),
+        "multi_agent_v1"
+            | MULTI_AGENT_V2_NAMESPACE
+            | "spawn_agent"
+            | "send_message"
+            | "wait_agent"
+            | "list_agents"
+    )));
 
     Ok(())
 }

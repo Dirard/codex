@@ -42,6 +42,75 @@ pub(crate) struct AgentMetadata {
     pub(crate) agent_role: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct TurnSpawnBudget {
+    inner: Arc<TurnSpawnBudgetInner>,
+}
+
+#[derive(Debug)]
+struct TurnSpawnBudgetInner {
+    limit: usize,
+    reserved_or_committed: AtomicUsize,
+}
+
+struct TurnSpawnReservation {
+    budget: TurnSpawnBudget,
+    active: bool,
+}
+
+impl TurnSpawnBudget {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            inner: Arc::new(TurnSpawnBudgetInner {
+                limit,
+                reserved_or_committed: AtomicUsize::new(0),
+            }),
+        }
+    }
+
+    fn reserve(&self) -> Result<TurnSpawnReservation> {
+        let mut current = self.inner.reserved_or_committed.load(Ordering::Acquire);
+        loop {
+            if current >= self.inner.limit {
+                return Err(CodexErr::new(CodexErrorDetails::AgentLimitReached {
+                    max_threads: self.inner.limit,
+                }));
+            }
+            match self.inner.reserved_or_committed.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Ok(TurnSpawnReservation {
+                        budget: self.clone(),
+                        active: true,
+                    });
+                }
+                Err(updated) => current = updated,
+            }
+        }
+    }
+}
+
+impl TurnSpawnReservation {
+    fn commit(mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for TurnSpawnReservation {
+    fn drop(&mut self) {
+        if self.active {
+            self.budget
+                .inner
+                .reserved_or_committed
+                .fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
 fn format_agent_nickname(name: &str, nickname_reset_count: usize) -> String {
     match nickname_reset_count {
         0 => name.to_string(),
@@ -81,7 +150,11 @@ impl AgentRegistry {
     pub(crate) fn reserve_spawn_slot(
         self: &Arc<Self>,
         max_threads: Option<usize>,
+        turn_spawn_budget: Option<&TurnSpawnBudget>,
     ) -> Result<SpawnReservation> {
+        let turn_spawn_reservation = turn_spawn_budget
+            .map(TurnSpawnBudget::reserve)
+            .transpose()?;
         if let Some(max_threads) = max_threads {
             if !self.try_increment_spawned(max_threads) {
                 return Err(CodexErr::new(CodexErrorDetails::AgentLimitReached {
@@ -96,6 +169,7 @@ impl AgentRegistry {
             active: true,
             reserved_agent_nickname: None,
             reserved_agent_path: None,
+            turn_spawn_reservation,
         })
     }
 
@@ -299,6 +373,7 @@ pub(crate) struct SpawnReservation {
     active: bool,
     reserved_agent_nickname: Option<String>,
     reserved_agent_path: Option<AgentPath>,
+    turn_spawn_reservation: Option<TurnSpawnReservation>,
 }
 
 impl SpawnReservation {
@@ -324,6 +399,9 @@ impl SpawnReservation {
     }
 
     pub(crate) fn commit(mut self, agent_metadata: AgentMetadata) {
+        if let Some(turn_spawn_reservation) = self.turn_spawn_reservation.take() {
+            turn_spawn_reservation.commit();
+        }
         self.reserved_agent_nickname = None;
         self.reserved_agent_path = None;
         self.state.register_spawned_thread(agent_metadata);
