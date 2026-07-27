@@ -83,18 +83,32 @@ pub(crate) async fn build_compaction_replacement_history(
     world_state: &WorldState,
     compacted_history: Vec<ResponseItemEnvelope>,
 ) -> (Vec<ResponseItemEnvelope>, WorldStateSnapshot) {
-    let (updates, snapshot) = sess
-        .build_initial_context_with_world_state(step_context, world_state)
-        .await;
-    let (prefix, context) = split_prefix_updates(updates);
-    let context = merge_world_state_updates(context);
+    let (prefix, context, snapshot) =
+        build_compaction_context_for_window(sess, step_context, world_state, None).await;
     (
         assemble_compaction_history(compacted_history, prefix, context),
         snapshot,
     )
 }
 
-fn assemble_compaction_history(
+pub(crate) async fn build_compaction_context_for_window(
+    sess: &Session,
+    step_context: &StepContext,
+    world_state: &WorldState,
+    window_ids: Option<AutoCompactWindowIds>,
+) -> (Vec<ResponseItem>, Vec<ResponseItem>, WorldStateSnapshot) {
+    let (updates, snapshot) = match window_ids {
+        Some(ids) => {
+            sess.build_initial_context_with_world_state_for_window(step_context, world_state, ids)
+                .await
+        }
+        None => sess.build_initial_context_with_world_state(step_context, world_state).await,
+    };
+    let (prefix, context) = split_prefix_updates(updates);
+    (prefix, merge_world_state_updates(context), snapshot)
+}
+
+pub(crate) fn assemble_compaction_history(
     compacted_history: Vec<ResponseItemEnvelope>,
     prefix: Vec<ResponseItem>,
     context: Vec<ResponseItem>,
