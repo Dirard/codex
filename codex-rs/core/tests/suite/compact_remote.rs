@@ -249,6 +249,21 @@ fn loop_guard_test_codex() -> TestCodexBuilder {
     })
 }
 
+struct TurnErrorRecorder {
+    errors: Arc<Mutex<Vec<CodexErrorInfo>>>,
+}
+
+impl TurnLifecycleContributor for TurnErrorRecorder {
+    fn on_turn_error<'a>(&'a self, input: TurnErrorInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            self.errors
+                .lock()
+                .expect("turn error records lock")
+                .push(input.error);
+        })
+    }
+}
+
 fn ev_follow_up_at_limit(id: &str) -> Value {
     let mut response = responses::ev_completed_with_tokens(id, /*total_tokens*/ 200_000);
     response["response"]["end_turn"] = json!(false);
@@ -1461,13 +1476,19 @@ async fn remote_compact_v2_rebuilds_candidate_until_headroom_is_available() -> R
             .count(),
         1
     );
-    let follow_up_body = requests
-        .last()
-        .expect("follow-up request missing")
-        .body_json()
-        .to_string();
-    assert!(follow_up_body.contains("RETAINED_HEADROOM_MARKER"));
-    assert!(!follow_up_body.contains("OLD_HEADROOM_MARKER"));
+    let follow_up = requests.last().expect("follow-up request missing");
+    let user_texts = follow_up.message_input_texts("user");
+    let truncated_old_text = user_texts
+        .iter()
+        .find(|text| text.contains("OLD_HEADROOM_MARKER"))
+        .expect("old user message should be retained in truncated form");
+    assert!(truncated_old_text.len() < old_user_text.len());
+    assert!(
+        user_texts
+            .iter()
+            .any(|text| text.contains("RETAINED_HEADROOM_MARKER"))
+    );
+    let follow_up_body = follow_up.body_json().to_string();
     assert!(follow_up_body.contains("HEADROOM_COMPACTION_SUMMARY"));
 
     codex.submit(Op::Shutdown).await?;
@@ -1556,21 +1577,6 @@ async fn remote_compact_v2_rejects_summary_only_candidate_without_headroom() -> 
 async fn remote_compact_without_progress_stops_after_two_retries() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    struct TurnErrorRecorder {
-        errors: Arc<Mutex<Vec<CodexErrorInfo>>>,
-    }
-
-    impl TurnLifecycleContributor for TurnErrorRecorder {
-        fn on_turn_error<'a>(&'a self, input: TurnErrorInput<'a>) -> ExtensionFuture<'a, ()> {
-            Box::pin(async move {
-                self.errors
-                    .lock()
-                    .expect("turn error records lock")
-                    .push(input.error);
-            })
-        }
-    }
-
     let errors = Arc::new(Mutex::new(Vec::new()));
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
     extensions.turn_lifecycle_contributor(Arc::new(TurnErrorRecorder {
@@ -1602,6 +1608,62 @@ async fn remote_compact_without_progress_stops_after_two_retries() -> Result<()>
     .await;
 
     harness.test().submit_turn("loop guard").await?;
+
+    assert_eq!(
+        errors.lock().expect("turn error records lock").as_slice(),
+        &[CodexErrorInfo::ContextWindowExceeded]
+    );
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 5);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| is_compact_request(request))
+            .count(),
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_failed_tool_does_not_reset_loop_guard() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.turn_lifecycle_contributor(Arc::new(TurnErrorRecorder {
+        errors: Arc::clone(&errors),
+    }));
+    let harness = TestCodexHarness::with_builder(
+        loop_guard_test_codex().with_extensions(Arc::new(extensions.build())),
+    )
+    .await?;
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("sample-1"),
+                ev_follow_up_at_limit("sample-1"),
+            ]),
+            remote_compaction_sse("compact-1", "SUMMARY_1"),
+            responses::sse(vec![
+                responses::ev_response_created("sample-2"),
+                ev_follow_up_at_limit("sample-2"),
+            ]),
+            remote_compaction_sse("compact-2", "SUMMARY_2"),
+            responses::sse(vec![
+                responses::ev_response_created("sample-3"),
+                responses::ev_function_call("failed-call", "shell_command", "{"),
+                ev_follow_up_at_limit("sample-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    harness
+        .test()
+        .submit_turn("failed tool does not reset loop guard")
+        .await?;
 
     assert_eq!(
         errors.lock().expect("turn error records lock").as_slice(),
