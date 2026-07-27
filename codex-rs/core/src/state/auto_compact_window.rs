@@ -25,6 +25,14 @@ pub(crate) struct AutoCompactWindowSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PreparedAutoCompactWindow {
+    pub(crate) base_window_number: u64,
+    pub(crate) base_window_id: Uuid,
+    pub(crate) window_number: u64,
+    pub(crate) ids: AutoCompactWindowIds,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AutoCompactWindowPrefill {
     ServerObserved(i64),
     Estimated(i64),
@@ -82,6 +90,33 @@ impl AutoCompactWindow {
         self.token_budget_reminder_delivered = false;
         self.auto_compact_fallback_delivered = false;
         (self.window_number, self.ids)
+    }
+
+    pub(super) fn prepare_advance(&self) -> PreparedAutoCompactWindow {
+        PreparedAutoCompactWindow {
+            base_window_number: self.window_number,
+            base_window_id: self.ids.window_id,
+            window_number: self.window_number.saturating_add(1),
+            ids: AutoCompactWindowIds {
+                first_window_id: self.ids.first_window_id,
+                previous_window_id: Some(self.ids.window_id),
+                window_id: Uuid::now_v7(),
+            },
+        }
+    }
+
+    pub(super) fn commit_prepared(&mut self, prepared: PreparedAutoCompactWindow) -> bool {
+        if self.window_number != prepared.base_window_number
+            || self.ids.window_id != prepared.base_window_id
+        {
+            return false;
+        }
+        self.window_number = prepared.window_number;
+        self.ids = prepared.ids;
+        self.new_context_window_requested = false;
+        self.token_budget_reminder_delivered = false;
+        self.auto_compact_fallback_delivered = false;
+        true
     }
 
     pub(super) fn claim_token_budget_reminder(&mut self) -> bool {

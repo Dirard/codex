@@ -310,6 +310,7 @@ use crate::state::AcceptedUserInputResponse;
 use crate::state::AutoCompactWindowIds;
 use crate::state::AutoCompactWindowSnapshot;
 use crate::state::PendingRequestPermissions;
+use crate::state::PreparedAutoCompactWindow;
 use crate::state::ReasoningEffortPin;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -4141,18 +4142,43 @@ impl Session {
         step_context: &StepContext,
         world_state: &WorldState,
     ) -> Vec<ResponseItem> {
+        self.build_initial_context_with_world_state_inner(step_context, world_state, None)
+            .await
+    }
+
+    pub(crate) async fn build_initial_context_with_world_state_for_window(
+        &self,
+        step_context: &StepContext,
+        world_state: &WorldState,
+        auto_compact_window_ids: AutoCompactWindowIds,
+    ) -> Vec<ResponseItem> {
+        self.build_initial_context_with_world_state_inner(
+            step_context,
+            world_state,
+            Some(auto_compact_window_ids),
+        )
+        .await
+    }
+
+    async fn build_initial_context_with_world_state_inner(
+        &self,
+        step_context: &StepContext,
+        world_state: &WorldState,
+        auto_compact_window_ids: Option<AutoCompactWindowIds>,
+    ) -> Vec<ResponseItem> {
         let turn_context = step_context.turn.as_ref();
         let mut developer_sections = Vec::<RenderedFragment>::with_capacity(8);
         let mut contextual_user_sections = Vec::<RenderedFragment>::with_capacity(2);
         let mut separate_developer_sections = Vec::<RenderedFragment>::new();
         let mut context_window_hints = Vec::new();
-        let (session_source, auto_compact_window_ids) = {
+        let (session_source, current_window_ids) = {
             let state = self.state.lock().await;
             (
                 state.session_configuration.session_source.clone(),
                 state.auto_compact_window_ids(),
             )
         };
+        let auto_compact_window_ids = auto_compact_window_ids.unwrap_or(current_window_ids);
         let separate_guardian_developer_message =
             crate::guardian::is_basic_session_source(&session_source);
         // Keep the guardian policy prompt out of the aggregated developer bundle so it
@@ -4424,6 +4450,19 @@ impl Session {
     pub(crate) async fn advance_auto_compact_window(&self) -> (u64, AutoCompactWindowIds) {
         let mut state = self.state.lock().await;
         state.advance_auto_compact_window()
+    }
+
+    pub(crate) async fn prepare_auto_compact_window(&self) -> PreparedAutoCompactWindow {
+        let state = self.state.lock().await;
+        state.prepare_auto_compact_window()
+    }
+
+    pub(crate) async fn commit_prepared_auto_compact_window(
+        &self,
+        prepared: PreparedAutoCompactWindow,
+    ) -> bool {
+        let mut state = self.state.lock().await;
+        state.commit_prepared_auto_compact_window(prepared)
     }
 
     pub(crate) async fn request_new_context_window(&self) {
