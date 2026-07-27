@@ -2070,6 +2070,25 @@ impl Session {
             ));
     }
 
+    pub(crate) fn enqueue_inter_agent_communication(
+        self: &Arc<Self>,
+        communication: InterAgentCommunication,
+    ) -> BoxFuture<'_, String> {
+        async move {
+            let id = new_submission_id();
+            handlers::inter_agent_communication(
+                self,
+                id.clone(),
+                communication,
+                /*parent_turn_id*/ None,
+                /*root_turn_id*/ None,
+            )
+            .await;
+            id
+        }
+        .boxed()
+    }
+
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
@@ -2113,8 +2132,10 @@ impl Session {
                 .analytics_events_client
                 .track_guardian_session_event(self.thread_id, &event);
         }
-        self.send_event_raw(event).await;
-        self.maybe_notify_parent_of_terminal_turn(turn_context, &legacy_source)
+        let status = self
+            .maybe_notify_parent_of_terminal_turn(turn_context, &legacy_source)
+            .await;
+        self.send_event_raw_with_persistence(event, /*persist*/ true, status)
             .await;
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
             .await;
@@ -2139,13 +2160,10 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         msg: &EventMsg,
-    ) {
+    ) -> Option<AgentStatus> {
+        let event_status = agent_status_from_event(msg);
         if turn_context.multi_agent_version != MultiAgentVersion::V2 {
-            return;
-        }
-
-        if !matches!(msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
-            return;
+            return event_status;
         }
 
         let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -2154,33 +2172,40 @@ impl Session {
             ..
         }) = &turn_context.session_source
         else {
-            return;
+            return event_status;
         };
 
+        if matches!(
+            msg,
+            EventMsg::Error(error)
+                if error
+                    .codex_error_info
+                    .as_ref()
+                    .is_some_and(CodexErrorInfo::affects_turn_status)
+        ) {
+            return None;
+        }
+
+        if !matches!(msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
+            return event_status;
+        }
+
         let status = match turn_context.terminal_error.lock().await.take() {
-            Some(error) => {
-                let status = AgentStatus::Errored(error.message);
-                self.agent_status.send_replace(status.clone());
-                status
-            }
-            None => {
-                let Some(status) = agent_status_from_event(msg) else {
-                    return;
-                };
-                status
-            }
+            Some(error) => AgentStatus::Errored(error.message),
+            None => event_status?,
         };
         if !is_final(&status) {
-            return;
+            return Some(status);
         }
 
         self.forward_child_completion_to_parent(
             turn_context,
             *parent_thread_id,
             child_agent_path,
-            status,
+            status.clone(),
         )
         .await;
+        Some(status)
     }
 
     /// Sends the standard completion envelope from a spawned MultiAgentV2 child to its parent.
@@ -2271,12 +2296,7 @@ impl Session {
         if let Err(err) = self
             .services
             .agent_control
-            .send_inter_agent_communication(
-                parent_thread_id,
-                communication,
-                context,
-                TurnStartOptions::default(),
-            )
+            .enqueue_inter_agent_communication(parent_thread_id, communication, context)
             .await
         {
             debug!("failed to notify parent thread {parent_thread_id}: {err}");
@@ -2352,12 +2372,14 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
-        self.send_event_raw_with_persistence(event, /*persist*/ true)
+        let status = agent_status_from_event(&event.msg);
+        self.send_event_raw_with_persistence(event, /*persist*/ true, status)
             .await;
     }
 
     /// Delivers an event without creating a local rollout for a thread that has not materialized.
     pub(crate) async fn send_event_raw_without_materializing_rollout(&self, event: Event) {
+        let status = agent_status_from_event(&event.msg);
         let persist = match self.current_rollout_path().await {
             Ok(Some(path)) => codex_rollout::existing_rollout_path(&path).await.is_some(),
             Ok(None) => true,
@@ -2366,10 +2388,16 @@ impl Session {
                 true
             }
         };
-        self.send_event_raw_with_persistence(event, persist).await;
+        self.send_event_raw_with_persistence(event, persist, status)
+            .await;
     }
 
-    async fn send_event_raw_with_persistence(&self, event: Event, persist: bool) {
+    async fn send_event_raw_with_persistence(
+        &self,
+        event: Event,
+        persist: bool,
+        status: Option<AgentStatus>,
+    ) {
         // Keep realtime reduction, canonical append, and delivery in the same order.
         // This lock must not acquire SessionState or ActiveTurn: event producers can
         // already hold those locks. Host presentation policies are synchronous.
@@ -2409,17 +2437,21 @@ impl Session {
         {
             warn!("failed to persist realtime history: {error}");
         }
-        self.deliver_event_raw(event).await;
+        self.send_event_raw_with_status(event, status).await;
+    }
+
+    async fn send_event_raw_with_status(&self, event: Event, status: Option<AgentStatus>) {
+        if let Some(status) = status {
+            self.agent_status.send_replace(status);
+        }
+        if let Err(error) = self.tx_event.send(event).await {
+            debug!("dropping event because channel is closed: {error}");
+        }
     }
 
     async fn deliver_event_raw(&self, event: Event) {
-        // Record the last known agent status.
-        if let Some(status) = agent_status_from_event(&event.msg) {
-            self.agent_status.send_replace(status);
-        }
-        if let Err(e) = self.tx_event.send(event).await {
-            debug!("dropping event because channel is closed: {e}");
-        }
+        let status = agent_status_from_event(&event.msg);
+        self.send_event_raw_with_status(event, status).await;
     }
 
     pub(crate) async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
