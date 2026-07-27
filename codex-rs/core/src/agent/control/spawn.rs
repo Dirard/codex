@@ -613,11 +613,14 @@ impl LocalAgentControl {
             .reserve_v2_residency_slot(&state, &config, &membership, Some(thread_id))
             .await?;
 
-        match state
+        let control = self.clone();
+        tokio::spawn(async move {
+            let _membership = membership;
+            match state
             .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
                 config,
                 initial_history,
-                agent_control: self.clone(),
+                agent_control: control.clone(),
                 session_source,
                 parent_thread_id,
                 environment_selections,
@@ -625,21 +628,18 @@ impl LocalAgentControl {
                 inherited_instructions,
                 inherited_exec_policy,
                 client_mcp_extensions,
+                turn_spawn_budget: turn_spawn_budget.clone(),
             })
             .await
         {
-            Ok(reloaded_thread) => {
+            Ok(ThreadSpawnOutcome::Spawned(reloaded_thread)) => {
                 if let Some(parent_thread_id) = owner_thread_id {
-                    self.validate_loaded_v2_child(&reloaded_thread.thread, parent_thread_id)?;
+                    control.validate_loaded_v2_child(&reloaded_thread.thread, parent_thread_id)?;
                 }
-                let runtime = self.runtime.clone();
-                // Finish registration even if the sender is cancelled while acquiring its pin.
-                tokio::spawn(async move {
-                    let _membership = membership;
-                    let residency_pin = runtime
+                    let residency_pin = control.runtime
                         .pin_v2_residency(&state, &reloaded_thread.thread)
                         .await?;
-                    runtime.registry.clear_evicted_environments(thread_id);
+                    control.runtime.registry.clear_evicted_environments(thread_id);
                     if let Some(turn_spawn_budget) = turn_spawn_budget {
                         reloaded_thread
                             .thread
@@ -668,17 +668,27 @@ impl LocalAgentControl {
                     }
                     state.notify_thread_created(reloaded_thread.thread_id);
                     Ok(residency_pin)
-                })
-                .await?
+            }
+            Ok(ThreadSpawnOutcome::AlreadyRunning(reloaded_thread)) => {
+                if let Some(parent_thread_id) = owner_thread_id {
+                    control.validate_loaded_v2_child(&reloaded_thread.thread, parent_thread_id)?;
+                }
+                let pin = control.runtime.pin_v2_residency(&state, &reloaded_thread.thread).await?;
+                control.runtime.registry.clear_evicted_environments(thread_id);
+                drop(residency_slot);
+                if let Some(budget) = turn_spawn_budget {
+                    reloaded_thread.thread.session.set_turn_spawn_budget(budget).await;
+                }
+                Ok(pin)
             }
             Err(err) => {
                 if let Ok(thread) = state.get_thread(thread_id).await {
                     if let Some(parent_thread_id) = owner_thread_id {
-                        self.validate_loaded_v2_child(&thread, parent_thread_id)?;
+                        control.validate_loaded_v2_child(&thread, parent_thread_id)?;
                     }
-                    self.runtime.registry.clear_evicted_environments(thread_id);
+                    let pin = control.runtime.pin_v2_residency(&state, &thread).await?;
+                    control.runtime.registry.clear_evicted_environments(thread_id);
                     drop(residency_slot);
-                    let pin = self.runtime.pin_v2_residency(&state, &thread).await?;
                     if let Some(budget) = turn_spawn_budget {
                         thread.session.set_turn_spawn_budget(budget).await;
                     }
@@ -686,7 +696,9 @@ impl LocalAgentControl {
                 }
                 Err(err)
             }
-        }
+            }
+        })
+        .await?
     }
 
     pub(super) async fn spawn_agent_internal(
@@ -851,17 +863,11 @@ impl LocalAgentControl {
                 self.clone(),
                 parent_thread_id,
                 inherited_exec_policy,
+                options.turn_spawn_budget.clone(),
             )
             .await
             .map_err(|err| err.with_agent_context(AgentErrorContext::ChildStartup))?;
         let child_create = child_create_started_at.elapsed();
-        if let Some(turn_spawn_budget) = options.turn_spawn_budget.clone() {
-            new_thread
-                .thread
-                .session
-                .set_turn_spawn_budget(turn_spawn_budget)
-                .await;
-        }
         agent_metadata.agent_id = Some(new_thread.thread_id);
         let mut pending_spawn =
             PendingSpawn::new(Arc::clone(&state), new_thread.thread_id, membership);
@@ -1479,7 +1485,7 @@ impl LocalAgentControl {
             .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
             .await;
 
-        let resumed_thread = state
+        let resumed_thread = match state
             .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
                 config: config.clone(),
                 initial_history,
@@ -1491,8 +1497,16 @@ impl LocalAgentControl {
                 inherited_instructions: None,
                 inherited_exec_policy,
                 client_mcp_extensions: None,
+                turn_spawn_budget: None,
             })
-            .await?;
+            .await?
+        {
+            ThreadSpawnOutcome::Spawned(resumed_thread) => resumed_thread,
+            ThreadSpawnOutcome::AlreadyRunning(resumed_thread) => {
+                drop(reservation);
+                return Ok((resumed_thread.thread_id, multi_agent_version));
+            }
+        };
         let mut agent_metadata = agent_metadata;
         agent_metadata.agent_id = Some(resumed_thread.thread_id);
         reservation.commit(agent_metadata.clone());

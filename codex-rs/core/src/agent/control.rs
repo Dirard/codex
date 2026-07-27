@@ -20,6 +20,7 @@ use crate::session_prefix::format_inter_agent_completion_message;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadIdGenerator;
 use crate::thread_manager::ThreadManagerState;
+use crate::thread_manager::ThreadSpawnOutcome;
 use crate::thread_manager::default_thread_id_generator;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_history::InitialHistory;
