@@ -407,6 +407,7 @@ pub(crate) async fn run_turn(
     track_turn_resolved_config_analytics(&sess, &turn_context, &input).await;
 
     let mut last_agent_message: Option<String> = None;
+    let mut consecutive_compactions_without_progress = 0usize;
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
@@ -539,7 +540,11 @@ pub(crate) async fn run_turn(
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
+                    made_progress,
                 } = sampling_request_output;
+                if made_progress {
+                    consecutive_compactions_without_progress = 0;
+                }
                 if model_needs_follow_up {
                     sess.input_queue
                         .accept_mailbox_delivery_for_current_turn(
@@ -609,8 +614,13 @@ pub(crate) async fn run_turn(
                 )
                 .await;
 
-                // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if should_roll_over {
+                    if !made_progress && consecutive_compactions_without_progress >= 2 {
+                        let error = CodexErr::ContextWindowExceeded.to_codex_protocol_error();
+                        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error)
+                            .await;
+                        return Ok(None);
+                    }
                     if let Err(err) = run_auto_compact(
                         &sess,
                         Arc::clone(&step_context),
@@ -636,6 +646,9 @@ pub(crate) async fn run_turn(
                         )
                         .await;
                         return Ok(None);
+                    }
+                    if !made_progress {
+                        consecutive_compactions_without_progress += 1;
                     }
                     if run_pending_session_start_hooks(&sess, &turn_context).await {
                         return Ok(None);
@@ -1882,6 +1895,7 @@ pub(crate) async fn built_tools(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
+    made_progress: bool,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -2473,11 +2487,13 @@ async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<InFlightFuture<'static>>,
     sess: Arc<Session>,
     step_context: &StepContext,
-) -> CodexResult<()> {
+) -> CodexResult<bool> {
     let turn_context = &step_context.turn;
+    let mut completed_tool_result = false;
     while let Some(res) = in_flight.next().await {
         match res {
             Ok(envelope) => {
+                completed_tool_result = true;
                 mark_thread_memory_mode_polluted_if_external_context(
                     sess.as_ref(),
                     turn_context.as_ref(),
@@ -2496,7 +2512,7 @@ async fn drain_in_flight(
             }
         }
     }
-    Ok(())
+    Ok(completed_tool_result)
 }
 
 fn assign_missing_streamed_response_item_id(
@@ -2810,6 +2826,7 @@ async fn try_run_sampling_request(
                     );
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
+                        made_progress: last_agent_message.is_some(),
                         last_agent_message,
                     });
                 }
@@ -2996,6 +3013,7 @@ async fn try_run_sampling_request(
                 }
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
+                    made_progress: last_agent_message.is_some(),
                     last_agent_message,
                 });
             }
@@ -3159,8 +3177,14 @@ async fn try_run_sampling_request(
     )
     .await;
 
-    if !in_flight.is_empty() {
-        let _tool_blocking_timing_guard = turn_context.turn_timing_state.begin_tool_blocking();
+    let tool_blocking_timing_guard = if in_flight.is_empty() {
+        None
+    } else {
+        Some(turn_context.turn_timing_state.begin_tool_blocking())
+    };
+    let completed_tool_result = if in_flight.is_empty() {
+        false
+    } else {
         let _tool_blocking_span = trace_span!(
             "codex.tool_blocking",
             codex.turn.phase = "tool_blocking",
@@ -3168,7 +3192,8 @@ async fn try_run_sampling_request(
             turn.id = %turn_context.sub_id,
         );
         drain_in_flight(&mut in_flight, sess.clone(), &step_context).await?;
-    }
+    };
+    drop(tool_blocking_timing_guard);
 
     if should_emit_token_count {
         // A tool call such as request_user_input can intentionally pause the turn. Emit token
@@ -3193,7 +3218,10 @@ async fn try_run_sampling_request(
         }
     }
 
-    outcome
+    outcome.map(|mut result| {
+        result.made_progress |= completed_tool_result;
+        result
+    })
 }
 
 pub(crate) fn get_last_assistant_message_from_turn<'a>(
