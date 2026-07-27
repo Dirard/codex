@@ -3,7 +3,8 @@
 //! Prepared prefixes are validated by the history replacement primitive before mutation.
 
 use super::*;
-use crate::compact::build_compaction_replacement_history;
+use crate::compact::assemble_compaction_history;
+use crate::compact::build_compaction_context_for_window;
 use crate::context::world_state::split_prefix_updates;
 use crate::context_manager::updates::merge_world_state_updates;
 use crate::session::CompactedHistoryInstallation;
@@ -45,7 +46,14 @@ pub(super) async fn run_compaction(
                 &replacement_step_context.turn,
             )
             .await;
-            if !status.token_limit_reached {
+            if compaction_candidate_overflow(
+                &status,
+                replacement_step_context
+                    .turn
+                    .config
+                    .model_auto_compact_token_limit_scope,
+            ) == 0
+            {
                 return Ok(true);
             }
             // The live suffix can leave an adopted prefix over budget. Try the existing
@@ -189,17 +197,76 @@ async fn build_and_install_compaction(
         sess.record_rollout_budget_usage(token_usage).await?;
         analytics_details.active_context_tokens_before = Some(token_usage.input_tokens);
     }
-    let (compacted_history, retained_images) = build_v2_compacted_history(
-        prompt_input,
-        prompt_input_metadata,
-        compaction_output,
+    let retained_image_budget = if sess.enabled(Feature::CompactionImageBudget) {
+        RetainedImageBudget::Enabled
+    } else {
+        RetainedImageBudget::Disabled
+    };
+    let mut retained_message_token_budget = RETAINED_MESSAGE_TOKEN_BUDGET;
+    let (mut compacted_history, mut retained_images) = build_v2_compacted_history(
+        &prompt_input,
+        &prompt_input_metadata,
+        compaction_output.clone(),
         sess.features().get(),
-        if sess.enabled(Feature::CompactionImageBudget) {
-            RetainedImageBudget::Enabled
-        } else {
-            RetainedImageBudget::Disabled
-        },
+        retained_message_token_budget,
+        retained_image_budget,
     );
+    let complete_replacement = if prefix.is_none() {
+        let prepared_window = sess.prepare_auto_compact_window().await;
+        let (window_prefix, context, world_state_baseline) = build_compaction_context_for_window(
+            sess.as_ref(),
+            replacement_step_context,
+            world_state,
+            Some(prepared_window.ids),
+        )
+        .await;
+        let base_instructions = sess.get_base_instructions().await;
+        let mut attempts = 0;
+        let new_history = loop {
+            let new_history = assemble_compaction_history(
+                compacted_history.clone(),
+                window_prefix.clone(),
+                context.clone(),
+            );
+            let candidate_tokens = estimate_history_token_count(&new_history, &base_instructions);
+            let scope = replacement_step_context
+                .turn
+                .config
+                .model_auto_compact_token_limit_scope;
+            let status = context_window_token_status_for_usage(
+                replacement_step_context.turn.config.as_ref(),
+                replacement_step_context.turn.model_info().as_ref(),
+                candidate_tokens,
+                matches!(scope, AutoCompactTokenLimitScope::BodyAfterPrefix)
+                    .then_some(candidate_tokens),
+            );
+            let overflow = compaction_candidate_overflow(&status, scope);
+            if overflow == 0 {
+                break new_history;
+            }
+            if retained_message_token_budget == 0 {
+                return Err(CodexErr::ContextWindowExceeded);
+            }
+            attempts += 1;
+            retained_message_token_budget = if attempts >= 3 {
+                0
+            } else {
+                retained_message_token_budget
+                    .saturating_sub(usize::try_from(overflow).unwrap_or(usize::MAX))
+            };
+            (compacted_history, retained_images) = build_v2_compacted_history(
+                &prompt_input,
+                &prompt_input_metadata,
+                compaction_output.clone(),
+                sess.features().get(),
+                retained_message_token_budget,
+                retained_image_budget,
+            );
+        };
+        Some((new_history, world_state_baseline, prepared_window))
+    } else {
+        None
+    };
     let reviewer_compaction_hash = reviewer_compaction_hash(sess, turn_context).await;
     let installed = if let Some((prefix, model_info, cutoff_world_state)) = prefix {
         let (initial_context, world_state_baseline) = sess
@@ -227,19 +294,21 @@ async fn build_and_install_compaction(
         )
         .await
     } else {
-        let (new_history, world_state_baseline) = build_compaction_replacement_history(
-            sess,
-            replacement_step_context,
-            world_state,
-            compacted_history,
-        )
-        .await;
-        let (window_number, window_ids) = sess.advance_auto_compact_window().await;
+        let (new_history, world_state_baseline, prepared_window) =
+            complete_replacement.expect("foreground compaction must have a validated history");
+        if !sess
+            .commit_prepared_auto_compact_window(prepared_window)
+            .await
+        {
+            return Err(CodexErr::Fatal(
+                "auto-compact window changed while validating replacement history".to_string(),
+            ));
+        }
         let installation = CompactedHistoryMetadata {
             input_goal_ids,
             message: String::new(),
-            window_number,
-            window_ids,
+            window_number: prepared_window.window_number,
+            window_ids: prepared_window.ids,
             compaction_response_id: Some(compaction_response_id),
             compaction_model_hash: compaction_turn_context.model_info().comp_hash.clone(),
             reviewer_compaction_hash,

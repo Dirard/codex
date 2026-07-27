@@ -17,6 +17,7 @@ use crate::compact_model_fallback::should_retry_with_current_model;
 use crate::compact_remote_history::HistoryItemGroup;
 use crate::compact_remote_history::history_item_groups;
 use crate::context::world_state::WorldState;
+use crate::context_manager::estimate_history_token_count;
 use crate::context_manager::estimate_item_token_count;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
@@ -28,6 +29,7 @@ use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::ResponsesStreamRetryState;
 use crate::responses_retry::handle_response_stream_error;
 use crate::session::RequestEffortUsage;
+use crate::session::context_window::context_window_token_status_for_usage;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
@@ -41,6 +43,7 @@ use codex_features::Feature;
 use codex_features::Features;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
@@ -106,6 +109,40 @@ enum CompactionRequestTransport<'a> {
 pub(crate) enum CompactionFallback {
     Foreground,
     Skip,
+}
+
+fn required_headroom(limit: i64) -> i64 {
+    RETAINED_MESSAGE_TOKEN_BUDGET
+        .min(usize::try_from(limit.saturating_div(4).max(0)).unwrap_or(usize::MAX))
+        .try_into()
+        .unwrap_or(i64::MAX)
+}
+
+fn overflow(used: i64, limit: Option<i64>) -> i64 {
+    limit.map_or(0, |limit| {
+        used.saturating_sub(limit.saturating_sub(required_headroom(limit)))
+            .max(0)
+    })
+}
+
+fn compaction_candidate_overflow(
+    status: &crate::session::context_window::ContextWindowTokenStatus,
+    scope: AutoCompactTokenLimitScope,
+) -> i64 {
+    match scope {
+        AutoCompactTokenLimitScope::Total => overflow(
+            status.auto_compact_scope_tokens,
+            status.auto_compact_scope_limit,
+        )
+        .max(overflow(
+            status.active_context_tokens,
+            status.full_context_window_limit,
+        )),
+        AutoCompactTokenLimitScope::BodyAfterPrefix => overflow(
+            status.active_context_tokens,
+            status.full_context_window_limit,
+        ),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -478,16 +515,18 @@ async fn collect_compaction_output(
 }
 
 fn build_v2_compacted_history(
-    prompt_input: Vec<ResponseItem>,
-    prompt_input_metadata: Vec<Option<CodexHarnessMetadata>>,
+    prompt_input: &[ResponseItem],
+    prompt_input_metadata: &[Option<CodexHarnessMetadata>],
     compaction_output: ResponseItem,
     features: &Features,
+    retained_message_token_budget: usize,
     image_budget: RetainedImageBudget,
 ) -> (Vec<ResponseItemEnvelope>, usize) {
     debug_assert_eq!(prompt_input.len(), prompt_input_metadata.len());
     let prompt_input = prompt_input
-        .into_iter()
-        .zip(prompt_input_metadata)
+        .iter()
+        .cloned()
+        .zip(prompt_input_metadata.iter().cloned())
         .map(|(item, metadata)| ResponseItemEnvelope { item, metadata })
         .collect::<Vec<_>>();
     let retained = v2_history_item_groups(prompt_input)
@@ -495,7 +534,7 @@ fn build_v2_compacted_history(
         .flat_map(HistoryItemGroup::into_items)
         .collect::<Vec<_>>();
     let mut retained =
-        truncate_retained_messages(retained, RETAINED_MESSAGE_TOKEN_BUDGET, image_budget);
+        truncate_retained_messages(retained, retained_message_token_budget, image_budget);
     let retained_image_count = retained
         .iter()
         .map(|envelope| retained_input_image_count(&envelope.item))
@@ -800,10 +839,11 @@ mod tests {
     ) -> (Vec<ResponseItemEnvelope>, usize) {
         let metadata = vec![None; input.len()];
         build_v2_compacted_history(
-            input,
-            metadata,
+            &input,
+            &metadata,
             output,
             &Features::with_defaults(),
+            RETAINED_MESSAGE_TOKEN_BUDGET,
             RetainedImageBudget::Disabled,
         )
     }
@@ -824,6 +864,45 @@ mod tests {
             annotated(items),
             max_tokens,
         ))
+    }
+
+    fn image_message(image_url: &str) -> ResponseItem {
+        ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputImage {
+                image: ImageReference::Inline {
+                    image_url: image_url.to_string(),
+                },
+                detail: None,
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }
+    }
+
+    fn mixed_text_image_message(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: text.to_string(),
+                },
+                ContentItem::InputImage {
+                    image: ImageReference::Inline {
+                        image_url: "data:image/png;base64,AAAA".to_string(),
+                    },
+                    detail: None,
+                },
+            ],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }
     }
 
     fn response_stream(events: Vec<CodexResult<ResponseEvent>>) -> ResponseStream {
@@ -911,13 +990,13 @@ mod tests {
                 features.enable(Feature::RetainClientDeveloperMessages);
             }
             let (history, _) = build_v2_compacted_history(
-                vec![
+                &[
                     harness.clone(),
                     client.clone(),
                     retained.clone(),
                     generated_notice.clone(),
                 ],
-                vec![
+                &[
                     None,
                     Some(CodexHarnessMetadata {
                         client_authored: true,
@@ -928,6 +1007,7 @@ mod tests {
                 ],
                 output.clone(),
                 &features,
+                RETAINED_MESSAGE_TOKEN_BUDGET,
                 RetainedImageBudget::Disabled,
             );
             let mut expected = vec![
@@ -1065,6 +1145,18 @@ mod tests {
                 },
                 new,
             ]
+        );
+    }
+
+    #[test]
+    fn retained_history_budget_uses_full_item_estimator_for_image_only_message() {
+        let image_only = ResponseItemEnvelope::new(image_message("data:image/png;base64,AAAA"));
+        let budget = usize::try_from(estimate_item_token_count(&image_only.item) - 1)
+            .expect("positive image estimate");
+
+        assert_eq!(
+            truncate_retained_messages_for_remote_compaction(vec![image_only], budget),
+            Vec::<ResponseItemEnvelope>::new(),
         );
     }
 
@@ -1217,6 +1309,18 @@ mod tests {
     }
 
     #[test]
+    fn retained_history_keeps_mixed_fixed_content_that_exactly_fits() {
+        let mixed = ResponseItemEnvelope::new(mixed_text_image_message("keep only what fits"));
+        let text_free = truncate_message_text_to_token_budget(mixed.clone(), 0)
+            .expect("the image remains after text is removed");
+        let fixed_cost = usize::try_from(estimate_item_token_count(&text_free.item))
+            .expect("positive fixed-content estimate");
+        let retained = truncate_retained_messages_for_remote_compaction(vec![mixed], fixed_cost);
+
+        assert_eq!(retained, vec![text_free]);
+    }
+
+    #[test]
     fn retained_history_truncation_drops_image_only_messages_after_budget_is_spent() {
         let image_only_message = ResponseItem::Message {
             status: None,
@@ -1240,6 +1344,15 @@ mod tests {
         assert_eq!(truncated, vec![newest]);
     }
 
+    #[test]
+    fn retained_history_truncation_rechecks_final_item_cost() {
+        let item = ResponseItemEnvelope::new(mixed_text_image_message(
+            "text that crosses the estimator rounding boundary",
+        ));
+        let retained = truncate_retained_messages_for_remote_compaction(vec![item], 1);
+
+        assert!(retained.is_empty());
+    }
     #[tokio::test]
     async fn collect_background_incomplete_does_not_publish_foreground_usage() {
         let stream = response_stream(vec![Err(CodexErr::new(
