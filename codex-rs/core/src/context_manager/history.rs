@@ -64,7 +64,6 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
-use codex_utils_output_truncation::truncate_function_output_payload as truncate_function_output_payload_with_policy;
 use codex_utils_output_truncation::truncate_function_output_items_with_config;
 use codex_utils_output_truncation::truncate_text_with_config;
 use std::num::NonZeroUsize;
@@ -448,26 +447,13 @@ impl ContextManager {
             }
 
             let item_truncation = metadata
-                .and_then(|metadata| metadata.fallback_token_limit_override)
+                .and_then(|metadata| metadata.history_truncation_token_limit)
                 .map(TruncationPolicy::Tokens)
                 .map_or(truncation, |policy| truncation.with_policy(policy));
             let processed = ResponseItemEnvelope {
                 item: Self::process_item(item, item_truncation),
                 metadata: metadata.cloned(),
             };
-            if let ResponseItem::FunctionCallOutput { output, .. }
-            | ResponseItem::CustomToolCallOutput { output, .. } = &mut processed.item
-            {
-                if let Some(token_limit) = metadata
-                    .and_then(|metadata| metadata.history_truncation_token_limit)
-                {
-                    truncate_function_output_payload_with_policy(
-                        output,
-                        TruncationPolicy::Tokens(token_limit),
-                        estimate_audio_token_count,
-                    );
-                }
-            }
             if let Some(review_history) = &mut self.review_history
                 && !matches!(item, ResponseItem::Message { role, content, .. }
                 if role == "user" && is_contextual_user_message_content(content))
@@ -600,16 +586,10 @@ impl ContextManager {
         &self,
         base_instructions: &BaseInstructions,
     ) -> Option<i64> {
-        let base_tokens =
-            i64::try_from(approx_token_count(&base_instructions.text)).unwrap_or(i64::MAX);
-
-        let items_tokens = self
-            .items
-            .iter()
-            .map(|envelope| estimate_item_token_count(&envelope.item))
-            .fold(0i64, i64::saturating_add);
-
-        Some(base_tokens.saturating_add(items_tokens))
+        Some(estimate_history_token_count(
+            self.items.as_slice(),
+            base_instructions,
+        ))
     }
 
     pub(crate) fn remove_first_item(&mut self) {
@@ -985,6 +965,18 @@ impl ContextManager {
         }
         cut_idx
     }
+}
+
+pub(crate) fn estimate_history_token_count(
+    items: &[ResponseItemEnvelope],
+    base_instructions: &BaseInstructions,
+) -> i64 {
+    let base_tokens =
+        i64::try_from(approx_token_count(&base_instructions.text)).unwrap_or(i64::MAX);
+    items
+        .iter()
+        .map(|envelope| estimate_item_token_count(&envelope.item))
+        .fold(base_tokens, i64::saturating_add)
 }
 
 pub(crate) fn truncate_function_output_payload(
