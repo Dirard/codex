@@ -191,7 +191,7 @@ pub enum Feature {
     Worktrees,
     /// Respect host system proxy settings for Codex-owned network clients.
     RespectSystemProxy,
-    /// Enable collab tools.
+    /// Select the V1 fallback backend when multi-agent tools are enabled.
     Collab,
     /// Enable task-path-based multi-agent routing.
     MultiAgentV2,

@@ -76,6 +76,7 @@ use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::sleep;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 
 async fn test_config_with_cli_overrides(
@@ -559,6 +560,56 @@ async fn spawn_agent_errors_when_manager_dropped() {
 }
 
 #[tokio::test]
+async fn pre_creation_spawn_failure_releases_turn_budget() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+    let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id,
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
+    let budget = TurnSpawnBudget::new(/*limit*/ 1);
+    let invalid_fork = SpawnAgentOptions {
+        fork_mode: Some(SpawnAgentForkMode::FullHistory),
+        fork_parent_spawn_call_id: None,
+        parent_thread_id: Some(parent_thread_id),
+        turn_spawn_budget: Some(budget.clone()),
+        ..Default::default()
+    };
+    assert!(
+        harness
+            .control
+            .spawn_agent_with_metadata(
+                harness.config.clone(),
+                text_input("invalid fork"),
+                Some(session_source.clone()),
+                invalid_fork,
+            )
+            .await
+            .is_err()
+    );
+
+    assert!(
+        harness
+            .control
+            .spawn_agent_with_metadata(
+                harness.config.clone(),
+                text_input("valid child"),
+                Some(session_source),
+                SpawnAgentOptions {
+                    parent_thread_id: Some(parent_thread_id),
+                    turn_spawn_budget: Some(budget),
+                    ..Default::default()
+                },
+            )
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
 async fn resume_agent_errors_when_manager_dropped() {
     let control = AgentControl::default();
     let (_home, config) = test_config().await;
@@ -871,7 +922,12 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
     let mut parent_turn = parent_thread.session.new_default_turn().await;
     match route {
         V2ReloadRoute::Sender => control
-            .ensure_v2_agent_loaded(sender_config, spawned_agent.thread_id, /*parent*/ None)
+            .ensure_v2_agent_loaded(
+                sender_config,
+                spawned_agent.thread_id,
+                /*parent*/ None,
+                TurnSpawnBudget::new(/*limit*/ 1),
+            )
             .await
             .expect("known v2 agent should reload"),
         V2ReloadRoute::NestedParent => {
@@ -952,6 +1008,56 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
         ),
         "residency reload must preserve the worker provider instead of inheriting its sender's provider",
     );
+
+    let reloaded_step = reloaded_child
+        .session
+        .capture_step_context(
+            reloaded_child.session.new_default_turn().await,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("reloaded child should capture a step");
+    let grandchild_source = |agent_path: &str| {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: spawned_agent.thread_id,
+            depth: 2,
+            agent_path: Some(AgentPath::try_from(agent_path).expect("grandchild agent path")),
+            agent_nickname: None,
+            agent_role: None,
+        })
+    };
+    harness
+        .control
+        .spawn_agent_with_metadata(
+            harness.config.clone(),
+            text_input("first grandchild"),
+            Some(grandchild_source("/root/worker/first")),
+            SpawnAgentOptions {
+                parent_thread_id: Some(spawned_agent.thread_id),
+                turn_spawn_budget: Some(reloaded_step.turn_spawn_budget.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("fresh cold-resume epoch should allow one grandchild");
+    let error = harness
+        .control
+        .spawn_agent_with_metadata(
+            harness.config.clone(),
+            text_input("second grandchild"),
+            Some(grandchild_source("/root/worker/second")),
+            SpawnAgentOptions {
+                parent_thread_id: Some(spawned_agent.thread_id),
+                turn_spawn_budget: Some(reloaded_step.turn_spawn_budget.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("cold-resume epoch should be exhausted");
+    let CodexErrorDetails::AgentLimitReached { max_threads } = error.details() else {
+        panic!("expected AgentLimitReached");
+    };
+    assert_eq!(*max_threads, 1);
 
     let communication = InterAgentCommunication::new(
         AgentPath::root(),
