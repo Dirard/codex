@@ -235,6 +235,44 @@ async fn synchronous_exit_returns_successfully() {
 }
 
 #[tokio::test]
+async fn promise_all_settled_returns_fulfilled_and_rejected_results() {
+    let service = InProcessCodeModeSession::new();
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            source: r#"
+const results = await Promise.allSettled([
+  Promise.resolve("ok"),
+  Promise.reject(new Error("boom")),
+]);
+text(JSON.stringify(results.map(({ status, value, reason }) => ({
+  status,
+  value,
+  reason: reason?.message,
+}))));
+"#
+            .to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+
+    assert_eq!(
+        response,
+        RuntimeResponse::Result {
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text:
+                    r#"[{"status":"fulfilled","value":"ok"},{"status":"rejected","reason":"boom"}]"#
+                        .to_string(),
+            }],
+            error_text: None,
+        }
+    );
+}
+
+#[tokio::test]
 async fn stored_values_are_shared_between_cells_but_not_sessions() {
     let first_session = InProcessCodeModeSession::new();
     let second_session = InProcessCodeModeSession::new();
