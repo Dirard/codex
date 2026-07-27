@@ -15,6 +15,7 @@ use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::call_trace;
+use crate::tools::parallel::ToolCallResult;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::tool_log_payload;
@@ -202,7 +203,7 @@ async fn record_stage1_output_usage_for_memory_citation(
 /// queuing any tool execution futures. This records items immediately so
 /// history and rollout stay in sync even if the turn is later cancelled.
 pub(crate) type InFlightFuture<'f> =
-    Pin<Box<dyn Future<Output = Result<ResponseItemEnvelope>> + Send + 'f>>;
+    Pin<Box<dyn Future<Output = Result<ToolCallResult>> + Send + 'f>>;
 
 #[derive(Default)]
 pub(crate) struct OutputItemResult {
