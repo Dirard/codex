@@ -84,6 +84,7 @@ pub(crate) struct CompactedHistoryMetadata {
 pub(crate) async fn build_compaction_initial_context(
     sess: &Session,
     initial_context_injection: &InitialContextInjection,
+    auto_compact_window_ids: Option<AutoCompactWindowIds>,
 ) -> (Vec<ResponseItem>, Option<Arc<WorldState>>) {
     // Return the rendered state with its items so history and its baseline stay identical.
     match initial_context_injection {
@@ -91,12 +92,23 @@ pub(crate) async fn build_compaction_initial_context(
             world_state,
             step_context,
         } => {
-            let items = sess
-                .build_initial_context_with_world_state(
-                    step_context.turn.as_ref(),
-                    world_state.as_ref(),
-                )
-                .await;
+            let items = match auto_compact_window_ids {
+                Some(auto_compact_window_ids) => {
+                    sess.build_initial_context_with_world_state_for_window(
+                        step_context.turn.as_ref(),
+                        world_state.as_ref(),
+                        auto_compact_window_ids,
+                    )
+                    .await
+                }
+                None => {
+                    sess.build_initial_context_with_world_state(
+                        step_context.turn.as_ref(),
+                        world_state.as_ref(),
+                    )
+                    .await
+                }
+            };
             (items, Some(Arc::clone(world_state)))
         }
         InitialContextInjection::DoNotInject => (Vec::new(), None),
@@ -353,8 +365,12 @@ async fn run_compact_task_inner_impl(
     }
     let (window_number, window_ids) = sess.advance_auto_compact_window().await;
 
-    let (initial_context, world_state_baseline) =
-        build_compaction_initial_context(sess.as_ref(), &initial_context_injection).await;
+    let (initial_context, world_state_baseline) = build_compaction_initial_context(
+        sess.as_ref(),
+        &initial_context_injection,
+        /*auto_compact_window_ids*/ None,
+    )
+    .await;
     if !initial_context.is_empty() {
         new_history =
             insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
