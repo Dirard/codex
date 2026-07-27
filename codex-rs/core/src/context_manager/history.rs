@@ -183,16 +183,10 @@ impl ContextManager {
         &self,
         base_instructions: &BaseInstructions,
     ) -> Option<i64> {
-        let base_tokens =
-            i64::try_from(approx_token_count(&base_instructions.text)).unwrap_or(i64::MAX);
-
-        let items_tokens = self
-            .items
-            .iter()
-            .map(estimate_item_token_count)
-            .fold(0i64, i64::saturating_add);
-
-        Some(base_tokens.saturating_add(items_tokens))
+        Some(estimate_history_token_count(
+            self.items.as_slice(),
+            base_instructions,
+        ))
     }
 
     pub(crate) fn remove_first_item(&mut self) {
@@ -447,6 +441,18 @@ impl ContextManager {
         }
         cut_idx
     }
+}
+
+pub(crate) fn estimate_history_token_count(
+    items: &[ResponseItem],
+    base_instructions: &BaseInstructions,
+) -> i64 {
+    let base_tokens =
+        i64::try_from(approx_token_count(&base_instructions.text)).unwrap_or(i64::MAX);
+    items
+        .iter()
+        .map(estimate_item_token_count)
+        .fold(base_tokens, i64::saturating_add)
 }
 
 pub(crate) fn truncate_function_output_payload(

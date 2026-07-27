@@ -25,28 +25,41 @@ pub(crate) async fn context_window_token_status(
     turn_context: &TurnContext,
 ) -> ContextWindowTokenStatus {
     let active_context_tokens = sess.get_total_token_usage().await;
+    let auto_compact_window_prefill_tokens =
+        match turn_context.config.model_auto_compact_token_limit_scope {
+            AutoCompactTokenLimitScope::Total => None,
+            AutoCompactTokenLimitScope::BodyAfterPrefix => {
+                sess.auto_compact_window_snapshot()
+                    .await
+                    .prefill_input_tokens
+            }
+        };
+    context_window_token_status_for_usage(
+        turn_context,
+        active_context_tokens,
+        auto_compact_window_prefill_tokens,
+    )
+}
 
+pub(crate) fn context_window_token_status_for_usage(
+    turn_context: &TurnContext,
+    active_context_tokens: i64,
+    auto_compact_window_prefill_tokens: Option<i64>,
+) -> ContextWindowTokenStatus {
     // Count either the full active context or only the tokens added after the initial prefix.
-    let (auto_compact_scope_tokens, auto_compact_scope_limit, auto_compact_window_prefill_tokens) =
+    let (auto_compact_scope_tokens, auto_compact_scope_limit) =
         match turn_context.config.model_auto_compact_token_limit_scope {
             AutoCompactTokenLimitScope::Total => (
                 active_context_tokens,
                 turn_context.model_info.auto_compact_token_limit(),
-                None,
             ),
             AutoCompactTokenLimitScope::BodyAfterPrefix => {
-                let window = sess.auto_compact_window_snapshot().await;
-                let baseline = window.prefill_input_tokens.unwrap_or(active_context_tokens);
-
+                let baseline = auto_compact_window_prefill_tokens.unwrap_or(active_context_tokens);
                 let scope_limit = turn_context
                     .config
                     .model_auto_compact_token_limit
                     .or_else(|| turn_context.model_info.auto_compact_token_limit());
-                (
-                    active_context_tokens.saturating_sub(baseline),
-                    scope_limit,
-                    window.prefill_input_tokens,
-                )
+                (active_context_tokens.saturating_sub(baseline), scope_limit)
             }
         };
 
@@ -89,3 +102,7 @@ pub(crate) async fn context_window_token_status(
         token_limit_reached,
     }
 }
+
+#[cfg(test)]
+#[path = "context_window_tests.rs"]
+mod tests;
