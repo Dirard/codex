@@ -5,7 +5,6 @@ on:
     branches:
       - codex/fork
     paths:
-      - .github/workflows/fork-rust-release.yml
       - codex-rs/Cargo.toml
   workflow_dispatch:
     inputs:
@@ -13,6 +12,10 @@ on:
         description: Git ref or commit to build
         required: true
         default: codex/fork
+        type: string
+      build_matrix:
+        description: Optional JSON array of runner and target pairs
+        required: false
         type: string
 
 permissions:
@@ -26,7 +29,7 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    timeout-minutes: 240
     defaults:
       run:
         working-directory: codex-rs
@@ -35,15 +38,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-musl
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-          - runner: macos-15
-            target: aarch64-apple-darwin
+        include: ${{ fromJSON(inputs.build_matrix || '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-musl"},{"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-musl"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin"},{"runner":"macos-15","target":"aarch64-apple-darwin"}]') }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
