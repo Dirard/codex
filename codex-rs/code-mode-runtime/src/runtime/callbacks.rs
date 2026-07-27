@@ -3,6 +3,7 @@ use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use super::EXIT_SENTINEL;
 use super::RuntimeEvent;
 use super::RuntimeState;
+use super::send_runtime_event;
 use super::timers;
 use super::value::json_to_v8;
 use super::value::normalize_output_audio;
@@ -89,10 +90,19 @@ pub(super) fn text_callback(
             return;
         }
     };
-    if let Some(state) = scope.get_slot::<RuntimeState>() {
-        let _ = state.event_tx.send(RuntimeEvent::ContentItem(
-            FunctionCallOutputContentItem::InputText { text },
-        ));
+    let result = scope.get_slot_mut::<RuntimeState>().map(|state| {
+        let result = send_runtime_event(
+            &state.event_tx,
+            RuntimeEvent::ContentItem(FunctionCallOutputContentItem::InputText { text }),
+        );
+        if result.is_ok() {
+            state.clear_settled_tool_outcomes();
+        }
+        result
+    });
+    if let Some(Err(error_text)) = result {
+        throw_type_error(scope, &error_text);
+        return;
     }
     retval.set(v8::undefined(scope).into());
 }
@@ -111,8 +121,16 @@ pub(super) fn audio_callback(
         Ok(audio_item) => audio_item,
         Err(()) => return,
     };
-    if let Some(state) = scope.get_slot::<RuntimeState>() {
-        let _ = state.event_tx.send(RuntimeEvent::ContentItem(audio_item));
+    let result = scope.get_slot_mut::<RuntimeState>().map(|state| {
+        let result = send_runtime_event(&state.event_tx, RuntimeEvent::ContentItem(audio_item));
+        if result.is_ok() {
+            state.clear_settled_tool_outcomes();
+        }
+        result
+    });
+    if let Some(Err(error_text)) = result {
+        throw_type_error(scope, &error_text);
+        return;
     }
     retval.set(v8::undefined(scope).into());
 }
@@ -144,8 +162,16 @@ pub(super) fn image_callback(
         Ok(image_item) => image_item,
         Err(()) => return,
     };
-    if let Some(state) = scope.get_slot::<RuntimeState>() {
-        let _ = state.event_tx.send(RuntimeEvent::ContentItem(image_item));
+    let result = scope.get_slot_mut::<RuntimeState>().map(|state| {
+        let result = send_runtime_event(&state.event_tx, RuntimeEvent::ContentItem(image_item));
+        if result.is_ok() {
+            state.clear_settled_tool_outcomes();
+        }
+        result
+    });
+    if let Some(Err(error_text)) = result {
+        throw_type_error(scope, &error_text);
+        return;
     }
     retval.set(v8::undefined(scope).into());
 }
@@ -171,13 +197,20 @@ pub(super) fn generated_image_callback(
         Ok(image_item) => image_item,
         Err(()) => return,
     };
-    if let Some(state) = scope.get_slot::<RuntimeState>() {
-        let _ = state.event_tx.send(RuntimeEvent::ContentItem(image_item));
+    let result = scope.get_slot_mut::<RuntimeState>().map(|state| {
+        send_runtime_event(&state.event_tx, RuntimeEvent::ContentItem(image_item))?;
         if let Some(text) = output_hint {
-            let _ = state.event_tx.send(RuntimeEvent::ContentItem(
-                FunctionCallOutputContentItem::InputText { text },
-            ));
+            send_runtime_event(
+                &state.event_tx,
+                RuntimeEvent::ContentItem(FunctionCallOutputContentItem::InputText { text }),
+            )?;
         }
+        state.clear_settled_tool_outcomes();
+        Ok::<(), String>(())
+    });
+    if let Some(Err(error_text)) = result {
+        throw_type_error(scope, &error_text);
+        return;
     }
     retval.set(v8::undefined(scope).into());
 }
@@ -232,6 +265,7 @@ pub(super) fn store_callback(
     if let Some(state) = scope.get_slot_mut::<RuntimeState>() {
         state.stored_values.insert(key.clone(), serialized.clone());
         state.stored_value_writes.insert(key, serialized);
+        state.clear_settled_tool_outcomes();
     }
 }
 
@@ -283,11 +317,22 @@ pub(super) fn notify_callback(
         throw_type_error(scope, "notify expects non-empty text");
         return;
     }
-    if let Some(state) = scope.get_slot::<RuntimeState>() {
-        let _ = state.event_tx.send(RuntimeEvent::Notify {
-            call_id: state.tool_call_id.clone(),
-            text,
-        });
+    let result = scope.get_slot_mut::<RuntimeState>().map(|state| {
+        let result = send_runtime_event(
+            &state.event_tx,
+            RuntimeEvent::Notify {
+                call_id: state.tool_call_id.clone(),
+                text,
+            },
+        );
+        if result.is_ok() {
+            state.clear_settled_tool_outcomes();
+        }
+        result
+    });
+    if let Some(Err(error_text)) = result {
+        throw_type_error(scope, &error_text);
+        return;
     }
     retval.set(v8::undefined(scope).into());
 }

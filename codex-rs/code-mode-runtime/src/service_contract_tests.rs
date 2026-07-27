@@ -526,9 +526,14 @@ async fn natural_completion_cleans_up_callbacks_before_responding() {
         RuntimeResponse::Result {
             code_mode_host_duration: None,
             cell_id: cell_id("1"),
-            content_items: vec![FunctionCallOutputContentItem::InputText {
-                text: "done".to_string(),
-            }],
+            content_items: vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "done".to_string(),
+                },
+                FunctionCallOutputContentItem::InputText {
+                    text: "1 started nested tool call is still unsettled; the runtime does not wait for them automatically, and they may already have produced side effects.".to_string(),
+                },
+            ],
             error_text: None,
         }
     );
