@@ -57,7 +57,12 @@ impl Handler {
             session
                 .services
                 .agent_control
-                .ensure_v2_agent_loaded(resume_config, receiver_thread_id, /*parent*/ None)
+                .ensure_v2_agent_loaded(
+                    resume_config,
+                    receiver_thread_id,
+                    /*parent*/ None,
+                    Some(step_context.turn_spawn_budget.clone()),
+                )
                 .await
                 .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
         }

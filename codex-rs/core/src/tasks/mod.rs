@@ -310,7 +310,7 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
-        let (pending_items, _) = self.input_queue.drain_mailbox_input_items().await;
+        let (pending_items, _, _) = self.input_queue.drain_mailbox_input_items().await;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             self.record_started_turn(&turn_context.sub_id).await;
@@ -481,11 +481,15 @@ impl Session {
         {
             return;
         }
-        let (input, mut start_options) =
+        let (input, mut start_options, turn_spawn_budget) =
             self.input_queue.get_pending_input(&self.active_turn).await;
-        if !input.iter().any(
+        let has_trigger_turn = input.iter().any(
             |item| matches!(item, TurnInput::InterAgentCommunication(mail) if mail.trigger_turn),
-        ) {
+        );
+        if has_trigger_turn && let Some(turn_spawn_budget) = turn_spawn_budget {
+            self.set_turn_spawn_budget(turn_spawn_budget).await;
+        }
+        if !has_trigger_turn {
             // Queue-only mail wakes durable sleep without selecting a new task's settings.
             start_options.cyber_access_program = self
                 .reference_context_item()

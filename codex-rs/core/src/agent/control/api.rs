@@ -101,16 +101,29 @@ impl AgentControl for LocalAgentControl {
                 resume_config,
                 input,
                 mut start_options,
+                turn_spawn_budget,
             } = request;
             let target = self.resolve_target(caller, &target)?;
             let (metadata, submission_id) = match input {
                 AgentInput::UserInput(input) => {
                     let receiver = self.get_agent_metadata(target);
                     if receiver.is_some() {
-                        self.ensure_v2_agent_loaded(resume_config, target, /*parent*/ None)
+                        self.ensure_v2_agent_loaded(
+                            resume_config,
+                            target,
+                            /*parent*/ None,
+                            turn_spawn_budget.clone(),
+                        )
                             .await?;
                     }
-                    let submission_id = self.send_input(target, input, start_options).await?;
+                    let submission_id = self
+                        .send_input_with_spawn_budget(
+                            target,
+                            input,
+                            start_options,
+                            turn_spawn_budget,
+                        )
+                        .await?;
                     (receiver.unwrap_or_default(), submission_id)
                 }
                 AgentInput::Message { message, mode } => {
@@ -131,7 +144,16 @@ impl AgentControl for LocalAgentControl {
                             "target agent is missing an agent_path".to_string(),
                         )
                     })?;
-                    self.ensure_v2_agent_loaded(resume_config, target, /*parent*/ None)
+                    let turn_spawn_budget =
+                        (mode == MessageDeliveryMode::TriggerTurn)
+                            .then_some(turn_spawn_budget)
+                            .flatten();
+                    self.ensure_v2_agent_loaded(
+                        resume_config,
+                        target,
+                        /*parent*/ None,
+                        turn_spawn_budget.clone(),
+                    )
                         .await?;
                     let communication = message.into_communication(author, receiver_path, mode);
                     let kind = match mode {
@@ -142,11 +164,12 @@ impl AgentControl for LocalAgentControl {
                         MessageDeliveryMode::TriggerTurn => AgentCommunicationKind::Followup,
                     };
                     let submission_id = self
-                        .send_inter_agent_communication(
+                        .send_inter_agent_communication_with_spawn_budget(
                             target,
                             communication,
                             AgentCommunicationContext::new(kind, caller),
                             start_options,
+                            turn_spawn_budget,
                         )
                         .await?;
                     (receiver, submission_id)

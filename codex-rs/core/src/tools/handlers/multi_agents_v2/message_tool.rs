@@ -51,6 +51,7 @@ pub(super) async fn handle_message_string_tool(
     let ToolInvocation {
         session,
         turn,
+        step_context,
         call_id,
         source,
         ..
@@ -78,6 +79,7 @@ pub(super) async fn handle_message_string_tool(
                 cyber_access_program: turn.cyber_access_program,
                 ..Default::default()
             },
+            turn_spawn_budget: Some(step_context.turn_spawn_budget.clone()),
         })
         .await
         .map_err(|err| collab_v2_agent_error(receiver_thread_id, err))?;

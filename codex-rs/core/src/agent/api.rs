@@ -10,6 +10,7 @@ use crate::agent::types::AgentMetadata;
 use crate::agent::types::LiveAgent;
 use crate::agent::types::MessageDeliveryMode;
 use crate::agent::types::SpawnAgentOptions;
+use crate::agent::types::TurnSpawnBudget;
 use crate::codex_thread::GuardianRootSnapshot;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::config::Config;
@@ -217,6 +218,8 @@ pub struct SendRequest {
     pub resume_config: Config,
     pub input: AgentInput,
     pub start_options: TurnStartOptions,
+    /// Captured caller epoch, adopted only when this request starts a new task.
+    pub turn_spawn_budget: Option<TurnSpawnBudget>,
 }
 
 pub struct DeliveryReceipt {

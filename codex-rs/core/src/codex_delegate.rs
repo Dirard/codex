@@ -260,10 +260,11 @@ pub(crate) async fn run_codex_thread_one_shot(
                     .send(Submission {
                         id: "shutdown".to_string(),
                         op: Op::Shutdown {},
-                        trace: None,
-                        parent_turn_id: None,
-                        root_turn_id: None,
-                        residency_guard: None,
+                    trace: None,
+                    parent_turn_id: None,
+                    root_turn_id: None,
+                    turn_spawn_budget: None,
+                    residency_guard: None,
                     })
                     .await;
                 child_cancel.cancel();

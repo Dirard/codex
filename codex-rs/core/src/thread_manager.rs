@@ -3,6 +3,7 @@ mod shared_instructions;
 
 use crate::CodexAppsToolsCache;
 use crate::agent::LocalAgentControl;
+use crate::agent::types::TurnSpawnBudget;
 use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
@@ -1238,13 +1239,22 @@ impl ThreadManager {
             ))
         })?;
         let config = parent.session.get_config().await.as_ref().clone();
+        let turn_spawn_budget = parent
+            .session
+            .current_turn_spawn_budget(config.max_spawned_threads_per_turn)
+            .await;
         let agent_control = parent
             .session
             .services
             .local_agent_runtime
             .control(parent.session.session_id());
         agent_control
-            .ensure_v2_agent_loaded(config, child_thread_id, Some(parent))
+            .ensure_v2_agent_loaded(
+                config,
+                child_thread_id,
+                Some(parent),
+                Some(turn_spawn_budget),
+            )
             .await
     }
 
@@ -1698,6 +1708,24 @@ impl ThreadManagerState {
         parent_turn_id: Option<String>,
         root_turn_id: Option<String>,
     ) -> CodexResult<String> {
+        self.send_op_with_spawn_budget(
+            thread_id,
+            op,
+            parent_turn_id,
+            root_turn_id,
+            /*turn_spawn_budget*/ None,
+        )
+        .await
+    }
+
+    pub(crate) async fn send_op_with_spawn_budget(
+        &self,
+        thread_id: ThreadId,
+        op: Op,
+        parent_turn_id: Option<String>,
+        root_turn_id: Option<String>,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
+    ) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
         let residency_guard = if matches!(op, Op::InterAgentCommunication { .. }) {
             thread
@@ -1723,6 +1751,7 @@ impl ThreadManagerState {
                 parent_turn_id,
                 root_turn_id,
                 residency_guard,
+                turn_spawn_budget,
             )
             .await
     }
