@@ -1112,9 +1112,9 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
 
     let resumed = manager
         .resume_thread_from_rollout(
-            config,
-            rollout_path,
-            auth_manager,
+            config.clone(),
+            rollout_path.clone(),
+            auth_manager.clone(),
             /*parent_trace*/ None,
             /*supports_openai_form_elicitation*/ false,
         )
@@ -1122,6 +1122,33 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
         .expect("resume active source thread");
     assert_eq!(resumed.thread_id, source.thread_id);
     assert!(Arc::ptr_eq(&resumed.thread, &source.thread));
+
+    let initial_history = manager
+        .initial_history_from_rollout_path(rollout_path)
+        .await
+        .expect("reload active source history");
+    let parent_thread_id = initial_history.get_resumed_parent_thread_id();
+    let (session_source, _) = initial_history
+        .get_resumed_session_sources()
+        .expect("resumed history should retain session source");
+    let outcome = manager
+        .state
+        .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
+            config,
+            initial_history,
+            agent_control: manager.agent_control(),
+            session_source,
+            parent_thread_id,
+            inherited_environments: None,
+            inherited_exec_policy: None,
+            turn_spawn_budget: None,
+        })
+        .await
+        .expect("identify the active thread");
+    let ThreadSpawnOutcome::AlreadyRunning(already_running) = outcome else {
+        panic!("expected an already-running outcome");
+    };
+    assert!(Arc::ptr_eq(&already_running.thread, &source.thread));
 
     source
         .thread

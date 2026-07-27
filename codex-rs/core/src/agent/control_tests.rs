@@ -13,8 +13,14 @@ use crate::context::SubagentNotification;
 use crate::init_state_db;
 use crate::session::TurnInput;
 use crate::thread_manager::StartThreadOptions;
+use crate::thread_manager::build_models_manager;
+use crate::thread_manager::thread_store_from_config;
 use assert_matches::assert_matches;
 use codex_extension_api::ExtensionDataInit;
+use codex_extension_api::ExtensionFuture;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_login::AuthManager;
@@ -848,6 +854,181 @@ async fn cold_resume_starts_fresh_turn_spawn_budget_epoch() {
         .into_iter()
         .find(|entry| *entry == expected);
     assert_eq!(captured, Some(expected));
+}
+
+#[tokio::test]
+async fn cancelled_cold_resume_finishes_residency_accounting() {
+    struct BlockingThreadResume {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    impl ThreadLifecycleContributor<Config> for BlockingThreadResume {
+        fn on_thread_resume<'a>(
+            &'a self,
+            _input: ThreadResumeInput<'a>,
+        ) -> ExtensionFuture<'a, ()> {
+            Box::pin(async move {
+                self.entered.notify_one();
+                self.release.notified().await;
+            })
+        }
+    }
+
+    let (home, mut config) = test_config().await;
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    let _ = config.features.enable(Feature::Sqlite);
+    config.multi_agent_v2.max_concurrent_threads_per_session = 2;
+    let state_db = init_state_db(&config).await;
+    let observer = Arc::new(BlockingThreadResume {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.thread_lifecycle_contributor(observer.clone());
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
+    let manager = Arc::new(ThreadManager::new(
+        &config,
+        Arc::clone(&auth_manager),
+        build_models_manager(&config, auth_manager),
+        crate::CodexAppsToolsCache::default(),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        Arc::new(extensions.build()),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, state_db),
+        /*agent_graph_store*/ None,
+        uuid::Uuid::new_v4().to_string(),
+        /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
+    ));
+    let control = manager.agent_control();
+    let parent = manager
+        .start_thread(StartThreadOptions::new(config.clone()))
+        .await
+        .expect("start parent thread");
+    let agent_path = AgentPath::try_from("/root/worker").expect("agent path");
+    let spawned_agent = control
+        .spawn_agent_with_metadata(
+            config.clone(),
+            text_input("hello child"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: parent.thread_id,
+                depth: 1,
+                agent_path: Some(agent_path),
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            SpawnAgentOptions {
+                parent_thread_id: Some(parent.thread_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("spawn child");
+    let child = manager
+        .get_thread(spawned_agent.thread_id)
+        .await
+        .expect("child thread");
+    child
+        .inject_response_items(vec![assistant_message(
+            "child persisted",
+            Some(MessagePhase::FinalAnswer),
+        )])
+        .await
+        .expect("persist child rollout");
+    let terminal_turn = child.session.new_default_turn().await;
+    child
+        .session
+        .send_event(
+            terminal_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: terminal_turn.sub_id.clone(),
+                started_at: None,
+                last_agent_message: Some("done".to_string()),
+                error: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        )
+        .await;
+    *child.session.active_turn.lock().await = None;
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if control.get_status(spawned_agent.thread_id).await
+                == AgentStatus::Completed(Some("done".to_string()))
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("child should become unloadable");
+
+    let state = control.upgrade().expect("thread manager should be live");
+    let eviction_slot = control
+        .reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
+        .await
+        .expect("cold eviction slot");
+    drop(eviction_slot);
+    assert!(manager.get_thread(spawned_agent.thread_id).await.is_err());
+
+    let mut thread_created = manager.subscribe_thread_created();
+    let resume_task = tokio::spawn({
+        let control = control.clone();
+        let config = config.clone();
+        async move {
+            control
+                .ensure_v2_agent_loaded(
+                    config,
+                    spawned_agent.thread_id,
+                    TurnSpawnBudget::new(/*limit*/ 1),
+                )
+                .await
+        }
+    });
+    timeout(Duration::from_secs(5), observer.entered.notified())
+        .await
+        .expect("cold resume should enter lifecycle");
+    assert!(manager.get_thread(spawned_agent.thread_id).await.is_ok());
+    resume_task.abort();
+    assert!(
+        resume_task
+            .await
+            .expect_err("cancelled resume task should not finish")
+            .is_cancelled()
+    );
+    observer.release.notify_one();
+
+    assert_eq!(
+        timeout(Duration::from_secs(5), thread_created.recv())
+            .await
+            .expect("cold resume should publish creation notification")
+            .expect("thread-created channel should stay open"),
+        spawned_agent.thread_id
+    );
+    let Err(err) = control
+        .reserve_v2_residency_slot(&state, &config, Some(spawned_agent.thread_id))
+        .await
+    else {
+        panic!("resumed protected thread should consume the only residency slot");
+    };
+    let CodexErrorDetails::AgentLimitReached { max_threads } = err.details() else {
+        panic!("expected AgentLimitReached");
+    };
+    assert_eq!(*max_threads, 1);
+
+    manager
+        .get_thread(spawned_agent.thread_id)
+        .await
+        .expect("resumed child thread")
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown resumed child");
+    drop(home);
 }
 
 #[tokio::test]

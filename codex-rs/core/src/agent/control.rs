@@ -18,6 +18,7 @@ use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadManagerState;
+use crate::thread_manager::ThreadSpawnOutcome;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;

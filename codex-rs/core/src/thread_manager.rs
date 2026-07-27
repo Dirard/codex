@@ -1,6 +1,7 @@
 use crate::CodexAppsToolsCache;
 use crate::SkillsService;
 use crate::agent::AgentControl;
+use crate::agent::control::TurnSpawnBudget;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
@@ -129,6 +130,19 @@ pub struct NewThread {
     pub thread_id: ThreadId,
     pub thread: Arc<CodexThread>,
     pub session_configured: SessionConfiguredEvent,
+}
+
+pub(crate) enum ThreadSpawnOutcome {
+    Spawned(NewThread),
+    AlreadyRunning(NewThread),
+}
+
+impl ThreadSpawnOutcome {
+    fn into_new_thread(self) -> NewThread {
+        match self {
+            Self::Spawned(thread) | Self::AlreadyRunning(thread) => thread,
+        }
+    }
 }
 
 // TODO(ccunningham): Add an explicit non-interrupting live-turn snapshot once
@@ -268,6 +282,7 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) inherited_environments: Option<TurnEnvironmentSnapshot>,
     pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+    pub(crate) turn_spawn_budget: Option<TurnSpawnBudget>,
 }
 
 /// Shared, `Arc`-owned state for [`ThreadManager`]. This `Arc` is required to have a single
@@ -788,6 +803,7 @@ impl ThreadManager {
             options.metrics_service_name,
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
+            /*turn_spawn_budget*/ None,
             options.parent_trace,
             environments,
             options.thread_extension_init,
@@ -795,6 +811,7 @@ impl ThreadManager {
             /*user_shell_override*/ None,
         ))
         .await
+        .map(ThreadSpawnOutcome::into_new_thread)
     }
 
     // TODO(jif) merge with fork_agent
@@ -895,6 +912,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
+            /*turn_spawn_budget*/ None,
             parent_trace,
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
@@ -902,6 +920,7 @@ impl ThreadManager {
             /*user_shell_override*/ None,
         ))
         .await
+        .map(ThreadSpawnOutcome::into_new_thread)
     }
 
     pub(crate) async fn start_thread_with_user_shell_override_for_tests(
@@ -970,6 +989,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
+            /*turn_spawn_budget*/ None,
             /*parent_trace*/ None,
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
@@ -977,6 +997,7 @@ impl ThreadManager {
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
+        .map(ThreadSpawnOutcome::into_new_thread)
     }
 
     /// Removes the thread from the manager's internal map, though the thread is stored
@@ -1489,6 +1510,7 @@ impl ThreadManagerState {
         &self,
         config: Config,
         agent_control: AgentControl,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_new_thread_with_source(
             config,
@@ -1501,6 +1523,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
+            turn_spawn_budget,
             /*environments*/ None,
         ))
         .await
@@ -1519,6 +1542,7 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
         let environments = environments.unwrap_or_else(|| {
@@ -1544,6 +1568,7 @@ impl ThreadManagerState {
             metrics_service_name,
             inherited_environments,
             inherited_exec_policy,
+            turn_spawn_budget,
             /*parent_trace*/ None,
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
@@ -1551,12 +1576,13 @@ impl ThreadManagerState {
             /*user_shell_override*/ None,
         ))
         .await
+        .map(ThreadSpawnOutcome::into_new_thread)
     }
 
     pub(crate) async fn resume_thread_with_history_with_source(
         &self,
         options: ResumeThreadWithHistoryOptions,
-    ) -> CodexResult<NewThread> {
+    ) -> CodexResult<ThreadSpawnOutcome> {
         let ResumeThreadWithHistoryOptions {
             config,
             initial_history,
@@ -1565,6 +1591,7 @@ impl ThreadManagerState {
             parent_thread_id,
             inherited_environments,
             inherited_exec_policy,
+            turn_spawn_budget,
         } = options;
         let environments = default_thread_environment_selections(
             self.environment_manager.as_ref(),
@@ -1588,6 +1615,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             inherited_environments,
             inherited_exec_policy,
+            turn_spawn_budget,
             /*parent_trace*/ None,
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
@@ -1610,6 +1638,7 @@ impl ThreadManagerState {
         forked_from_thread_id: Option<ThreadId>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
         thread_extension_init: ExtensionDataInit,
     ) -> CodexResult<NewThread> {
@@ -1636,6 +1665,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             inherited_environments,
             inherited_exec_policy,
+            turn_spawn_budget,
             /*parent_trace*/ None,
             environments,
             thread_extension_init,
@@ -1643,6 +1673,7 @@ impl ThreadManagerState {
             /*user_shell_override*/ None,
         ))
         .await
+        .map(ThreadSpawnOutcome::into_new_thread)
     }
 
     /// Spawn a new thread with optional history and register it with the manager.
@@ -1681,6 +1712,7 @@ impl ThreadManagerState {
             metrics_service_name,
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
+            /*turn_spawn_budget*/ None,
             parent_trace,
             environments,
             thread_extension_init,
@@ -1688,6 +1720,7 @@ impl ThreadManagerState {
             user_shell_override,
         ))
         .await
+        .map(ThreadSpawnOutcome::into_new_thread)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1708,12 +1741,13 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
         thread_extension_init: ExtensionDataInit,
         supports_openai_form_elicitation: bool,
         user_shell_override: Option<crate::shell::Shell>,
-    ) -> CodexResult<NewThread> {
+    ) -> CodexResult<ThreadSpawnOutcome> {
         let source_changed_during_startup = Arc::new(AtomicBool::new(false));
         {
             let mut starting = self
@@ -1736,11 +1770,11 @@ impl ThreadManagerState {
                             resumed.conversation_id
                         )));
                     }
-                    return Ok(NewThread {
+                    return Ok(ThreadSpawnOutcome::AlreadyRunning(NewThread {
                         thread_id: resumed.conversation_id,
                         session_configured: thread.session_configured(),
                         thread,
-                    });
+                    }));
                 }
                 threads.remove(&resumed.conversation_id);
             }
@@ -1804,6 +1838,7 @@ impl ThreadManagerState {
             metrics_service_name,
             inherited_environments,
             inherited_exec_policy,
+            turn_spawn_budget,
             parent_rollout_thread_trace,
             user_shell_override,
             parent_trace,
@@ -1829,7 +1864,7 @@ impl ThreadManagerState {
         if is_resumed_thread {
             new_thread.thread.emit_thread_resume_lifecycle().await;
         }
-        Ok(new_thread)
+        Ok(ThreadSpawnOutcome::Spawned(new_thread))
     }
 
     async fn finalize_thread_spawn(
