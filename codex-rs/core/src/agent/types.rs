@@ -4,9 +4,15 @@
 use crate::context::MultiAgentRoleInstructions;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
+use codex_protocol::error::Result;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::turn_input::CyberAccessProgram;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 /// Registry identity shared by loaded and unloaded agents.
 /// Registered agents have an `agent_id`; a reserved spawn can still be awaiting its ID.
@@ -36,6 +42,77 @@ pub struct SpawnAgentOptions {
     pub environments: Option<Vec<TurnEnvironmentSelection>>,
     pub multi_agent_v2_usage_hints: Option<ResolvedMultiAgentV2UsageHints>,
     pub cyber_access_program: Option<CyberAccessProgram>,
+    pub turn_spawn_budget: Option<TurnSpawnBudget>,
+}
+
+/// Cumulative spawn budget for the root user input that requested a delegation.
+#[derive(Clone, Debug)]
+pub struct TurnSpawnBudget {
+    inner: Arc<TurnSpawnBudgetInner>,
+}
+
+#[derive(Debug)]
+struct TurnSpawnBudgetInner {
+    limit: usize,
+    reserved_or_committed: AtomicUsize,
+}
+
+impl TurnSpawnBudget {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            inner: Arc::new(TurnSpawnBudgetInner {
+                limit,
+                reserved_or_committed: AtomicUsize::new(0),
+            }),
+        }
+    }
+
+    pub(crate) fn reserve(&self) -> Result<TurnSpawnReservation> {
+        let mut current = self.inner.reserved_or_committed.load(Ordering::Acquire);
+        loop {
+            if current >= self.inner.limit {
+                return Err(CodexErr::new(CodexErrorDetails::AgentLimitReached {
+                    max_threads: self.inner.limit,
+                }));
+            }
+            match self.inner.reserved_or_committed.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Ok(TurnSpawnReservation {
+                        budget: self.clone(),
+                        active: true,
+                    });
+                }
+                Err(updated) => current = updated,
+            }
+        }
+    }
+}
+
+pub(crate) struct TurnSpawnReservation {
+    budget: TurnSpawnBudget,
+    active: bool,
+}
+
+impl TurnSpawnReservation {
+    pub(crate) fn commit(mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for TurnSpawnReservation {
+    fn drop(&mut self) {
+        if self.active {
+            self.budget
+                .inner
+                .reserved_or_committed
+                .fetch_sub(1, Ordering::AcqRel);
+        }
+    }
 }
 
 /// Identity and status observed from a loaded agent, without a handle to its runtime.
