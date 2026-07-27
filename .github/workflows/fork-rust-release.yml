@@ -38,7 +38,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.build_matrix || '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-musl"},{"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-musl"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin"},{"runner":"macos-15","target":"aarch64-apple-darwin"}]') }}
+        include: ${{ fromJSON(inputs.build_matrix || '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-musl"},{"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-musl"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin"},{"runner":"macos-15","target":"aarch64-apple-darwin"},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc"}]') }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -94,6 +94,7 @@ jobs:
           echo "${target_no_jitter}=1" >> "$GITHUB_ENV"
 
       - name: Configure rusty_v8 artifacts
+        if: runner.os != 'Windows'
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: ${{ matrix.target }}
@@ -117,6 +118,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "$TARGET" == "x86_64-pc-windows-msvc" ]]; then
+            export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+          fi
           cargo build --target "$TARGET" --release \
             --bin codex \
             --bin codex-app-server \
@@ -139,33 +143,49 @@ jobs:
           fi
 
           for binary in "${binaries[@]}"; do
-            source_path="target/${TARGET}/release/${binary}"
-            output_name="${binary}-${TARGET}"
+            extension=""
+            if [[ "$TARGET" == *windows* ]]; then
+              extension=".exe"
+            fi
+            source_path="target/${TARGET}/release/${binary}${extension}"
+            output_name="${binary}-${TARGET}${extension}"
             if [[ "$binary" != "bwrap" ]]; then
               if [[ "$TARGET" == *apple-darwin ]]; then
                 strip -S -x "$source_path"
-              else
+              elif [[ "$TARGET" != *windows* ]]; then
                 strip --strip-debug --strip-unneeded "$source_path"
               fi
             fi
             cp "$source_path" "$dest/$output_name"
-            chmod 0755 "$dest/$output_name"
-            tar -C "$dest" -czf "$dest/${output_name}.tar.gz" "$output_name"
+            if [[ "$TARGET" == *windows* ]]; then
+              (cd "$dest" && 7z a -tzip "${output_name}.zip" "$output_name")
+            else
+              chmod 0755 "$dest/$output_name"
+              tar -C "$dest" -czf "$dest/${output_name}.tar.gz" "$output_name"
+            fi
             rm "$dest/$output_name"
           done
 
           (
             cd "$dest"
+            shopt -s nullglob
+            archives=(./*.tar.gz ./*.zip)
             if command -v sha256sum >/dev/null 2>&1; then
-              sha256sum ./*.tar.gz > SHA256SUMS
+              sha256sum "${archives[@]}" > SHA256SUMS
             else
-              shasum -a 256 ./*.tar.gz > SHA256SUMS
+              shasum -a 256 "${archives[@]}" > SHA256SUMS
             fi
           )
 
-          tar -C "$dest" -xzf "$dest/codex-${TARGET}.tar.gz"
-          "$dest/codex-${TARGET}" --version | grep -F "$VERSION"
-          rm "$dest/codex-${TARGET}"
+          if [[ "$TARGET" == *windows* ]]; then
+            7z x "$dest/codex-${TARGET}.exe.zip" "-o$dest"
+            "$dest/codex-${TARGET}.exe" --version | grep -F "$VERSION"
+            rm "$dest/codex-${TARGET}.exe"
+          else
+            tar -C "$dest" -xzf "$dest/codex-${TARGET}.tar.gz"
+            "$dest/codex-${TARGET}" --version | grep -F "$VERSION"
+            rm "$dest/codex-${TARGET}"
+          fi
 
       - name: Upload release binaries
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
