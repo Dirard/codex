@@ -218,7 +218,9 @@ impl AgentControl {
                     .map_err(|err| {
                         CodexErr::InvalidRequest(format!("invalid stored agent path: {err}"))
                     })?;
-                let mut reservation = self.state.reserve_spawn_slot(/*max_threads*/ None)?;
+                let mut reservation = self.state.reserve_spawn_slot(
+                    /*max_threads*/ None, /*turn_spawn_budget*/ None,
+                )?;
                 let mut metadata = self.prepare_agent_metadata(
                     &mut reservation,
                     config,
@@ -317,6 +319,7 @@ impl AgentControl {
         mut config: Config,
         thread_id: ThreadId,
         parent: Option<Arc<CodexThread>>,
+        turn_spawn_budget: TurnSpawnBudget,
     ) -> CodexResult<()> {
         let state = self.upgrade()?;
         let parent = if let Some(parent) = parent {
@@ -581,6 +584,11 @@ impl AgentControl {
                     self.validate_loaded_v2_child(&reloaded_thread.thread, parent_thread_id)?;
                 }
                 self.state.clear_evicted_environments(thread_id);
+                reloaded_thread
+                    .thread
+                    .session
+                    .set_turn_spawn_budget(turn_spawn_budget)
+                    .await;
                 residency_slot.commit(reloaded_thread.thread_id);
                 state.notify_thread_created(reloaded_thread.thread_id);
                 Ok(())
@@ -625,6 +633,14 @@ impl AgentControl {
             && session_source
                 .as_ref()
                 .is_some_and(is_v2_resident_session_source);
+        let reservation_max_threads = if spawn_uses_v2_residency {
+            None
+        } else {
+            agent_max_threads
+        };
+        let mut reservation = self
+            .state
+            .reserve_spawn_slot(reservation_max_threads, options.turn_spawn_budget.as_ref())?;
         let residency_slot = if spawn_uses_v2_residency {
             Some(
                 self.reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
@@ -633,12 +649,6 @@ impl AgentControl {
         } else {
             None
         };
-        let reservation_max_threads = if spawn_uses_v2_residency {
-            None
-        } else {
-            agent_max_threads
-        };
-        let mut reservation = self.state.reserve_spawn_slot(reservation_max_threads)?;
         let inheritance = SpawnAgentThreadInheritance {
             environments: self
                 .inherited_environments_for_source(&state, session_source.as_ref())
@@ -712,6 +722,13 @@ impl AgentControl {
             }
             (None, _, _) => Box::pin(state.spawn_new_thread(config.clone(), self.clone())).await?,
         };
+        if let Some(turn_spawn_budget) = options.turn_spawn_budget.clone() {
+            new_thread
+                .thread
+                .session
+                .set_turn_spawn_budget(turn_spawn_budget)
+                .await;
+        }
         agent_metadata.agent_id = Some(new_thread.thread_id);
         reservation.commit(agent_metadata.clone());
         if let Some(residency_slot) = residency_slot {
@@ -1240,7 +1257,9 @@ impl AgentControl {
             )
             .await;
         let agent_max_threads = config.effective_agent_max_threads(multi_agent_version);
-        let mut reservation = self.state.reserve_spawn_slot(agent_max_threads)?;
+        let mut reservation = self
+            .state
+            .reserve_spawn_slot(agent_max_threads, /*turn_spawn_budget*/ None)?;
         let (session_source, agent_metadata) = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
