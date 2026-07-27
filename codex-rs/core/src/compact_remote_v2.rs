@@ -1123,6 +1123,29 @@ mod tests {
     }
 
     #[test]
+    fn retained_history_truncates_text_only_message_to_full_item_budget() {
+        let original_text = "latest context ".repeat(64);
+        let item = message("user", &original_text, None);
+        let budget = usize::try_from(estimate_item_token_count(&item) - 1)
+            .expect("positive message estimate");
+
+        let retained = truncate_retained_messages_for_remote_compaction(vec![item], budget);
+
+        let [ResponseItem::Message { content, .. }] = retained.as_slice() else {
+            panic!("expected one retained message");
+        };
+        let [ContentItem::InputText { text }] = content.as_slice() else {
+            panic!("expected one retained text item");
+        };
+        assert!(!text.is_empty());
+        assert_ne!(text, &original_text);
+        assert!(
+            estimate_item_token_count(&retained[0])
+                <= i64::try_from(budget).expect("budget fits in i64")
+        );
+    }
+
+    #[test]
     fn retained_history_keeps_mixed_fixed_content_that_exactly_fits() {
         let mixed =
             ResponseItemEnvelope::new(mixed_text_image_message("keep only what fits"));
