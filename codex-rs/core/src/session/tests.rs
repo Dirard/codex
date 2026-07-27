@@ -230,6 +230,14 @@ pub(crate) fn update_turn_settings_for_test(
 
 impl StepContext {
     pub(crate) fn for_test(turn: Arc<TurnContext>) -> Arc<Self> {
+        let turn_spawn_budget = TurnSpawnBudget::new(turn.config.max_spawned_threads_per_turn);
+        Self::for_test_with_turn_spawn_budget(turn, turn_spawn_budget)
+    }
+
+    pub(crate) fn for_test_with_turn_spawn_budget(
+        turn: Arc<TurnContext>,
+        turn_spawn_budget: TurnSpawnBudget,
+    ) -> Arc<Self> {
         let environments = turn.environments.clone();
         // Unit fixtures still customize the legacy Config directly.
         // Production capture instead takes the turn's current snapshot.
@@ -248,6 +256,7 @@ impl StepContext {
             settings: Arc::new(settings),
             session_telemetry: turn.session_telemetry.clone(),
             turn: Arc::clone(&turn),
+            turn_spawn_budget,
             environments,
             selected_capability_roots: Vec::new(),
             executor_capability_discovery: None,
@@ -272,6 +281,9 @@ impl StepContext {
         self
     }
 }
+
+#[path = "turn_spawn_budget_tests.rs"]
+mod turn_spawn_budget_tests;
 
 mod guardian_tests;
 

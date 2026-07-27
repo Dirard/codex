@@ -1066,9 +1066,13 @@ impl ThreadManager {
             ))
         })?;
         let config = parent.session.get_config().await.as_ref().clone();
+        let turn_spawn_budget = parent
+            .session
+            .current_turn_spawn_budget(config.max_spawned_threads_per_turn)
+            .await;
         let agent_control = parent.session.services.agent_control.clone();
         agent_control
-            .ensure_v2_agent_loaded(config, child_thread_id, Some(parent))
+            .ensure_v2_agent_loaded(config, child_thread_id, Some(parent), turn_spawn_budget)
             .await
     }
 
