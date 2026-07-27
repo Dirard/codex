@@ -81,19 +81,40 @@ pub(super) fn resolve_tool_response(
     let tc = std::pin::pin!(v8::TryCatch::new(scope));
     let mut tc = tc.init();
     let resolver = v8::Local::new(&tc, &resolver);
-    match response {
+    let settled = match response {
         Ok(result) => {
             let value = json_to_v8(&mut tc, &result)
                 .ok_or_else(|| "failed to serialize tool response".to_string())?;
-            resolver.resolve(&tc, value);
+            let Some(state) = tc.get_slot_mut::<RuntimeState>() else {
+                return Err("runtime state unavailable".to_string());
+            };
+            state.settled_tool_outcomes_since_sink =
+                state.settled_tool_outcomes_since_sink.saturating_add(1);
+            resolver.resolve(&tc, value)
         }
         Err(error_text) => {
             let value = v8::String::new(&tc, &error_text)
                 .ok_or_else(|| "failed to allocate tool error".to_string())?;
-            resolver.reject(&tc, value.into());
+            let Some(state) = tc.get_slot_mut::<RuntimeState>() else {
+                return Err("runtime state unavailable".to_string());
+            };
+            state.settled_tool_outcomes_since_sink =
+                state.settled_tool_outcomes_since_sink.saturating_add(1);
+            resolver.reject(&tc, value.into())
         }
+    };
+    if settled != Some(true) && !tc.has_caught() {
+        if let Some(state) = tc.get_slot_mut::<RuntimeState>() {
+            state.settled_tool_outcomes_since_sink =
+                state.settled_tool_outcomes_since_sink.saturating_sub(1);
+        }
+        return Err("failed to settle tool response".to_string());
     }
     if tc.has_caught() {
+        if let Some(state) = tc.get_slot_mut::<RuntimeState>() {
+            state.settled_tool_outcomes_since_sink =
+                state.settled_tool_outcomes_since_sink.saturating_sub(1);
+        }
         return Err(tc
             .exception()
             .map(|exception| value_to_error_text(&mut tc, exception))
@@ -106,15 +127,21 @@ pub(super) fn completion_state(
     scope: &mut v8::PinScope<'_, '_>,
     pending_promise: Option<&v8::Global<v8::Promise>>,
 ) -> CompletionState {
-    let stored_value_writes = scope
+    let (stored_value_writes, diagnostic) = scope
         .get_slot::<RuntimeState>()
-        .map(|state| state.stored_value_writes.clone())
+        .map(|state| {
+            (
+                state.stored_value_writes.clone(),
+                state.completion_diagnostic(),
+            )
+        })
         .unwrap_or_default();
 
     let Some(pending_promise) = pending_promise else {
         return CompletionState::Completed {
             stored_value_writes,
             error_text: None,
+            diagnostic,
         };
     };
 
@@ -124,6 +151,7 @@ pub(super) fn completion_state(
         v8::PromiseState::Fulfilled => CompletionState::Completed {
             stored_value_writes,
             error_text: None,
+            diagnostic,
         },
         v8::PromiseState::Rejected => {
             let result = promise.result(scope);
@@ -135,6 +163,7 @@ pub(super) fn completion_state(
             CompletionState::Completed {
                 stored_value_writes,
                 error_text,
+                diagnostic,
             }
         }
     }
