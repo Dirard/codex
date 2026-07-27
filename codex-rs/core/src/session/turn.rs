@@ -2235,8 +2235,9 @@ async fn drain_in_flight(
     let mut completed_tool_result = false;
     while let Some(res) = in_flight.next().await {
         match res {
-            Ok(envelope) => {
-                completed_tool_result = true;
+            Ok(tool_result) => {
+                completed_tool_result |= tool_result.made_progress;
+                let envelope = tool_result.response;
                 mark_thread_memory_mode_polluted_if_external_context(
                     sess.as_ref(),
                     turn_context.as_ref(),
