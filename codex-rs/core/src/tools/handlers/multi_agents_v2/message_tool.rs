@@ -46,6 +46,7 @@ pub(super) async fn handle_message_string_tool(
     let ToolInvocation {
         session,
         turn,
+        step_context,
         call_id,
         source,
         ..
@@ -61,6 +62,7 @@ pub(super) async fn handle_message_string_tool(
             receiver_thread_id,
             agent_message_from_tool(message, &source),
             mode,
+            step_context.turn_spawn_budget.clone(),
         )
         .await
         .map_err(|err| match err {
