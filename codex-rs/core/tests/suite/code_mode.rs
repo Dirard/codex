@@ -1077,7 +1077,7 @@ text(JSON.stringify(result));
 
 #[cfg_attr(windows, ignore = "flaky on windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_nested_tool_calls_can_run_in_parallel() -> Result<()> {
+async fn code_mode_promise_all_settled_nested_tool_calls_run_in_parallel() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1098,7 +1098,7 @@ const args = {
   },
 };
 
-await Promise.all([
+await Promise.allSettled([
   tools.test_sync_tool(args),
   tools.test_sync_tool(args),
 ]);
@@ -1113,12 +1113,14 @@ const args = {
   },
 };
 
-const results = await Promise.all([
+const results = await Promise.allSettled([
   tools.test_sync_tool(args),
   tools.test_sync_tool(args),
 ]);
 
-text(JSON.stringify(results));
+text(JSON.stringify(results.map((result) => (
+  result.status === "fulfilled" ? result.value : "rejected"
+))));
 "#;
 
     let response_mock = responses::mount_sse_sequence(
