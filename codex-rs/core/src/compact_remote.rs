@@ -301,19 +301,33 @@ async fn run_remote_compact_task_inner_impl(
 
 pub(crate) async fn process_compacted_history(
     sess: &Session,
-    mut compacted_history: Vec<ResponseItem>,
+    compacted_history: Vec<ResponseItem>,
     initial_context_injection: &InitialContextInjection,
 ) -> (Vec<ResponseItem>, Option<Arc<WorldState>>) {
     // Mid-turn compaction is the only path that must inject initial context above the last user
     // message in the replacement history. Pre-turn compaction instead injects context after the
     // compaction item, but mid-turn compaction keeps the compaction item last for model training.
-    let (initial_context, world_state_baseline) =
-        build_compaction_initial_context(sess, initial_context_injection).await;
+    let (initial_context, world_state_baseline) = build_compaction_initial_context(
+        sess,
+        initial_context_injection,
+        /*auto_compact_window_ids*/ None,
+    )
+    .await;
 
-    compacted_history.retain(should_keep_compacted_history_item);
     (
-        insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context),
+        process_compacted_history_with_initial_context(compacted_history, &initial_context),
         world_state_baseline,
+    )
+}
+
+pub(crate) fn process_compacted_history_with_initial_context(
+    mut compacted_history: Vec<ResponseItem>,
+    initial_context: &[ResponseItem],
+) -> Vec<ResponseItem> {
+    compacted_history.retain(should_keep_compacted_history_item);
+    insert_initial_context_before_last_real_user_or_summary(
+        compacted_history,
+        initial_context.to_vec(),
     )
 }
 
