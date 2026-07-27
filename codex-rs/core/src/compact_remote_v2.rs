@@ -629,24 +629,57 @@ fn truncate_retained_messages_for_remote_compaction(
             continue;
         }
 
-        let fixed_tokens =
-            truncate_message_text_to_token_budget(item.clone(), /*max_tokens*/ 0)
-                .map(|text_free| {
-                    usize::try_from(estimate_item_token_count(&text_free)).unwrap_or(usize::MAX)
-                })
-                .unwrap_or(0);
+        let fixed_item = truncate_message_text_to_token_budget(item.clone(), /*max_tokens*/ 0)
+            .or_else(|| {
+                let mut text_wrapper = item.clone();
+                let ResponseItem::Message { content, .. } = &mut text_wrapper else {
+                    return None;
+                };
+                let text_index = content.iter().position(|content_item| {
+                    matches!(
+                        content_item,
+                        ContentItem::InputText { .. } | ContentItem::OutputText { .. }
+                    )
+                })?;
+                let mut text_item = content.remove(text_index);
+                match &mut text_item {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                        text.clear();
+                    }
+                    ContentItem::InputImage { .. } | ContentItem::InputAudio { .. } => {
+                        unreachable!("text index must identify text content")
+                    }
+                }
+                content.clear();
+                content.push(text_item);
+                Some(text_wrapper)
+            });
+        let fixed_tokens = fixed_item
+            .as_ref()
+            .map(|fixed_item| {
+                usize::try_from(estimate_item_token_count(fixed_item)).unwrap_or(usize::MAX)
+            })
+            .unwrap_or(0);
         if fixed_tokens > remaining {
             continue;
         }
 
-        let text_budget = remaining - fixed_tokens;
-        if let Some(candidate) = truncate_message_text_to_token_budget(item, text_budget) {
+        let mut text_budget = remaining - fixed_tokens;
+        while let Some(candidate) = truncate_message_text_to_token_budget(item.clone(), text_budget)
+        {
             let final_tokens =
                 usize::try_from(estimate_item_token_count(&candidate)).unwrap_or(usize::MAX);
             if final_tokens <= remaining {
                 remaining -= final_tokens;
                 truncated_reversed.push(candidate);
+                break;
             }
+            let overflow = final_tokens.saturating_sub(remaining).max(1);
+            let next_text_budget = text_budget.saturating_sub(overflow);
+            if next_text_budget == text_budget {
+                break;
+            }
+            text_budget = next_text_budget;
         }
     }
     truncated_reversed.reverse();
@@ -879,6 +912,29 @@ mod tests {
         assert_eq!(
             truncate_retained_messages_for_remote_compaction(vec![image_only], budget),
             Vec::<ResponseItem>::new(),
+        );
+    }
+
+    #[test]
+    fn retained_history_truncates_text_only_message_to_full_item_budget() {
+        let original_text = "latest context ".repeat(64);
+        let item = message("user", &original_text, None);
+        let budget = usize::try_from(estimate_item_token_count(&item) - 1)
+            .expect("positive message estimate");
+
+        let retained = truncate_retained_messages_for_remote_compaction(vec![item], budget);
+
+        let [ResponseItem::Message { content, .. }] = retained.as_slice() else {
+            panic!("expected one retained message");
+        };
+        let [ContentItem::InputText { text }] = content.as_slice() else {
+            panic!("expected one retained text item");
+        };
+        assert!(!text.is_empty());
+        assert_ne!(text, &original_text);
+        assert!(
+            estimate_item_token_count(&retained[0])
+                <= i64::try_from(budget).expect("budget fits in i64")
         );
     }
 
