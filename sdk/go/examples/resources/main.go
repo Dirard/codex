@@ -262,6 +262,7 @@ func resources(ctx context.Context, client *codex.Client) error {
 	// codex-go-sdk-docs:thread/delete
 	// codex-go-sdk-docs:thread/unarchive
 	// codex-go-sdk-docs:thread/list
+	// codex-go-sdk-docs:threadSection/list
 	// codex-go-sdk-docs:thread/search
 	// codex-go-sdk-docs:thread/searchOccurrences
 	thread, err := client.Threads.Resume(ctx, codex.ThreadResumeOptions{ThreadID: "thread-id"})
@@ -274,6 +275,7 @@ func resources(ctx context.Context, client *codex.Client) error {
 	_, _ = client.Threads.Delete(ctx, protocol.ThreadDeleteParams{})
 	_, _ = client.Threads.Unarchive(ctx, protocol.ThreadUnarchiveParams{})
 	_, _ = client.Threads.List(ctx, protocol.ThreadListParams{})
+	_, _ = client.Threads.ListSections(ctx, protocol.ThreadSectionListParams{})
 	_, _ = client.Threads.Search(ctx, protocol.ThreadSearchParams{})
 	_, _ = client.Threads.SearchOccurrences(ctx, protocol.ThreadSearchOccurrencesParams{})
 	// codex-go-sdk-resource:WindowsSandbox

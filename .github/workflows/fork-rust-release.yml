@@ -148,7 +148,8 @@ jobs:
               extension=".exe"
             fi
             source_path="target/${TARGET}/release/${binary}${extension}"
-            output_name="${binary}-${TARGET}${extension}"
+            archive_name="${binary}-${TARGET}${extension}"
+            output_name="${binary}${extension}"
             if [[ "$binary" != "bwrap" ]]; then
               if [[ "$TARGET" == *apple-darwin ]]; then
                 strip -S -x "$source_path"
@@ -158,10 +159,10 @@ jobs:
             fi
             cp "$source_path" "$dest/$output_name"
             if [[ "$TARGET" == *windows* ]]; then
-              (cd "$dest" && 7z a -tzip "${output_name}.zip" "$output_name")
+              (cd "$dest" && 7z a -tzip "${archive_name}.zip" "$output_name")
             else
               chmod 0755 "$dest/$output_name"
-              tar -C "$dest" -czf "$dest/${output_name}.tar.gz" "$output_name"
+              tar -C "$dest" -czf "$dest/${archive_name}.tar.gz" "$output_name"
             fi
             rm "$dest/$output_name"
           done
@@ -179,12 +180,12 @@ jobs:
 
           if [[ "$TARGET" == *windows* ]]; then
             7z x "$dest/codex-${TARGET}.exe.zip" "-o$dest"
-            "$dest/codex-${TARGET}.exe" --version | grep -F "$VERSION"
-            rm "$dest/codex-${TARGET}.exe"
+            "$dest/codex.exe" --version | grep -F "$VERSION"
+            rm "$dest/codex.exe"
           else
             tar -C "$dest" -xzf "$dest/codex-${TARGET}.tar.gz"
-            "$dest/codex-${TARGET}" --version | grep -F "$VERSION"
-            rm "$dest/codex-${TARGET}"
+            "$dest/codex" --version | grep -F "$VERSION"
+            rm "$dest/codex"
           fi
 
       - name: Upload release binaries

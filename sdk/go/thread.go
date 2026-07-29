@@ -263,6 +263,13 @@ func (c *ThreadsClient) List(ctx context.Context, params protocol.ThreadListPara
 	return c.client.Raw().ThreadList(ctx, params)
 }
 
+func (c *ThreadsClient) ListSections(ctx context.Context, params protocol.ThreadSectionListParams) (protocol.ThreadSectionListResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.ThreadSectionListResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().ThreadSectionList(ctx, params)
+}
+
 func (c *ThreadsClient) ListLoaded(ctx context.Context, params protocol.ThreadLoadedListParams) (protocol.ThreadLoadedListResponse, error) {
 	if c == nil || c.client == nil {
 		return protocol.ThreadLoadedListResponse{}, &ClosedError{}

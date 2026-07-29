@@ -1854,7 +1854,13 @@ impl Session {
     ) -> BoxFuture<'_, String> {
         async move {
             let id = new_submission_id();
-            handlers::inter_agent_communication(self, id.clone(), communication).await;
+            handlers::inter_agent_communication(
+                self,
+                id.clone(),
+                communication,
+                /*parent_turn_id*/ None,
+            )
+            .await;
             id
         }
         .boxed()

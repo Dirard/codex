@@ -135,6 +135,13 @@ func TestThreadsResourceWrappersSendMatrixMethods(t *testing.T) {
 			},
 		},
 		{
+			name: "list sections", method: "threadSection/list",
+			call: func() error {
+				_, err := client.Threads.ListSections(ctx, protocol.ThreadSectionListParams{})
+				return err
+			},
+		},
+		{
 			name: "list loaded", method: "thread/loaded/list",
 			call: func() error {
 				_, err := client.Threads.ListLoaded(ctx, protocol.ThreadLoadedListParams{})

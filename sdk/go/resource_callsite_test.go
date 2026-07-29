@@ -783,9 +783,9 @@ var compiledResourceCallsites = map[string]compiledResourceCallsite{
 	"externalAgentConfig/import/recordHistory": {
 		wrapperName: "ExternalAgents.RecordImportHistory",
 		convention:  "thin",
-		callsite:    `client.ExternalAgents.RecordImportHistory(ctx, protocol.ExternalAgentConfigImportHistoryRecordParams{ProviderID: "codex", ItemTypeResults: []protocol.ExternalAgentConfigImportTypeResult{}})`,
+		callsite:    `client.ExternalAgents.RecordImportHistory(ctx, protocol.ExternalAgentConfigImportHistoryRecordParams{ProviderID: "codex", ItemTypeResults: []protocol.ExternalAgentConfigImportHistoryRecordTypeResultParams{}})`,
 		compile: func(ctx context.Context, client *Client) {
-			response, err := client.ExternalAgents.RecordImportHistory(ctx, protocol.ExternalAgentConfigImportHistoryRecordParams{ProviderID: "codex", ItemTypeResults: []protocol.ExternalAgentConfigImportTypeResult{}})
+			response, err := client.ExternalAgents.RecordImportHistory(ctx, protocol.ExternalAgentConfigImportHistoryRecordParams{ProviderID: "codex", ItemTypeResults: []protocol.ExternalAgentConfigImportHistoryRecordTypeResultParams{}})
 			_, _ = response, err
 		},
 	},
@@ -1007,6 +1007,15 @@ var compiledResourceCallsites = map[string]compiledResourceCallsite{
 		callsite:    `client.Threads.List(ctx, protocol.ThreadListParams{})`,
 		compile: func(ctx context.Context, client *Client) {
 			response, err := client.Threads.List(ctx, protocol.ThreadListParams{})
+			_, _ = response, err
+		},
+	},
+	"threadSection/list": {
+		wrapperName: "Threads.ListSections",
+		convention:  "thin",
+		callsite:    `client.Threads.ListSections(ctx, protocol.ThreadSectionListParams{})`,
+		compile: func(ctx context.Context, client *Client) {
+			response, err := client.Threads.ListSections(ctx, protocol.ThreadSectionListParams{})
 			_, _ = response, err
 		},
 	},

@@ -215,17 +215,28 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
         sse(vec![ev_completed("resp-parent-turn-assistant")]),
     )
     .await;
-    for (text, is_subagent) in [(NESTED_CALL_ID, true), (QUEUE_CALL_ID, false)] {
+    for (text, is_role_model) in [(NESTED_CALL_ID, true), (QUEUE_CALL_ID, false)] {
         mount_sse_once_match(
             &server,
             move |request: &wiremock::Request| {
                 body_contains(request, text)
-                    && request_has_input_type(request, "agent_message") == is_subagent
+                    && request_has_model(request, ROLE_MODEL) == is_role_model
+                    && !body_contains(request, FOLLOWUP_TASK)
             },
             sse(vec![ev_completed("resp-parent-turn-assistant")]),
         )
         .await;
     }
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, NESTED_CALL_ID)
+                && request_has_model(request, ROLE_MODEL)
+                && !body_contains(request, FOLLOWUP_TASK)
+        },
+        sse(vec![ev_completed("resp-parent-turn-assistant")]),
+    )
+    .await;
     mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {

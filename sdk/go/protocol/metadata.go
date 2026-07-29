@@ -1,11 +1,11 @@
 package protocol
 
-const StableProtocolDigest = "c66cdf6b3c0e5d68a30097ccf412b185f7d1807ab0d6b14ce899f155ea5938d4"
-const StableSchemaDigest = "2d8afa5cfebeef8b643c8fab5a644f87868471087bcb96e663cb48796d1b2b7e"
-const StableManifestDigest = "c53c8cd075ad9f8325fc7a84bac50c834d44b95c095225c59e3c1a7e56341565"
-const ExperimentalProtocolDigest = "172b3da414d9d353a68d25cb3478f07d94793338658efde9e982559e6959f401"
-const ExperimentalSchemaDigest = "295817bd68d73ab4a041ad5c748e951e1c99516524b41469c8d72929ea65657f"
-const ExperimentalManifestDigest = "8e2805a85483d565cb9e3021d682837bd0eee968007624ac7e90f53f2596df80"
+const StableProtocolDigest = "b13146efd29516c797b1439fbef1708f1421cdc005aba2a729f0f33f655dd753"
+const StableSchemaDigest = "fc8a6737cfd1223ea767c0531d36c416b40e8249b9f02093295ff5b424d0fd68"
+const StableManifestDigest = "b6f12b46c106154265e8462c19a745c70fae3d7d3b50f044282854c4b02d1382"
+const ExperimentalProtocolDigest = "8cbe3746c44d70be77947ea916b82e44cbfb9720493a65bd41e9017673e20a49"
+const ExperimentalSchemaDigest = "6804e0a846067d67dbb50a037d54eb85093b8e278c242e13ddccf83f96abec38"
+const ExperimentalManifestDigest = "263da112cd0992cab609a24edcc6b27e48817e1fdd825f05e7c18faf0cbc9d47"
 
 const MaxAdditionalContextEntries = 8
 const MaxAdditionalContextKeyBytes = 128
@@ -69,6 +69,7 @@ var MethodMetadataByMethod = map[string]MethodMetadata{
 	"thread/backgroundTerminals/terminate":     {Method: "thread/backgroundTerminals/terminate", Visibility: "public", ParamsType: "ThreadBackgroundTerminalsTerminateParams", ResponseType: "ThreadBackgroundTerminalsTerminateResponse", ParamsSchemaRef: "#/definitions/ThreadBackgroundTerminalsTerminateParams", ResponseSchemaRef: "#/definitions/ThreadBackgroundTerminalsTerminateResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: true, Retry: "neverRetryAfterWrite"},
 	"thread/rollback":                          {Method: "thread/rollback", Visibility: "public", ParamsType: "ThreadRollbackParams", ResponseType: "ThreadRollbackResponse", ParamsSchemaRef: "#/definitions/ThreadRollbackParams", ResponseSchemaRef: "#/definitions/ThreadRollbackResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"thread/list":                              {Method: "thread/list", Visibility: "public", ParamsType: "ThreadListParams", ResponseType: "ThreadListResponse", ParamsSchemaRef: "#/definitions/ThreadListParams", ResponseSchemaRef: "#/definitions/ThreadListResponse", SchemaExcludedReason: "", InspectParams: true, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite", ExperimentalFields: []ExperimentalFieldMetadata{{ContainingType: "ThreadListParams", FieldPath: "parent_thread_id", Reason: "thread/list.parentThreadId", InspectParams: true, DiscriminatorJSON: ""}, {ContainingType: "ThreadListParams", FieldPath: "ancestor_thread_id", Reason: "thread/list.ancestorThreadId", InspectParams: true, DiscriminatorJSON: ""}}},
+	"threadSection/list":                       {Method: "threadSection/list", Visibility: "public", ParamsType: "ThreadSectionListParams", ResponseType: "ThreadSectionListResponse", ParamsSchemaRef: "#/definitions/ThreadSectionListParams", ResponseSchemaRef: "#/definitions/ThreadSectionListResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"thread/search":                            {Method: "thread/search", Visibility: "public", ParamsType: "ThreadSearchParams", ResponseType: "ThreadSearchResponse", ParamsSchemaRef: "#/definitions/ThreadSearchParams", ResponseSchemaRef: "#/definitions/ThreadSearchResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: true, Retry: "neverRetryAfterWrite"},
 	"thread/searchOccurrences":                 {Method: "thread/searchOccurrences", Visibility: "public", ParamsType: "ThreadSearchOccurrencesParams", ResponseType: "ThreadSearchOccurrencesResponse", ParamsSchemaRef: "#/definitions/ThreadSearchOccurrencesParams", ResponseSchemaRef: "#/definitions/ThreadSearchOccurrencesResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: true, Retry: "neverRetryAfterWrite"},
 	"thread/loaded/list":                       {Method: "thread/loaded/list", Visibility: "public", ParamsType: "ThreadLoadedListParams", ResponseType: "ThreadLoadedListResponse", ParamsSchemaRef: "#/definitions/ThreadLoadedListParams", ResponseSchemaRef: "#/definitions/ThreadLoadedListResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},

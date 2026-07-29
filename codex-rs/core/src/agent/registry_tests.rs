@@ -468,7 +468,7 @@ fn register_root_thread_indexes_root_path() {
     assert!(registry.agent_metadata_for_thread(root_thread_id).is_none());
 
     let reservation = registry
-        .reserve_spawn_slot(Some(1))
+        .reserve_spawn_slot(Some(1), /*turn_spawn_budget*/ None)
         .expect("releasing the uncounted root should not consume a spawn slot");
     drop(reservation);
 }
@@ -578,7 +578,9 @@ fn thread_identity_can_move_between_pathless_and_path_backed_metadata() {
     let registry = Arc::new(AgentRegistry::default());
     let thread_id = ThreadId::new();
     let path = agent_path("/root/researcher");
-    let reservation = registry.reserve_spawn_slot(Some(1)).expect("reserve slot");
+    let reservation = registry
+        .reserve_spawn_slot(Some(1), /*turn_spawn_budget*/ None)
+        .expect("reserve slot");
     reservation.commit(agent_metadata(thread_id));
 
     registry.register_spawned_thread(AgentMetadata {
@@ -606,7 +608,7 @@ fn thread_identity_can_move_between_pathless_and_path_backed_metadata() {
     assert_eq!(registry.agent_id_for_path(&path), None);
 
     let mut path_reservation = registry
-        .reserve_spawn_slot(/*max_threads*/ None)
+        .reserve_spawn_slot(/*max_threads*/ None, /*turn_spawn_budget*/ None)
         .expect("reserve path reuse slot");
     path_reservation
         .reserve_agent_path(&path)
@@ -617,7 +619,7 @@ fn thread_identity_can_move_between_pathless_and_path_backed_metadata() {
     assert!(registry.agent_metadata_for_thread(thread_id).is_none());
 
     let reservation = registry
-        .reserve_spawn_slot(Some(1))
+        .reserve_spawn_slot(Some(1), /*turn_spawn_budget*/ None)
         .expect("releasing the migrated agent should free its spawn slot");
     drop(reservation);
 }
@@ -628,7 +630,9 @@ fn thread_identity_can_move_between_agent_paths() {
     let thread_id = ThreadId::new();
     let previous_path = agent_path("/root/researcher");
     let current_path = agent_path("/root/reviewer");
-    let mut reservation = registry.reserve_spawn_slot(Some(1)).expect("reserve slot");
+    let mut reservation = registry
+        .reserve_spawn_slot(Some(1), /*turn_spawn_budget*/ None)
+        .expect("reserve slot");
     reservation
         .reserve_agent_path(&previous_path)
         .expect("reserve original path");
@@ -659,7 +663,7 @@ fn thread_identity_can_move_between_agent_paths() {
     assert_eq!(registry.agent_id_for_path(&current_path), Some(thread_id));
 
     let mut path_reservation = registry
-        .reserve_spawn_slot(/*max_threads*/ None)
+        .reserve_spawn_slot(/*max_threads*/ None, /*turn_spawn_budget*/ None)
         .expect("reserve path reuse slot");
     path_reservation
         .reserve_agent_path(&previous_path)
@@ -671,7 +675,7 @@ fn thread_identity_can_move_between_agent_paths() {
     assert!(registry.agent_metadata_for_thread(thread_id).is_none());
 
     let reservation = registry
-        .reserve_spawn_slot(Some(1))
+        .reserve_spawn_slot(Some(1), /*turn_spawn_budget*/ None)
         .expect("releasing the migrated agent should free its spawn slot");
     drop(reservation);
 }

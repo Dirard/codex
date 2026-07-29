@@ -236,6 +236,7 @@ var stage5BImplementedResourceMethods = map[string]bool{
 	"thread/approveGuardianDeniedAction":   true,
 	"thread/rollback":                      true,
 	"thread/list":                          true,
+	"threadSection/list":                   true,
 	"thread/loaded/list":                   true,
 	"thread/read":                          true,
 	"thread/inject_items":                  true,

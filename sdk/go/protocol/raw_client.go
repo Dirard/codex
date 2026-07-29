@@ -160,6 +160,12 @@ func (c RawClient) ThreadList(ctx context.Context, params ThreadListParams) (Thr
 	return result, err
 }
 
+func (c RawClient) ThreadSectionList(ctx context.Context, params ThreadSectionListParams) (ThreadSectionListResponse, error) {
+	var result ThreadSectionListResponse
+	err := c.sender.Call(ctx, "threadSection/list", params, &result, MethodMetadataByMethod["threadSection/list"])
+	return result, err
+}
+
 func (c RawClient) ThreadSearch(ctx context.Context, params ThreadSearchParams) (ThreadSearchResponse, error) {
 	var result ThreadSearchResponse
 	err := c.sender.Call(ctx, "thread/search", params, &result, MethodMetadataByMethod["thread/search"])
