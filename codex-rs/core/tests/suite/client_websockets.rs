@@ -1634,6 +1634,50 @@ async fn responses_websocket_invalid_request_error_with_status_is_forwarded() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_missing_tool_search_output_retries_and_completes() {
+    skip_if_no_network!();
+
+    let missing_tool_output_error = json!({
+        "type": "error",
+        "status": 400,
+        "error": {
+            "type": "invalid_request_error",
+            "message": "No tool output found for tool search call call_missing."
+        }
+    });
+    let server = start_websocket_server(vec![
+        vec![
+            vec![
+                ev_response_created("resp-prewarm"),
+                ev_completed("resp-prewarm"),
+            ],
+            vec![missing_tool_output_error.clone()],
+            vec![missing_tool_output_error],
+        ],
+        vec![vec![ev_response_created("resp-1"), ev_completed("resp-1")]],
+    ])
+    .await;
+    let mut builder = test_codex().with_config(|config| {
+        config.model_provider.request_max_retries = Some(0);
+        config.model_provider.stream_max_retries = Some(0);
+    });
+    let test = builder
+        .build_with_websocket_server(&server)
+        .await
+        .expect("build websocket codex");
+
+    test.submit_turn("hello")
+        .await
+        .expect("submission should recover from missing tool search output");
+
+    let total_websocket_requests: usize = server.connections().iter().map(Vec::len).sum();
+    assert_eq!(total_websocket_requests, 3);
+    assert_eq!(server.connections().len(), 2);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_connection_limit_error_reconnects_and_completes() {
     skip_if_no_network!();
 
