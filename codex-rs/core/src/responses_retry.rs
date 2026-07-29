@@ -7,9 +7,13 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::util::backoff;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
 use tracing::warn;
+
+const MISSING_TOOL_SEARCH_OUTPUT_MESSAGE_PREFIX: &str =
+    "No tool output found for tool search call ";
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ResponsesStreamRequest {
@@ -28,6 +32,20 @@ pub(crate) async fn handle_retryable_response_stream_error(
     turn_context: &TurnContext,
     request: ResponsesStreamRequest,
 ) -> Result<(), CodexErr> {
+    let missing_tool_search_output = matches!(
+        err.details(),
+        CodexErrorDetails::Stream(message)
+            if message.starts_with(MISSING_TOOL_SEARCH_OUTPUT_MESSAGE_PREFIX)
+    );
+    let max_retries = if missing_tool_search_output {
+        max_retries.max(1)
+    } else {
+        max_retries
+    };
+    if missing_tool_search_output {
+        client_session.reset_websocket_session();
+    }
+
     if *retries >= max_retries
         && client_session.try_switch_fallback_transport(
             &turn_context.session_telemetry,

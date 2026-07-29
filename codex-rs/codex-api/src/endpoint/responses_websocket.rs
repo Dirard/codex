@@ -160,6 +160,8 @@ const WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE: &str = "Responses websocket co
 const PREVIOUS_RESPONSE_NOT_FOUND_CODE: &str = "previous_response_not_found";
 const PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE: &str =
     "Previous response was not found. Retrying the full request.";
+const MISSING_TOOL_SEARCH_OUTPUT_MESSAGE_PREFIX: &str =
+    "No tool output found for tool search call ";
 const RESPONSES_WEBSOCKET_TIMING_KIND: &str = "responsesapi.websocket_timing";
 const RESPONSES_WEBSOCKET_TIMING_EVENT_TARGET: &str = "codex_api::responses_websocket_timing";
 const SESSION_ID_CLIENT_METADATA_KEY: &str = "session_id";
@@ -615,6 +617,15 @@ fn map_wrapped_websocket_error_event(
         headers,
         ..
     } = event;
+
+    if let Some(message) = error.as_ref().and_then(|error| error.message.as_deref())
+        && message.starts_with(MISSING_TOOL_SEARCH_OUTPUT_MESSAGE_PREFIX)
+    {
+        return Some(ApiError::Retryable {
+            message: message.to_string(),
+            delay: None,
+        });
+    }
 
     if let Some(error) = error.as_ref()
         && let Some(code) = error.code.as_deref()
