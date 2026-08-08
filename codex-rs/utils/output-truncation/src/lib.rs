@@ -66,7 +66,7 @@ impl OutputTruncation {
 
 impl From<TruncationPolicy> for OutputTruncation {
     fn from(policy: TruncationPolicy) -> Self {
-        Self::new(policy, None)
+        Self::new(policy, /*max_lines*/ None)
     }
 }
 

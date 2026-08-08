@@ -131,7 +131,7 @@ fn schema_definition_digest_inputs(mode: &ProtocolModeManifest) -> Value {
         let Some(schema) = definitions.get(&key) else {
             panic!("Go SDK manifest schema ref {schema_ref} is missing from schema bundle");
         };
-        let canonical_schema = crate::schema_fixtures::canonicalize_schema_json(schema);
+        let canonical_schema = sort_object_keys(schema.clone());
         schema_definitions.insert(
             schema_ref.clone(),
             serde_json::json!({
@@ -340,7 +340,9 @@ fn schema_bundle(protocol_mode: ProtocolModeName) -> &'static Value {
 
     match protocol_mode {
         ProtocolModeName::Stable => STABLE_SCHEMA_BUNDLE.get_or_init(|| {
-            match crate::export::build_json_schema_bundle(/*experimental_api*/ false) {
+            match crate::precomputed_exports::load_json_schema_bundle(
+                /*experimental_api*/ false,
+            ) {
                 Ok(bundle) => bundle,
                 Err(error) => {
                     panic!("build stable app-server schema bundle for Go SDK manifest: {error}")
@@ -348,7 +350,9 @@ fn schema_bundle(protocol_mode: ProtocolModeName) -> &'static Value {
             }
         }),
         ProtocolModeName::Experimental => EXPERIMENTAL_SCHEMA_BUNDLE.get_or_init(|| {
-            match crate::export::build_json_schema_bundle(/*experimental_api*/ true) {
+            match crate::precomputed_exports::load_json_schema_bundle(
+                /*experimental_api*/ true,
+            ) {
                 Ok(bundle) => bundle,
                 Err(error) => {
                     panic!(

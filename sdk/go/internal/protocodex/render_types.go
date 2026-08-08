@@ -65,7 +65,7 @@ func publicDefinitionSkipSet(manifest *Manifest) map[string]bool {
 
 func hasPublicGeneratedProtocolSurface(visibility string) bool {
 	switch visibility {
-	case "compatibilityOnly", "excluded", "internalTestOnly":
+	case "compatibilityOnly", "excluded", "generatedOnly", "internalTestOnly":
 		return false
 	default:
 		return true

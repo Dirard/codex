@@ -233,6 +233,41 @@ func TestThreadsResourceWrappersSendMatrixMethods(t *testing.T) {
 			},
 		},
 		{
+			name: "list sections", method: "threadSection/list",
+			call: func() error {
+				_, err := client.Threads.ListSections(ctx, protocol.ThreadSectionListParams{})
+				return err
+			},
+		},
+		{
+			name: "create section", method: "threadSection/create",
+			call: func() error {
+				_, err := client.Threads.CreateSection(ctx, protocol.ThreadSectionCreateParams{Name: "section"})
+				return err
+			},
+		},
+		{
+			name: "update section", method: "threadSection/update",
+			call: func() error {
+				_, err := client.Threads.UpdateSection(ctx, protocol.ThreadSectionUpdateParams{SectionID: "section-1", Name: "renamed"})
+				return err
+			},
+		},
+		{
+			name: "delete section", method: "threadSection/delete",
+			call: func() error {
+				_, err := client.Threads.DeleteSection(ctx, protocol.ThreadSectionDeleteParams{SectionID: "section-1"})
+				return err
+			},
+		},
+		{
+			name: "move to section", method: "thread/section/move", threadID: "thread-1",
+			call: func() error {
+				_, err := client.Threads.MoveToSection(ctx, protocol.ThreadSectionMoveParams{ThreadID: "thread-1", SectionID: protocol.Some("section-1")})
+				return err
+			},
+		},
+		{
 			name: "list turns", method: "thread/turns/list", threadID: "thread-1",
 			call: func() error {
 				_, err := client.Threads.ListTurns(ctx, protocol.ThreadTurnsListParams{ThreadID: "thread-1"})

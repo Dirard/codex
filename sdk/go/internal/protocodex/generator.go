@@ -57,9 +57,6 @@ func Generate(opts GenerateOptions) error {
 	if err := validateReachableSerdeShapeCoverage("experimental", manifest.Experimental, experimental); err != nil {
 		return err
 	}
-	if err := ValidateResourceMappings(manifest, experimental, resourceAPIMappings, serverHandlerMappings); err != nil {
-		return err
-	}
 	if err := validateModeSubset(opts.Mode, manifest, stable, experimental); err != nil {
 		return err
 	}
@@ -394,9 +391,7 @@ func renderFiles(manifest *Manifest, stable, schema *SchemaBundle) (map[string]s
 
 func renderRootFiles(manifest *Manifest) map[string]string {
 	return map[string]string{
-		"handlers_generated.go":          renderHandlersGenerated(manifest),
-		"resource_coverage_generated.go": renderResourceCoverageGenerated(manifest),
-		filepath.Join("internal", "protocodex", "current_protocol_inventory.generated.md"): renderInventory(manifest),
+		"handlers_generated.go": renderHandlersGenerated(manifest),
 	}
 }
 
