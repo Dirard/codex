@@ -313,7 +313,10 @@ async fn write_stdin(
             input,
             yield_time_ms,
             max_output_tokens: None,
-            truncation: OutputTruncation::new(TruncationPolicy::Tokens(10_000), None),
+            truncation: OutputTruncation::new(
+                TruncationPolicy::Tokens(10_000),
+                /*max_lines*/ None,
+            ),
             interaction_event: None,
         })
         .await

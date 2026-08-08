@@ -23,7 +23,10 @@ async fn body_scope_turn(auto_limit: i64, full_limit: i64) -> TurnContext {
 #[tokio::test]
 async fn total_scope_requires_auto_and_full_window_headroom() {
     let turn = total_scope_turn(/*auto_limit*/ 100_000, /*full_limit*/ 120_000).await;
-    let status = context_window_token_status_for_usage(&turn, 80_001, None);
+    let status = context_window_token_status_for_usage(
+        &turn, /*active_context_tokens*/ 80_001,
+        /*auto_compact_window_prefill_tokens*/ None,
+    );
 
     assert_eq!(status.auto_compact_scope_tokens, 80_001);
     assert_eq!(status.full_context_window_limit, Some(120_000));

@@ -531,7 +531,7 @@ mod tests {
             original_image_detail_supported: true,
             truncation: codex_utils_output_truncation::OutputTruncation::new(
                 codex_utils_output_truncation::TruncationPolicy::Bytes(1024),
-                None,
+                /*max_lines*/ None,
             ),
         };
         let (session, turn) = make_session_and_context().await;

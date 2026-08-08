@@ -592,9 +592,14 @@ return;
             .expect("wait for terminal response"),
         WaitOutcome::LiveCell(RuntimeResponse::Result {
             cell_id: running_cell_id,
-            content_items: vec![FunctionCallOutputContentItem::InputText {
-                text: "hello".to_string(),
-            }],
+            content_items: vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "hello".to_string(),
+                },
+                FunctionCallOutputContentItem::InputText {
+                    text: "Code mode completed with 1 settled nested tool outcome not passed to an output helper after the last successful sink.\nPass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`.\n1 started nested tool call is still unsettled; the runtime does not wait for them automatically, and they may already have produced side effects.".to_string(),
+                },
+            ],
             error_text: None,
         })
     );

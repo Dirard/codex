@@ -1914,7 +1914,13 @@ impl Session {
     ) -> BoxFuture<'_, String> {
         async move {
             let id = new_submission_id();
-            handlers::inter_agent_communication(self, id.clone(), communication).await;
+            handlers::inter_agent_communication(
+                self,
+                id.clone(),
+                communication,
+                /*parent_turn_id*/ None,
+            )
+            .await;
             id
         }
         .boxed()
@@ -3513,8 +3519,12 @@ impl Session {
         turn_context: &TurnContext,
         world_state: &WorldState,
     ) -> Vec<ResponseItem> {
-        self.build_initial_context_with_world_state_inner(turn_context, world_state, None)
-            .await
+        self.build_initial_context_with_world_state_inner(
+            turn_context,
+            world_state,
+            /*auto_compact_window_ids*/ None,
+        )
+        .await
     }
 
     pub(crate) async fn build_initial_context_with_world_state_for_window(

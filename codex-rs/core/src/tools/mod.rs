@@ -30,10 +30,10 @@ use codex_features::Feature;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::openai_models::ToolMode;
 use codex_tools::ToolName;
-pub(crate) use executed_tool_calls::ExecutedToolCallRecorder;
 use codex_utils_output_truncation::OutputTruncation;
 use codex_utils_output_truncation::formatted_truncate_text_with_config;
 use codex_utils_output_truncation::truncate_text_with_config;
+pub(crate) use executed_tool_calls::ExecutedToolCallRecorder;
 pub use router::ToolRouter;
 
 // Telemetry preview limits: keep log events smaller than model budgets.

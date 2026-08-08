@@ -884,8 +884,8 @@ impl ThreadManager {
             ThreadSpawnRequest::new(options, Arc::clone(&self.state.auth_manager), agent_control);
         request.forked_from_thread_id = forked_from_thread_id;
         Box::pin(self.state.spawn_thread(request))
-        .await
-        .map(ThreadSpawnOutcome::into_new_thread)
+            .await
+            .map(ThreadSpawnOutcome::into_new_thread)
     }
 
     // TODO(jif) merge with fork_agent

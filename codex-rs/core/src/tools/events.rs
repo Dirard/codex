@@ -389,7 +389,13 @@ impl ToolEmitter {
         out: Result<ExecToolCallOutput, ToolError>,
         applied_patch_delta: Option<&AppliedPatchDelta>,
     ) -> Result<String, FunctionCallError> {
-        self.finish_inner(ctx, out, applied_patch_delta, None).await
+        self.finish_inner(
+            ctx,
+            out,
+            applied_patch_delta,
+            /*capture_metadata*/ None,
+        )
+        .await
     }
 
     pub(crate) async fn finish_shell(

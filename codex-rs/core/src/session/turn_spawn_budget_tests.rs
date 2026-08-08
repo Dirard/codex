@@ -80,8 +80,9 @@ async fn new_root_input_gets_independent_turn_spawn_budget() -> anyhow::Result<(
         "new-root-turn".to_string(),
         root_user_input(),
         /*client_user_message_id*/ None,
+        /*parent_turn_id*/ None,
     )
-    .await;
+    .await?;
     let new_step = capture_step(&session, session.new_default_turn().await).await?;
 
     assert_budget_exhausted(&registry, &old_step, "old root");
@@ -99,8 +100,9 @@ async fn late_descendant_uses_original_budget_during_root_rollover() -> anyhow::
         "root-rollover".to_string(),
         root_user_input(),
         /*client_user_message_id*/ None,
+        /*parent_turn_id*/ None,
     )
-    .await;
+    .await?;
     let new_root_step = capture_step(&session, session.new_default_turn().await).await?;
     let registry = Arc::new(AgentRegistry::default());
 

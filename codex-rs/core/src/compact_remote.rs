@@ -327,10 +327,9 @@ pub(crate) async fn process_compacted_history(
 }
 
 pub(crate) fn process_compacted_history_with_initial_context(
-    mut compacted_history: Vec<ResponseItem>,
+    compacted_history: Vec<ResponseItem>,
     initial_context: &[ResponseItem],
 ) -> Vec<ResponseItem> {
-    compacted_history.retain(should_keep_compacted_history_item);
     insert_initial_context_before_last_real_user_or_summary(
         compacted_history,
         initial_context.to_vec(),

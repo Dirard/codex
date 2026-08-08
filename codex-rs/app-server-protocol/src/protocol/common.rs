@@ -7,9 +7,10 @@ use crate::JSONRPCRequest;
 use crate::JsonSchema;
 use crate::RequestId;
 use crate::TS;
+#[cfg(test)]
 use crate::export::GeneratedSchema;
-use crate::export::build_json_schema;
-use crate::export::write_json_schema_files;
+#[cfg(test)]
+use crate::export::write_json_schema;
 use crate::protocol::v1;
 use crate::protocol::v2;
 use codex_experimental_api_macros::ExperimentalApi;
@@ -764,6 +765,7 @@ macro_rules! client_request_definitions {
             entries
         }
 
+        #[cfg(test)]
         pub fn export_client_responses(
             out_dir: &::std::path::Path,
         ) -> ::std::result::Result<(), ::ts_rs::ExportError> {
@@ -782,38 +784,25 @@ macro_rules! client_request_definitions {
 
         #[cfg(test)]
         #[allow(clippy::vec_init_then_push)]
-        pub fn build_client_response_schemas() -> ::anyhow::Result<Vec<GeneratedSchema>> {
+        pub fn export_client_response_schemas(
+            out_dir: &::std::path::Path,
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
             let mut schemas = Vec::new();
             $(
-                schemas.push(build_json_schema::<$response>(stringify!($response))?);
+                schemas.push(write_json_schema::<$response>(out_dir, stringify!($response))?);
             )*
             Ok(schemas)
         }
 
         #[cfg(test)]
         #[allow(clippy::vec_init_then_push)]
-        pub fn export_client_response_schemas(
-            out_dir: &::std::path::Path,
-        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
-            let schemas = build_client_response_schemas()?;
-            write_json_schema_files(out_dir, &schemas)?;
-            Ok(schemas)
-        }
-
-        #[allow(clippy::vec_init_then_push)]
-        pub fn build_client_param_schemas() -> ::anyhow::Result<Vec<GeneratedSchema>> {
-            let mut schemas = Vec::new();
-            $(
-                schemas.push(build_json_schema::<$params>(stringify!($params))?);
-            )*
-            Ok(schemas)
-        }
-
         pub fn export_client_param_schemas(
             out_dir: &::std::path::Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
-            let schemas = build_client_param_schemas()?;
-            write_json_schema_files(out_dir, &schemas)?;
+            let mut schemas = Vec::new();
+            $(
+                schemas.push(write_json_schema::<$params>(out_dir, stringify!($params))?);
+            )*
             Ok(schemas)
         }
     };
@@ -1798,6 +1787,7 @@ macro_rules! server_request_definitions {
             entries
         }
 
+        #[cfg(test)]
         pub fn export_server_responses(
             out_dir: &::std::path::Path,
         ) -> ::std::result::Result<(), ::ts_rs::ExportError> {
@@ -1816,10 +1806,13 @@ macro_rules! server_request_definitions {
 
         #[cfg(test)]
         #[allow(clippy::vec_init_then_push)]
-        pub fn build_server_response_schemas() -> ::anyhow::Result<Vec<GeneratedSchema>> {
+        pub fn export_server_response_schemas(
+            out_dir: &Path,
+        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
             let mut schemas = Vec::new();
             $(
-                schemas.push(crate::export::build_json_schema::<$response>(
+                schemas.push(crate::export::write_json_schema::<$response>(
+                    out_dir,
                     concat!(stringify!($variant), "Response"),
                 )?);
             )*
@@ -1828,30 +1821,16 @@ macro_rules! server_request_definitions {
 
         #[cfg(test)]
         #[allow(clippy::vec_init_then_push)]
-        pub fn export_server_response_schemas(
-            out_dir: &Path,
-        ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
-            let schemas = build_server_response_schemas()?;
-            write_json_schema_files(out_dir, &schemas)?;
-            Ok(schemas)
-        }
-
-        #[allow(clippy::vec_init_then_push)]
-        pub fn build_server_param_schemas() -> ::anyhow::Result<Vec<GeneratedSchema>> {
-            let mut schemas = Vec::new();
-            $(
-                schemas.push(crate::export::build_json_schema::<$params>(
-                    concat!(stringify!($variant), "Params"),
-                )?);
-            )*
-            Ok(schemas)
-        }
-
         pub fn export_server_param_schemas(
             out_dir: &Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
-            let schemas = build_server_param_schemas()?;
-            write_json_schema_files(out_dir, &schemas)?;
+            let mut schemas = Vec::new();
+            $(
+                schemas.push(crate::export::write_json_schema::<$params>(
+                    out_dir,
+                    concat!(stringify!($variant), "Params"),
+                )?);
+            )*
             Ok(schemas)
         }
     };
@@ -1908,17 +1887,11 @@ macro_rules! server_notification_definitions {
 
         #[cfg(test)]
         #[allow(clippy::vec_init_then_push)]
-        pub fn build_server_notification_schemas() -> ::anyhow::Result<Vec<GeneratedSchema>> {
-            let mut schemas = Vec::new();
-            $(schemas.push(crate::export::build_json_schema::<$payload>(stringify!($payload))?);)*
-            Ok(schemas)
-        }
-
         pub fn export_server_notification_schemas(
             out_dir: &::std::path::Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
-            let schemas = build_server_notification_schemas()?;
-            write_json_schema_files(out_dir, &schemas)?;
+            let mut schemas = Vec::new();
+            $(schemas.push(crate::export::write_json_schema::<$payload>(out_dir, stringify!($payload))?);)*
             Ok(schemas)
         }
 
@@ -1969,18 +1942,12 @@ macro_rules! client_notification_definitions {
             )*
         }
 
-        #[allow(unused_mut)]
-        pub fn build_client_notification_schemas() -> ::anyhow::Result<Vec<GeneratedSchema>> {
-            let mut schemas = Vec::new();
-            $( $(schemas.push(crate::export::build_json_schema::<$payload>(stringify!($payload))?);)? )*
-            Ok(schemas)
-        }
-
+        #[cfg(test)]
         pub fn export_client_notification_schemas(
-            out_dir: &::std::path::Path,
+            _out_dir: &::std::path::Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
-            let schemas = build_client_notification_schemas()?;
-            write_json_schema_files(out_dir, &schemas)?;
+            let schemas = Vec::new();
+            $( $(schemas.push(crate::export::write_json_schema::<$payload>(_out_dir, stringify!($payload))?);)? )*
             Ok(schemas)
         }
 

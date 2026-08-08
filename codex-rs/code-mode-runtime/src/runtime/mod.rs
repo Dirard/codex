@@ -237,7 +237,12 @@ fn run_runtime(
     });
 
     if let Err(error_text) = globals::install_globals(scope) {
-        send_result(&event_tx, None, HashMap::new(), Some(error_text));
+        send_result(
+            &event_tx,
+            /*diagnostic*/ None,
+            HashMap::new(),
+            Some(error_text),
+        );
         return;
     }
 

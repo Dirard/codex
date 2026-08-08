@@ -27,7 +27,7 @@ use tokio::sync::Mutex;
 const TEST_TRUNCATION_POLICY: TruncationPolicy = TruncationPolicy::Tokens(10_000);
 
 fn test_truncation() -> OutputTruncation {
-    OutputTruncation::new(TEST_TRUNCATION_POLICY, None)
+    OutputTruncation::new(TEST_TRUNCATION_POLICY, /*max_lines*/ None)
 }
 
 async fn invocation_for_payload(
