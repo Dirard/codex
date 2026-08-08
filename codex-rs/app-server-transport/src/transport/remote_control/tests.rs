@@ -1626,6 +1626,14 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
                             codex_home: codex_home.path().abs(),
                             platform_family: "test-family".to_string(),
                             platform_os: "test-os".to_string(),
+                            stable_protocol_digest: "stable-protocol".to_string(),
+                            experimental_protocol_digest: "experimental-protocol".to_string(),
+                            stable_schema_digest: "stable-schema".to_string(),
+                            experimental_schema_digest: "experimental-schema".to_string(),
+                            stable_manifest_digest: "stable-manifest".to_string(),
+                            experimental_manifest_digest: "experimental-manifest".to_string(),
+                            active_protocol_mode:
+                                codex_app_server_protocol::ActiveProtocolMode::Stable,
                         },
                     ),
                 ),
@@ -1646,6 +1654,13 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
                     "codexHome": codex_home.path(),
                     "platformFamily": "test-family",
                     "platformOs": "test-os",
+                    "stableProtocolDigest": "stable-protocol",
+                    "experimentalProtocolDigest": "experimental-protocol",
+                    "stableSchemaDigest": "stable-schema",
+                    "experimentalSchemaDigest": "experimental-schema",
+                    "stableManifestDigest": "stable-manifest",
+                    "experimentalManifestDigest": "experimental-manifest",
+                    "activeProtocolMode": "stable",
                 }
             }
         })

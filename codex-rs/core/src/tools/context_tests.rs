@@ -8,7 +8,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 fn truncation(policy: TruncationPolicy) -> OutputTruncation {
-    OutputTruncation::new(policy, None)
+    OutputTruncation::new(policy, /*max_lines*/ None)
 }
 
 #[test]
