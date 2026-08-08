@@ -477,51 +477,6 @@ jobs:
               "$dest/${binary}-${{ matrix.target }}.exe"
           done
 
-      - name: Materialize package helpers
-        shell: bash
-        run: |
-          set -euo pipefail
-          target="${{ matrix.target }}"
-          CODEX_PACKAGE_HELPER_ROOT="${RUNNER_TEMP}/codex-package-helpers"
-          rm -rf "${CODEX_PACKAGE_HELPER_ROOT}/${target}"
-          PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 -m codex_package.materialize_helpers \
-            --target "$target" \
-            --output-root "$CODEX_PACKAGE_HELPER_ROOT" \
-            --codex-command-runner-bin "$CARGO_TARGET_DIR/${target}/release/codex-command-runner.exe" \
-            --codex-windows-sandbox-setup-bin "$CARGO_TARGET_DIR/${target}/release/codex-windows-sandbox-setup.exe"
-          echo "CODEX_PACKAGE_HELPER_ROOT=$CODEX_PACKAGE_HELPER_ROOT" >> "$GITHUB_ENV"
-
-      - name: Resolve materialized package helpers
-        shell: bash
-        run: |
-          set -euo pipefail
-          target="${{ matrix.target }}"
-          # Stage 5G: package archive assembly must fail before helper
-          # resolution if a prior release-owned step did not materialize this
-          # payload. Do not replace this preflight with DotSlash, package-cache,
-          # PATH, or network fallback; Go SDK release-readiness remains blocked
-          # until a reviewed producer supplies CODEX_PACKAGE_HELPER_ROOT.
-          : "${CODEX_PACKAGE_HELPER_ROOT:?CODEX_PACKAGE_HELPER_ROOT must point to Stage 5G materialized helper sources}"
-          helper_root="${CODEX_PACKAGE_HELPER_ROOT%/}/${target}"
-          rg_bin="${helper_root}/rg.exe"
-          command_runner_bin="${helper_root}/codex-command-runner.exe"
-          sandbox_setup_bin="${helper_root}/codex-windows-sandbox-setup.exe"
-          if [[ ! -x "$rg_bin" ]]; then
-            echo "Materialized ripgrep helper is missing or not executable: $rg_bin" >&2
-            exit 1
-          fi
-          if [[ ! -x "$command_runner_bin" ]]; then
-            echo "Materialized codex-command-runner.exe helper is missing or not executable: $command_runner_bin" >&2
-            exit 1
-          fi
-          if [[ ! -x "$sandbox_setup_bin" ]]; then
-            echo "Materialized codex-windows-sandbox-setup.exe helper is missing or not executable: $sandbox_setup_bin" >&2
-            exit 1
-          fi
-          echo "CODEX_PACKAGE_RG_BIN=$rg_bin" >> "$GITHUB_ENV"
-          echo "CODEX_PACKAGE_COMMAND_RUNNER_BIN=$command_runner_bin" >> "$GITHUB_ENV"
-          echo "CODEX_PACKAGE_WINDOWS_SANDBOX_SETUP_BIN=$sandbox_setup_bin" >> "$GITHUB_ENV"
-
       - name: Build Codex package archives
         shell: bash
         run: |
@@ -530,23 +485,14 @@ jobs:
           archive_script="${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh"
           voice_args=(--voice-release-dir "$VOICE_RELEASE_DIR")
           voice_args+=(--release-version "${GITHUB_REF_NAME#rust-v}")
-          rg_bin="${CODEX_PACKAGE_RG_BIN:?missing materialized ripgrep helper}"
-          command_runner_bin="${CODEX_PACKAGE_COMMAND_RUNNER_BIN:?missing materialized codex-command-runner helper}"
-          sandbox_setup_bin="${CODEX_PACKAGE_WINDOWS_SANDBOX_SETUP_BIN:?missing materialized Windows sandbox setup helper}"
-          helper_args=(
-            --require-materialized-helper-sources
-            --rg-bin "$rg_bin"
-            --codex-command-runner-bin "$command_runner_bin"
-            --codex-windows-sandbox-setup-bin "$sandbox_setup_bin"
-          )
           bash "$archive_script" \
             --target "$target" --bundle primary \
             --entrypoint-dir "$CARGO_TARGET_DIR/$target/release" \
-            --archive-dir "dist/$target" "${helper_args[@]}" "${voice_args[@]}"
+            --archive-dir "dist/$target" "${voice_args[@]}"
           bash "$archive_script" \
             --target "$target" --bundle app-server \
             --entrypoint-dir "$CARGO_TARGET_DIR/$target/release" \
-            --archive-dir "dist/$target" "${helper_args[@]}"
+            --archive-dir "dist/$target"
 
       - name: Verify packaged Windows voice closure
         shell: pwsh
@@ -554,12 +500,12 @@ jobs:
           $target = "${{ matrix.target }}"
           $package = Join-Path $env:RUNNER_TEMP "verify-voice-archive-$target"
           New-Item -ItemType Directory -Path $package | Out-Null
-          tar -xzf "dist/$target/codex-package-$target.tar.gz" -C $package
+          tar -xzf "dist/$target/codex-package-$target.tar.gz" -C "$package"
           if ($LASTEXITCODE -ne 0) { throw "Cannot extract the final Windows package" }
           $voice = Join-Path $package 'codex-resources/voice'
           $helper = Join-Path $voice 'bin/codex-voice-host.exe'
           if (-not (Test-Path $helper) -or -not (Test-Path (Join-Path $voice 'bin/gstreamer-1.0-0.dll'))) {
-            throw 'Signed Windows voice files are missing from the canonical package'
+            throw "Signed Windows voice files are missing from the canonical package"
           }
           $signature = Get-AuthenticodeSignature $helper
           if ($signature.Status -ne 'Valid') { throw "Packaged helper signature: $($signature.Status)" }
@@ -615,12 +561,6 @@ jobs:
       - name: Compress artifacts
         shell: bash
         run: |
-          set -euo pipefail
-          if ! command -v zstd >/dev/null 2>&1; then
-            echo "zstd is required before Windows release artifact compression starts." >&2
-            exit 1
-          fi
-
           # Path that contains the uncompressed binaries for the current
           # ${{ matrix.target }}
           dest="dist/${{ matrix.target }}"
@@ -628,8 +568,8 @@ jobs:
           target="${{ matrix.target }}"
           export dest repo_root target
 
-          # For downstream compatibility we additionally create a `.tar.gz` and
-          # `.zip` for every Windows binary after the zstd prerequisite check.
+          # For compatibility with environments that lack the `zstd` tool we
+          # additionally create a `.tar.gz` and `.zip` for every Windows binary.
           # The end result is:
           #   codex-<target>.zst
           #   codex-<target>.tar.gz
@@ -667,14 +607,13 @@ jobs:
               bundle_dir="$(mktemp -d)"
               tar -xzf "$dest/codex-package-${target}.tar.gz" -C "$bundle_dir"
               python "${GITHUB_WORKSPACE}/scripts/build_winget_package.py" "$(cygpath -w "$bundle_dir")"
-              (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)
-              rm -rf "$bundle_dir"
+              (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)              rm -rf "$bundle_dir"
             else
               (cd "$dest" && 7z a "${base}.zip" "$base")
             fi
 
             # Keep raw executables and produce .zst alongside them.
-            zstd -T0 -19 "$dest/$base"
+            "${GITHUB_WORKSPACE}/.github/workflows/zstd" -T0 -19 "$dest/$base"
           ' _
 
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
