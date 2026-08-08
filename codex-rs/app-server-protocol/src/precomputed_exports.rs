@@ -2,6 +2,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use serde::Deserialize;
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs;
@@ -110,6 +111,20 @@ pub fn generate_internal_json_schema(out_dir: &Path) -> Result<()> {
     let exports = load_exports(ExportSet::Stable)?;
     write_exports(out_dir, &exports.internal_json_schema)?;
     Ok(())
+}
+
+pub(crate) fn load_json_schema_bundle(experimental_api: bool) -> Result<Value> {
+    let export_set = if experimental_api {
+        ExportSet::Experimental
+    } else {
+        ExportSet::Stable
+    };
+    let exports = load_exports(export_set)?;
+    let json = exports
+        .json_schema
+        .get("codex_app_server_protocol.schemas.json")
+        .context("precomputed app-server protocol schema bundle is missing")?;
+    serde_json::from_str(json).context("decode precomputed app-server protocol schema bundle")
 }
 
 fn load_exports(export_set: ExportSet) -> Result<PrecomputedExports> {

@@ -56,7 +56,7 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
         config.clone(),
         root.thread_id,
         "worker-1",
-        None,
+        /*turn_spawn_budget*/ None,
     )
     .await;
     first_slot.commit(first.thread_id);
@@ -73,8 +73,15 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
         },
         Ok(_) => panic!("expected evicted thread to be missing"),
     }
-    let second =
-        spawn_v2_subagent(&control, &state, config, root.thread_id, "worker-2", None).await;
+    let second = spawn_v2_subagent(
+        &control,
+        &state,
+        config,
+        root.thread_id,
+        "worker-2",
+        /*turn_spawn_budget*/ None,
+    )
+    .await;
     second_slot.commit(second.thread_id);
 
     assert!(manager.get_thread(root.thread_id).await.is_ok());
@@ -169,7 +176,7 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
         config.clone(),
         root.thread_id,
         "worker-1",
-        None,
+        /*turn_spawn_budget*/ None,
     )
     .await;
     first_slot.commit(first.thread_id);
@@ -192,7 +199,7 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
         config.clone(),
         root.thread_id,
         "worker-2",
-        None,
+        /*turn_spawn_budget*/ None,
     )
     .await;
     second_slot.commit(second.thread_id);
