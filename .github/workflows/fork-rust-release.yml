@@ -83,7 +83,6 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends binutils pkg-config libcap-dev
 
       - name: Configure rusty_v8 artifacts
-        if: runner.os != 'Windows'
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: ${{ matrix.target }}
