@@ -2,12 +2,14 @@ name: fork-rust-release
 
 on:
   push:
-    branches:
-      - codex/fork
-    paths:
-      - codex-rs/Cargo.toml
+    tags:
+      - "rust-v*.*.*"
   workflow_dispatch:
     inputs:
+      release_version:
+        description: Release version without the rust-v prefix
+        required: true
+        type: string
       checkout_ref:
         description: Git ref or commit to build
         required: true
@@ -22,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: fork-rust-release-${{ github.ref }}
+  group: fork-rust-release-${{ inputs.release_version || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -38,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.build_matrix || '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-musl"},{"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-musl"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin"},{"runner":"macos-15","target":"aarch64-apple-darwin"},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc"}]') }}
+        include: ${{ fromJSON(inputs.build_matrix || '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},{"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-gnu"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin"},{"runner":"macos-15","target":"aarch64-apple-darwin"},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc"}]') }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -46,52 +48,39 @@ jobs:
           ref: ${{ inputs.checkout_ref || github.sha }}
           persist-credentials: false
 
-      - name: Validate version
+      - name: Resolve release version
         id: release
         shell: bash
+        env:
+          MANUAL_VERSION: ${{ inputs.release_version }}
         run: |
           set -euo pipefail
-          actual_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | head -1)"
-          [[ "$actual_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          echo "version=${actual_version}" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha(\.[0-9]+){0,2}|beta(\.[0-9]+)?))?$ ]]
+            version="${GITHUB_REF_NAME#rust-v}"
+          else
+            version="${MANUAL_VERSION}"
+          fi
+          [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha(\.[0-9]+){0,2}|beta(\.[0-9]+)?))?$ ]]
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           targets: ${{ matrix.target }}
 
-      - name: Use hermetic Cargo home
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
-          mkdir -p "${cargo_home}/bin"
-          echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
-          echo "${cargo_home}/bin" >> "$GITHUB_PATH"
-          : > "${cargo_home}/config.toml"
-
-      - name: Install Zig
-        if: runner.os == 'Linux'
-        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+      - name: Configure MSVC
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/setup-msvc-env
         with:
-          version: 0.14.0
-          use-cache: false
+          target: ${{ matrix.target }}
 
-      - name: Install musl build tools
-        if: runner.os == 'Linux'
-        env:
-          TARGET: ${{ matrix.target }}
-        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
-
-      - name: Disable aws-lc jitter entropy
+      - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
-          echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
-          target_no_jitter="AWS_LC_SYS_NO_JITTER_ENTROPY_${{ matrix.target }}"
-          target_no_jitter="${target_no_jitter//-/_}"
-          echo "${target_no_jitter}=1" >> "$GITHUB_ENV"
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends binutils pkg-config libcap-dev
 
       - name: Configure rusty_v8 artifacts
         if: runner.os != 'Windows'
@@ -99,93 +88,91 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      - name: Build Linux sandbox helper
+      - name: Build bwrap and export digest
         if: runner.os == 'Linux'
+        shell: bash
         env:
           TARGET: ${{ matrix.target }}
-        shell: bash
         run: |
           set -euo pipefail
-          cargo build --target "$TARGET" --release --bin bwrap
+          cargo build --target "${TARGET}" --release --bin bwrap
+
           bwrap_path="target/${TARGET}/release/bwrap"
-          strip --strip-debug --strip-unneeded "$bwrap_path"
-          digest="$(sha256sum "$bwrap_path" | awk '{print $1}')"
-          echo "CODEX_BWRAP_SHA256=${digest}" >> "$GITHUB_ENV"
+          strip --strip-debug --strip-unneeded "${bwrap_path}"
+          digest="$(sha256sum "${bwrap_path}" | awk '{print $1}')"
+          echo "CODEX_BWRAP_SHA256=${digest}" >> "${GITHUB_ENV}"
 
       - name: Build release binaries
+        shell: bash
         env:
           TARGET: ${{ matrix.target }}
-        shell: bash
         run: |
           set -euo pipefail
-          if [[ "$TARGET" == "x86_64-pc-windows-msvc" ]]; then
+          binaries=(codex codex-app-server codex-code-mode-host codex-responses-api-proxy)
+          if [[ "${TARGET}" == *windows* ]]; then
             export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+            binaries+=(codex-command-runner codex-windows-sandbox-setup)
           fi
-          cargo build --target "$TARGET" --release \
-            --bin codex \
-            --bin codex-app-server \
-            --bin codex-code-mode-host \
-            --bin codex-responses-api-proxy
+          build_args=()
+          for binary in "${binaries[@]}"; do
+            build_args+=(--bin "${binary}")
+          done
+          cargo build --target "${TARGET}" --release "${build_args[@]}"
 
-      - name: Stage release binaries
+      - name: Package runtime
+        shell: bash
         env:
           TARGET: ${{ matrix.target }}
           VERSION: ${{ steps.release.outputs.version }}
-        shell: bash
         run: |
           set -euo pipefail
           dest="${GITHUB_WORKSPACE}/dist/${TARGET}"
-          mkdir -p "$dest"
+          stage_dir="${RUNNER_TEMP}/fork-release-${TARGET}"
+          rm -rf "${stage_dir}"
+          mkdir -p "${dest}" "${stage_dir}/bin"
 
           binaries=(codex codex-app-server codex-code-mode-host codex-responses-api-proxy)
-          if [[ "$TARGET" == *linux* ]]; then
+          if [[ "${TARGET}" == *linux* ]]; then
             binaries+=(bwrap)
+          elif [[ "${TARGET}" == *windows* ]]; then
+            binaries+=(codex-command-runner codex-windows-sandbox-setup)
           fi
 
+          extension=""
+          if [[ "${TARGET}" == *windows* ]]; then
+            extension=".exe"
+          fi
+
+          expected_entries=()
           for binary in "${binaries[@]}"; do
-            extension=""
-            if [[ "$TARGET" == *windows* ]]; then
-              extension=".exe"
+            cp "target/${TARGET}/release/${binary}${extension}" "${stage_dir}/bin/${binary}${extension}"
+            expected_entries+=("bin/${binary}${extension}")
+            if [[ "${TARGET}" == *apple-darwin ]]; then
+              strip -S -x "${stage_dir}/bin/${binary}"
+            elif [[ "${TARGET}" != *windows* && "${binary}" != "bwrap" ]]; then
+              strip --strip-debug --strip-unneeded "${stage_dir}/bin/${binary}"
             fi
-            source_path="target/${TARGET}/release/${binary}${extension}"
-            output_name="${binary}-${TARGET}${extension}"
-            if [[ "$binary" != "bwrap" ]]; then
-              if [[ "$TARGET" == *apple-darwin ]]; then
-                strip -S -x "$source_path"
-              elif [[ "$TARGET" != *windows* ]]; then
-                strip --strip-debug --strip-unneeded "$source_path"
-              fi
-            fi
-            cp "$source_path" "$dest/$output_name"
-            if [[ "$TARGET" == *windows* ]]; then
-              (cd "$dest" && 7z a -tzip "${output_name}.zip" "$output_name")
-            else
-              chmod 0755 "$dest/$output_name"
-              tar -C "$dest" -czf "$dest/${output_name}.tar.gz" "$output_name"
-            fi
-            rm "$dest/$output_name"
           done
 
-          (
-            cd "$dest"
-            shopt -s nullglob
-            archives=(./*.tar.gz ./*.zip)
-            if command -v sha256sum >/dev/null 2>&1; then
-              sha256sum "${archives[@]}" > SHA256SUMS
-            else
-              shasum -a 256 "${archives[@]}" > SHA256SUMS
-            fi
-          )
-
-          if [[ "$TARGET" == *windows* ]]; then
-            7z x "$dest/codex-${TARGET}.exe.zip" "-o$dest"
-            "$dest/codex-${TARGET}.exe" --version | grep -F "$VERSION"
-            rm "$dest/codex-${TARGET}.exe"
+          if [[ "${TARGET}" == *windows* ]]; then
+            archive="${dest}/codex-package-${TARGET}.zip"
+            (cd "${stage_dir}" && 7z a -tzip "${archive}" bin)
+            actual_entries="$(
+              7z l -ba "${archive}" |
+                awk '{print $NF}' |
+                sed 's#\\#/#g' |
+                sed -E '/^bin\/?$/d' |
+                sort
+            )"
           else
-            tar -C "$dest" -xzf "$dest/codex-${TARGET}.tar.gz"
-            "$dest/codex-${TARGET}" --version | grep -F "$VERSION"
-            rm "$dest/codex-${TARGET}"
+            archive="${dest}/codex-package-${TARGET}.tar.gz"
+            tar -C "${stage_dir}" -czf "${archive}" bin
+            actual_entries="$(tar -tzf "${archive}" | sed -E '/^bin\/?$/d' | sort)"
           fi
+
+          expected_listing="$(printf '%s\n' "${expected_entries[@]}" | sort)"
+          test "${actual_entries}" = "${expected_listing}"
+          "${stage_dir}/bin/codex${extension}" --version | grep -F "${VERSION}"
 
       - name: Upload release binaries
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

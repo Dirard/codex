@@ -10,6 +10,12 @@ type RawClient struct{ sender Sender }
 
 func NewRawClient(sender Sender) RawClient { return RawClient{sender: sender} }
 
+func (c RawClient) ServerDiagnostics(ctx context.Context, params ServerDiagnosticsParams) (ServerDiagnosticsResponse, error) {
+	var result ServerDiagnosticsResponse
+	err := c.sender.Call(ctx, "server/diagnostics", params, &result, MethodMetadataByMethod["server/diagnostics"])
+	return result, err
+}
+
 func (c RawClient) ThreadStart(ctx context.Context, params ThreadStartParams) (ThreadStartResponse, error) {
 	var result ThreadStartResponse
 	err := c.sender.Call(ctx, "thread/start", params, &result, MethodMetadataByMethod["thread/start"])
@@ -88,6 +94,12 @@ func (c RawClient) ThreadMetadataUpdate(ctx context.Context, params ThreadMetada
 	return result, err
 }
 
+func (c RawClient) ThreadSectionMove(ctx context.Context, params ThreadSectionMoveParams) (ThreadSectionMoveResponse, error) {
+	var result ThreadSectionMoveResponse
+	err := c.sender.Call(ctx, "thread/section/move", params, &result, MethodMetadataByMethod["thread/section/move"])
+	return result, err
+}
+
 func (c RawClient) ThreadSettingsUpdate(ctx context.Context, params ThreadSettingsUpdateParams) (ThreadSettingsUpdateResponse, error) {
 	var result ThreadSettingsUpdateResponse
 	err := c.sender.Call(ctx, "thread/settings/update", params, &result, MethodMetadataByMethod["thread/settings/update"])
@@ -157,6 +169,30 @@ func (c RawClient) ThreadRollback(ctx context.Context, params ThreadRollbackPara
 func (c RawClient) ThreadList(ctx context.Context, params ThreadListParams) (ThreadListResponse, error) {
 	var result ThreadListResponse
 	err := c.sender.Call(ctx, "thread/list", params, &result, MethodMetadataByMethod["thread/list"])
+	return result, err
+}
+
+func (c RawClient) ThreadSectionList(ctx context.Context, params ThreadSectionListParams) (ThreadSectionListResponse, error) {
+	var result ThreadSectionListResponse
+	err := c.sender.Call(ctx, "threadSection/list", params, &result, MethodMetadataByMethod["threadSection/list"])
+	return result, err
+}
+
+func (c RawClient) ThreadSectionCreate(ctx context.Context, params ThreadSectionCreateParams) (ThreadSectionCreateResponse, error) {
+	var result ThreadSectionCreateResponse
+	err := c.sender.Call(ctx, "threadSection/create", params, &result, MethodMetadataByMethod["threadSection/create"])
+	return result, err
+}
+
+func (c RawClient) ThreadSectionUpdate(ctx context.Context, params ThreadSectionUpdateParams) (ThreadSectionUpdateResponse, error) {
+	var result ThreadSectionUpdateResponse
+	err := c.sender.Call(ctx, "threadSection/update", params, &result, MethodMetadataByMethod["threadSection/update"])
+	return result, err
+}
+
+func (c RawClient) ThreadSectionDelete(ctx context.Context, params ThreadSectionDeleteParams) (ThreadSectionDeleteResponse, error) {
+	var result ThreadSectionDeleteResponse
+	err := c.sender.Call(ctx, "threadSection/delete", params, &result, MethodMetadataByMethod["threadSection/delete"])
 	return result, err
 }
 
@@ -241,6 +277,12 @@ func (c RawClient) MarketplaceUpgrade(ctx context.Context, params MarketplaceUpg
 func (c RawClient) PluginList(ctx context.Context, params PluginListParams) (PluginListResponse, error) {
 	var result PluginListResponse
 	err := c.sender.Call(ctx, "plugin/list", params, &result, MethodMetadataByMethod["plugin/list"])
+	return result, err
+}
+
+func (c RawClient) PluginSearch(ctx context.Context, params PluginSearchParams) (PluginSearchResponse, error) {
+	var result PluginSearchResponse
+	err := c.sender.Call(ctx, "plugin/search", params, &result, MethodMetadataByMethod["plugin/search"])
 	return result, err
 }
 
