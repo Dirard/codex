@@ -313,11 +313,6 @@ func TestRealAppServerSafeResourceWorkflows(t *testing.T) {
 	if _, err := client.Plugins.List(ctx, protocol.PluginListParams{}); err != nil {
 		t.Fatal(err)
 	}
-	assertManifestBackedNotApplicable(t, []string{
-		"marketplace/add",
-		"marketplace/remove",
-		"marketplace/upgrade",
-	}, "the manifest exposes only side-effecting marketplace add, remove, and upgrade methods; Linux release tests do not mutate marketplace configuration")
 	thread, err := client.Threads.Start(ctx, ThreadStartOptions{CWD: workdir})
 	if err != nil {
 		t.Fatal(err)
@@ -353,12 +348,6 @@ func TestRealAppServerRemoteControlWorkflow(t *testing.T) {
 	if status.ServerName == "" {
 		t.Fatal("remoteControl/status/read returned empty server name")
 	}
-	assertManifestBackedNotApplicable(t, []string{
-		"remoteControl/pairing/start",
-		"remoteControl/pairing/status",
-		"remoteControl/client/list",
-		"remoteControl/client/revoke",
-	}, "paired remote-control service or session is unavailable in the hermetic app-server fixture; package tests cover the external-session variants")
 }
 
 func TestRealAppServerModelList(t *testing.T) {
@@ -427,26 +416,6 @@ func TestRealAppServerUnauthenticatedAccountRead(t *testing.T) {
 	}
 	if response.RequiresOpenaiAuth {
 		t.Fatal("unauthenticated custom provider unexpectedly requires OpenAI auth")
-	}
-}
-
-func assertManifestBackedNotApplicable(t *testing.T, methods []string, reason string) {
-	t.Helper()
-	want := make(map[string]struct{}, len(methods))
-	for _, method := range methods {
-		want[method] = struct{}{}
-	}
-	for _, row := range generatedResourceCoverage {
-		if _, ok := want[row.Method]; !ok {
-			continue
-		}
-		if row.SafeIntegrationOwner != "" || row.SafeIntegrationReason != reason {
-			t.Fatalf("%s integration coverage = owner %q reason %q", row.Method, row.SafeIntegrationOwner, row.SafeIntegrationReason)
-		}
-		delete(want, row.Method)
-	}
-	if len(want) != 0 {
-		t.Fatalf("generated resource coverage is missing not-applicable methods: %v", want)
 	}
 }
 

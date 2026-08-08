@@ -52,7 +52,7 @@ fn context_with_entry_count(count: usize) -> HashMap<String, AdditionalContextEn
 }
 
 fn context_with_key_len(len: usize) -> HashMap<String, AdditionalContextEntry> {
-    HashMap::from([(key_with_len(len, 0), context_entry("x"))])
+    HashMap::from([(key_with_len(len, /*index*/ 0), context_entry("x"))])
 }
 
 fn context_with_value_len(len: usize) -> HashMap<String, AdditionalContextEntry> {
@@ -61,7 +61,12 @@ fn context_with_value_len(len: usize) -> HashMap<String, AdditionalContextEntry>
 
 fn context_at_total_limit() -> HashMap<String, AdditionalContextEntry> {
     let context = (0..4)
-        .map(|i| (key_with_len(24, i), context_entry(&"x".repeat(1000))))
+        .map(|i| {
+            (
+                key_with_len(/*len*/ 24, i),
+                context_entry(&"x".repeat(1000)),
+            )
+        })
         .collect::<HashMap<_, _>>();
     assert_eq!(
         total_context_bytes(&context),
@@ -72,7 +77,9 @@ fn context_at_total_limit() -> HashMap<String, AdditionalContextEntry> {
 
 fn context_over_total_limit() -> HashMap<String, AdditionalContextEntry> {
     let context = (0..5)
-        .map(|i| (key_with_len(24, i), context_entry(&"x".repeat(900))))
+        .map(|i| {
+            (key_with_len(/*len*/ 24, i), context_entry(&"x".repeat(900)))
+        })
         .collect::<HashMap<_, _>>();
     assert!(total_context_bytes(&context) > MAX_ADDITIONAL_CONTEXT_TOTAL_BYTES);
     context
