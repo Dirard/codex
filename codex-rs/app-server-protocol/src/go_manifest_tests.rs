@@ -1551,7 +1551,7 @@ fn runtime_serialization_scopes_match_manifest_representatives() {
             thread_id: "thread-1".to_string(),
         },
         crate::go_manifest::RequestSerializationScopeKind::Thread,
-        None,
+        /*expected_queue_key*/ None,
         &["thread_id"],
     );
 
@@ -1569,7 +1569,7 @@ fn runtime_serialization_scopes_match_manifest_representatives() {
             path: PathBuf::from("/tmp/resume-thread.jsonl"),
         },
         crate::go_manifest::RequestSerializationScopeKind::ThreadPath,
-        None,
+        /*expected_queue_key*/ None,
         &["path"],
     );
 
@@ -1583,7 +1583,7 @@ fn runtime_serialization_scopes_match_manifest_representatives() {
             process_id: "proc-1".to_string(),
         },
         crate::go_manifest::RequestSerializationScopeKind::CommandExecProcess,
-        None,
+        /*expected_queue_key*/ None,
         &["process_id?"],
     );
 
@@ -1608,7 +1608,7 @@ fn runtime_serialization_scopes_match_manifest_representatives() {
             process_handle: "process-1".to_string(),
         },
         crate::go_manifest::RequestSerializationScopeKind::Process,
-        None,
+        /*expected_queue_key*/ None,
         &["process_handle"],
     );
 
@@ -1625,7 +1625,7 @@ fn runtime_serialization_scopes_match_manifest_representatives() {
             session_id: "search-1".to_string(),
         },
         crate::go_manifest::RequestSerializationScopeKind::FuzzyFileSearchSession,
-        None,
+        /*expected_queue_key*/ None,
         &["session_id"],
     );
 
@@ -1642,7 +1642,7 @@ fn runtime_serialization_scopes_match_manifest_representatives() {
             watch_id: "watch-1".to_string(),
         },
         crate::go_manifest::RequestSerializationScopeKind::FsWatch,
-        None,
+        /*expected_queue_key*/ None,
         &["watch_id"],
     );
 
@@ -1661,7 +1661,7 @@ fn runtime_serialization_scopes_match_manifest_representatives() {
             server_name: "server-1".to_string(),
         },
         crate::go_manifest::RequestSerializationScopeKind::McpOauth,
-        None,
+        /*expected_queue_key*/ None,
         &["name"],
     );
 }
