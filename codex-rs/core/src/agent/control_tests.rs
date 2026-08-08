@@ -3256,15 +3256,18 @@ async fn multi_agent_v2_terminal_status_is_published_after_parent_mailbox() {
             .input_queue
             .drain_mailbox_input_items()
             .await,
-        vec![TurnInput::InterAgentCommunication(
-            InterAgentCommunication::new(
-                tester_path,
-                worker_path,
-                Vec::new(),
-                expected_message,
-                /*trigger_turn*/ false,
-            )
-        )]
+        (
+            vec![TurnInput::InterAgentCommunication(
+                InterAgentCommunication::new(
+                    tester_path,
+                    worker_path,
+                    Vec::new(),
+                    expected_message,
+                    /*trigger_turn*/ false,
+                )
+            )],
+            None,
+        )
     );
 }
 
@@ -3389,15 +3392,18 @@ async fn multi_agent_v2_terminal_error_is_published_after_parent_mailbox() {
             .input_queue
             .drain_mailbox_input_items()
             .await,
-        vec![TurnInput::InterAgentCommunication(
-            InterAgentCommunication::new(
-                tester_path,
-                worker_path,
-                Vec::new(),
-                expected_message,
-                /*trigger_turn*/ false,
-            )
-        )]
+        (
+            vec![TurnInput::InterAgentCommunication(
+                InterAgentCommunication::new(
+                    tester_path,
+                    worker_path,
+                    Vec::new(),
+                    expected_message,
+                    /*trigger_turn*/ false,
+                )
+            )],
+            None,
+        )
     );
 }
 

@@ -708,8 +708,7 @@ pub(crate) fn truncate_retained_messages_for_remote_compaction(
             continue;
         }
 
-        let group_tokens =
-            usize::try_from(group.estimated_token_count()).unwrap_or(usize::MAX);
+        let group_tokens = usize::try_from(group.estimated_token_count()).unwrap_or(usize::MAX);
         if group_tokens <= remaining {
             if let Some(notice) = group.attached_notice {
                 truncated_reversed.push(notice);
@@ -1125,13 +1124,17 @@ mod tests {
     #[test]
     fn retained_history_truncates_text_only_message_to_full_item_budget() {
         let original_text = "latest context ".repeat(64);
-        let item = message("user", &original_text, None);
-        let budget = usize::try_from(estimate_item_token_count(&item) - 1)
+        let item = ResponseItemEnvelope::new(message("user", &original_text, /*phase*/ None));
+        let budget = usize::try_from(estimate_item_token_count(&item.item) - 1)
             .expect("positive message estimate");
 
         let retained = truncate_retained_messages_for_remote_compaction(vec![item], budget);
 
-        let [ResponseItem::Message { content, .. }] = retained.as_slice() else {
+        let [ResponseItemEnvelope {
+            item: ResponseItem::Message { content, .. },
+            ..
+        }] = retained.as_slice()
+        else {
             panic!("expected one retained message");
         };
         let [ContentItem::InputText { text }] = content.as_slice() else {
@@ -1140,7 +1143,7 @@ mod tests {
         assert!(!text.is_empty());
         assert_ne!(text, &original_text);
         assert!(
-            estimate_item_token_count(&retained[0])
+            estimate_item_token_count(&retained[0].item)
                 <= i64::try_from(budget).expect("budget fits in i64")
         );
     }
@@ -1149,7 +1152,7 @@ mod tests {
     fn retained_history_keeps_mixed_fixed_content_that_exactly_fits() {
         let mixed =
             ResponseItemEnvelope::new(mixed_text_image_message("keep only what fits"));
-        let text_free = truncate_message_text_to_token_budget(mixed.clone(), 0)
+        let text_free = truncate_message_text_to_token_budget(mixed.clone(), /*max_tokens*/ 0)
             .expect("the image remains after text is removed");
         let fixed_cost = usize::try_from(estimate_item_token_count(&text_free.item))
             .expect("positive fixed-content estimate");
@@ -1163,7 +1166,8 @@ mod tests {
         let item = ResponseItemEnvelope::new(mixed_text_image_message(
             "text that crosses the estimator rounding boundary",
         ));
-        let retained = truncate_retained_messages_for_remote_compaction(vec![item], 1);
+        let retained =
+            truncate_retained_messages_for_remote_compaction(vec![item], /*max_tokens*/ 1);
 
         assert!(retained.is_empty());
     }

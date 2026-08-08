@@ -374,6 +374,13 @@ mod tests {
                     codex_home,
                     platform_family: "unix".to_string(),
                     platform_os: "linux".to_string(),
+                    stable_protocol_digest: String::new(),
+                    experimental_protocol_digest: String::new(),
+                    stable_schema_digest: String::new(),
+                    experimental_schema_digest: String::new(),
+                    stable_manifest_digest: String::new(),
+                    experimental_manifest_digest: String::new(),
+                    active_protocol_mode: codex_app_server_protocol::ActiveProtocolMode::Stable,
                 },
             )),
         });

@@ -2199,22 +2199,25 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
             .input_queue
             .drain_mailbox_input_items()
             .await,
-        vec![
-            TurnInput::InterAgentCommunication(InterAgentCommunication::new(
-                worker_path.clone(),
-                AgentPath::root(),
-                Vec::new(),
-                first_notification,
-                /*trigger_turn*/ false,
-            )),
-            TurnInput::InterAgentCommunication(InterAgentCommunication::new(
-                worker_path,
-                AgentPath::root(),
-                Vec::new(),
-                second_notification,
-                /*trigger_turn*/ false,
-            )),
-        ]
+        (
+            vec![
+                TurnInput::InterAgentCommunication(InterAgentCommunication::new(
+                    worker_path.clone(),
+                    AgentPath::root(),
+                    Vec::new(),
+                    first_notification,
+                    /*trigger_turn*/ false,
+                )),
+                TurnInput::InterAgentCommunication(InterAgentCommunication::new(
+                    worker_path,
+                    AgentPath::root(),
+                    Vec::new(),
+                    second_notification,
+                    /*trigger_turn*/ false,
+                )),
+            ],
+            None,
+        )
     );
 }
 
@@ -3397,7 +3400,7 @@ async fn multi_agent_v2_wait_agent_clamps_timeout_below_configured_min() {
     assert_eq!(
         result,
         crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
-            message: "Wait timed out. Active agents: pending_init=0, running=1, interrupted=0.\n\nRequested timeout of 1ms was clamped to the minimum of 50ms.".to_string(),
+            message: "Wait timed out. Active agents: pending_init=1, running=0, interrupted=0.\n\nRequested timeout of 1ms was clamped to the minimum of 50ms.".to_string(),
             timed_out: true,
         }
     );

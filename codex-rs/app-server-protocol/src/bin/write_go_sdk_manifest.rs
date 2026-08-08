@@ -1,19 +1,33 @@
+use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use clap::Parser;
-
-#[derive(Parser, Debug)]
+#[derive(Debug)]
 struct Args {
-    #[arg(long)]
     output: PathBuf,
-
-    #[arg(long)]
     check: bool,
 }
 
 fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+    let mut output = None;
+    let mut check = false;
+    let mut cli_args = env::args_os().skip(1);
+    while let Some(arg) = cli_args.next() {
+        match arg.to_str() {
+            Some("--output") => {
+                output =
+                    Some(PathBuf::from(cli_args.next().ok_or_else(|| {
+                        anyhow::anyhow!("--output requires a path")
+                    })?));
+            }
+            Some("--check") => check = true,
+            _ => anyhow::bail!("unexpected argument: {}", arg.to_string_lossy()),
+        }
+    }
+    let args = Args {
+        output: output.ok_or_else(|| anyhow::anyhow!("--output is required"))?,
+        check,
+    };
     let manifest = codex_app_server_protocol::go_manifest::go_sdk_manifest();
     let json = codex_app_server_protocol::go_manifest::canonical_pretty_manifest_json(&manifest)?;
     if args.check {
