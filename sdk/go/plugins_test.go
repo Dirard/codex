@@ -23,6 +23,14 @@ func TestPluginsThinWrappers(t *testing.T) {
 			},
 		},
 		{
+			name:   "search",
+			method: "plugin/search",
+			call: func(ctx context.Context, client *Client) error {
+				_, err := client.Plugins.Search(ctx, protocol.PluginSearchParams{SearchTerm: "plugin"})
+				return err
+			},
+		},
+		{
 			name:   "installed",
 			method: "plugin/installed",
 			call: func(ctx context.Context, client *Client) error {

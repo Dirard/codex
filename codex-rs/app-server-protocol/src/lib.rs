@@ -8,6 +8,7 @@ mod precomputed_exports;
 mod precomputed_exports_tests;
 mod protocol;
 pub mod rpc;
+#[cfg(test)]
 mod schema_fixtures;
 #[cfg(test)]
 #[path = "schema_fixtures_tests.rs"]
@@ -53,13 +54,15 @@ pub use protocol::v1::Tools;
 pub use protocol::v1::UserSavedConfig;
 pub use protocol::v2::*;
 pub use rpc::*;
+#[cfg(test)]
 pub use schema_fixtures::SchemaFixtureOptions;
-pub use schema_fixtures::check_schema_fixtures_with_options;
-#[doc(hidden)]
-pub use schema_fixtures::generate_typescript_schema_fixture_subtree_for_tests;
+#[cfg(test)]
 pub use schema_fixtures::read_schema_fixture_subtree;
+#[cfg(test)]
 pub use schema_fixtures::read_schema_fixture_tree;
+#[cfg(test)]
 pub use schema_fixtures::write_schema_fixtures;
+#[cfg(test)]
 pub use schema_fixtures::write_schema_fixtures_with_options;
 
 #[cfg(not(test))]

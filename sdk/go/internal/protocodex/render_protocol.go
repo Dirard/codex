@@ -104,9 +104,9 @@ func mapClientMethods(entries []ClientRequestEntry) map[string]ClientRequestEntr
 func renderServerRequestMetadata(manifest *Manifest) string {
 	var b strings.Builder
 	b.WriteString("package protocol\n\n")
-	b.WriteString("type ServerRequestMetadata struct { Method string; Visibility string; ParamsType string; ResponseType string; ParamsSchemaRef string; ResponseSchemaRef string; SchemaExcludedReason string; ManualPayloadConversion string; Capability string; HandlerOwner string; DecodeFunction string; UnitTestOwner string; DocsExampleOwner string; GeneratedOnlyException string; ReviewNote string; Experimental bool }\n\n")
+	b.WriteString("type ServerRequestMetadata struct { Method string; Visibility string; ParamsType string; ResponseType string; ParamsSchemaRef string; ResponseSchemaRef string; SchemaExcludedReason string; ManualPayloadConversion string; Capability string; HandlerOwner string; DecodeFunction string; Experimental bool }\n\n")
 	b.WriteString("var ServerRequestMetadataByMethod = map[string]ServerRequestMetadata{\n")
-	handlers := mapServerHandlerMappings(nil, &[]string{})
+	handlers := make(map[string]ServerHandlerMapping, len(serverHandlerMappings))
 	for _, mapping := range serverHandlerMappings {
 		handlers[mapping.Method] = mapping
 	}
@@ -114,7 +114,7 @@ func renderServerRequestMetadata(manifest *Manifest) string {
 	for _, entry := range manifest.Experimental.ServerRequests {
 		mapping := handlers[entry.Method]
 		_, isStable := stable[entry.Method]
-		b.WriteString(fmt.Sprintf("\t%q: {Method: %q, Visibility: %q, ParamsType: %q, ResponseType: %q, ParamsSchemaRef: %q, ResponseSchemaRef: %q, SchemaExcludedReason: %q, ManualPayloadConversion: %q, Capability: %q, HandlerOwner: %q, DecodeFunction: %q, UnitTestOwner: %q, DocsExampleOwner: %q, GeneratedOnlyException: %q, ReviewNote: %q, Experimental: %v},\n", entry.Method, entry.Method, mapping.Visibility, entry.PayloadType, entry.ResponseType, entry.ParamsSchemaRef, entry.ResponseSchemaRef, entry.SchemaExcludedReason, manualPayloadConversionString(entry.ManualPayloadConversion), mapping.Capability, mapping.HandlerOwner, "decode"+RawMethodName(entry.Method)+"ServerRequest", mapping.UnitTestOwner, mapping.DocsExampleOwner, mapping.GeneratedOnlyException, mapping.ReviewNote, !isStable))
+		b.WriteString(fmt.Sprintf("\t%q: {Method: %q, Visibility: %q, ParamsType: %q, ResponseType: %q, ParamsSchemaRef: %q, ResponseSchemaRef: %q, SchemaExcludedReason: %q, ManualPayloadConversion: %q, Capability: %q, HandlerOwner: %q, DecodeFunction: %q, Experimental: %v},\n", entry.Method, entry.Method, mapping.Visibility, entry.PayloadType, entry.ResponseType, entry.ParamsSchemaRef, entry.ResponseSchemaRef, entry.SchemaExcludedReason, manualPayloadConversionString(entry.ManualPayloadConversion), mapping.Capability, mapping.HandlerOwner, "decode"+RawMethodName(entry.Method)+"ServerRequest", !isStable))
 	}
 	b.WriteString("}\n")
 	return b.String()
@@ -132,6 +132,9 @@ func renderServerNotificationMetadata(manifest *Manifest, stableServerNotificati
 	b.WriteString("var ServerNotificationRoutingByMethod = map[string]ServerNotificationRoutingMetadata{\n")
 	stable := stableServerNotificationMethods(manifest, stableServerNotifications)
 	for _, entry := range manifest.Experimental.ServerNotifications {
+		if !hasPublicGeneratedProtocolSurface(entry.SDKVisibility) {
+			continue
+		}
 		_, isStable := stable[entry.Method]
 		b.WriteString(fmt.Sprintf("\t%q: {Method: %q, PayloadType: %q, PayloadSchemaRef: %q, Visibility: %q, SchemaExcludedReason: %q, ManualPayloadConversion: %q, RoutingKind: %q, Experimental: %v, Routes: []ServerNotificationRouteMetadata{", entry.Method, entry.Method, entry.PayloadType, entry.PayloadSchemaRef, entry.SDKVisibility, entry.SchemaExcludedReason, manualPayloadConversionString(entry.ManualPayloadConversion), entry.RoutingStrategy.Kind, !isStable))
 		for _, route := range entry.RoutingStrategy.Routes {
@@ -151,7 +154,7 @@ func renderServerNotificationMetadata(manifest *Manifest, stableServerNotificati
 	b.WriteString("\nfunc DecodeServerNotificationPayload(method string, params json.RawMessage) (any, error) {\n")
 	b.WriteString("\tswitch method {\n")
 	for _, entry := range manifest.Experimental.ServerNotifications {
-		if entry.PayloadType == "" {
+		if entry.PayloadType == "" || !hasPublicGeneratedProtocolSurface(entry.SDKVisibility) {
 			continue
 		}
 		b.WriteString(fmt.Sprintf("\tcase %q:\n", entry.Method))
