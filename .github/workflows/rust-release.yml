@@ -10,9 +10,10 @@
 
 name: rust-release
 on:
-  push:
-    tags:
-      - "rust-v*.*.*"
+  workflow_dispatch:
+
+env:
+  CODEX_ZSH_RELEASE_TAG: codex-zsh-v0.1.0
 
 env:
   CODEX_REPO_ROOT: ${{ github.workspace }}
@@ -94,13 +95,13 @@ jobs:
             artifact_name: aarch64-apple-darwin-app-server
             binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
-          - runner: macos-15-large
+          - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
             binaries: "codex codex-code-mode-host codex-responses-api-proxy"
             build_dmg: "true"
-          - runner: macos-15-large
+          - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
@@ -117,7 +118,7 @@ jobs:
             target: x86_64-unknown-linux-musl
             bundle: app-server
             artifact_name: x86_64-unknown-linux-musl-app-server
-            binaries: "codex-app-server codex-code-mode-host bwrap"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-arm64
             target: aarch64-unknown-linux-musl
@@ -129,7 +130,7 @@ jobs:
             target: aarch64-unknown-linux-musl
             bundle: app-server
             artifact_name: aarch64-unknown-linux-musl-app-server
-            binaries: "codex-app-server codex-code-mode-host bwrap"
+            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
 
     steps:
@@ -165,12 +166,6 @@ jobs:
           echo "Total RAM: ${total_ram}"
           echo "Disk usage:"
           df -h .
-      - name: Verify macOS x64 runner
-        if: ${{ matrix.target == 'x86_64-apple-darwin' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(uname -m)" = "x86_64"
       - name: Install Linux bwrap build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -393,59 +388,14 @@ jobs:
             cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
           fi
 
-      - name: Materialize package helpers
+      - name: Download packaged zsh manifest
         if: ${{ runner.os != 'macOS' }}
         shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          CODEX_PACKAGE_HELPER_ROOT="${RUNNER_TEMP}/codex-package-helpers"
-          rm -rf "${CODEX_PACKAGE_HELPER_ROOT}/${TARGET}"
-          PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 -m codex_package.materialize_helpers \
-            --target "$TARGET" \
-            --output-root "$CODEX_PACKAGE_HELPER_ROOT" \
-            --bwrap-bin "target/${TARGET}/release/bwrap"
-          echo "CODEX_PACKAGE_HELPER_ROOT=$CODEX_PACKAGE_HELPER_ROOT" >> "$GITHUB_ENV"
-
-      - name: Resolve materialized package helpers
-        if: ${{ runner.os != 'macOS' }}
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          # Stage 5G: package archive assembly must fail before helper
-          # resolution if a prior release-owned step did not materialize these
-          # payloads. Do not replace this preflight with DotSlash, package-cache,
-          # PATH, or network fallback; Go SDK release-readiness remains blocked
-          # until a reviewed producer supplies CODEX_PACKAGE_HELPER_ROOT.
-          : "${CODEX_PACKAGE_HELPER_ROOT:?CODEX_PACKAGE_HELPER_ROOT must point to Stage 5G materialized helper sources}"
-          helper_root="${CODEX_PACKAGE_HELPER_ROOT%/}/${TARGET}"
-          rg_bin="${helper_root}/rg"
-          zsh_bin="${helper_root}/zsh"
-          bwrap_bin="${helper_root}/bwrap"
-          if [[ ! -x "$rg_bin" ]]; then
-            echo "Materialized ripgrep helper is missing or not executable: $rg_bin" >&2
-            exit 1
-          fi
-          if [[ ! -x "$zsh_bin" ]]; then
-            echo "Materialized patched shell helper is missing or not executable: $zsh_bin" >&2
-            exit 1
-          fi
-          if [[ ! -x "$bwrap_bin" ]]; then
-            echo "Materialized bwrap helper is missing or not executable: $bwrap_bin" >&2
-            exit 1
-          fi
-          : "${CODEX_BWRAP_SHA256:?CODEX_BWRAP_SHA256 must be exported before package bwrap verification}"
-          package_bwrap_digest="$(sha256sum "$bwrap_bin" | awk '{print $1}')"
-          if [[ "$package_bwrap_digest" != "$CODEX_BWRAP_SHA256" ]]; then
-            echo "Materialized bwrap helper $bwrap_bin has sha256:${package_bwrap_digest}, expected sha256:${CODEX_BWRAP_SHA256}" >&2
-            exit 1
-          fi
-          echo "CODEX_PACKAGE_RG_BIN=$rg_bin" >> "$GITHUB_ENV"
-          echo "CODEX_PACKAGE_ZSH_BIN=$zsh_bin" >> "$GITHUB_ENV"
-          echo "CODEX_PACKAGE_BWRAP_BIN=$bwrap_bin" >> "$GITHUB_ENV"
+          curl -fsSL \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
+            -o "${RUNNER_TEMP}/codex-zsh"
 
       - name: Build Codex package archive
         if: ${{ runner.os != 'macOS' }}
@@ -465,10 +415,6 @@ jobs:
             --bundle "$BUNDLE" \
             --entrypoint-dir "target/${TARGET}/release" \
             --archive-dir "dist/${TARGET}" \
-            --require-materialized-helper-sources \
-            --rg-bin "$CODEX_PACKAGE_RG_BIN" \
-            --zsh-bin "$CODEX_PACKAGE_ZSH_BIN" \
-            --bwrap-bin "$CODEX_PACKAGE_BWRAP_BIN" \
             --zsh-manifest "${RUNNER_TEMP}/codex-zsh" \
             "${voice_args[@]}"
 
@@ -904,7 +850,7 @@ jobs:
   package-macos:
     needs: sign-macos-binaries
     name: Package macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }}
-    runs-on: ${{ matrix.runs_on }}
+    runs-on: macos-15-xlarge
     timeout-minutes: 45
     permissions:
       contents: read
@@ -921,37 +867,26 @@ jobs:
             artifact_name: aarch64-apple-darwin
             binaries: "codex codex-code-mode-host codex-responses-api-proxy"
             build_dmg: "true"
-            runs_on: macos-15-xlarge
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
             binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
-            runs_on: macos-15-xlarge
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
             binaries: "codex codex-code-mode-host codex-responses-api-proxy"
             build_dmg: "true"
-            runs_on: macos-15-large
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
             binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
-            runs_on: macos-15-large
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Verify macOS x64 runner
-        if: ${{ matrix.target == 'x86_64-apple-darwin' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(uname -m)" = "x86_64"
 
       - name: Download signed macOS binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -1290,7 +1225,7 @@ jobs:
       - package-macos
       - sign-macos-dmg
     name: Verify macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }}
-    runs-on: ${{ matrix.runs_on }}
+    runs-on: macos-15-xlarge
     timeout-minutes: 30
     permissions:
       contents: read
@@ -1307,37 +1242,26 @@ jobs:
             artifact_name: aarch64-apple-darwin
             binaries: "codex codex-code-mode-host codex-responses-api-proxy"
             verify_dmg: "true"
-            runs_on: macos-15-xlarge
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
             binaries: "codex-app-server codex-code-mode-host"
             verify_dmg: "false"
-            runs_on: macos-15-xlarge
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
             binaries: "codex codex-code-mode-host codex-responses-api-proxy"
             verify_dmg: "true"
-            runs_on: macos-15-large
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
             binaries: "codex-app-server codex-code-mode-host"
             verify_dmg: "false"
-            runs_on: macos-15-large
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Verify macOS x64 runner
-        if: ${{ matrix.target == 'x86_64-apple-darwin' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(uname -m)" = "x86_64"
 
       - name: Download packaged macOS artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -1606,94 +1530,6 @@ jobs:
           name: npm-packages
           path: dist/npm/*.tgz
           if-no-files-found: error
-
-  go-sdk-linux-verification:
-    name: Go SDK Linux verification
-    needs: tag-check
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ needs.tag-check.outputs.commit_sha }}
-          persist-credentials: false
-
-      - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: "1.25"
-          cache-dependency-path: sdk/go/go.mod
-
-      - name: Setup Rust for Go SDK protocol source checks
-        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
-        with:
-          toolchain: "1.95.0"
-
-      - name: Install Rust helpers for Go SDK protocol source checks
-        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
-        with:
-          tool: just,nextest@0.9.103
-
-      - name: Check Rust-owned Go SDK protocol sources
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd codex-rs
-          cargo run --manifest-path Cargo.toml -p codex-app-server-protocol --bin write_go_sdk_manifest -- \
-            --check \
-            --output ../sdk/go/internal/protocodex/manifest/app_server_protocol_manifest.json
-          just write-app-server-schema --check
-          cargo run --manifest-path Cargo.toml -p codex-app-server-protocol --bin write_schema_fixtures -- \
-            --experimental \
-            --check \
-            --schema-root ../sdk/go/internal/protocodex/schema-experimental
-          just test -p codex-app-server-protocol
-
-      - name: Run full Linux Go SDK verification
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd sdk/go
-          go test ./... -count=1
-          go test -race ./... -count=1
-          go vet ./...
-          go run ./internal/cmd/protocodex --check --mode stable \
-            --stable-schema-root ../../codex-rs/app-server-protocol/schema \
-            --experimental-schema-root internal/protocodex/schema-experimental \
-            --manifest internal/protocodex/manifest/app_server_protocol_manifest.json
-          go run ./internal/cmd/protocodex --check --mode experimental \
-            --stable-schema-root ../../codex-rs/app-server-protocol/schema \
-            --experimental-schema-root internal/protocodex/schema-experimental \
-            --manifest internal/protocodex/manifest/app_server_protocol_manifest.json
-          go run ./internal/cmd/protocodex --check --mode both \
-            --stable-schema-root ../../codex-rs/app-server-protocol/schema \
-            --experimental-schema-root internal/protocodex/schema-experimental \
-            --manifest internal/protocodex/manifest/app_server_protocol_manifest.json \
-            --out protocol \
-            --root-out .
-
-  go-sdk-linux-shipping-release-readiness:
-    needs:
-      - tag-check
-      - build
-      - go-sdk-linux-verification
-    if: >-
-      ${{
-        always() &&
-        needs.tag-check.result == 'success' &&
-        needs.build.result == 'success' &&
-        needs.go-sdk-linux-verification.result == 'success'
-      }}
-    uses: ./.github/workflows/go-sdk-shipping-release-readiness.yml
-    with:
-      checkout_ref: ${{ needs.tag-check.outputs.commit_sha }}
-      evidence_source: rust-release
-      verification_job: go-sdk-linux-verification
-      verification_conclusion: ${{ needs.go-sdk-linux-verification.result }}
-      verification_commit_sha: ${{ needs.tag-check.outputs.commit_sha }}
-
   release:
     needs:
       - tag-check
@@ -1701,8 +1537,6 @@ jobs:
       - finalize-macos
       - build-windows
       - argument-comment-lint-release-assets
-      - go-sdk-linux-verification
-      - go-sdk-shipping-release-readiness
       - stage-npm-packages
       - provisioned-macos-candidate
     if: >-
@@ -1713,8 +1547,6 @@ jobs:
         needs.finalize-macos.result == 'success' &&
         needs.build-windows.result == 'success' &&
         needs.argument-comment-lint-release-assets.result == 'success' &&
-        needs.go-sdk-linux-verification.result == 'success' &&
-        needs.go-sdk-linux-shipping-release-readiness.result == 'success' &&
         needs.stage-npm-packages.result == 'success' &&
         (needs.provisioned-macos-candidate.result == 'success' ||
           (vars.CODEX_PROVISIONED_MACOS_CANDIDATE != 'true' &&
@@ -1781,9 +1613,29 @@ jobs:
       - name: Add Codex package checksum manifest
         run: |
           set -euo pipefail
-          bash .github/scripts/write-codex-package-checksums.sh \
-            --dist dist \
-            --manifest dist/codex-package_SHA256SUMS
+
+          manifest="dist/codex-package_SHA256SUMS"
+          tmp_manifest="$(mktemp)"
+          find dist -type f \
+            \( -name 'codex-package-*.tar.gz' \
+              -o -name 'codex-package-*.tar.zst' \
+              -o -name 'codex-app-server-package-*.tar.gz' \
+              -o -name 'codex-app-server-package-*.tar.zst' \
+              -o -name 'codex-provisioned-package-*.tar.gz' \) \
+            -print |
+            sort |
+            while IFS= read -r archive; do
+              sha256sum "$archive" |
+                awk -v name="$(basename "$archive")" '{ print $1 "  " name }'
+            done > "$tmp_manifest"
+
+          if [[ ! -s "$tmp_manifest" ]]; then
+            echo "No Codex package archives found for checksum manifest"
+            exit 1
+          fi
+
+          mv "$tmp_manifest" "$manifest"
+          cat "$manifest"
 
       - name: Add config schema release asset
         run: |

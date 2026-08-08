@@ -94,8 +94,3 @@ CHANGELOG.ignore.md
 # Python bytecode files
 __pycache__/
 *.pyc
-.supergoal/
-.serena/
-.codegraph/
-superpowers/
-.worktrees/
