@@ -7,7 +7,6 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
-use codex_config::ConfigLayerStackOrdering;
 use codex_config::HookEventsToml;
 use codex_config::HookHandlerConfig;
 use codex_config::HookStateToml;
@@ -31,6 +30,7 @@ use crate::events::session_end::SESSION_END_DEFAULT_TIMEOUT_SEC;
 use crate::events::session_end::SESSION_END_MAX_TIMEOUT_SEC;
 use crate::output_spill::AdditionalContextLimit;
 use crate::output_spill::DEFAULT_HOOK_OUTPUT_TOKEN_LIMIT;
+use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
@@ -98,10 +98,7 @@ pub(crate) fn discover_handlers(
             policy,
         );
 
-        for layer in config_layer_stack.get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ false,
-        ) {
+        for layer in config_layer_stack.layers_low_to_high() {
             let (hook_source, is_managed) = hook_metadata_for_config_layer_source(&layer.name);
             let policy_path = config_toml_source_path(layer);
             let policy_source = HookHandlerSource {
@@ -477,14 +474,6 @@ fn append_matcher_groups(
                     } else {
                         command
                     };
-                    if r#async && event_name != codex_protocol::protocol::HookEventName::SessionEnd
-                    {
-                        warnings.push(format!(
-                            "skipping async hook in {}: async hooks are not supported yet",
-                            source.path.display()
-                        ));
-                        continue;
-                    }
                     if command.trim().is_empty() {
                         warnings.push(format!(
                             "skipping empty hook command in {}",
@@ -498,7 +487,14 @@ fn append_matcher_groups(
                         source.path.as_path(),
                         warnings,
                     );
-                    if r#async {
+                    let execution_mode = if r#async
+                        && event_name != codex_protocol::protocol::HookEventName::SessionEnd
+                    {
+                        HookExecutionMode::Async
+                    } else {
+                        HookExecutionMode::Sync
+                    };
+                    if r#async && execution_mode == HookExecutionMode::Sync {
                         warnings.push(format!(
                             "running async SessionEnd hook synchronously in {}",
                             source.path.display()
@@ -562,6 +558,7 @@ fn append_matcher_groups(
                         is_managed: source.is_managed,
                         current_hash,
                         trust_status,
+                        execution_mode,
                     });
                     if enabled
                         && (source.bypass_hook_trust
@@ -572,6 +569,7 @@ fn append_matcher_groups(
                     {
                         handlers.push(ConfiguredHandler {
                             event_name,
+                            execution_mode,
                             matcher: matcher.map(ToOwned::to_owned),
                             command,
                             timeout_sec,
@@ -587,6 +585,10 @@ fn append_matcher_groups(
                     }
                     *display_order += 1;
                 }
+                HookHandlerConfig::McpTool { .. } => warnings.push(format!(
+                    "skipping MCP tool hook in {}: MCP tool hooks are not supported yet",
+                    source.path.display()
+                )),
                 HookHandlerConfig::Prompt {} => warnings.push(format!(
                     "skipping prompt hook in {}: prompt hooks are not supported yet",
                     source.path.display()
@@ -956,6 +958,7 @@ mod tests {
             handlers,
             vec![ConfiguredHandler {
                 event_name: HookEventName::UserPromptSubmit,
+                execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
                 matcher: None,
                 command: "echo hello".to_string(),
                 timeout_sec: 600,
@@ -992,6 +995,7 @@ mod tests {
             handlers,
             vec![ConfiguredHandler {
                 event_name: HookEventName::PreToolUse,
+                execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
                 matcher: Some("^Bash$".to_string()),
                 command: "echo hello".to_string(),
                 timeout_sec: 600,

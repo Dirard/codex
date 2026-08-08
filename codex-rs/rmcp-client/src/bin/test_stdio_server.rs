@@ -513,7 +513,7 @@ impl ServerHandler for TestToolServer {
 
     fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParams>,
+        request: Option<PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         let tools = self.tools.clone();
@@ -527,7 +527,25 @@ impl ServerHandler for TestToolServer {
                     .get_or_insert_with(MetaObject::new)
                     .insert("ui".to_string(), json!({ "visibility": ["app"] }));
             }
-            Ok(ListToolsResult::with_all_items(tools))
+            let mut result = ListToolsResult::with_all_items(tools);
+            match (
+                std::env::var("MCP_TEST_TOOL_PAGINATION").as_deref(),
+                request.and_then(|request| request.cursor).as_deref(),
+            ) {
+                (Ok("two-pages"), None) => {
+                    result.tools.retain(|tool| tool.name == "echo");
+                    result.next_cursor = Some("second".to_string());
+                }
+                (Ok("two-pages"), Some("second")) => {
+                    result.tools.retain(|tool| tool.name == "sync");
+                }
+                (Ok("oversized-cursor"), None) => {
+                    result.tools.retain(|tool| tool.name == "echo");
+                    result.next_cursor = Some("x".repeat(65_537));
+                }
+                _ => {}
+            }
+            Ok(result)
         }
     }
 
@@ -882,9 +900,51 @@ fn parse_data_url(url: &str) -> Option<(String, String)> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(windows)]
+    if std::env::var_os("MCP_TEST_DESCENDANT_ROLE").is_some() {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        return Ok(());
+    }
+
     eprintln!("starting rmcp test server");
     if let Ok(pid_file) = std::env::var("MCP_TEST_PID_FILE") {
         std::fs::write(pid_file, std::process::id().to_string())?;
+    }
+    #[cfg(windows)]
+    if let Ok(marker_file) = std::env::var("MCP_TEST_BREAKAWAY_DENIED_FILE") {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        const ERROR_ACCESS_DENIED: i32 = 5;
+
+        let escaped = std::process::Command::new(std::env::current_exe()?)
+            .creation_flags(CREATE_BREAKAWAY_FROM_JOB)
+            .env("MCP_TEST_DESCENDANT_ROLE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        match escaped {
+            Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED) => {
+                std::fs::write(marker_file, "denied")?;
+            }
+            Err(error) => return Err(error.into()),
+            Ok(mut child) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("MCP descendant unexpectedly escaped its Windows job".into());
+            }
+        }
+    }
+    #[cfg(windows)]
+    if let Ok(pid_file) = std::env::var("MCP_TEST_DESCENDANT_PID_FILE") {
+        let child = std::process::Command::new(std::env::current_exe()?)
+            .env("MCP_TEST_DESCENDANT_ROLE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+        std::fs::write(pid_file, child.id().to_string())?;
     }
     // Run the server with STDIO transport. If the client disconnects we simply
     // bubble up the error so the process exits.

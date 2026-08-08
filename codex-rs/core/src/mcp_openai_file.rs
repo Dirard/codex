@@ -17,7 +17,6 @@ use codex_api::OPENAI_FILE_UPLOAD_LIMIT_BYTES;
 use codex_api::upload_openai_file;
 use codex_http_client::RouteAwareClientPool;
 use codex_login::CodexAuth;
-use codex_utils_path_uri::PathUri;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
@@ -139,14 +138,10 @@ async fn build_uploaded_argument_value(
             "no primary turn environment is available".to_string(),
         ));
     };
-    // TODO(anp): Resolve app tool file arguments using the selected environment's native path
-    // convention so uploads can read relative paths from foreign environments.
-    let native_environment_cwd = turn_environment
+    let path_uri = turn_environment
         .cwd()
-        .to_abs_path()
+        .join(file_path)
         .map_err(|error| contextualize_error(error.to_string()))?;
-    let resolved_path = native_environment_cwd.join(file_path);
-    let path_uri = PathUri::from_abs_path(&resolved_path);
     let fs = turn_environment.environment.get_filesystem();
     let metadata = fs
         .get_metadata(&path_uri, /*sandbox*/ None)
@@ -155,13 +150,13 @@ async fn build_uploaded_argument_value(
     if !metadata.is_file {
         return Err(contextualize_error(format!(
             "path `{}` is not a file",
-            resolved_path.display()
+            path_uri.inferred_native_path_string()
         )));
     }
     if metadata.size > OPENAI_FILE_UPLOAD_LIMIT_BYTES {
         return Err(contextualize_error(format!(
             "file `{}` is too large: {} bytes exceeds the limit of {} bytes",
-            resolved_path.display(),
+            path_uri.inferred_native_path_string(),
             metadata.size,
             OPENAI_FILE_UPLOAD_LIMIT_BYTES,
         )));
@@ -170,11 +165,17 @@ async fn build_uploaded_argument_value(
         .read_file_stream(&path_uri, /*sandbox*/ None)
         .await
         .map_err(|error| contextualize_error(error.to_string()))?;
-    let file_name = resolved_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("file")
-        .to_string();
+    let file_name = path_uri
+        .basename()
+        .or_else(|| {
+            path_uri.infer_path_convention().and_then(|convention| {
+                convention
+                    .path_segments(file_path)
+                    .rfind(|segment| !segment.is_empty())
+                    .map(str::to_string)
+            })
+        })
+        .unwrap_or_else(|| "file".to_string());
     let upload_auth = codex_model_provider::auth_provider_from_auth(auth);
     let uploaded = upload_openai_file(
         turn_context.config.chatgpt_base_url.trim_end_matches('/'),
@@ -227,7 +228,6 @@ mod tests {
 
     fn set_primary_environment_cwd(turn_context: &mut TurnContext, cwd: &Path) {
         let cwd = AbsolutePathBuf::try_from(cwd).expect("absolute path");
-        turn_context.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
         let TurnEnvironmentState::Ready(primary) = &mut turn_context.environments.environments[0]
         else {
             panic!("expected ready primary environment");
@@ -238,6 +238,7 @@ mod tests {
             PathUri::from_abs_path(&cwd),
             Vec::new(),
             primary.shell.clone(),
+            primary.config.clone(),
         );
     }
 
@@ -314,19 +315,21 @@ mod tests {
             .await
             .expect("write local file");
         set_primary_environment_cwd(&mut turn_context, dir.path());
-        let selection = turn_context
+        let environment = turn_context
             .environments
             .primary()
-            .expect("ready primary environment")
-            .selection();
+            .expect("ready primary environment");
+        let selection = environment.selection();
+        let environment_config = environment.config.clone();
         let environments = crate::environment_selection::ThreadEnvironments::new(
             session.services.turn_environments.environment_manager(),
             crate::shell::default_user_shell(),
+            environment_config.clone(),
             crate::shell_snapshot::ShellSnapshot::disabled(),
             Default::default(),
             /*non_blocking_snapshots*/ true,
         );
-        environments.update_selections(std::slice::from_ref(&selection));
+        environments.update_selections(std::slice::from_ref(&selection), &environment_config);
         turn_context.environments = environments.snapshot().await;
         turn_context
             .environments
