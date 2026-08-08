@@ -202,8 +202,6 @@ OS-specific resources compile on every supported OS. For example, `WindowsSandbo
 
 See `examples/raw_protocol` for a typed raw method call beside the equivalent high-level wrapper.
 
-## Release Notes
+## Versioning
 
 Go module releases use subdirectory tags such as `sdk/go/v1.2.3`. Published tags are immutable; a bad published release is superseded by a higher patch version or documented retraction rather than being overwritten.
-
-This README and the examples are package-level documentation only; runtime packaging, CI wiring, live app-server/auth proof, and release readiness are validated by later Stage 6/Stage 7 gates.

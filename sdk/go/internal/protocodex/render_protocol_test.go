@@ -51,3 +51,32 @@ func TestRenderClientNotificationsRejectsParamsBearingNotification(t *testing.T)
 		t.Fatalf("err = %v, want params-bearing client notification rejection", err)
 	}
 }
+
+func TestGeneratedOnlyServerNotificationsAreNotRendered(t *testing.T) {
+	manifest := &Manifest{
+		Experimental: ManifestMode{
+			ServerNotifications: []NotificationEntry{
+				{
+					Method:        "rawResponse/completed",
+					PayloadType:   "RawResponseCompletedNotification",
+					SDKVisibility: "generatedOnly",
+				},
+				{
+					Method:        "rawResponseItem/completed",
+					PayloadType:   "RawResponseItemCompletedNotification",
+					SDKVisibility: "generatedOnly",
+				},
+			},
+		},
+	}
+
+	rendered := renderServerNotificationMetadata(manifest, nil)
+	for _, method := range []string{"rawResponse/completed", "rawResponseItem/completed"} {
+		if strings.Contains(rendered, method) {
+			t.Fatalf("generated-only server notification %q leaked into generated metadata", method)
+		}
+	}
+	if variants := jsonRPCUnionVariants("ServerNotification", manifest); len(variants) != 0 {
+		t.Fatalf("generated-only server notification variants = %#v, want none", variants)
+	}
+}

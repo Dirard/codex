@@ -367,6 +367,41 @@ func (c *ThreadsClient) SearchOccurrences(ctx context.Context, params protocol.T
 	return c.client.Raw().ThreadSearchOccurrences(ctx, params)
 }
 
+func (c *ThreadsClient) ListSections(ctx context.Context, params protocol.ThreadSectionListParams) (protocol.ThreadSectionListResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.ThreadSectionListResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().ThreadSectionList(ctx, params)
+}
+
+func (c *ThreadsClient) CreateSection(ctx context.Context, params protocol.ThreadSectionCreateParams) (protocol.ThreadSectionCreateResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.ThreadSectionCreateResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().ThreadSectionCreate(ctx, params)
+}
+
+func (c *ThreadsClient) UpdateSection(ctx context.Context, params protocol.ThreadSectionUpdateParams) (protocol.ThreadSectionUpdateResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.ThreadSectionUpdateResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().ThreadSectionUpdate(ctx, params)
+}
+
+func (c *ThreadsClient) DeleteSection(ctx context.Context, params protocol.ThreadSectionDeleteParams) (protocol.ThreadSectionDeleteResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.ThreadSectionDeleteResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().ThreadSectionDelete(ctx, params)
+}
+
+func (c *ThreadsClient) MoveToSection(ctx context.Context, params protocol.ThreadSectionMoveParams) (protocol.ThreadSectionMoveResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.ThreadSectionMoveResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().ThreadSectionMove(ctx, params)
+}
+
 func (c *ThreadsClient) ListTurns(ctx context.Context, params protocol.ThreadTurnsListParams) (protocol.ThreadTurnsListResponse, error) {
 	if c == nil || c.client == nil {
 		return protocol.ThreadTurnsListResponse{}, &ClosedError{}
