@@ -13,6 +13,13 @@ func (c *PluginsClient) List(ctx context.Context, params protocol.PluginListPara
 	return c.client.Raw().PluginList(ctx, params)
 }
 
+func (c *PluginsClient) Search(ctx context.Context, params protocol.PluginSearchParams) (protocol.PluginSearchResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.PluginSearchResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().PluginSearch(ctx, params)
+}
+
 func (c *PluginsClient) Installed(ctx context.Context, params protocol.PluginInstalledParams) (protocol.PluginInstalledResponse, error) {
 	if c == nil || c.client == nil {
 		return protocol.PluginInstalledResponse{}, &ClosedError{}

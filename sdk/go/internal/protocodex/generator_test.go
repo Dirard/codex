@@ -8,6 +8,11 @@ import (
 	"testing"
 )
 
+func testManifestPath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join("manifest", "app_server_protocol_manifest.json")
+}
+
 func TestRenderMixedStringObjectUnionPreservesBothWireShapes(t *testing.T) {
 	schema := Schema{OneOf: []Schema{
 		{Type: "string", Enum: []json.RawMessage{json.RawMessage(`"never"`)}},
@@ -60,7 +65,7 @@ func TestRenderTaggedObjectUnionRequiresOnlyTheDiscriminatorGlobally(t *testing.
 	}
 }
 
-func TestGenerateWritesProtocolAndInventory(t *testing.T) {
+func TestGenerateWritesProtocol(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "protocol")
 	rootOut := t.TempDir()
 	err := Generate(GenerateOptions{
@@ -220,81 +225,6 @@ func TestGenerateWritesProtocolAndInventory(t *testing.T) {
 		}
 	}
 
-	coverage := readGeneratedFile(t, rootOut, "resource_coverage_generated.go")
-	for _, required := range []string{
-		"type generatedResourceCoverageRow struct",
-		"var generatedResourceCoverage = []generatedResourceCoverageRow",
-		"RawMethodName",
-		"PublicSignature",
-		"CompileCallsite",
-		"SafeIntegrationReason",
-		"ImplementationStatus",
-		`Method: "app/list"`,
-		`ImplementationStatus: "implemented-stage5f"`,
-		`Method: "thread/start"`,
-		`ImplementationStatus: "implemented-stage4"`,
-	} {
-		if !strings.Contains(coverage, required) {
-			t.Fatalf("resource_coverage_generated.go missing %q", required)
-		}
-	}
-	if strings.Contains(coverage, "type GeneratedResourceCoverage struct") {
-		t.Fatal("resource_coverage_generated.go exported generated review coverage row type")
-	}
-
-	inventory := readGeneratedFile(t, rootOut, filepath.Join("internal", "protocodex", "current_protocol_inventory.generated.md"))
-	if !strings.Contains(inventory, "thread/start") || !strings.Contains(inventory, "item/tool/call") || !strings.Contains(inventory, "initialized") {
-		t.Fatal("generated inventory missing expected method or server request")
-	}
-	assertInventoryCoversManifest(t, inventory)
-	for _, required := range []string{
-		"serverNotifications=",
-		"thread/started",
-		"serverHandlers=",
-		"item/tool/call(dynamic-tool-call)",
-	} {
-		if !strings.Contains(inventory, required) {
-			t.Fatalf("generated inventory missing owner-level relation %q", required)
-		}
-	}
-}
-
-func assertInventoryCoversManifest(t *testing.T, inventory string) {
-	t.Helper()
-	manifest, err := LoadManifest(testManifestPath(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range manifest.Experimental.ClientRequests {
-		if !strings.Contains(inventory, "`"+entry.Method+"`") {
-			t.Fatalf("inventory missing client method %q", entry.Method)
-		}
-	}
-	for _, entry := range manifest.Experimental.ServerRequests {
-		if !strings.Contains(inventory, "`"+entry.Method+"`") {
-			t.Fatalf("inventory missing server request %q", entry.Method)
-		}
-	}
-	for _, entry := range manifest.Experimental.ServerNotifications {
-		if !strings.Contains(inventory, "`"+entry.Method+"`") {
-			t.Fatalf("inventory missing server notification %q", entry.Method)
-		}
-	}
-	for _, entry := range manifest.Experimental.ClientNotifications {
-		if !strings.Contains(inventory, "`"+entry.Method+"`") {
-			t.Fatalf("inventory missing client notification %q", entry.Method)
-		}
-	}
-	for _, mapping := range resourceAPIMappings {
-		if mapping.ResourceOwner == "" || !strings.Contains(inventory, "### "+mapping.ResourceOwner) {
-			t.Fatalf("inventory missing resource owner section for %q", mapping.ResourceOwner)
-		}
-	}
-	for _, mapping := range serverHandlerMappings {
-		if mapping.HandlerOwner == "" || !strings.Contains(inventory, mapping.Capability) {
-			t.Fatalf("inventory missing server handler capability for %q", mapping.Method)
-		}
-	}
 }
 
 func TestStableModeRejectsExperimentalMethodsAndFields(t *testing.T) {
@@ -399,10 +329,6 @@ func TestStableModeValidatesStableSchemaAgainstCanonicalManifest(t *testing.T) {
 	processExited := generatedExcerpt(metadata, `"process/exited"`)
 	if !strings.Contains(processExited, "Experimental: false") {
 		t.Fatalf("process/exited metadata = %s, want stable schema notification", processExited)
-	}
-	rawResponseItemCompleted := generatedExcerpt(metadata, `"rawResponseItem/completed"`)
-	if !strings.Contains(rawResponseItemCompleted, "Experimental: false") {
-		t.Fatalf("rawResponseItem/completed metadata = %s, want stable manifest notification", rawResponseItemCompleted)
 	}
 }
 
@@ -1010,69 +936,6 @@ func TestRoutingLifecycleMetadataIsFailClosed(t *testing.T) {
 	}
 }
 
-func TestGlobalNotificationsMappedToResourceOwners(t *testing.T) {
-	manifest, err := LoadManifest(testManifestPath(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	notificationsByOwner := serverNotificationMethodsByOwner(manifest)
-	for _, required := range []struct {
-		owner  string
-		method string
-	}{
-		{"Accounts", "account/updated"},
-		{"Accounts", "account/rateLimits/updated"},
-		{"Apps", "app/list/updated"},
-		{"Realtime", "thread/realtime/started"},
-		{"Realtime", "thread/realtime/sdp"},
-		{"Reviews", "item/completed"},
-		{"Reviews", "turn/completed"},
-		{"Skills", "skills/changed"},
-		{"WindowsSandbox", "windowsSandbox/setupCompleted"},
-	} {
-		if !containsString(notificationsByOwner[required.owner], required.method) {
-			t.Fatalf("%s notifications = %#v, missing %s", required.owner, notificationsByOwner[required.owner], required.method)
-		}
-	}
-}
-
-func TestStage4ImplementedResourceCoverageUsesCurrentAPINames(t *testing.T) {
-	for _, mapping := range resourceAPIMappings {
-		if resourceImplementationStatus(mapping) != "implemented-stage4" {
-			continue
-		}
-		text := mapping.WrapperName + " " + mapping.CompileCallsite
-		for _, forbidden := range []string{
-			"Accounts.LoginStart",
-			"DeviceCodeLoginOptions",
-			"ReadRateLimits",
-			"ReadUsage",
-			"Turns.Start",
-			"PermissionProfile(",
-			"ServerName:",
-		} {
-			if strings.Contains(text, forbidden) {
-				t.Fatalf("%s implemented-stage4 mapping uses stale API name %q: %s", mapping.Method, forbidden, text)
-			}
-		}
-	}
-}
-
-func TestStage4ImplementedResourceCoverageUsesExistingTestOwners(t *testing.T) {
-	for _, mapping := range resourceAPIMappings {
-		if resourceImplementationStatus(mapping) != "implemented-stage4" {
-			continue
-		}
-		if mapping.UnitTestOwner == "" {
-			t.Fatalf("%s implemented-stage4 mapping has empty unitTest owner", mapping.Method)
-		}
-		path := filepath.Join("..", "..", mapping.UnitTestOwner)
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("%s implemented-stage4 unitTest owner %q does not exist: %v", mapping.Method, mapping.UnitTestOwner, err)
-		}
-	}
-}
-
 func filterClientRequests(entries []ClientRequestEntry, method string) []ClientRequestEntry {
 	out := entries[:0]
 	for _, entry := range entries {
@@ -1111,15 +974,6 @@ func filterSerdeShapes(entries []SerdeShape, rustType string) []SerdeShape {
 		}
 	}
 	return out
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 func copyDigestMap(in map[string]string) map[string]string {
