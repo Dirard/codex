@@ -126,12 +126,13 @@ pub(crate) fn assemble_compaction_history(
 
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     replacement_step_context: Arc<StepContext>,
     world_state: Arc<WorldState>,
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
+    let turn_context = Arc::clone(&step_context.turn);
     let prompt = turn_context
         .config
         .compact_prompt
@@ -146,7 +147,7 @@ pub(crate) async fn run_inline_auto_compact_task(
 
     run_compact_task_inner(
         sess,
-        turn_context,
+        step_context,
         replacement_step_context,
         input,
         world_state,
@@ -169,7 +170,7 @@ pub(crate) async fn run_compact_task(
 ) -> CodexResult<()> {
     run_compact_task_inner(
         sess.clone(),
-        Arc::clone(&step_context.turn),
+        Arc::clone(&step_context),
         step_context,
         input,
         world_state,
@@ -186,12 +187,13 @@ pub(crate) async fn run_compact_task(
 
 async fn run_compact_task_inner(
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     replacement_step_context: Arc<StepContext>,
     input: Vec<UserInput>,
     world_state: Arc<WorldState>,
     compaction_metadata: CompactionTurnMetadata,
 ) -> CodexResult<()> {
+    let turn_context = Arc::clone(&step_context.turn);
     let trigger = compaction_metadata.trigger();
     let reason = compaction_metadata.reason();
     let phase = compaction_metadata.phase();
@@ -222,7 +224,7 @@ async fn run_compact_task_inner(
     }
     let result = run_compact_task_inner_impl(
         Arc::clone(&sess),
-        Arc::clone(&turn_context),
+        step_context,
         replacement_step_context,
         input,
         world_state,
@@ -272,12 +274,13 @@ async fn run_compact_task_inner(
 
 async fn run_compact_task_inner_impl(
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     replacement_step_context: Arc<StepContext>,
     input: Vec<UserInput>,
     world_state: Arc<WorldState>,
     compaction_metadata: CompactionTurnMetadata,
 ) -> CodexResult<String> {
+    let turn_context = Arc::clone(&step_context.turn);
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
         .await;
@@ -317,6 +320,8 @@ async fn run_compact_task_inner_impl(
         };
         let prompt = Prompt {
             input: turn_input,
+            tools: step_context.tool_router.model_visible_specs(),
+            parallel_tool_calls: turn_context.model_info().supports_parallel_tool_calls,
             base_instructions,
             cyber_access_program: turn_context.cyber_access_program,
             ..Default::default()
