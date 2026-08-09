@@ -4087,7 +4087,26 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
         "function call output should be sent before auto compact"
     );
 
-    let auto_compact_body = auto_compact_mock.single_request().body_json().to_string();
+    let first_request_body = first_turn_mock.single_request().body_json();
+    let auto_compact_request_body = auto_compact_mock.single_request().body_json();
+    assert!(
+        first_request_body["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty()),
+        "regular request should advertise tools"
+    );
+    assert_eq!(
+        (
+            &auto_compact_request_body["tools"],
+            &auto_compact_request_body["parallel_tool_calls"],
+        ),
+        (
+            &first_request_body["tools"],
+            &first_request_body["parallel_tool_calls"],
+        ),
+        "local compaction should preserve tool request properties"
+    );
+    let auto_compact_body = auto_compact_request_body.to_string();
     assert!(
         body_contains_text(&auto_compact_body, SUMMARIZATION_PROMPT),
         "mid-turn auto compact request should include the summarization prompt after exceeding 95% (limit {limit})"
