@@ -118,7 +118,7 @@ struct Error {
 struct ResponseCompleted {
     id: String,
     #[serde(default)]
-    usage: Option<ResponseCompletedUsage>,
+    usage: Option<Value>,
     usage_metadata: Option<ResponseUsageMetadata>,
     #[serde(default)]
     end_turn: Option<bool>,
@@ -489,7 +489,18 @@ pub fn process_responses_event(
                         }
                         return Ok(Some(ResponseEvent::Completed {
                             response_id: resp.id,
-                            token_usage: resp.usage.map(Into::into),
+                            token_usage: resp
+                                .usage
+                                .and_then(|usage| {
+                                    serde_json::from_value::<ResponseCompletedUsage>(usage)
+                                        .inspect_err(|err| {
+                                            debug!(
+                                                "failed to parse response.completed usage: {err}"
+                                            );
+                                        })
+                                        .ok()
+                                })
+                                .map(Into::into),
                             usage_metadata: resp.usage_metadata,
                             end_turn: resp.end_turn,
                         }));
@@ -884,6 +895,29 @@ mod tests {
             }
             other => panic!("unexpected third event: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn parses_completed_with_partial_usage() {
+        let events = run_sse(vec![json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp1",
+                "usage": { "input_tokens": 3 },
+                "end_turn": true,
+            },
+        })])
+        .await;
+
+        assert_eq!(events.len(), 1);
+        assert_matches!(
+            &events[0],
+            ResponseEvent::Completed {
+                response_id,
+                token_usage: None,
+                end_turn: Some(true),
+            } if response_id == "resp1"
+        );
     }
 
     #[test]
