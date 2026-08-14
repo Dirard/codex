@@ -11,6 +11,7 @@ use codex_tools::ToolExposure;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
+use codex_features::MultiAgentMessageDelivery;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 
@@ -20,14 +21,19 @@ pub(super) fn multi_agent_v2_handler(
     handler: impl CoreToolRuntime + 'static,
     namespace: Option<&str>,
     description_override: Option<&str>,
+    message_delivery: MultiAgentMessageDelivery,
 ) -> Arc<dyn CoreToolRuntime> {
-    if namespace.is_none() && description_override.is_none() {
+    if namespace.is_none()
+        && description_override.is_none()
+        && message_delivery != MultiAgentMessageDelivery::Plaintext
+    {
         return Arc::new(handler);
     }
     Arc::new(MultiAgentV2ToolOverrides {
         handler: Arc::new(handler),
         namespace: namespace.map(str::to_owned),
         description_override: description_override.map(str::to_owned),
+        message_delivery,
     })
 }
 
@@ -35,6 +41,7 @@ struct MultiAgentV2ToolOverrides {
     handler: Arc<dyn CoreToolRuntime>,
     namespace: Option<String>,
     description_override: Option<String>,
+    message_delivery: MultiAgentMessageDelivery,
 }
 
 impl ToolExecutor<ToolInvocation> for MultiAgentV2ToolOverrides {
@@ -52,6 +59,16 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2ToolOverrides {
             && let Some(description) = &self.description_override
         {
             tool.description.clone_from(description);
+        }
+        if let ToolSpec::Function(tool) = &mut spec
+            && self.message_delivery == MultiAgentMessageDelivery::Plaintext
+            && let Some(message) = tool
+                .parameters
+                .properties
+                .as_mut()
+                .and_then(|properties| properties.get_mut("message"))
+        {
+            message.encrypted = None;
         }
         match (&self.namespace, spec) {
             (Some(namespace), ToolSpec::Function(tool)) => {
