@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::config::Config;
+use crate::config::MultiAgentV2Config;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::tools::context::ToolPayload;
@@ -19,6 +20,7 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ResponsesApiTool;
 use codex_extension_api::ToolCall as ExtensionToolCall;
 use codex_extension_api::ToolExecutor;
+use codex_features::MultiAgentMessageDelivery;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
@@ -57,6 +59,49 @@ fn tool_log_payload_redacts_plaintext_multi_agent_messages() {
     assert_eq!(
         tool_log_payload(&payload, &ToolCallSource::Direct),
         payload.log_payload()
+    );
+}
+
+#[test]
+fn direct_source_uses_configured_plaintext_policy_without_marker() {
+    let call = ToolCall {
+        tool_name: ToolName::namespaced("agents", "spawn_agent"),
+        call_id: "call-1".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+        encrypted_function_args: None,
+    };
+    let plaintext = MultiAgentV2Config {
+        tool_namespace: Some("agents".to_string()),
+        message_delivery: MultiAgentMessageDelivery::Plaintext,
+        ..MultiAgentV2Config::default()
+    };
+
+    assert_eq!(
+        call.direct_source(&plaintext),
+        ToolCallSource::DirectPlaintextMessage
+    );
+    assert_eq!(
+        call.direct_source(&MultiAgentV2Config::default()),
+        ToolCallSource::Direct
+    );
+}
+
+#[test]
+fn direct_source_preserves_legacy_collaboration_empty_marker() {
+    let call = ToolCall {
+        tool_name: ToolName::namespaced("collaboration", "spawn_agent"),
+        call_id: "call-1".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+        encrypted_function_args: Some(Vec::new()),
+    };
+
+    assert_eq!(
+        call.direct_source(&MultiAgentV2Config::default()),
+        ToolCallSource::DirectPlaintextMessage
     );
 }
 
@@ -228,7 +273,10 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
     );
     assert_eq!(call.call_id, "call-namespace");
     assert_eq!(call.encrypted_function_args, Some(Vec::new()));
-    assert_eq!(call.direct_source(), ToolCallSource::Direct);
+    assert_eq!(
+        call.direct_source(&MultiAgentV2Config::default()),
+        ToolCallSource::Direct
+    );
     match call.payload {
         ToolPayload::Function { arguments } => {
             assert_eq!(arguments, "{}");

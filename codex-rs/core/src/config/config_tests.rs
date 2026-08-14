@@ -10978,6 +10978,34 @@ smart_approvals = true
 }
 
 #[tokio::test]
+async fn multi_agent_v2_plaintext_message_delivery_requires_custom_namespace() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+message_delivery = "plaintext"
+"#,
+    )?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+        .expect_err("plaintext delivery with the reserved default namespace should fail");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "features.multi_agent_v2.message_delivery = \"plaintext\" requires features.multi_agent_v2.tool_namespace to be set to a non-reserved namespace"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn multi_agent_v2_config_from_feature_table() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
@@ -10994,6 +11022,7 @@ subagent_usage_hint_text = "Subagent guidance."
 subagent_developer_instructions = "  Delegate carefully.  "
 multi_agent_mode_hint_text = "Custom mode guidance."
 tool_namespace = "agents"
+message_delivery = "plaintext"
 hide_spawn_agent_metadata = true
 expose_spawn_agent_model_overrides = false
 wait_agent_enabled = false
@@ -11048,6 +11077,10 @@ max_concurrent_threads_per_session = 9
     assert_eq!(
         config.multi_agent_v2.tool_namespace.as_deref(),
         Some("agents")
+    );
+    assert_eq!(
+        config.multi_agent_v2.message_delivery,
+        MultiAgentMessageDelivery::Plaintext
     );
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
     assert!(!config.multi_agent_v2.expose_spawn_agent_model_overrides);

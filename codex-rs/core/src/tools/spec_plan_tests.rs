@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use codex_features::Feature;
+use codex_features::MultiAgentMessageDelivery;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_mcp::ToolInfo;
@@ -2548,6 +2549,44 @@ async fn multi_agent_v2_can_use_configured_tool_namespace() {
                 .iter()
                 .any(|name| name == tool_name),
             "expected {tool_name} in agents namespace"
+        );
+    }
+}
+
+#[tokio::test]
+async fn multi_agent_v2_plaintext_delivery_removes_message_encryption() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+        update_config(turn, |config| {
+            config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+            config.multi_agent_v2.message_delivery = MultiAgentMessageDelivery::Plaintext;
+        });
+    })
+    .await;
+
+    let ToolSpec::Namespace(namespace) = plan.visible_spec("agents") else {
+        panic!("expected namespaced multi-agent tools");
+    };
+    for tool_name in ["spawn_agent", "send_message", "followup_task"] {
+        let tool = namespace
+            .tools
+            .iter()
+            .find_map(|tool| match tool {
+                ResponsesApiNamespaceTool::Function(tool) if tool.name == tool_name => Some(tool),
+                ResponsesApiNamespaceTool::Function(_) | ResponsesApiNamespaceTool::Custom(_) => {
+                    None
+                }
+            })
+            .unwrap_or_else(|| panic!("expected {tool_name} in agents namespace"));
+        let message = tool
+            .parameters
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.get("message"))
+            .unwrap_or_else(|| panic!("{tool_name} should retain its message property"));
+        assert_eq!(
+            message.encrypted, None,
+            "{tool_name} should send plaintext messages"
         );
     }
 }

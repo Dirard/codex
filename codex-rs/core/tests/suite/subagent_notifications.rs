@@ -7,6 +7,7 @@ use codex_core::TimeFuture;
 use codex_core::TimeProvider;
 use codex_core::config::AgentRoleConfig;
 use codex_features::Feature;
+use codex_features::MultiAgentMessageDelivery;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
@@ -1528,6 +1529,121 @@ async fn spawned_multi_agent_v2_child_inherits_parent_developer_context() -> Res
         .expect("child request log should capture at least one request");
     assert!(child_request.body_contains_text("Parent developer instructions."));
     assert!(child_request.body_contains_text(CHILD_PROMPT));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_plaintext_spawn_delivers_task_to_custom_provider() -> Result<()> {
+    const CHILD_MODEL: &str = "custom-child-model";
+    const ROLE_NAME: &str = "custom_provider_worker";
+    const TASK_NONCE: &str = "cross-provider-plaintext-task-7d70f1";
+    const TOOL_NAMESPACE: &str = "agents";
+
+    let parent_server = start_mock_server().await;
+    let child_server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": TASK_NONCE,
+        "task_name": "worker",
+        "agent_type": ROLE_NAME,
+        "fork_turns": "none",
+    }))?;
+    mount_sse_once_match(
+        &parent_server,
+        |request: &wiremock::Request| body_contains(request, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-parent-1"),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                TOOL_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
+            ev_completed("resp-parent-1"),
+        ]),
+    )
+    .await;
+    let child_request_log = mount_sse_once_match(
+        &child_server,
+        |request: &wiremock::Request| {
+            request
+                .body_json::<Value>()
+                .is_ok_and(|body| body["model"] == CHILD_MODEL)
+                && request_has_input_type(request, "agent_message")
+        },
+        sse(vec![
+            ev_response_created("resp-child-1"),
+            ev_assistant_message("msg-child-1", "done"),
+            ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &parent_server,
+        |request: &wiremock::Request| body_contains(request, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-parent-2"),
+            ev_assistant_message("msg-parent-2", "done"),
+            ev_completed("resp-parent-2"),
+        ]),
+    )
+    .await;
+
+    let child_base_url = format!("{}/v1", child_server.uri());
+    let mut builder = test_codex().with_config(move |config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::MultiAgentV2)
+            .expect("test config should allow feature update");
+        config.multi_agent_v2.tool_namespace = Some(TOOL_NAMESPACE.to_string());
+        config.multi_agent_v2.message_delivery = MultiAgentMessageDelivery::Plaintext;
+
+        let role_path = config.codex_home.join("custom-provider-worker.toml");
+        fs::write(
+            &role_path,
+            format!(
+                "model = \"{CHILD_MODEL}\"\nmodel_provider = \"mock\"\n\n[model_providers.mock]\nname = \"mock\"\nbase_url = \"{child_base_url}\"\nenv_key = \"PATH\"\nwire_api = \"responses\"\n"
+            ),
+        )
+        .expect("write custom provider role config");
+        config.agent_roles.insert(
+            ROLE_NAME.to_string(),
+            AgentRoleConfig {
+                description: Some("Custom provider worker".to_string()),
+                config_file: Some(role_path.to_path_buf()),
+                nickname_candidates: None,
+            },
+        );
+    });
+    let test = builder.build_with_auto_env(&parent_server).await?;
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+
+    let child_request = wait_for_requests(&child_request_log)
+        .await?
+        .pop()
+        .expect("custom provider child request");
+    assert_eq!(child_request.body_json()["model"], CHILD_MODEL);
+    assert_eq!(
+        strip_response_item_ids_from_json(strip_metadata_from_json(Value::Array(
+            child_request.inputs_of_type("agent_message"),
+        ))),
+        Value::Array(vec![json!({
+            "type": "agent_message",
+            "author": "/root",
+            "recipient": "/root/worker",
+            "content": [{
+                "type": "input_text",
+                "text": format!(
+                    "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n{TASK_NONCE}"
+                ),
+            }],
+        })])
+    );
 
     Ok(())
 }
