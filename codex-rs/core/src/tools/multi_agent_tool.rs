@@ -12,6 +12,7 @@ use codex_tools::ToolExposure;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
+use codex_features::MultiAgentMessageDelivery;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 
@@ -23,6 +24,7 @@ pub(super) fn multi_agent_v2_handler(
     namespace: Option<&str>,
     description_override: Option<&str>,
     parameters_override: Option<&str>,
+    message_delivery: MultiAgentMessageDelivery,
 ) -> Arc<dyn CoreToolRuntime> {
     let parameters_override = parameters_override.map(|parameters| -> Result<JsonSchema, &str> {
         let mut parameters = super::catalog_parameters::parse(parameters)?;
@@ -47,7 +49,11 @@ pub(super) fn multi_agent_v2_handler(
         tracing::warn!(tool = %handler.tool_name(), reason, "Invalid catalog tool parameters; using bundled parameters");
     }
     let parameters_override = parameters_override.and_then(Result::ok);
-    if namespace.is_none() && description_override.is_none() && parameters_override.is_none() {
+    if namespace.is_none()
+        && description_override.is_none()
+        && parameters_override.is_none()
+        && message_delivery != MultiAgentMessageDelivery::Plaintext
+    {
         return Arc::new(handler);
     }
     Arc::new(MultiAgentV2ToolOverrides {
@@ -55,6 +61,7 @@ pub(super) fn multi_agent_v2_handler(
         namespace: namespace.map(str::to_owned),
         description_override: description_override.map(str::to_owned),
         parameters_override,
+        message_delivery,
     })
 }
 
@@ -63,6 +70,7 @@ struct MultiAgentV2ToolOverrides {
     namespace: Option<String>,
     description_override: Option<String>,
     parameters_override: Option<JsonSchema>,
+    message_delivery: MultiAgentMessageDelivery,
 }
 
 impl ToolExecutor<ToolInvocation> for MultiAgentV2ToolOverrides {
@@ -83,6 +91,16 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2ToolOverrides {
             if let Some(parameters) = &self.parameters_override {
                 tool.parameters.clone_from(parameters);
             }
+        }
+        if let ToolSpec::Function(tool) = &mut spec
+            && self.message_delivery == MultiAgentMessageDelivery::Plaintext
+            && let Some(message) = tool
+                .parameters
+                .properties
+                .as_mut()
+                .and_then(|properties| properties.get_mut("message"))
+        {
+            message.encrypted = None;
         }
         match (&self.namespace, spec) {
             (Some(namespace), ToolSpec::Function(tool)) => {
