@@ -63,6 +63,7 @@ use crate::tools::router::ToolRouter;
 use crate::tools::tool_namespaces_info::collect_tool_namespaces_info;
 use codex_extension_api::ExtensionData;
 use codex_features::Feature;
+use codex_features::MultiAgentMessageDelivery;
 use codex_login::AuthManager;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::account::PlanType;
@@ -1152,6 +1153,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
             let tool_namespace = namespace_tools_enabled(turn_context)
                 .then_some(turn_context.config.multi_agent_v2.tool_namespace.as_deref())
                 .flatten();
+            let message_delivery = turn_context.config.multi_agent_v2.message_delivery;
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
             let hide_spawn_agent_metadata =
@@ -1171,15 +1173,16 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                         usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
                     }),
                     tool_namespace,
+                    message_delivery,
                 ),
                 exposure,
             );
             registry.register_trusted_with_exposure(
-                multi_agent_v2_handler(SendMessageHandlerV2, tool_namespace),
+                multi_agent_v2_handler(SendMessageHandlerV2, tool_namespace, message_delivery),
                 exposure,
             );
             registry.register_trusted_with_exposure(
-                multi_agent_v2_handler(FollowupTaskHandlerV2, tool_namespace),
+                multi_agent_v2_handler(FollowupTaskHandlerV2, tool_namespace, message_delivery),
                 exposure,
             );
             if turn_context.config.multi_agent_v2.wait_agent_enabled {
@@ -1187,16 +1190,17 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     multi_agent_v2_handler(
                         WaitAgentHandlerV2::new(context.wait_agent_timeouts),
                         tool_namespace,
+                        message_delivery,
                     ),
                     exposure,
                 );
             }
             registry.register_trusted_with_exposure(
-                multi_agent_v2_handler(InterruptAgentHandler, tool_namespace),
+                multi_agent_v2_handler(InterruptAgentHandler, tool_namespace, message_delivery),
                 exposure,
             );
             registry.register_trusted_with_exposure(
-                multi_agent_v2_handler(ListAgentsHandlerV2, tool_namespace),
+                multi_agent_v2_handler(ListAgentsHandlerV2, tool_namespace, message_delivery),
                 exposure,
             );
         } else {
@@ -1312,11 +1316,13 @@ fn append_extension_tool_executors(
 fn multi_agent_v2_handler(
     handler: impl CoreToolRuntime + 'static,
     namespace: Option<&str>,
+    message_delivery: MultiAgentMessageDelivery,
 ) -> Arc<dyn CoreToolRuntime> {
     match namespace {
         Some(namespace) => Arc::new(MultiAgentV2NamespaceOverride {
             handler: Arc::new(handler),
             namespace: namespace.to_string(),
+            message_delivery,
         }),
         None => Arc::new(handler),
     }
@@ -1325,6 +1331,7 @@ fn multi_agent_v2_handler(
 struct MultiAgentV2NamespaceOverride {
     handler: Arc<dyn CoreToolRuntime>,
     namespace: String,
+    message_delivery: MultiAgentMessageDelivery,
 }
 
 impl ToolExecutor<ToolInvocation> for MultiAgentV2NamespaceOverride {
@@ -1334,11 +1341,22 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2NamespaceOverride {
 
     fn spec(&self) -> ToolSpec {
         match self.handler.spec() {
-            ToolSpec::Function(tool) => ToolSpec::Namespace(ResponsesApiNamespace {
-                name: self.namespace.clone(),
-                description: MULTI_AGENT_V2_NAMESPACE_DESCRIPTION.to_string(),
-                tools: vec![ResponsesApiNamespaceTool::Function(tool)],
-            }),
+            ToolSpec::Function(mut tool) => {
+                if self.message_delivery == MultiAgentMessageDelivery::Plaintext
+                    && let Some(message) = tool
+                        .parameters
+                        .properties
+                        .as_mut()
+                        .and_then(|properties| properties.get_mut("message"))
+                {
+                    message.encrypted = None;
+                }
+                ToolSpec::Namespace(ResponsesApiNamespace {
+                    name: self.namespace.clone(),
+                    description: MULTI_AGENT_V2_NAMESPACE_DESCRIPTION.to_string(),
+                    tools: vec![ResponsesApiNamespaceTool::Function(tool)],
+                })
+            }
             spec => spec,
         }
     }

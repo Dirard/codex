@@ -2038,6 +2038,25 @@
       },
       "type": "object"
     },
+    "MultiAgentMessageDelivery": {
+      "description": "How multi-agent V2 task and message arguments are delivered to child agents.",
+      "oneOf": [
+        {
+          "description": "Keep OpenAI's encrypted collaboration arguments.",
+          "enum": [
+            "encrypted"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Deliver provider-neutral plain text for cross-provider agents.",
+          "enum": [
+            "plaintext"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "MultiAgentV2ConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -2067,6 +2086,14 @@
           "maximum": 3600000.0,
           "minimum": 0.0,
           "type": "integer"
+        },
+        "message_delivery": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MultiAgentMessageDelivery"
+            }
+          ],
+          "description": "Plaintext delivery requires a non-reserved tool namespace such as `agents`."
         },
         "min_wait_timeout_ms": {
           "format": "int64",

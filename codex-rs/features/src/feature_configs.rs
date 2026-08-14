@@ -218,6 +218,17 @@ where
     Ok(feature)
 }
 
+/// How multi-agent V2 task and message arguments are delivered to child agents.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MultiAgentMessageDelivery {
+    /// Keep OpenAI's encrypted collaboration arguments.
+    #[default]
+    Encrypted,
+    /// Deliver provider-neutral plain text for cross-provider agents.
+    Plaintext,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MultiAgentV2ConfigToml {
@@ -252,6 +263,9 @@ pub struct MultiAgentV2ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = 64), regex(pattern = r"^[a-zA-Z0-9_-]+$"))]
     pub tool_namespace: Option<String>,
+    /// Plaintext delivery requires a non-reserved tool namespace such as `agents`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_delivery: Option<MultiAgentMessageDelivery>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_spawn_agent_metadata: Option<bool>,
     /// Exposes `model` and `reasoning_effort` on the multi-agent v2 spawn tool and adds

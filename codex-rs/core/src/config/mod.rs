@@ -68,6 +68,7 @@ use codex_features::FeatureOverrides;
 use codex_features::FeatureToml;
 use codex_features::Features;
 use codex_features::FeaturesToml;
+use codex_features::MultiAgentMessageDelivery;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_features::NetworkProxyConfigToml;
 use codex_features::TokenBudgetConfigToml;
@@ -1275,6 +1276,7 @@ pub struct MultiAgentV2Config {
     pub subagent_developer_instructions: Option<String>,
     pub multi_agent_mode_hint_text: Option<String>,
     pub tool_namespace: Option<String>,
+    pub message_delivery: MultiAgentMessageDelivery,
     pub hide_spawn_agent_metadata: bool,
     pub expose_spawn_agent_model_overrides: bool,
     pub wait_agent_enabled: bool,
@@ -1294,6 +1296,7 @@ impl MultiAgentV2Config {
             subagent_developer_instructions: None,
             multi_agent_mode_hint_text: None,
             tool_namespace: Some(DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE.to_string()),
+            message_delivery: MultiAgentMessageDelivery::Encrypted,
             hide_spawn_agent_metadata: true,
             expose_spawn_agent_model_overrides: true,
             wait_agent_enabled: true,
@@ -2734,6 +2737,9 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         .and_then(|config| config.tool_namespace.as_ref())
         .cloned()
         .or(default.tool_namespace);
+    let message_delivery = base
+        .and_then(|config| config.message_delivery)
+        .unwrap_or(default.message_delivery);
     let non_code_mode_only = base
         .and_then(|config| config.non_code_mode_only)
         .unwrap_or(default.non_code_mode_only);
@@ -2749,6 +2755,7 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         subagent_developer_instructions,
         multi_agent_mode_hint_text,
         tool_namespace,
+        message_delivery,
         hide_spawn_agent_metadata,
         expose_spawn_agent_model_overrides,
         wait_agent_enabled,
@@ -3048,7 +3055,10 @@ fn validate_multi_agent_v2_wait_timeout(label: &str, value: i64) -> std::io::Res
     Ok(())
 }
 
-fn validate_multi_agent_v2_tool_namespace(namespace: Option<&str>) -> std::io::Result<()> {
+fn validate_multi_agent_v2_tool_namespace(
+    namespace: Option<&str>,
+    message_delivery: MultiAgentMessageDelivery,
+) -> std::io::Result<()> {
     const LABEL: &str = "features.multi_agent_v2.tool_namespace";
     const MAX_LEN: usize = 64;
     const RESERVED_RESPONSES_NAMESPACES: &[&str] = &[
@@ -3067,6 +3077,15 @@ fn validate_multi_agent_v2_tool_namespace(namespace: Option<&str>) -> std::io::R
         "tool_search",
         "web",
     ];
+
+    if message_delivery == MultiAgentMessageDelivery::Plaintext
+        && namespace.is_none_or(|namespace| namespace == DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.multi_agent_v2.message_delivery = \"plaintext\" requires features.multi_agent_v2.tool_namespace to be set to a non-reserved namespace",
+        ));
+    }
 
     let Some(namespace) = namespace else {
         return Ok(());
@@ -3741,7 +3760,10 @@ impl Config {
                 "features.multi_agent_v2.default_wait_timeout_ms must be at most features.multi_agent_v2.max_wait_timeout_ms",
             ));
         }
-        validate_multi_agent_v2_tool_namespace(multi_agent_v2.tool_namespace.as_deref())?;
+        validate_multi_agent_v2_tool_namespace(
+            multi_agent_v2.tool_namespace.as_deref(),
+            multi_agent_v2.message_delivery,
+        )?;
         let agents_enabled = cfg
             .agents
             .as_ref()
