@@ -1,3 +1,4 @@
+use crate::config::MultiAgentV2Config;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
@@ -14,6 +15,7 @@ use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolRegistry;
 #[cfg(test)]
 use crate::tools::spec_plan::finalize_tool_router;
+use codex_features::MultiAgentMessageDelivery;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_tools::DiscoverableTool;
@@ -37,17 +39,20 @@ pub struct ToolCall {
 }
 
 impl ToolCall {
-    pub(crate) fn direct_source(&self) -> ToolCallSource {
-        if self.tool_name.namespace.as_deref() == Some("collaboration")
-            && matches!(
-                self.tool_name.name.as_str(),
-                "spawn_agent" | "send_message" | "followup_task"
-            )
+    pub(crate) fn direct_source(&self, multi_agent_v2: &MultiAgentV2Config) -> ToolCallSource {
+        let is_multi_agent_message = matches!(
+            self.tool_name.name.as_str(),
+            "spawn_agent" | "send_message" | "followup_task"
+        );
+        let legacy_plaintext_marker = self.tool_name.namespace.as_deref() == Some("collaboration")
             && self
                 .encrypted_function_args
                 .as_ref()
-                .is_some_and(Vec::is_empty)
-        {
+                .is_some_and(Vec::is_empty);
+        let configured_plaintext = multi_agent_v2.message_delivery
+            == MultiAgentMessageDelivery::Plaintext
+            && self.tool_name.namespace.as_deref() == multi_agent_v2.tool_namespace.as_deref();
+        if is_multi_agent_message && (legacy_plaintext_marker || configured_plaintext) {
             ToolCallSource::DirectPlaintextMessage
         } else {
             ToolCallSource::Direct
