@@ -63,6 +63,7 @@ use crate::tools::tool_namespaces_info::collect_tool_namespaces_info;
 use codex_connectors::apps_config_from_layer_stack;
 use codex_extension_api::ExtensionData;
 use codex_features::Feature;
+use codex_features::MultiAgentMessageDelivery;
 use codex_features::SleepToolMode;
 use codex_login::AuthManager;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -1258,6 +1259,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
             let tool_namespace = namespace_tools_enabled(turn_context)
                 .then_some(turn_context.config.multi_agent_v2.tool_namespace.as_deref())
                 .flatten();
+            let message_delivery = turn_context.config.multi_agent_v2.message_delivery;
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
             let hide_spawn_agent_metadata =
@@ -1288,6 +1290,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     /*description_override*/
                     None,
                     model_messages.multi_agent_tool_parameters_override("spawn_agent"),
+                    message_delivery,
                 ),
                 exposure,
             );
@@ -1297,6 +1300,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     tool_namespace,
                     model_messages.multi_agent_tool_description_override("send_message"),
                     model_messages.multi_agent_tool_parameters_override("send_message"),
+                    message_delivery,
                 ),
                 exposure,
             );
@@ -1306,6 +1310,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     tool_namespace,
                     model_messages.multi_agent_tool_description_override("followup_task"),
                     model_messages.multi_agent_tool_parameters_override("followup_task"),
+                    message_delivery,
                 ),
                 exposure,
             );
@@ -1316,6 +1321,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                         tool_namespace,
                         model_messages.multi_agent_tool_description_override("wait_agent"),
                         model_messages.multi_agent_tool_parameters_override("wait_agent"),
+                        message_delivery,
                     ),
                     exposure,
                 );
@@ -1326,6 +1332,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     tool_namespace,
                     model_messages.multi_agent_tool_description_override("interrupt_agent"),
                     model_messages.multi_agent_tool_parameters_override("interrupt_agent"),
+                    message_delivery,
                 ),
                 exposure,
             );
@@ -1335,6 +1342,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     tool_namespace,
                     model_messages.multi_agent_tool_description_override("list_agents"),
                     model_messages.multi_agent_tool_parameters_override("list_agents"),
+                    message_delivery,
                 ),
                 exposure,
             );
