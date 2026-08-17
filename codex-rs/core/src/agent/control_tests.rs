@@ -66,6 +66,7 @@ use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::PersistContext;
 use codex_thread_store::ThreadStore;
 use codex_utils_path_uri::PathUri;
+use core_test_support::responses;
 use core_test_support::responses::strip_response_item_ids;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -74,6 +75,7 @@ use tokio::time::sleep;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
+use wiremock::MockServer;
 
 async fn test_config_with_cli_overrides(
     mut cli_overrides: Vec<(String, TomlValue)>,
@@ -3405,6 +3407,141 @@ async fn multi_agent_v2_terminal_error_is_published_after_parent_mailbox() {
             None,
         )
     );
+}
+
+#[tokio::test]
+async fn followup_to_non_v2_child_notifies_parent_on_second_completion() {
+    let server = MockServer::start().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("second-response"),
+            responses::ev_assistant_message("second-message", "second completion"),
+            responses::ev_completed("second-response"),
+        ]),
+    )
+    .await;
+    let (home, mut config) = test_config().await;
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    config.model_provider.supports_websockets = false;
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let mut parent_config = harness.config.clone();
+    let _ = parent_config.features.enable(Feature::MultiAgentV2);
+    let parent = harness
+        .manager
+        .start_thread(StartThreadOptions::new(parent_config))
+        .await
+        .expect("parent thread should start");
+    let parent_thread_id = parent.thread_id;
+    let parent_thread = parent.thread;
+    let child_path = AgentPath::root().join("reviewer").expect("child path");
+    let child_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id,
+        depth: 1,
+        agent_path: Some(child_path.clone()),
+        agent_nickname: None,
+        agent_role: Some("reviewer".to_string()),
+    });
+    let mut child_config = harness.config.clone();
+    child_config.agents_enabled = false;
+    let child = harness
+        .manager
+        .start_thread(StartThreadOptions {
+            session_source: Some(child_source),
+            ..StartThreadOptions::new(child_config)
+        })
+        .await
+        .expect("child thread should start");
+    let child_thread_id = child.thread_id;
+    let child_thread = child.thread;
+    assert_eq!(
+        child_thread.multi_agent_version(),
+        Some(MultiAgentVersion::Disabled)
+    );
+
+    let first_turn = child_thread.session.new_default_turn().await;
+    child_thread
+        .session
+        .send_event(
+            first_turn.as_ref(),
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: first_turn.sub_id.clone(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: ModeKind::Default,
+            }),
+        )
+        .await;
+    child_thread
+        .session
+        .send_event(
+            first_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: first_turn.sub_id.clone(),
+                started_at: None,
+                last_agent_message: Some("first completion".to_string()),
+                error: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        )
+        .await;
+    assert_eq!(
+        child_thread.agent_status().await,
+        AgentStatus::Completed(Some("first completion".to_string()))
+    );
+
+    harness
+        .control
+        .send_inter_agent_communication(
+            child_thread_id,
+            InterAgentCommunication::new(
+                AgentPath::root(),
+                child_path,
+                Vec::new(),
+                "follow up".to_string(),
+                /*trigger_turn*/ true,
+            ),
+            AgentCommunicationContext::new(AgentCommunicationKind::Followup, parent_thread_id),
+            Some("parent-turn".to_string()),
+        )
+        .await
+        .expect("follow-up should be accepted");
+
+    let followup_status = timeout(Duration::from_secs(5), async {
+        loop {
+            let status = child_thread.agent_status().await;
+            if is_final(&status)
+                && status != AgentStatus::Completed(Some("first completion".to_string()))
+            {
+                break status;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("follow-up turn should complete");
+    assert_eq!(
+        followup_status,
+        AgentStatus::Completed(Some("second completion".to_string()))
+    );
+
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if history_contains_text(
+                parent_thread.session.clone_history().await.raw_items(),
+                "second completion",
+            ) {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("follow-up completion should reach parent");
+    response_mock.single_request();
 }
 
 #[tokio::test]
