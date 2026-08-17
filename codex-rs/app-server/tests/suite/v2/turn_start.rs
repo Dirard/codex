@@ -1121,7 +1121,7 @@ async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()
 }
 
 #[tokio::test]
-async fn turn_start_accepts_text_at_limit_with_mention_item() -> Result<()> {
+async fn turn_start_accepts_text_above_one_mib_with_mention_item() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
@@ -1150,7 +1150,7 @@ async fn turn_start_accepts_text_at_limit_with_mention_item() -> Result<()> {
                 client_user_message_id: None,
                 input: vec![
                     V2UserInput::Text {
-                        text: "x".repeat(MAX_USER_INPUT_TEXT_CHARS),
+                        text: "x".repeat((1 << 20) + 1),
                         text_elements: Vec::new(),
                     },
                     V2UserInput::Mention {
