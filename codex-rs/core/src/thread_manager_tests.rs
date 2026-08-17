@@ -11,6 +11,7 @@ use crate::session::tests::build_world_state_from_turn_context;
 use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
+use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::empty_extension_registry;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
@@ -18,6 +19,10 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::ResponseItemId;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::MCP_APP_UI_EXTENSION_ID;
 use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
@@ -292,6 +297,97 @@ async fn child_session_inherits_client_mcp_extensions() {
             ),
         ]))
     );
+}
+
+#[tokio::test]
+async fn child_threads_inherit_parent_dynamic_tools() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let dynamic_tools = vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+        name: "indexing".to_string(),
+        description: "Indexing tools.".to_string(),
+        tools: vec![DynamicToolNamespaceTool::Function(
+            DynamicToolFunctionSpec {
+                name: "read_review_context".to_string(),
+                description: "Read reviewer context.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                defer_loading: false,
+            },
+        )],
+    })];
+    let parent = manager
+        .start_thread(StartThreadOptions {
+            dynamic_tools: dynamic_tools.clone(),
+            ..StartThreadOptions::new(config.clone())
+        })
+        .await
+        .expect("start parent thread");
+    let child_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: parent.thread_id,
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
+    let fresh_child = Box::pin(manager.state.spawn_new_thread_with_source(
+        config.clone(),
+        manager.agent_control(),
+        child_source.clone(),
+        /*history_mode*/ None,
+        /*parent_thread_id*/ Some(parent.thread_id),
+        /*forked_from_thread_id*/ None,
+        /*thread_source*/ Some(ThreadSource::Subagent),
+        /*metrics_service_name*/ None,
+        /*inherited_environments*/ None,
+        /*inherited_exec_policy*/ None,
+        /*turn_spawn_budget*/ None,
+        /*environments*/ None,
+    ))
+    .await
+    .expect("start fresh child thread");
+    let forked_child = Box::pin(manager.state.fork_thread_with_source(
+        config,
+        InitialHistory::Forked(Vec::new()),
+        /*history_mode*/ None,
+        manager.agent_control(),
+        child_source,
+        /*thread_source*/ Some(ThreadSource::Subagent),
+        /*parent_thread_id*/ Some(parent.thread_id),
+        /*forked_from_thread_id*/ Some(parent.thread_id),
+        /*inherited_environments*/ None,
+        /*inherited_exec_policy*/ None,
+        /*turn_spawn_budget*/ None,
+        /*environments*/ None,
+        ExtensionDataInit::default(),
+    ))
+    .await
+    .expect("fork child thread");
+
+    assert_eq!(
+        fresh_child.thread.session.dynamic_tools().await,
+        dynamic_tools
+    );
+    assert_eq!(
+        forked_child.thread.session.dynamic_tools().await,
+        dynamic_tools
+    );
+
+    manager
+        .shutdown_all_threads_bounded(Duration::from_secs(10))
+        .await;
 }
 
 struct FakeAgentGraphStore {
