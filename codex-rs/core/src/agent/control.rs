@@ -1,6 +1,7 @@
 use crate::TurnInputRequest;
 use crate::TurnInputSubmission;
 use crate::TurnStartOptions;
+use crate::agent::api::StatusSubscription;
 use crate::agent::AgentStatus;
 pub(crate) use crate::agent::types::TurnSpawnBudget;
 use crate::agent::role::DEFAULT_ROLE_NAME;
@@ -231,20 +232,61 @@ impl LocalAgentControl {
         turn_spawn_budget: Option<TurnSpawnBudget>,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
-        if communication.trigger_turn {
+        let completion_watcher = if communication.trigger_turn {
             let thread = state.get_thread(agent_id).await?;
             self.ensure_execution_capacity_for_turn_start(&thread)
                 .await?;
+            let is_idle = thread.session.active_turn.lock().await.is_none();
+            if thread.multi_agent_version() != Some(MultiAgentVersion::V2) && is_idle {
+                let mut status_updates = self.subscribe_status(agent_id).await?;
+                let current_status = status_updates
+                    .next()
+                    .await
+                    .and_then(Result::ok)
+                    .and_then(|snapshot| snapshot.status().cloned());
+                if current_status.as_ref().is_some_and(is_final) {
+                    let child_agent_path = thread.session_source.get_agent_path();
+                    let child_reference = child_agent_path
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| agent_id.to_string());
+                    Some((
+                        thread.session_source.clone(),
+                        child_reference,
+                        child_agent_path,
+                        status_updates,
+                    ))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let submission_id = self
+            .send_inter_agent_communication_after_capacity_check(
+                agent_id,
+                &state,
+                communication,
+                agent_communication_context,
+                start_options,
+                turn_spawn_budget,
+            )
+            .await?;
+        if let Some((session_source, child_reference, child_agent_path, status_updates)) =
+            completion_watcher
+        {
+            self.start_followup_completion_watcher(
+                agent_id,
+                session_source,
+                child_reference,
+                child_agent_path,
+                status_updates,
+            );
         }
-        self.send_inter_agent_communication_after_capacity_check(
-            agent_id,
-            &state,
-            communication,
-            agent_communication_context,
-            start_options,
-            turn_spawn_budget,
-        )
-        .await
+        Ok(submission_id)
     }
 
     pub(crate) async fn emit_sub_agent_activity(
@@ -629,6 +671,40 @@ impl LocalAgentControl {
         child_reference: String,
         child_agent_path: Option<AgentPath>,
     ) {
+        self.start_completion_watcher(
+            child_thread_id,
+            session_source,
+            child_reference,
+            child_agent_path,
+            /*status_rx*/ None,
+        );
+    }
+
+    fn start_followup_completion_watcher(
+        &self,
+        child_thread_id: ThreadId,
+        session_source: SessionSource,
+        child_reference: String,
+        child_agent_path: Option<AgentPath>,
+        status_updates: StatusSubscription,
+    ) {
+        self.start_completion_watcher(
+            child_thread_id,
+            Some(session_source),
+            child_reference,
+            child_agent_path,
+            Some(status_updates),
+        );
+    }
+
+    fn start_completion_watcher(
+        &self,
+        child_thread_id: ThreadId,
+        session_source: Option<SessionSource>,
+        child_reference: String,
+        child_agent_path: Option<AgentPath>,
+        status_updates: Option<StatusSubscription>,
+    ) {
         let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
         })) = session_source
@@ -637,7 +713,23 @@ impl LocalAgentControl {
         };
         let control = self.clone();
         tokio::spawn(async move {
-            let status = match control.subscribe_status(child_thread_id).await {
+            let status = match status_updates {
+                Some(mut updates) => {
+                    let mut final_status = None;
+                    while let Some(Ok(snapshot)) = updates.next().await {
+                        if let Some(status) = snapshot.status()
+                            && is_final(status)
+                        {
+                            final_status = Some(status.clone());
+                            break;
+                        }
+                    }
+                    match final_status {
+                        Some(status) => status,
+                        None => control.get_status(child_thread_id).await,
+                    }
+                }
+                None => match control.subscribe_status(child_thread_id).await {
                 Ok(mut updates) => {
                     let mut final_status = None;
                     while let Some(Ok(snapshot)) = updates.next().await {
@@ -654,6 +746,7 @@ impl LocalAgentControl {
                     }
                 }
                 Err(_) => control.get_status(child_thread_id).await,
+                },
             };
             if !is_final(&status) {
                 return;
