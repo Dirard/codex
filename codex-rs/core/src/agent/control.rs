@@ -205,14 +205,54 @@ impl AgentControl {
         let state = self.upgrade()?;
         self.ensure_execution_capacity_for_turn_start(agent_id, communication.trigger_turn)
             .await?;
-        self.send_inter_agent_communication_after_capacity_check(
-            agent_id,
-            &state,
-            communication,
-            agent_communication_context,
-            parent_turn_id,
-        )
-        .await
+        let completion_watcher = if communication.trigger_turn {
+            let thread = state.get_thread(agent_id).await?;
+            let is_idle = thread.session.active_turn.lock().await.is_none();
+            if thread.multi_agent_version() != Some(MultiAgentVersion::V2) && is_idle {
+                let mut status_rx = self.subscribe_status(agent_id).await?;
+                let current_status = status_rx.borrow_and_update().clone();
+                if is_final(&current_status) {
+                    let child_agent_path = thread.session_source.get_agent_path();
+                    let child_reference = child_agent_path
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| agent_id.to_string());
+                    Some((
+                        thread.session_source.clone(),
+                        child_reference,
+                        child_agent_path,
+                        status_rx,
+                    ))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let submission_id = self
+            .send_inter_agent_communication_after_capacity_check(
+                agent_id,
+                &state,
+                communication,
+                agent_communication_context,
+                parent_turn_id,
+            )
+            .await?;
+        if let Some((session_source, child_reference, child_agent_path, status_rx)) =
+            completion_watcher
+        {
+            self.start_followup_completion_watcher(
+                agent_id,
+                session_source,
+                child_reference,
+                child_agent_path,
+                status_rx,
+            );
+        }
+        Ok(submission_id)
     }
 
     pub(crate) async fn enqueue_inter_agent_communication(
@@ -517,6 +557,43 @@ impl AgentControl {
         child_reference: String,
         child_agent_path: Option<AgentPath>,
     ) {
+        self.start_completion_watcher(
+            child_thread_id,
+            session_source,
+            child_reference,
+            child_agent_path,
+            /*status_rx*/ None,
+            /*wait_for_change*/ false,
+        );
+    }
+
+    fn start_followup_completion_watcher(
+        &self,
+        child_thread_id: ThreadId,
+        session_source: SessionSource,
+        child_reference: String,
+        child_agent_path: Option<AgentPath>,
+        status_rx: watch::Receiver<AgentStatus>,
+    ) {
+        self.start_completion_watcher(
+            child_thread_id,
+            Some(session_source),
+            child_reference,
+            child_agent_path,
+            Some(status_rx),
+            /*wait_for_change*/ true,
+        );
+    }
+
+    fn start_completion_watcher(
+        &self,
+        child_thread_id: ThreadId,
+        session_source: Option<SessionSource>,
+        child_reference: String,
+        child_agent_path: Option<AgentPath>,
+        status_rx: Option<watch::Receiver<AgentStatus>>,
+        wait_for_change: bool,
+    ) {
         let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
         })) = session_source
@@ -525,20 +602,28 @@ impl AgentControl {
         };
         let control = self.clone();
         tokio::spawn(async move {
-            let status = match control.subscribe_status(child_thread_id).await {
-                Ok(mut status_rx) => {
-                    let mut status = status_rx.borrow().clone();
-                    while !is_final(&status) {
-                        if status_rx.changed().await.is_err() {
-                            status = control.get_status(child_thread_id).await;
-                            break;
-                        }
-                        status = status_rx.borrow().clone();
+            let mut status_rx = match status_rx {
+                Some(status_rx) => status_rx,
+                None => match control.subscribe_status(child_thread_id).await {
+                    Ok(status_rx) => status_rx,
+                    Err(_) => {
+                        let (_, status_rx) =
+                            watch::channel(control.get_status(child_thread_id).await);
+                        status_rx
                     }
-                    status
-                }
-                Err(_) => control.get_status(child_thread_id).await,
+                },
             };
+            if wait_for_change && status_rx.changed().await.is_err() {
+                return;
+            }
+            let mut status = status_rx.borrow().clone();
+            while !is_final(&status) {
+                if status_rx.changed().await.is_err() {
+                    status = control.get_status(child_thread_id).await;
+                    break;
+                }
+                status = status_rx.borrow().clone();
+            }
             if !is_final(&status) {
                 return;
             }
