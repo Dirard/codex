@@ -75,6 +75,7 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::ClientMcpExtensions;
@@ -2083,6 +2084,9 @@ impl ThreadManagerState {
     ) -> CodexResult<NewThread> {
         (options.client_mcp_extensions, options.prompt_cache_key) =
             self.inherited_child_settings(parent_thread_id).await;
+        if options.dynamic_tools.is_empty() {
+            options.dynamic_tools = self.dynamic_tools_for_child(parent_thread_id).await;
+        }
         let forked = matches!(options.initial_history, InitialHistory::Forked(_));
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.auth_manager), agent_control);
@@ -2120,6 +2124,7 @@ impl ThreadManagerState {
             self.inherited_child_settings(parent_thread_id).await;
         let client_mcp_extensions = client_mcp_extensions.unwrap_or(parent_client_mcp_extensions);
         let prompt_cache_key = prompt_cache_key.unwrap_or(inherited_prompt_cache_key);
+        let dynamic_tools = self.dynamic_tools_for_child(parent_thread_id).await;
         let thread_source = initial_history.get_resumed_thread_source();
         let options = StartThreadOptions {
             prompt_cache_key,
@@ -2132,6 +2137,7 @@ impl ThreadManagerState {
                     .map(TurnEnvironmentSelection::into_request)
                     .collect()
             }),
+            dynamic_tools,
             client_mcp_extensions,
             ..StartThreadOptions::new(config)
         };
@@ -2165,6 +2171,19 @@ impl ThreadManagerState {
                 )
             })
             .unwrap_or_default()
+    }
+
+    async fn dynamic_tools_for_child(
+        &self,
+        parent_thread_id: Option<ThreadId>,
+    ) -> Vec<DynamicToolSpec> {
+        let Some(parent_thread_id) = parent_thread_id else {
+            return Vec::new();
+        };
+        let Ok(parent) = self.get_thread(parent_thread_id).await else {
+            return Vec::new();
+        };
+        parent.session.dynamic_tools().await
     }
 
     /// Spawn a new thread with optional history and register it with the manager.
