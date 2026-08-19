@@ -134,7 +134,7 @@ func TestSDKServerHandlerBlockedHandlerDoesNotBlockUnrelatedResponse(t *testing.
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := client.Raw().AccountUsageRead(context.Background())
+		_, err := client.Raw().AccountUsageRead(context.Background(), protocol.NullableGetAccountTokenUsageParams{})
 		done <- err
 	}()
 	select {
@@ -157,7 +157,7 @@ func TestSDKServerHandlerCallbackIntoSameClientUsesNormalRequestPath(t *testing.
 		Handlers: ServerHandlers{
 			Approvals: ApprovalsHandlerFuncs{
 				ItemCommandExecutionRequestApproval: func(ctx context.Context, _ protocol.CommandExecutionRequestApprovalParams) (protocol.CommandExecutionRequestApprovalResponse, error) {
-					if _, err := client.Raw().AccountUsageRead(ctx); err != nil {
+					if _, err := client.Raw().AccountUsageRead(ctx, protocol.NullableGetAccountTokenUsageParams{}); err != nil {
 						return protocol.CommandExecutionRequestApprovalResponse{}, err
 					}
 					return protocol.CommandExecutionRequestApprovalResponse{
