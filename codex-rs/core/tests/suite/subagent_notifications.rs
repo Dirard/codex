@@ -3,9 +3,9 @@ use chrono::Utc;
 use codex_core::SleepFuture;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadConfigSnapshot;
-use codex_core::TurnInputRequest;
 use codex_core::TimeFuture;
 use codex_core::TimeProvider;
+use codex_core::TurnInputRequest;
 use codex_core::config::AgentRoleConfig;
 use codex_core::config::CurrentTimeReminderConfig;
 use codex_features::Feature;
@@ -2214,15 +2214,12 @@ async fn multi_agent_v2_wait_agent_does_not_resample_before_long_child_mailbox_d
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, test.cwd_path());
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: PROMPT.to_string(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -2236,8 +2233,8 @@ async fn multi_agent_v2_wait_agent_does_not_resample_before_long_child_mailbox_d
                     },
                 }),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
     time_provider.sleep_started.notified().await;
     wait_for_event_match(&test.codex, |event| {

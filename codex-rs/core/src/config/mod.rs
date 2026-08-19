@@ -216,46 +216,6 @@ pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usiz
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS: i64 = 1_800_000;
-const DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT: &str = r#"You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
-
-At the start of your turn, you are the active agent.
-You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.
-All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
-
-You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent without triggering a turn.
-Child agents can also spawn their own sub-agents.
-You can decide how much context you want to propagate to your sub-agents with the `fork_turns` parameter.
-
-You will receive messages in the analysis channel in the form:
-```
-Message Type: MESSAGE | FINAL_ANSWER
-Task name: <recipient>
-Sender: <author>
-Payload:
-<payload text>
-```
-They may be addressed as to=/root
-"#;
-const DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT: &str = r#"You are an agent in a team of agents collaborating to complete a task.
-
-You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
-
-You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent.
-Child agents can also spawn their own sub-agents.
-
-When you provide a response in the final channel, that content is immediately delivered back to your parent agent.
-
-You will receive messages in the analysis channel in the form:
-```
-Message Type: NEW_TASK | MESSAGE | FINAL_ANSWER
-Task name: <recipient>
-Sender: <author>
-Payload:
-<payload text>
-```
-You may also see them addressed as to=/root/..., which indicates your identity is /root/...
-"#;
-const DEFAULT_MULTI_AGENT_V2_MODEL_OVERRIDE_USAGE_HINT_TEXT: &str = "Full-history forks (`fork_turns` omitted or `\"all\"`) inherit the parent model and reasoning effort and do not accept overrides. Only set `model` or `reasoning_effort` when explicitly requested by the user, applicable `AGENTS.md` instructions, or skill instructions; when doing so, set `fork_turns` to `\"none\"` or a positive integer string.";
 const DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE: &str = "collaboration";
 
 pub(crate) const HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS: i64 = 0;

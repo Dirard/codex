@@ -584,7 +584,8 @@ fn exec_command_tool_output_applies_line_limit_once_when_recorded() {
         OutputTruncation::new(TruncationPolicy::Bytes(100_000), /*max_lines*/ Some(5)),
     );
 
-    let [ResponseItem::FunctionCallOutput { output, .. }] = history.raw_items() else {
+    let items = history.raw_items().cloned().collect::<Vec<_>>();
+    let [ResponseItem::FunctionCallOutput { output, .. }] = items.as_slice() else {
         panic!("expected one function call output");
     };
     assert_eq!(

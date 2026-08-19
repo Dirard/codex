@@ -1469,7 +1469,8 @@ fn record_items_returns_processed_items_for_rollout_persistence() {
 
     let processed_items = history.record_items([&item], policy);
 
-    assert_eq!(processed_items.as_slice(), history.raw_items());
+    let raw_items = history.raw_items().cloned().collect::<Vec<_>>();
+    assert_eq!(processed_items, raw_items);
     let stored = match &processed_items[0] {
         ResponseItem::FunctionCallOutput { output, .. } => output,
         other => panic!("unexpected history item: {other:?}"),

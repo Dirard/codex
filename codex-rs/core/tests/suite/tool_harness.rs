@@ -191,15 +191,12 @@ async fn legacy_shell_timeout_preserves_capture_warning_end_to_end() -> anyhow::
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "run the timeout regression".into(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_selections(cwd_path)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -213,8 +210,8 @@ async fn legacy_shell_timeout_preserves_capture_warning_end_to_end() -> anyhow::
                     },
                 }),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;

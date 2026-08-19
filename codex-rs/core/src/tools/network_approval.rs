@@ -801,7 +801,8 @@ impl NetworkApprovalService {
                 pending_owner.complete(PendingApprovalDecision::Deny);
                 return NetworkDecision::deny(REASON_NOT_ALLOWED);
             }
-            Err(ToolError::Codex(err)) => {
+            Err(ToolError::Codex(err))
+            | Err(ToolError::CapturedExec(crate::exec::CapturedExecError { error: err, .. })) => {
                 let telemetry_decision = if matches!(
                     err.details(),
                     codex_protocol::error::CodexErrorDetails::TurnAborted

@@ -1386,7 +1386,7 @@ async fn maybe_request_mcp_tool_approval(
         match sess.request_approval(action, approval_context).await {
             Ok(decision) => decision,
             Err(ToolError::Rejected(rejection)) => ReviewDecision::denied(rejection),
-            Err(ToolError::Codex(_)) => ReviewDecision::Abort,
+            Err(ToolError::Codex(_) | ToolError::CapturedExec(_)) => ReviewDecision::Abort,
         },
     )
 }

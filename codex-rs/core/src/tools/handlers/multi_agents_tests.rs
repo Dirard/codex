@@ -416,7 +416,7 @@ async fn seventeenth_spawn_is_rejected_after_sixteen_closed_children_in_one_turn
     }
 
     let thread_ids_before = manager.list_thread_ids().await;
-    let captured_ops_before = manager.captured_ops();
+    let captured_ops_before = manager.captured_ops().len();
     let err = match SpawnAgentHandlerV2::default()
         .handle(invocation_with_step_context(
             Arc::clone(&session),
@@ -441,7 +441,7 @@ async fn seventeenth_spawn_is_rejected_after_sixteen_closed_children_in_one_turn
         )
     );
     assert_eq!(manager.list_thread_ids().await, thread_ids_before);
-    assert_eq!(manager.captured_ops(), captured_ops_before);
+    assert_eq!(manager.captured_ops().len(), captured_ops_before);
     assert!(matches!(
         created_threads.try_recv(),
         Err(TryRecvError::Empty)
@@ -2216,6 +2216,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
                     /*trigger_turn*/ false,
                 )),
             ],
+            None,
             None,
         )
     );

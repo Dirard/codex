@@ -1823,16 +1823,10 @@ async fn remote_compact_v2_rejects_summary_only_candidate_without_headroom() -> 
     .await;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "summary-only overflow".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "summary-only overflow".to_string(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
     let error_message = wait_for_event_match(&codex, |event| match event {
         EventMsg::Error(error) => Some(error.message.clone()),

@@ -1346,7 +1346,7 @@ impl Session {
             )
         };
         let has_prior_user_turns = initial_history_has_prior_user_turns(&conversation_history);
-        let processed_items = {
+        {
             let mut state = self.state.lock().await;
             state.set_next_turn_is_first(!has_prior_user_turns);
         }
@@ -3100,16 +3100,15 @@ impl Session {
             .iter()
             .map(|envelope| envelope.item.clone())
             .collect::<Vec<_>>();
-        {
+        let processed_items = {
             let mut state = self.state.lock().await;
             state
                 .current_time_reminder
                 .note_recorded_items(&response_items);
-            state.history.record_annotated_items(
-                &items,
-                turn_context.output_truncation(),
-            )
-        }
+            state
+                .history
+                .record_annotated_items(&items, turn_context.output_truncation())
+        };
         for image in image_preparations {
             self.services
                 .analytics_events_client
@@ -3118,8 +3117,10 @@ impl Session {
                     metadata: image,
                 });
         }
-        let rollout_items: Vec<RolloutItem> =
-            processed_items.into_iter().map(RolloutItem::ResponseItem).collect();
+        let rollout_items: Vec<RolloutItem> = processed_items
+            .into_iter()
+            .map(RolloutItem::ResponseItem)
+            .collect();
         self.persist_rollout_items(&rollout_items).await;
         self.send_raw_response_items(turn_context, &response_items)
             .await;

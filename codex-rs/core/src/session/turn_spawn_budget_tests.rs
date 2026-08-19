@@ -69,7 +69,13 @@ async fn new_root_input_gets_independent_turn_spawn_budget() -> anyhow::Result<(
     let registry = Arc::new(AgentRegistry::default());
     spend_slot(&registry, &old_step);
 
-    session.start_or_steer_turn(root_user_input()).await?;
+    crate::session::turn_input::handle(
+        &session,
+        root_user_input(),
+        TurnInputMode::StartOrSteer,
+        "new-root-input".to_string(),
+    )
+    .await?;
     let new_step = capture_step(&session, session.new_default_turn().await).await?;
 
     assert_budget_exhausted(&registry, &old_step, "old root");
@@ -82,7 +88,13 @@ async fn late_descendant_uses_original_budget_during_root_rollover() -> anyhow::
     let (session, turn, _rx) = make_limit_one_session().await;
     let old_descendant_step = capture_step(&session, turn).await?;
 
-    session.start_or_steer_turn(root_user_input()).await?;
+    crate::session::turn_input::handle(
+        &session,
+        root_user_input(),
+        TurnInputMode::StartOrSteer,
+        "root-rollover".to_string(),
+    )
+    .await?;
     let new_root_step = capture_step(&session, session.new_default_turn().await).await?;
     let registry = Arc::new(AgentRegistry::default());
 
