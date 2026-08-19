@@ -88,6 +88,42 @@ func (c RawClient) ThreadGoalClear(ctx context.Context, params ThreadGoalClearPa
 	return result, err
 }
 
+func (c RawClient) ThreadQueueAdd(ctx context.Context, params ThreadQueueAddParams) (ThreadQueueAddResponse, error) {
+	var result ThreadQueueAddResponse
+	err := c.sender.Call(ctx, "thread/queue/add", params, &result, MethodMetadataByMethod["thread/queue/add"])
+	return result, err
+}
+
+func (c RawClient) ThreadQueueList(ctx context.Context, params ThreadQueueListParams) (ThreadQueueListResponse, error) {
+	var result ThreadQueueListResponse
+	err := c.sender.Call(ctx, "thread/queue/list", params, &result, MethodMetadataByMethod["thread/queue/list"])
+	return result, err
+}
+
+func (c RawClient) ThreadQueueUpdate(ctx context.Context, params ThreadQueueUpdateParams) (ThreadQueueUpdateResponse, error) {
+	var result ThreadQueueUpdateResponse
+	err := c.sender.Call(ctx, "thread/queue/update", params, &result, MethodMetadataByMethod["thread/queue/update"])
+	return result, err
+}
+
+func (c RawClient) ThreadQueueDelete(ctx context.Context, params ThreadQueueDeleteParams) (ThreadQueueDeleteResponse, error) {
+	var result ThreadQueueDeleteResponse
+	err := c.sender.Call(ctx, "thread/queue/delete", params, &result, MethodMetadataByMethod["thread/queue/delete"])
+	return result, err
+}
+
+func (c RawClient) ThreadQueueReorder(ctx context.Context, params ThreadQueueReorderParams) (ThreadQueueReorderResponse, error) {
+	var result ThreadQueueReorderResponse
+	err := c.sender.Call(ctx, "thread/queue/reorder", params, &result, MethodMetadataByMethod["thread/queue/reorder"])
+	return result, err
+}
+
+func (c RawClient) ThreadQueueStart(ctx context.Context, params ThreadQueueStartParams) (ThreadQueueStartResponse, error) {
+	var result ThreadQueueStartResponse
+	err := c.sender.Call(ctx, "thread/queue/start", params, &result, MethodMetadataByMethod["thread/queue/start"])
+	return result, err
+}
+
 func (c RawClient) ThreadMetadataUpdate(ctx context.Context, params ThreadMetadataUpdateParams) (ThreadMetadataUpdateResponse, error) {
 	var result ThreadMetadataUpdateResponse
 	err := c.sender.Call(ctx, "thread/metadata/update", params, &result, MethodMetadataByMethod["thread/metadata/update"])
@@ -166,9 +202,57 @@ func (c RawClient) ThreadRollback(ctx context.Context, params ThreadRollbackPara
 	return result, err
 }
 
+func (c RawClient) ThreadRevert(ctx context.Context, params ThreadRevertParams) (ThreadRevertResponse, error) {
+	var result ThreadRevertResponse
+	err := c.sender.Call(ctx, "thread/revert", params, &result, MethodMetadataByMethod["thread/revert"])
+	return result, err
+}
+
 func (c RawClient) ThreadList(ctx context.Context, params ThreadListParams) (ThreadListResponse, error) {
 	var result ThreadListResponse
 	err := c.sender.Call(ctx, "thread/list", params, &result, MethodMetadataByMethod["thread/list"])
+	return result, err
+}
+
+func (c RawClient) ProjectList(ctx context.Context, params ProjectListParams) (ProjectListResponse, error) {
+	var result ProjectListResponse
+	err := c.sender.Call(ctx, "project/list", params, &result, MethodMetadataByMethod["project/list"])
+	return result, err
+}
+
+func (c RawClient) ProjectRead(ctx context.Context, params ProjectReadParams) (ProjectReadResponse, error) {
+	var result ProjectReadResponse
+	err := c.sender.Call(ctx, "project/read", params, &result, MethodMetadataByMethod["project/read"])
+	return result, err
+}
+
+func (c RawClient) ProjectCreate(ctx context.Context, params ProjectCreateParams) (ProjectCreateResponse, error) {
+	var result ProjectCreateResponse
+	err := c.sender.Call(ctx, "project/create", params, &result, MethodMetadataByMethod["project/create"])
+	return result, err
+}
+
+func (c RawClient) ProjectImport(ctx context.Context, params ProjectImportParams) (ProjectImportResponse, error) {
+	var result ProjectImportResponse
+	err := c.sender.Call(ctx, "project/import", params, &result, MethodMetadataByMethod["project/import"])
+	return result, err
+}
+
+func (c RawClient) ProjectUpdate(ctx context.Context, params ProjectUpdateParams) (ProjectUpdateResponse, error) {
+	var result ProjectUpdateResponse
+	err := c.sender.Call(ctx, "project/update", params, &result, MethodMetadataByMethod["project/update"])
+	return result, err
+}
+
+func (c RawClient) ProjectMove(ctx context.Context, params ProjectMoveParams) (ProjectMoveResponse, error) {
+	var result ProjectMoveResponse
+	err := c.sender.Call(ctx, "project/move", params, &result, MethodMetadataByMethod["project/move"])
+	return result, err
+}
+
+func (c RawClient) ProjectDelete(ctx context.Context, params ProjectDeleteParams) (ProjectDeleteResponse, error) {
+	var result ProjectDeleteResponse
+	err := c.sender.Call(ctx, "project/delete", params, &result, MethodMetadataByMethod["project/delete"])
 	return result, err
 }
 
@@ -628,6 +712,18 @@ func (c RawClient) AccountLoginStart(ctx context.Context, params LoginAccountPar
 	return result, err
 }
 
+func (c RawClient) AccountBedrockDiscover(ctx context.Context, params BedrockDiscoverParams) (BedrockDiscoverResponse, error) {
+	var result BedrockDiscoverResponse
+	err := c.sender.Call(ctx, "account/bedrock/discover", params, &result, MethodMetadataByMethod["account/bedrock/discover"])
+	return result, err
+}
+
+func (c RawClient) AccountBedrockSetup(ctx context.Context, params BedrockSetupParams) (BedrockSetupResponse, error) {
+	var result BedrockSetupResponse
+	err := c.sender.Call(ctx, "account/bedrock/setup", params, &result, MethodMetadataByMethod["account/bedrock/setup"])
+	return result, err
+}
+
 func (c RawClient) AccountLoginCancel(ctx context.Context, params CancelLoginAccountParams) (CancelLoginAccountResponse, error) {
 	var result CancelLoginAccountResponse
 	err := c.sender.Call(ctx, "account/login/cancel", params, &result, MethodMetadataByMethod["account/login/cancel"])
@@ -652,9 +748,9 @@ func (c RawClient) AccountRateLimitResetCreditConsume(ctx context.Context, param
 	return result, err
 }
 
-func (c RawClient) AccountUsageRead(ctx context.Context) (GetAccountTokenUsageResponse, error) {
+func (c RawClient) AccountUsageRead(ctx context.Context, params NullableGetAccountTokenUsageParams) (GetAccountTokenUsageResponse, error) {
 	var result GetAccountTokenUsageResponse
-	err := c.sender.Call(ctx, "account/usage/read", nil, &result, MethodMetadataByMethod["account/usage/read"])
+	err := c.sender.Call(ctx, "account/usage/read", params, &result, MethodMetadataByMethod["account/usage/read"])
 	return result, err
 }
 
