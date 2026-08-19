@@ -76,7 +76,7 @@ func (c *AccountsClient) Usage(ctx context.Context) (protocol.GetAccountTokenUsa
 	if c == nil || c.client == nil {
 		return protocol.GetAccountTokenUsageResponse{}, &ClosedError{}
 	}
-	return c.client.Raw().AccountUsageRead(ctx)
+	return c.client.Raw().AccountUsageRead(ctx, protocol.NullableGetAccountTokenUsageParams{})
 }
 
 func (c *AccountsClient) RateLimits(ctx context.Context) (protocol.GetAccountRateLimitsResponse, error) {

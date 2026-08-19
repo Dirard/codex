@@ -929,7 +929,7 @@ func TestRawOnlyNotificationOptOutBlocksDependentWorkflowButAllowsRaw(t *testing
 		t.Fatal("thread/start was sent after raw-only dependent workflow opt-out")
 	}
 
-	if _, err := client.Raw().AccountUsageRead(context.Background()); err != nil {
+	if _, err := client.Raw().AccountUsageRead(context.Background(), protocol.NullableGetAccountTokenUsageParams{}); err != nil {
 		t.Fatalf("raw account usage should remain available: %v", err)
 	}
 	waitForMethod(t, transport, "account/usage/read")
@@ -985,6 +985,7 @@ func newWorkflowTransport(t *testing.T) *scriptedTransport {
 			ID:            "thread-1",
 			ModelProvider: "test-provider",
 			Preview:       "",
+			ProjectID:     protocol.Null[string](),
 			SessionID:     "session-1",
 			Source:        protocol.SessionSourceCli,
 			Status:        protocol.ThreadStatus{TypeValue: "idle"},
