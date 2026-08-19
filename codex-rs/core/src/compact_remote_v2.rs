@@ -1084,7 +1084,7 @@ mod tests {
         };
 
         let truncated =
-            truncate_retained_messages_for_remote_compaction(vec![item], /*max_tokens*/ 4);
+            truncate_retained_messages_for_remote_compaction(vec![item], /*max_tokens*/ 64);
 
         assert_eq!(truncated.len(), 1);
         assert_eq!(truncated[0].metadata, Some(CodexHarnessMetadata::default()));
@@ -1249,10 +1249,12 @@ mod tests {
 
         let retained = truncate_retained_messages_for_remote_compaction(vec![item], budget);
 
-        let [ResponseItemEnvelope {
-            item: ResponseItem::Message { content, .. },
-            ..
-        }] = retained.as_slice()
+        let [
+            ResponseItemEnvelope {
+                item: ResponseItem::Message { content, .. },
+                ..
+            },
+        ] = retained.as_slice()
         else {
             panic!("expected one retained message");
         };
@@ -1269,8 +1271,7 @@ mod tests {
 
     #[test]
     fn retained_history_keeps_mixed_fixed_content_that_exactly_fits() {
-        let mixed =
-            ResponseItemEnvelope::new(mixed_text_image_message("keep only what fits"));
+        let mixed = ResponseItemEnvelope::new(mixed_text_image_message("keep only what fits"));
         let text_free = truncate_message_text_to_token_budget(mixed.clone(), /*max_tokens*/ 0)
             .expect("the image remains after text is removed");
         let fixed_cost = usize::try_from(estimate_item_token_count(&text_free.item))

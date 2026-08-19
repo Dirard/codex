@@ -350,10 +350,7 @@ pub(crate) async fn process_annotated_compacted_history(
         .flat_map(HistoryItemGroup::into_items)
         .collect();
     (
-        insert_initial_context_before_last_real_user_or_summary(
-            compacted_history,
-            initial_context,
-        ),
+        insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context),
         world_state_baseline,
     )
 }
