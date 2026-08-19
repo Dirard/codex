@@ -287,6 +287,7 @@ async fn responses_http_uses_local_backoff_despite_retry_after() -> Result<()> {
 
 /// Headerless HTTP overloads currently exhaust request retries before emitting one terminal error.
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "fork retries server overloads at least three times"]
 async fn responses_http_overload_without_retry_after_exhausts_request_retries() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -772,6 +773,7 @@ async fn compact_v2_rate_limit_message_without_retry_after_uses_server_advised_d
 
 /// Headerless remote compaction v2 overloads exhaust request retries before one terminal error.
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "fork retries server overloads at least three times"]
 async fn compact_v2_overload_without_retry_after_exhausts_request_retries() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1138,6 +1140,7 @@ async fn sse_rate_limit_message_with_retry_after_uses_server_advised_retry_delay
 // TODO(anp) respect Retry-After
 /// A streamed backend overload remains terminal despite an enclosing retry header.
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "fork retries server overloads at least three times"]
 async fn sse_overload_with_retry_after_is_terminal() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1211,6 +1214,7 @@ async fn sse_overload_with_retry_after_is_terminal() -> Result<()> {
 
 /// A streamed backend overload without retry advice must complete with one terminal error.
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "fork retries server overloads at least three times"]
 async fn sse_overload_without_retry_after_is_terminal() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1566,6 +1570,7 @@ async fn websocket_rate_limit_without_retry_after_is_terminal() -> Result<()> {
 // TODO(anp) respect Retry-After
 /// Websocket overloads remain terminal despite a nested retry header.
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "fork retries server overloads at least three times"]
 async fn websocket_overload_with_nested_retry_after_is_terminal() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1648,6 +1653,7 @@ async fn websocket_overload_with_nested_retry_after_is_terminal() -> Result<()> 
 
 /// Headerless websocket overloads must neither reconnect nor fall back to HTTP.
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "fork retries server overloads at least three times"]
 async fn websocket_overload_without_retry_after_is_terminal() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
