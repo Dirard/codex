@@ -40,7 +40,6 @@ use crate::marketplace::home_dir;
 use crate::marketplace::list_marketplaces_with_home;
 use crate::marketplace::plugin_interface_with_marketplace_category;
 use crate::marketplace_policy::MarketplacePolicy;
-use crate::marketplace_policy::allowed_configured_marketplace_names;
 use crate::marketplace_policy::configured_plugins_from_stack;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
@@ -48,7 +47,6 @@ use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RecommendedPluginsMode;
 use crate::remote::RemoteInstalledPlugin;
-use crate::remote::RemoteInstalledPluginBundleSyncOutcome;
 use crate::remote::RemotePluginCatalogError;
 use crate::remote::RemotePluginMaterialization;
 use crate::remote::RemotePluginScope;
@@ -66,6 +64,7 @@ use crate::startup_sync::sync_openai_plugins_repo;
 use crate::store::PluginInstallResult as StorePluginInstallResult;
 use crate::store::PluginStore;
 use crate::store::PluginStoreError;
+use crate::store::error_context_sub_error_type;
 use crate::tool_suggest_metadata::ToolSuggestMetadataCache;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::PluginInstallSource;
@@ -81,7 +80,6 @@ use codex_hooks::plugin_hook_declarations;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_model_provider::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
@@ -445,10 +443,11 @@ pub struct PluginsManager {
     skill_root_loader: Arc<dyn SkillRootLoader<PluginSkillRoot>>,
     tool_suggest_metadata_cache: ToolSuggestMetadataCache,
     remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
+    remote_installed_plugin_bundle_sync_gate: Arc<Semaphore>,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     remote_catalog_cache_refresh_state: RwLock<RemoteCatalogCacheRefreshState>,
     restriction_product: Option<Product>,
-    auth_mode: RwLock<Option<AuthMode>>,
+    auth_manager: Arc<AuthManager>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
     plugin_install_source: PluginInstallSource,
 }
@@ -490,35 +489,24 @@ impl PluginLoadCacheKey {
     }
 }
 
-fn target_curated_marketplace(
-    auth_mode: Option<AuthMode>,
-    model_provider_id: &str,
-) -> TargetCuratedMarketplace {
-    match auth_mode {
-        Some(auth_mode) => {
-            if auth_mode.uses_codex_backend() {
-                TargetCuratedMarketplace::OpenAiWithRemote
-            } else {
-                TargetCuratedMarketplace::OpenAiApi
-            }
-        }
-        // Bedrock can use ambient AWS credentials without producing a stored auth mode.
-        None if model_provider_id == AMAZON_BEDROCK_PROVIDER_ID => {
-            TargetCuratedMarketplace::OpenAiApi
-        }
-        None => TargetCuratedMarketplace::OpenAi,
+fn target_curated_marketplace(auth_mode: Option<AuthMode>) -> TargetCuratedMarketplace {
+    if auth_mode.is_some_and(AuthMode::uses_codex_backend) {
+        TargetCuratedMarketplace::OpenAiWithRemote
+    } else {
+        TargetCuratedMarketplace::OpenAiApi
     }
 }
 
 impl PluginsManager {
     pub fn new(
         codex_home: PathBuf,
+        auth_manager: Arc<AuthManager>,
         skill_root_loader: Arc<dyn SkillRootLoader<PluginSkillRoot>>,
     ) -> Self {
         Self::new_with_options(
             codex_home,
             Some(Product::Codex),
-            /*auth_mode*/ None,
+            auth_manager,
             skill_root_loader,
         )
     }
@@ -526,7 +514,7 @@ impl PluginsManager {
     pub fn new_with_options(
         codex_home: PathBuf,
         restriction_product: Option<Product>,
-        auth_mode: Option<AuthMode>,
+        auth_manager: Arc<AuthManager>,
         skill_root_loader: Arc<dyn SkillRootLoader<PluginSkillRoot>>,
     ) -> Self {
         // Product restrictions are enforced at marketplace admission time for a given CODEX_HOME:
@@ -536,6 +524,8 @@ impl PluginsManager {
         // already-admitted plugins may continue exposing MCP servers/tools from shared local state.
         //
         // This assumes a single CODEX_HOME is only used by one product.
+        let remote_installed_plugin_bundle_sync_gate =
+            crate::remote::remote_installed_plugin_bundle_sync_gate(&codex_home);
         Self {
             codex_home: codex_home.clone(),
             store: PluginStore::new(codex_home),
@@ -556,6 +546,7 @@ impl PluginsManager {
             skill_root_loader,
             tool_suggest_metadata_cache: ToolSuggestMetadataCache::new(),
             remote_installed_plugins_cache: RwLock::new(None),
+            remote_installed_plugin_bundle_sync_gate,
             remote_installed_plugins_cache_refresh_state: RwLock::new(
                 RemoteInstalledPluginsCacheRefreshState::default(),
             ),
@@ -563,7 +554,7 @@ impl PluginsManager {
                 RemoteCatalogCacheRefreshState::default(),
             ),
             restriction_product,
-            auth_mode: RwLock::new(auth_mode),
+            auth_manager,
             analytics_events_client: RwLock::new(None),
             plugin_install_source: PluginInstallSource::Manual,
         }
@@ -574,23 +565,8 @@ impl PluginsManager {
         self
     }
 
-    pub fn set_auth_mode(&self, auth_mode: Option<AuthMode>) -> bool {
-        let mut stored_auth_mode = match self.auth_mode.write() {
-            Ok(auth_mode_guard) => auth_mode_guard,
-            Err(err) => err.into_inner(),
-        };
-        if *stored_auth_mode == auth_mode {
-            return false;
-        }
-        *stored_auth_mode = auth_mode;
-        true
-    }
-
     pub fn auth_mode(&self) -> Option<AuthMode> {
-        match self.auth_mode.read() {
-            Ok(auth_mode_guard) => *auth_mode_guard,
-            Err(err) => *err.into_inner(),
-        }
+        self.auth_manager.get_api_auth_mode()
     }
 
     fn remote_global_catalog_active(&self, config: &PluginsConfigInput) -> bool {
@@ -682,7 +658,7 @@ impl PluginsManager {
             remote_global_catalog_active,
         );
         if !force_reload && let Some(plugins) = self.cached_loaded_plugins(&cache_key) {
-            return self.resolve_loaded_plugins_for_auth(plugins, &config.model_provider_id);
+            return self.resolve_loaded_plugins_for_auth(plugins);
         }
 
         let Ok(_load_permit) = self.loaded_plugins_load_semaphore.acquire().await else {
@@ -690,7 +666,7 @@ impl PluginsManager {
             return PluginLoadOutcome::default();
         };
         if !force_reload && let Some(plugins) = self.cached_loaded_plugins(&cache_key) {
-            return self.resolve_loaded_plugins_for_auth(plugins, &config.model_provider_id);
+            return self.resolve_loaded_plugins_for_auth(plugins);
         }
         let cache_generation = self.loaded_plugins_cache_generation();
         let plugin_skill_snapshots = new_plugin_skill_snapshots();
@@ -711,16 +687,12 @@ impl PluginsManager {
             plugins.clone(),
             plugin_skill_snapshots,
         );
-        self.resolve_loaded_plugins_for_auth(plugins, &config.model_provider_id)
+        self.resolve_loaded_plugins_for_auth(plugins)
     }
 
-    fn resolve_loaded_plugins_for_auth(
-        &self,
-        mut plugins: Vec<LoadedPlugin>,
-        model_provider_id: &str,
-    ) -> PluginLoadOutcome {
+    fn resolve_loaded_plugins_for_auth(&self, mut plugins: Vec<LoadedPlugin>) -> PluginLoadOutcome {
         let auth_mode = self.auth_mode();
-        let target_curated_marketplace = target_curated_marketplace(auth_mode, model_provider_id);
+        let target_curated_marketplace = target_curated_marketplace(auth_mode);
         plugins.retain(|plugin| {
             plugin_is_eligible_for_target_marketplace(
                 &plugin.config_name,
@@ -786,28 +758,6 @@ impl PluginsManager {
         }
     }
 
-    /// Load plugins for a config layer stack without touching the plugins cache.
-    pub async fn plugins_for_layer_stack(
-        &self,
-        config_layer_stack: &ConfigLayerStack,
-        config: &PluginsConfigInput,
-    ) -> PluginLoadOutcome {
-        if !config.plugins_enabled {
-            return PluginLoadOutcome::default();
-        }
-        let plugins = load_plugins_from_layer_stack(
-            config_layer_stack,
-            self.remote_installed_plugins_snapshot(),
-            &self.store,
-            /*plugin_skill_snapshots*/ None,
-            self.restriction_product,
-            self.remote_global_catalog_active(config),
-            self.skill_root_loader.as_ref(),
-        )
-        .await;
-        self.resolve_loaded_plugins_for_auth(plugins, &config.model_provider_id)
-    }
-
     /// Resolve plugin hooks for a config layer stack without loading other plugin capabilities.
     pub async fn plugin_hooks_for_layer_stack(
         &self,
@@ -817,8 +767,7 @@ impl PluginsManager {
         if !config.plugins_enabled {
             return PluginHookLoadOutcome::default();
         }
-        let target_curated_marketplace =
-            target_curated_marketplace(self.auth_mode(), &config.model_provider_id);
+        let target_curated_marketplace = target_curated_marketplace(self.auth_mode());
         load_plugin_hooks_from_layer_stack(
             config_layer_stack,
             self.remote_installed_plugin_configs(),
@@ -827,17 +776,6 @@ impl PluginsManager {
             self.remote_global_catalog_active(config),
         )
         .await
-    }
-
-    /// Resolve plugin skill roots for a config layer stack without touching the plugins cache.
-    pub async fn effective_skill_roots_for_layer_stack(
-        &self,
-        config_layer_stack: &ConfigLayerStack,
-        config: &PluginsConfigInput,
-    ) -> Vec<PluginSkillRoot> {
-        self.plugins_for_layer_stack(config_layer_stack, config)
-            .await
-            .effective_plugin_skill_roots()
     }
 
     fn cached_loaded_plugins(&self, key: &PluginLoadCacheKey) -> Option<Vec<LoadedPlugin>> {
@@ -1160,28 +1098,53 @@ impl PluginsManager {
             return;
         }
 
+        let Some(auth) = auth else {
+            return;
+        };
+        let Ok(permit) =
+            Arc::clone(&self.remote_installed_plugin_bundle_sync_gate).try_acquire_owned()
+        else {
+            return;
+        };
         let manager = Arc::clone(self);
         let config_for_refresh = config.clone();
-        let auth_for_refresh = auth.clone();
-        let on_local_cache_changed =
-            Arc::new(move |outcome: RemoteInstalledPluginBundleSyncOutcome| {
-                manager.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
-                    &config_for_refresh,
-                    auth_for_refresh.clone(),
-                    RemoteInstalledPluginsCacheRefreshNotify::AfterSuccessfulRefresh,
-                    on_effective_plugins_changed.clone(),
-                    EffectivePluginsChange {
-                        materialized_remote_plugins: outcome.materialized_remote_plugins,
-                    },
-                );
-            });
-
-        crate::remote::maybe_start_remote_installed_plugin_bundle_sync(
-            self.codex_home.clone(),
-            remote_plugin_service_config(config),
-            auth,
-            Some(on_local_cache_changed),
-        );
+        let service_config = remote_plugin_service_config(config);
+        tokio::spawn(async move {
+            let _permit = permit;
+            let result = crate::remote::sync_remote_installed_plugin_bundles_once(
+                manager.codex_home.clone(),
+                &service_config,
+                Some(&auth),
+            )
+            .await;
+            match result {
+                Ok(outcome) => {
+                    tracing::info!(
+                        materialized_remote_plugins = ?outcome.materialized_remote_plugins,
+                        removed_cache_plugin_ids = ?outcome.removed_cache_plugin_ids,
+                        failed_remote_plugin_ids = ?outcome.failed_remote_plugin_ids,
+                        "completed remote installed plugin bundle sync"
+                    );
+                    if outcome.changed_local_cache() {
+                        manager.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
+                            &config_for_refresh,
+                            Some(auth),
+                            RemoteInstalledPluginsCacheRefreshNotify::AfterSuccessfulRefresh,
+                            on_effective_plugins_changed,
+                            EffectivePluginsChange {
+                                materialized_remote_plugins: outcome.materialized_remote_plugins,
+                            },
+                        );
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "remote installed plugin bundle sync failed"
+                    );
+                }
+            }
+        });
     }
 
     fn maybe_start_remote_catalog_cache_refresh(
@@ -1437,7 +1400,7 @@ impl PluginsManager {
                     description: None,
                     has_skills: false,
                     mcp_server_names: Vec::new(),
-                    app_connector_ids: plugin.app_connector_ids,
+                    app_connector_ids: Vec::new(),
                 })
             })
             .collect();
@@ -1555,6 +1518,7 @@ impl PluginsManager {
     }
 
     fn track_plugin_install_resolution_failed(&self, err: &MarketplaceError) {
+        let sub_error_type = marketplace_error_sub_error_type(err);
         let plugin_id = match err {
             MarketplaceError::PluginNotFound {
                 plugin_name,
@@ -1574,14 +1538,24 @@ impl PluginsManager {
             self.track_plugin_install_failed(
                 &plugin_id,
                 marketplace_error_type(err),
-                /*sub_error_type*/ None,
+                sub_error_type,
                 err.to_string(),
             );
         } else {
             tracing::warn!(
                 error_type = %marketplace_error_type(err),
+                sub_error_type = sub_error_type.as_deref(),
                 error = %err,
                 "plugin install failed while resolving marketplace plugin"
+            );
+            self.emit_plugin_install_failed(
+                PluginTelemetryMetadata {
+                    plugin_id: None,
+                    remote_plugin_id: None,
+                    capability_summary: None,
+                },
+                marketplace_error_type(err),
+                sub_error_type,
             );
         }
     }
@@ -1600,13 +1574,26 @@ impl PluginsManager {
             error = %error_message,
             "plugin install failed"
         );
+        self.emit_plugin_install_failed(
+            self.telemetry_metadata_for_plugin_id(plugin_id),
+            error_type,
+            sub_error_type,
+        );
+    }
+
+    fn emit_plugin_install_failed(
+        &self,
+        plugin: PluginTelemetryMetadata,
+        error_type: &'static str,
+        sub_error_type: Option<String>,
+    ) {
         let analytics_events_client = match self.analytics_events_client.read() {
             Ok(client) => client.clone(),
             Err(err) => err.into_inner().clone(),
         };
         if let Some(analytics_events_client) = analytics_events_client {
             analytics_events_client.track_plugin_install_failed(
-                self.telemetry_metadata_for_plugin_id(plugin_id),
+                plugin,
                 self.plugin_install_source,
                 error_type.to_string(),
                 sub_error_type,
@@ -2143,7 +2130,6 @@ impl PluginsManager {
     pub fn maybe_start_plugin_startup_tasks_for_config(
         self: &Arc<Self>,
         config: &PluginsConfigInput,
-        auth_manager: Arc<AuthManager>,
         on_effective_plugins_changed: Option<EffectivePluginsChangedCallback>,
     ) {
         if config.plugins_enabled {
@@ -2166,6 +2152,8 @@ impl PluginsManager {
             if should_spawn_marketplace_auto_upgrade {
                 let manager = Arc::clone(self);
                 let config = config.clone();
+                let on_effective_plugins_changed = on_effective_plugins_changed.clone();
+                let runtime = tokio::runtime::Handle::current();
                 if let Err(err) = std::thread::Builder::new()
                     .name("plugins-marketplace-auto-upgrade".to_string())
                     .spawn(move || {
@@ -2174,6 +2162,16 @@ impl PluginsManager {
                         );
                         match outcome {
                             Ok(outcome) => {
+                                if !outcome.upgraded_roots.is_empty()
+                                    && let Some(on_effective_plugins_changed) =
+                                        on_effective_plugins_changed
+                                {
+                                    runtime.spawn(async move {
+                                        on_effective_plugins_changed(
+                                            EffectivePluginsChange::default(),
+                                        );
+                                    });
+                                }
                                 for error in outcome.errors {
                                     warn!(
                                         marketplace = error.marketplace_name,
@@ -2204,10 +2202,9 @@ impl PluginsManager {
             }
             let config_for_remote_sync = config.clone();
             let manager = Arc::clone(self);
-            let auth_manager_for_remote_sync = auth_manager.clone();
             let on_effective_plugins_changed = on_effective_plugins_changed.clone();
             tokio::spawn(async move {
-                let auth = auth_manager_for_remote_sync.auth().await;
+                let auth = manager.auth_manager.auth().await;
                 manager.maybe_start_remote_plugin_caches_refresh(
                     &config_for_remote_sync,
                     auth.clone(),
@@ -2239,7 +2236,7 @@ impl PluginsManager {
             let config_for_featured_plugins = config.clone();
             let manager = Arc::clone(self);
             tokio::spawn(async move {
-                let auth = auth_manager.auth().await;
+                let auth = manager.auth_manager.auth().await;
                 if let Err(err) = manager
                     .featured_plugin_ids_for_config(&config_for_featured_plugins, auth.as_ref())
                     .await
@@ -2917,7 +2914,7 @@ impl PluginsManager {
             self.codex_home.as_path(),
         ));
         let curated_marketplace_path = if include_openai_curated {
-            match target_curated_marketplace(self.auth_mode(), &config.model_provider_id) {
+            match target_curated_marketplace(self.auth_mode()) {
                 TargetCuratedMarketplace::OpenAi | TargetCuratedMarketplace::OpenAiWithRemote => {
                     let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());
                     curated_repo_root.is_dir().then_some(curated_repo_root)
@@ -2951,16 +2948,15 @@ impl PluginsManager {
     ) -> Result<MarketplaceListOutcome, MarketplaceError> {
         let mut outcome = list_marketplaces_with_home(roots, home_dir().as_deref())?;
         let policy = MarketplacePolicy::from_requirements(config.config_layer_stack.requirements());
-        if !policy.is_restricted() {
-            return Ok(outcome);
-        }
-        let allowed_marketplace_names = allowed_configured_marketplace_names(
-            &config.config_layer_stack,
-            self.codex_home.as_path(),
-        );
         outcome.marketplaces.retain(|marketplace| {
-            is_openai_curated_marketplace_name(&marketplace.name)
-                || allowed_marketplace_names.contains(&marketplace.name)
+            policy
+                .validate_install(
+                    &config.config_layer_stack,
+                    self.codex_home.as_path(),
+                    &marketplace.path,
+                    &marketplace.name,
+                )
+                .is_ok()
         });
         Ok(outcome)
     }
@@ -3053,8 +3049,11 @@ impl PluginInstallError {
 
     pub fn sub_error_type(&self) -> Option<String> {
         match self {
+            Self::Marketplace(err) => marketplace_error_sub_error_type(err),
+            Self::Remote(err) => err.sub_error_type(),
             Self::Store(err) => err.sub_error_type(),
-            Self::Marketplace(_) | Self::Remote(_) | Self::Config(_) | Self::Join(_) => None,
+            Self::Config(_) => Some("failed_to_enable_plugin".to_string()),
+            Self::Join(_) => Some("plugin_install_task_failed".to_string()),
         }
     }
 }
@@ -3078,6 +3077,18 @@ fn marketplace_error_type(err: &MarketplaceError) -> &'static str {
         MarketplaceError::PluginNotAvailable { .. } => "plugin_not_available",
         MarketplaceError::PluginsDisabled => "plugins_disabled",
         MarketplaceError::InvalidPlugin(_) => "invalid_plugin",
+    }
+}
+
+fn marketplace_error_sub_error_type(err: &MarketplaceError) -> Option<String> {
+    match err {
+        MarketplaceError::Io { context, .. } => Some(error_context_sub_error_type(context)),
+        MarketplaceError::MarketplaceNotFound { .. }
+        | MarketplaceError::InvalidMarketplaceFile { .. }
+        | MarketplaceError::PluginNotFound { .. }
+        | MarketplaceError::PluginNotAvailable { .. }
+        | MarketplaceError::PluginsDisabled
+        | MarketplaceError::InvalidPlugin(_) => None,
     }
 }
 

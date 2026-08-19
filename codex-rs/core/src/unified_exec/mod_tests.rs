@@ -124,13 +124,17 @@ async fn exec_command_with_tty(
             )
             .await?,
     );
-    let context =
-        UnifiedExecContext::new(Arc::clone(session), Arc::clone(turn), "call".to_string());
+    let context = UnifiedExecContext::new(
+        Arc::clone(session),
+        crate::session::step_context::StepContext::for_test(Arc::clone(turn)),
+        "call".to_string(),
+    );
     let started_at = Instant::now();
     let process_started_alive = !process.has_exited() && process.exit_code().is_none();
     if process_started_alive {
         let entry = ProcessEntry {
             process: Arc::clone(&process),
+            plugin_metrics_sidecar: None,
             call_id: context.call_id.clone(),
             process_id,
             cwd: cwd.clone().into(),
@@ -326,12 +330,13 @@ fn push_chunk_preserves_prefix_and_suffix() {
     buffer.push_chunk(vec![b'c']);
 
     assert_eq!(buffer.retained_bytes(), UNIFIED_EXEC_OUTPUT_MAX_BYTES);
-    let snapshot = buffer.snapshot_chunks();
+    let snapshot = buffer.to_bytes();
     let head_bytes = UNIFIED_EXEC_OUTPUT_MAX_BYTES / 2;
     let tail_bytes = UNIFIED_EXEC_OUTPUT_MAX_BYTES - head_bytes;
-    let mut expected_tail = vec![b'a'; tail_bytes - 2];
-    expected_tail.extend_from_slice(b"bc");
-    assert_eq!(snapshot, vec![vec![b'a'; head_bytes], expected_tail]);
+    let expected = std::iter::repeat_n(b'a', head_bytes + tail_bytes - 2)
+        .chain(b"bc".iter().copied())
+        .collect::<Vec<_>>();
+    assert_eq!(snapshot, expected);
 }
 
 #[test]
@@ -604,6 +609,7 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
         process_id,
         ProcessEntry {
             process,
+            plugin_metrics_sidecar: None,
             call_id: "call".to_string(),
             process_id,
             cwd: cwd.into(),
@@ -677,6 +683,7 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
         process_id,
         ProcessEntry {
             process: Arc::clone(&process),
+            plugin_metrics_sidecar: None,
             call_id: "call".to_string(),
             process_id,
             cwd: cwd.into(),

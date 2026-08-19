@@ -46,9 +46,9 @@ use uuid::Uuid;
 use crate::LogEntry;
 use crate::StateRuntime;
 
-const LOG_QUEUE_CAPACITY: usize = 512;
-const LOG_BATCH_SIZE: usize = 128;
-const LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
+const LOG_QUEUE_CAPACITY: usize = 2048;
+const LOG_BATCH_SIZE: usize = 512;
+const LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(10);
 
 pub fn default_filter() -> Targets {
     Targets::new()
@@ -65,6 +65,9 @@ pub fn default_filter() -> Targets {
         // SQLite log database, but remain available to explicit TRACE subscribers.
         .with_target("codex_http_client::transport", LevelFilter::DEBUG)
         .with_target("codex_api::sse", LevelFilter::DEBUG)
+        // Per-chunk streaming traces otherwise flood the bounded SQLite log queue.
+        .with_target("codex_tui::streaming::controller", LevelFilter::DEBUG)
+        .with_target("codex_tui::streaming::table_holdback", LevelFilter::DEBUG)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

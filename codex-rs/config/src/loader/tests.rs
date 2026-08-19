@@ -11,7 +11,7 @@ use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
-struct TestFileSystem;
+pub(super) struct TestFileSystem;
 
 impl ExecutorFileSystem for TestFileSystem {
     fn canonicalize<'a>(
@@ -113,6 +113,236 @@ impl ExecutorFileSystem for TestFileSystem {
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(async move { unimplemented!("test filesystem only supports reads") })
     }
+}
+
+#[tokio::test]
+async fn packaged_defaults_have_lower_precedence_than_existing_config_layers() {
+    let tmp = tempdir().expect("tempdir");
+    let packaged_defaults_path =
+        AbsolutePathBuf::resolve_path_against_base("packaged-defaults.toml", tmp.path());
+    let system_config_path = tmp.path().join("system.toml");
+    let user_config_path = tmp.path().join(CONFIG_TOML_FILE);
+
+    std::fs::write(
+        packaged_defaults_path.as_path(),
+        r#"
+model = "packaged-model"
+model_provider = "packaged-provider"
+model_context_window = 120000
+"#,
+    )
+    .expect("write packaged defaults");
+    std::fs::write(
+        &system_config_path,
+        r#"
+model = "system-model"
+model_provider = "system-provider"
+"#,
+    )
+    .expect("write system config");
+    std::fs::write(&user_config_path, r#"model = "user-model""#).expect("write user config");
+
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.packaged_defaults_path = Some(packaged_defaults_path.clone());
+    overrides.system_config_path = Some(system_config_path.clone());
+
+    let stack = load_config_layers_state(
+        &TestFileSystem,
+        tmp.path(),
+        /*cwd*/ None,
+        &[(
+            "model".to_string(),
+            TomlValue::String("session-model".to_string()),
+        )],
+        overrides,
+        &crate::NoopThreadConfigLoader,
+    )
+    .await
+    .expect("load config layers");
+
+    assert_eq!(
+        stack
+            .all_layers_low_to_high()
+            .map(|layer| layer.name.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            ConfigLayerSource::PackagedDefaults {
+                file: packaged_defaults_path,
+            },
+            ConfigLayerSource::System {
+                file: AbsolutePathBuf::from_absolute_path(system_config_path)
+                    .expect("absolute system config path"),
+            },
+            ConfigLayerSource::User {
+                file: AbsolutePathBuf::from_absolute_path(user_config_path)
+                    .expect("absolute user config path"),
+                profile: None,
+            },
+            ConfigLayerSource::SessionFlags,
+        ]
+    );
+    assert_eq!(
+        stack.effective_config(),
+        toml::toml! {
+            model = "session-model"
+            model_provider = "system-provider"
+            model_context_window = 120000
+        }
+        .into()
+    );
+}
+
+#[tokio::test]
+async fn ignoring_login_requirements_preserves_local_auth_backend_requirements() {
+    let tmp = tempdir().expect("tempdir");
+    let requirements_path = tmp.path().join("requirements.toml");
+    std::fs::write(
+        &requirements_path,
+        r#"allowed_login_methods = ["chatgpt"]
+allowed_chatgpt_workspaces = ["managed-workspace"]
+cli_auth_credentials_store = "keyring"
+chatgpt_base_url = "https://managed.example/backend-api/"
+"#,
+    )
+    .expect("write local authentication requirements");
+
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.system_requirements_path = Some(requirements_path);
+    overrides.ignore_login_requirements = true;
+
+    let stack = load_config_layers_state(
+        &TestFileSystem,
+        tmp.path(),
+        /*cwd*/ None,
+        &[],
+        overrides,
+        &crate::NoopThreadConfigLoader,
+    )
+    .await
+    .expect("load configuration with remote login exemptions");
+
+    let requirements = stack.requirements();
+    assert_eq!(requirements.allowed_login_methods, None);
+    assert_eq!(requirements.allowed_chatgpt_workspaces, None);
+    assert_eq!(
+        requirements
+            .cli_auth_credentials_store
+            .as_ref()
+            .map(|required| required.value),
+        Some(crate::types::AuthCredentialsStoreMode::Keyring)
+    );
+    assert_eq!(
+        requirements
+            .chatgpt_base_url
+            .as_ref()
+            .map(|required| required.value.as_str()),
+        Some("https://managed.example/backend-api/")
+    );
+}
+
+#[tokio::test]
+async fn missing_packaged_defaults_file_returns_an_error() {
+    let tmp = tempdir().expect("tempdir");
+    let packaged_defaults_path =
+        AbsolutePathBuf::resolve_path_against_base("packaged-defaults.toml", tmp.path());
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.packaged_defaults_path = Some(packaged_defaults_path.clone());
+
+    let err = load_config_layers_state(
+        &TestFileSystem,
+        tmp.path(),
+        /*cwd*/ None,
+        &[],
+        overrides,
+        &crate::NoopThreadConfigLoader,
+    )
+    .await
+    .expect_err("an explicitly configured packaged defaults file must exist");
+
+    assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "packaged defaults config file {} not found",
+            packaged_defaults_path.display()
+        )
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn default_windows_managed_config_is_ignored_with_warning() {
+    let tmp = tempdir().expect("tempdir");
+    let codex_home = tmp.path().join("codex-home");
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    let managed_config_path = codex_home.join("managed_config.toml");
+    std::fs::write(
+        &managed_config_path,
+        r#"
+model = "legacy-model"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+"#,
+    )
+    .expect("write default legacy managed config");
+    std::fs::write(codex_home.join(CONFIG_TOML_FILE), r#"model = "user-model""#)
+        .expect("write user config");
+
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.managed_config_path = None;
+    overrides.system_config_path = Some(tmp.path().join("system-config.toml"));
+    overrides.system_requirements_path = Some(tmp.path().join("requirements.toml"));
+    let stack = load_config_layers_state(
+        &TestFileSystem,
+        &codex_home,
+        /*cwd*/ None,
+        &[],
+        overrides,
+        &crate::NoopThreadConfigLoader,
+    )
+    .await
+    .expect("load config layers");
+
+    assert_eq!(
+        stack.effective_config().get("model"),
+        Some(&TomlValue::String("user-model".to_string()))
+    );
+    assert_eq!(stack.requirements_toml().allowed_approval_policies, None);
+    assert_eq!(stack.requirements_toml().allowed_sandbox_modes, None);
+    assert!(stack.all_layers_low_to_high().all(|layer| !matches!(
+        &layer.name,
+        ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. }
+    )));
+    let expected_warnings = vec![format!(
+        "Ignoring deprecated managed config file at {}; CODEX_HOME/managed_config.toml is no longer supported on Windows. Use %ProgramData%\\OpenAI\\Codex\\requirements.toml for enforced settings or config.toml for defaults.",
+        managed_config_path.display()
+    )];
+    assert_eq!(stack.startup_warnings(), Some(expected_warnings.as_slice()));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_local_managed_configuration_ignores_legacy_file_but_detects_requirements() {
+    let tmp = tempdir().expect("tempdir");
+    let codex_home = tmp.path().join("codex-home");
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    std::fs::write(codex_home.join("managed_config.toml"), "")
+        .expect("write default legacy managed config");
+    let system_requirements_path = tmp.path().join("requirements.toml");
+
+    let legacy_only = has_local_managed_configuration_with_system_requirements_path(
+        &codex_home,
+        &system_requirements_path,
+    )
+    .expect("check legacy-only managed configuration");
+    std::fs::write(&system_requirements_path, "").expect("write system requirements");
+    let with_system_requirements = has_local_managed_configuration_with_system_requirements_path(
+        &codex_home,
+        &system_requirements_path,
+    )
+    .expect("check system managed configuration");
+
+    assert_eq!((legacy_only, with_system_requirements), (false, true));
 }
 
 #[tokio::test]

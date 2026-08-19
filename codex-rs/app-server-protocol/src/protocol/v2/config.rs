@@ -27,6 +27,14 @@ use std::path::PathBuf;
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum ConfigLayerSource {
+    /// Default configuration supplied with the installed Codex package.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    PackagedDefaults {
+        /// Path to the packaged default configuration file.
+        file: AbsolutePathBuf,
+    },
+
     /// Managed preferences layer delivered by MDM (macOS only).
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -102,6 +110,7 @@ impl ConfigLayerSource {
     /// from a layer with a lower precedence.
     pub fn precedence(&self) -> i16 {
         match self {
+            ConfigLayerSource::PackagedDefaults { .. } => -10,
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
             ConfigLayerSource::EnterpriseManaged { .. } => 15,
@@ -374,6 +383,8 @@ pub struct ConfigReadResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigRequirements {
+    pub cli_auth_credentials_store: Option<CliAuthCredentialsStoreMode>,
+    pub chatgpt_base_url: Option<String>,
     #[experimental(nested)]
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     #[experimental("configRequirements/read.allowedApprovalsReviewers")]
@@ -406,6 +417,16 @@ pub struct ConfigRequirements {
     pub allow_login_shell: Option<bool>,
     pub feedback: Option<FeedbackRequirements>,
     pub windows_sandbox_private_desktop: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/", rename_all = "camelCase")]
+pub enum CliAuthCredentialsStoreMode {
+    File,
+    Keyring,
+    Auto,
+    Ephemeral,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
