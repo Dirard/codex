@@ -27,6 +27,7 @@ func TestThreadAndTurnOptionCoverageAgainstGeneratedParams(t *testing.T) {
 		"MultiAgentMode":             "ThreadStartOptions.MultiAgentMode",
 		"Permissions":                "ThreadStartOptions.Permissions",
 		"Personality":                "ThreadStartOptions.Personality",
+		"ProjectID":                  "ThreadStartOptions.ProjectID",
 		"RuntimeWorkspaceRoots":      "ThreadStartOptions.RuntimeWorkspaceRoots",
 		"Sandbox":                    "ThreadStartOptions.Sandbox",
 		"SelectedCapabilityRoots":    "ThreadStartOptions.SelectedCapabilityRoots",

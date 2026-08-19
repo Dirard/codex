@@ -20,6 +20,7 @@ func TestRawClientPublicShape(t *testing.T) {
 			ID:            "thread-1",
 			ModelProvider: "test",
 			Preview:       "",
+			ProjectID:     protocol.Null[string](),
 			SessionID:     "session-1",
 			Source:        protocol.SessionSourceCli,
 			Status:        protocol.ThreadStatus{TypeValue: "idle"},

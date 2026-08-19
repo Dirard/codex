@@ -1611,7 +1611,7 @@ async fn maybe_request_mcp_tool_approval(
         decision: match approval.result {
             Ok(decision) => decision,
             Err(ToolError::Rejected(rejection)) => ReviewDecision::denied(rejection),
-            Err(ToolError::Codex(_)) => ReviewDecision::Abort,
+            Err(ToolError::Codex(_) | ToolError::CapturedExec(_)) => ReviewDecision::Abort,
         },
         source: approval.source,
         cancellation_reason: approval.cancellation_reason,
