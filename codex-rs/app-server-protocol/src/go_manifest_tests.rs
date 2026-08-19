@@ -1653,6 +1653,7 @@ fn runtime_serialization_scopes_match_manifest_representatives() {
             params: v2::McpServerOauthLoginParams {
                 name: "server-1".to_string(),
                 thread_id: None,
+                client_registration: None,
                 scopes: None,
                 timeout_secs: None,
             },
@@ -2108,6 +2109,7 @@ fn expected_server_notification_routes() -> Vec<(&'static str, ExpectedRouting)>
         ("thread/deleted", ExpectedRouting::Routed(&["threadId"])),
         ("thread/unarchived", ExpectedRouting::Routed(&["threadId"])),
         ("thread/closed", ExpectedRouting::Routed(&["threadId"])),
+        ("thread/reverted", ExpectedRouting::Routed(&["threadId"])),
         ("skills/changed", ExpectedRouting::Global),
         (
             "thread/name/updated",
@@ -2120,6 +2122,15 @@ fn expected_server_notification_routes() -> Vec<(&'static str, ExpectedRouting)>
         (
             "thread/goal/cleared",
             ExpectedRouting::Routed(&["threadId"]),
+        ),
+        (
+            "thread/queue/changed",
+            ExpectedRouting::Routed(&["threadId"]),
+        ),
+        ("project/changed", ExpectedRouting::Routed(&["projectId"])),
+        (
+            "thread/project/updated",
+            ExpectedRouting::Routed(&["threadId", "projectId?"]),
         ),
         (
             "thread/environment/connected",
@@ -2172,6 +2183,10 @@ fn expected_server_notification_routes() -> Vec<(&'static str, ExpectedRouting)>
         (
             "item/autoApprovalReview/completed",
             ExpectedRouting::Routed(&["threadId", "turnId", "reviewId", "targetItemId?"]),
+        ),
+        (
+            "autoApprovalReview/strictReviewRequired",
+            ExpectedRouting::Routed(&["threadId", "turnId"]),
         ),
         (
             "item/completed",

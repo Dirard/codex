@@ -1559,7 +1559,7 @@ impl Session {
             )
         };
         let has_prior_user_turns = initial_history_has_prior_user_turns(&conversation_history);
-        let processed_items = {
+        {
             let mut state = self.state.lock().await;
             state.set_next_turn_is_first(!has_prior_user_turns);
         }
