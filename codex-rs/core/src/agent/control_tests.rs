@@ -4526,6 +4526,7 @@ async fn multi_agent_v2_terminal_status_is_published_after_parent_mailbox() {
                 )
             )],
             None,
+            None,
         )
     );
 }
@@ -4662,6 +4663,7 @@ async fn multi_agent_v2_terminal_error_is_published_after_parent_mailbox() {
                 )
             )],
             None,
+            None,
         )
     );
 }
@@ -4762,6 +4764,7 @@ async fn followup_to_non_v2_child_notifies_parent_on_second_completion() {
                 /*trigger_turn*/ true,
             ),
             AgentCommunicationContext::new(AgentCommunicationKind::Followup, parent_thread_id),
+            Some("parent-turn".to_string()),
             Some("parent-turn".to_string()),
         )
         .await

@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 async fn total_scope_turn(auto_limit: i64, full_limit: i64) -> TurnContext {
     let (_, mut turn) = crate::session::tests::make_session_and_context().await;
-    turn.model_info.auto_compact_token_limit = Some(auto_limit);
-    turn.model_info.context_window = Some(full_limit);
-    turn.model_info.effective_context_window_percent = 100;
+    let model_info = Arc::make_mut(&mut turn.model_info);
+    model_info.auto_compact_token_limit = Some(auto_limit);
+    model_info.context_window = Some(full_limit);
+    model_info.effective_context_window_percent = 100;
     turn
 }
 
@@ -15,8 +16,9 @@ async fn body_scope_turn(auto_limit: i64, full_limit: i64) -> TurnContext {
     Arc::make_mut(&mut turn.config).model_auto_compact_token_limit = Some(auto_limit);
     Arc::make_mut(&mut turn.config).model_auto_compact_token_limit_scope =
         AutoCompactTokenLimitScope::BodyAfterPrefix;
-    turn.model_info.context_window = Some(full_limit);
-    turn.model_info.effective_context_window_percent = 100;
+    let model_info = Arc::make_mut(&mut turn.model_info);
+    model_info.context_window = Some(full_limit);
+    model_info.effective_context_window_percent = 100;
     turn
 }
 
