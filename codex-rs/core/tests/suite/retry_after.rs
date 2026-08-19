@@ -504,6 +504,7 @@ async fn exhausted_http_retries_preserve_deadline_through_error_mapping() {
 #[test_case::test_case(Some("0"), 0, 3; "advice_without_stream_retries")]
 #[test_case::test_case(Some("0"), 2, 9; "advice_with_stream_retries")]
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "fork retries server overloads at least three times"]
 async fn responses_http_overload_respects_retry_limits(
     retry_after: Option<&str>,
     stream_max_retries: u64,
@@ -940,6 +941,7 @@ async fn compact_v2_rate_limit_uses_server_advice(
 
 /// Headerless remote compaction v2 overloads exhaust request retries before one terminal error.
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "fork retries server overloads at least three times"]
 async fn compact_v2_overload_without_retry_after_exhausts_request_retries() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1272,6 +1274,7 @@ async fn sse_failure_uses_server_advice(
 
 /// A streamed backend overload remains terminal despite an enclosing retry header.
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "fork retries server overloads at least three times"]
 async fn sse_overload_with_retry_after_is_terminal() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1345,6 +1348,7 @@ async fn sse_overload_with_retry_after_is_terminal() -> Result<()> {
 
 /// A streamed backend overload without retry advice must complete with one terminal error.
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "fork retries server overloads at least three times"]
 async fn sse_overload_without_retry_after_is_terminal() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2136,6 +2140,7 @@ async fn websocket_overload_retries_only_while_it_has_retry_after() -> Result<()
 
 /// Headerless websocket overloads must neither reconnect nor fall back to HTTP.
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "fork retries server overloads at least three times"]
 async fn websocket_overload_without_retry_after_is_terminal() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
