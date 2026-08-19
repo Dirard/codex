@@ -10,6 +10,7 @@ import (
 type ThreadStartOptions struct {
 	Model                      string
 	ModelProvider              string
+	ProjectID                  string
 	AllowProviderModelFallback *bool
 	ServiceTier                string
 	CWD                        string
@@ -455,6 +456,9 @@ func threadStartParams(opts ThreadStartOptions) protocol.ThreadStartParams {
 	}
 	if opts.ModelProvider != "" {
 		params.ModelProvider = protocol.Some(opts.ModelProvider)
+	}
+	if opts.ProjectID != "" {
+		params.ProjectID = protocol.Some(opts.ProjectID)
 	}
 	if opts.AllowProviderModelFallback != nil {
 		params.AllowProviderModelFallback = protocol.SomeNonNull(*opts.AllowProviderModelFallback)

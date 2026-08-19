@@ -51,8 +51,10 @@ pub(crate) fn notification_routing_strategy(method: &'static str) -> Notificatio
         | "thread/deleted"
         | "thread/unarchived"
         | "thread/closed"
+        | "thread/reverted"
         | "thread/name/updated"
         | "thread/goal/cleared"
+        | "thread/queue/changed"
         | "thread/settings/updated"
         | "guardianWarning"
         | "thread/realtime/started"
@@ -61,6 +63,10 @@ pub(crate) fn notification_routing_strategy(method: &'static str) -> Notificatio
         | "thread/realtime/sdp"
         | "thread/realtime/error"
         | "thread/realtime/closed" => routed_notification(method, &[("threadId", false)]),
+        "project/changed" => routed_notification(method, &[("projectId", false)]),
+        "thread/project/updated" => {
+            routed_notification(method, &[("threadId", false), ("projectId", true)])
+        }
         "thread/environment/connected" | "thread/environment/disconnected" => {
             routed_notification(method, &[("threadId", false)])
         }
@@ -100,6 +106,9 @@ pub(crate) fn notification_routing_strategy(method: &'static str) -> Notificatio
                     ("targetItemId", true),
                 ],
             )
+        }
+        "autoApprovalReview/strictReviewRequired" => {
+            routed_notification(method, &[("threadId", false), ("turnId", false)])
         }
         "item/agentMessage/delta"
         | "item/plan/delta"
