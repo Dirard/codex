@@ -1765,7 +1765,9 @@ fn record_items_returns_processed_items_for_rollout_persistence() {
         OutputTruncation::new(TruncationPolicy::Bytes(100_000), /*max_lines*/ Some(3));
     let item = ResponseItem::FunctionCallOutput {
         id: None,
-        call_id: "call-line-limit".to_string(),
+        call_id: Some("call-line-limit".to_string()),
+        name: None,
+        namespace: None,
         output: FunctionCallOutputPayload {
             body: FunctionCallOutputBody::Text("line1\nline2\nline3\nline4\nline5".to_string()),
             success: Some(true),
@@ -1784,6 +1786,43 @@ fn record_items_returns_processed_items_for_rollout_persistence() {
     assert_eq!(
         stored.text_content(),
         Some("line1\nline2\n... 2 lines truncated ...\nline5")
+    );
+}
+
+#[test]
+fn dynamic_tool_output_uses_general_line_limit_not_mcp_limit() {
+    let mut history = ContextManager::new();
+    let truncation = OutputTruncation::new_with_mcp_max_lines(
+        TruncationPolicy::Bytes(100_000),
+        /*max_lines*/ Some(3),
+        /*mcp_max_lines*/ Some(5),
+    );
+    let item = ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: Some("call-dynamic-line-limit".to_string()),
+        name: Some("dynamic_tool".to_string()),
+        namespace: None,
+        output: FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "line1\nline2\nline3\nline4\nline5".to_string(),
+            },
+        ]),
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    let processed_items = history.record_items([&item], truncation);
+
+    let stored = match &processed_items[0] {
+        ResponseItem::FunctionCallOutput { output, .. } => output,
+        other => panic!("unexpected history item: {other:?}"),
+    };
+    assert_eq!(
+        stored,
+        &FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "line1\nline2\n... 2 lines truncated ...\nline5".to_string(),
+            },
+        ])
     );
 }
 

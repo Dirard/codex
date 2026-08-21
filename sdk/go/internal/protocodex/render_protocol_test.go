@@ -70,7 +70,7 @@ func TestGeneratedOnlyServerNotificationsAreNotRendered(t *testing.T) {
 		},
 	}
 
-	rendered := renderServerNotificationMetadata(manifest, nil)
+	rendered := renderServerNotificationMetadata(manifest)
 	for _, method := range []string{"rawResponse/completed", "rawResponseItem/completed"} {
 		if strings.Contains(rendered, method) {
 			t.Fatalf("generated-only server notification %q leaked into generated metadata", method)
