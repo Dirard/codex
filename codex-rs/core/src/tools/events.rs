@@ -1,6 +1,3 @@
-use crate::exec::CapturedExecError;
-use crate::exec::CapturedExecToolCallOutput;
-use crate::exec::ExecCaptureMetadata;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -374,14 +371,9 @@ impl ToolEmitter {
     fn format_exec_output_for_model(
         &self,
         output: &ExecToolCallOutput,
-        capture_metadata: Option<&ExecCaptureMetadata>,
         ctx: ToolEventCtx<'_>,
     ) -> String {
-        super::format_captured_exec_output_for_model(
-            output,
-            capture_metadata,
-            ctx.turn.output_truncation(),
-        )
+        super::format_exec_output_for_model(output, ctx.turn.output_truncation())
     }
 
     pub async fn finish(
@@ -390,32 +382,7 @@ impl ToolEmitter {
         out: Result<ExecToolCallOutput, ToolError>,
         applied_patch_delta: Option<&AppliedPatchDelta>,
     ) -> Result<String, FunctionCallError> {
-        self.finish_inner(
-            ctx,
-            out,
-            applied_patch_delta,
-            /*capture_metadata*/ None,
-        )
-        .await
-    }
-
-    pub(crate) async fn finish_shell(
-        &self,
-        ctx: ToolEventCtx<'_>,
-        out: Result<CapturedExecToolCallOutput, ToolError>,
-    ) -> Result<String, FunctionCallError> {
-        let capture_metadata = match &out {
-            Ok(captured) => captured.capture_metadata,
-            Err(ToolError::CapturedExec(captured)) => captured.capture_metadata,
-            Err(ToolError::Codex(_) | ToolError::Rejected(_)) => None,
-        };
-        self.finish_inner(
-            ctx,
-            out.map(|captured| captured.output),
-            /*applied_patch_delta*/ None,
-            capture_metadata.as_ref(),
-        )
-        .await
+        self.finish_inner(ctx, out, applied_patch_delta).await
     }
 
     async fn finish_inner(
@@ -423,11 +390,10 @@ impl ToolEmitter {
         ctx: ToolEventCtx<'_>,
         out: Result<ExecToolCallOutput, ToolError>,
         applied_patch_delta: Option<&AppliedPatchDelta>,
-        capture_metadata: Option<&ExecCaptureMetadata>,
     ) -> Result<String, FunctionCallError> {
         let (event, result) = match out {
             Ok(output) => {
-                let content = self.format_exec_output_for_model(&output, capture_metadata, ctx);
+                let content = self.format_exec_output_for_model(&output, ctx);
                 let exit_code = output.exit_code;
                 let event = ToolEventStage::Success {
                     output,
@@ -440,22 +406,17 @@ impl ToolEmitter {
                 };
                 (event, result)
             }
-            Err(ToolError::Codex(err))
-            | Err(ToolError::CapturedExec(CapturedExecError { error: err, .. })) => match err
-                .details()
-            {
+            Err(ToolError::Codex(err)) => match err.details() {
                 CodexErrorDetails::Sandbox(SandboxErr::Timeout { output }) => {
                     let output = output.as_ref().clone();
-                    let response =
-                        self.format_exec_output_for_model(&output, capture_metadata, ctx);
+                    let response = self.format_exec_output_for_model(&output, ctx);
                     let event = ToolEventStage::Failure(ToolEventFailure::Output(output));
                     let result = Err(FunctionCallError::RespondToModel(response));
                     (event, result)
                 }
                 CodexErrorDetails::Sandbox(SandboxErr::Denied { output, .. }) => {
                     let output = output.as_ref().clone();
-                    let response =
-                        self.format_exec_output_for_model(&output, capture_metadata, ctx);
+                    let response = self.format_exec_output_for_model(&output, ctx);
                     // apply_patch can be denied after it has already committed a
                     // known prefix. Reuse the output-bearing path so the visible
                     // item still fails while the turn diff consumes that prefix.
