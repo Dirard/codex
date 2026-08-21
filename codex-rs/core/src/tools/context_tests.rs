@@ -513,7 +513,7 @@ fn exec_command_tool_output_reserves_metadata_budget_and_preserves_policy_units(
             chunk_id: "abc123".to_string(),
             wall_time: std::time::Duration::from_millis(/*millis*/ 1250),
             raw_output: raw_output.clone(),
-            truncation_policy: policy,
+            truncation: truncation(policy),
             max_output_tokens: None,
             process_id: None,
             exit_code: Some(0),

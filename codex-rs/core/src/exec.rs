@@ -54,7 +54,6 @@ use codex_sandboxing::unsupported_windows_restricted_token_sandbox_reason;
 #[cfg(any(test, target_os = "windows"))]
 use codex_sandboxing::windows_sandbox_uses_elevated_backend;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_output_truncation::approx_tokens_from_byte_count;
 use codex_utils_path_uri::PathUri;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use codex_utils_pty::process_group::kill_child_process_group;
@@ -404,17 +403,6 @@ pub(crate) async fn execute_exec_request(
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<ExecToolCallOutput> {
-    execute_exec_request_with_capture(exec_request, stdout_stream, after_spawn)
-        .await
-        .map(|captured| captured.output)
-        .map_err(|captured| captured.error)
-}
-
-pub(crate) async fn execute_exec_request_with_capture(
-    exec_request: ExecRequest,
-    stdout_stream: Option<StdoutStream>,
-    after_spawn: Option<Box<dyn FnOnce() + Send>>,
-) -> std::result::Result<CapturedExecToolCallOutput, CapturedExecError> {
     let ExecRequest {
         command,
         cwd,
@@ -440,18 +428,13 @@ pub(crate) async fn execute_exec_request_with_capture(
     let network_sandbox_policy = permission_profile.network_sandbox_policy();
 
     // TODO(anp): Keep PathUri through the local process launch boundary.
-    let cwd = cwd.to_abs_path().map_err(|err| CapturedExecError {
-        error: CodexErr::InvalidRequest(format!("invalid exec cwd: {err}")),
-        capture_metadata: None,
-    })?;
+    let cwd = cwd
+        .to_abs_path()
+        .map_err(|err| CodexErr::InvalidRequest(format!("invalid exec cwd: {err}")))?;
     // TODO(anp): Keep PathUri through the Windows sandbox launch boundary.
-    let windows_sandbox_policy_cwd =
-        windows_sandbox_policy_cwd
-            .to_abs_path()
-            .map_err(|err| CapturedExecError {
-                error: CodexErr::InvalidRequest(format!("invalid sandbox cwd: {err}")),
-                capture_metadata: None,
-            })?;
+    let windows_sandbox_policy_cwd = windows_sandbox_policy_cwd
+        .to_abs_path()
+        .map_err(|err| CodexErr::InvalidRequest(format!("invalid sandbox cwd: {err}")))?;
 
     let params = ExecParams {
         command,
@@ -728,7 +711,7 @@ async fn exec_windows_sandbox(
     let retained_bytes_cap = capture_policy.retained_bytes_cap();
     let stdout = captured_windows_stream(capture.stdout, retained_bytes_cap);
     let stderr = captured_windows_stream(capture.stderr, retained_bytes_cap);
-    let aggregated_output = aggregate_captured_output(&stdout, &stderr, retained_bytes_cap);
+    let aggregated_output = aggregate_output(&stdout, &stderr, retained_bytes_cap);
 
     Ok(RawExecToolCallOutput {
         exit_status,
@@ -743,7 +726,7 @@ fn finalize_exec_result(
     raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr>,
     sandbox_type: SandboxType,
     duration: Duration,
-) -> std::result::Result<CapturedExecToolCallOutput, CapturedExecError> {
+) -> Result<ExecToolCallOutput> {
     match raw_output_result {
         Ok(raw_output) => {
             let RawExecToolCallOutput {
@@ -753,7 +736,6 @@ fn finalize_exec_result(
                 aggregated_output,
                 timed_out,
             } = raw_output;
-            let capture_metadata = aggregated_output.metadata;
             #[allow(unused_mut)]
             let mut timed_out = timed_out;
 
@@ -763,10 +745,7 @@ fn finalize_exec_result(
                     if signal == TIMEOUT_CODE {
                         timed_out = true;
                     } else {
-                        return Err(CapturedExecError {
-                            error: CodexErr::Sandbox(SandboxErr::Signal(signal)),
-                            capture_metadata: Some(capture_metadata),
-                        });
+                        return Err(CodexErr::Sandbox(SandboxErr::Signal(signal)));
                     }
                 }
             }
@@ -776,9 +755,9 @@ fn finalize_exec_result(
                 exit_code = EXEC_TIMEOUT_EXIT_CODE;
             }
 
-            let stdout = stdout.retained.from_utf8_lossy();
-            let stderr = stderr.retained.from_utf8_lossy();
-            let aggregated_output = aggregated_output.retained.from_utf8_lossy();
+            let stdout = stdout.from_utf8_lossy();
+            let stderr = stderr.from_utf8_lossy();
+            let aggregated_output = aggregated_output.from_utf8_lossy();
             let exec_output = ExecToolCallOutput {
                 exit_code,
                 stdout,
@@ -789,79 +768,34 @@ fn finalize_exec_result(
             };
 
             if timed_out {
-                return Err(CapturedExecError {
-                    error: CodexErr::Sandbox(SandboxErr::Timeout {
-                        output: Box::new(exec_output),
-                    }),
-                    capture_metadata: Some(capture_metadata),
-                });
+                return Err(CodexErr::Sandbox(SandboxErr::Timeout {
+                    output: Box::new(exec_output),
+                }));
             }
 
             if is_likely_sandbox_denied(sandbox_type, &exec_output) {
                 record_filesystem_sandbox_violation(sandbox_type, &exec_output);
-                return Err(CapturedExecError {
-                    error: CodexErr::Sandbox(SandboxErr::Denied {
-                        output: Box::new(exec_output),
-                        network_policy_decision: None,
-                    }),
-                    capture_metadata: Some(capture_metadata),
-                });
+                return Err(CodexErr::Sandbox(SandboxErr::Denied {
+                    output: Box::new(exec_output),
+                    network_policy_decision: None,
+                }));
             }
 
-            Ok(CapturedExecToolCallOutput {
-                output: exec_output,
-                capture_metadata: Some(capture_metadata),
-            })
+            Ok(exec_output)
         }
         Err(err) => {
             tracing::error!("exec error: {err}");
-            Err(CapturedExecError {
-                error: err,
-                capture_metadata: None,
-            })
+            Err(err)
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ExecCaptureMetadata {
-    pub(crate) observed_bytes: usize,
-    pub(crate) omitted_bytes: usize,
-    pub(crate) estimated_original_token_count: u64,
-    pub(crate) capture_incomplete: bool,
-}
-
-#[derive(Debug)]
-pub(crate) struct CapturedExecToolCallOutput {
-    pub(crate) output: ExecToolCallOutput,
-    pub(crate) capture_metadata: Option<ExecCaptureMetadata>,
-}
-
-#[derive(Debug)]
-pub(crate) struct CapturedExecError {
-    pub(crate) error: CodexErr,
-    pub(crate) capture_metadata: Option<ExecCaptureMetadata>,
-}
-
-#[derive(Debug)]
-struct CapturedStreamOutput {
-    retained: StreamOutput<Vec<u8>>,
-    observed_bytes: usize,
-    capture_incomplete: bool,
-}
-
-#[derive(Debug)]
-struct CapturedAggregateOutput {
-    retained: StreamOutput<Vec<u8>>,
-    metadata: ExecCaptureMetadata,
 }
 
 #[derive(Debug)]
 struct RawExecToolCallOutput {
     pub exit_status: ExitStatus,
-    pub stdout: CapturedStreamOutput,
-    pub stderr: CapturedStreamOutput,
-    pub aggregated_output: CapturedAggregateOutput,
+    pub stdout: StreamOutput<Vec<u8>>,
+    pub stderr: StreamOutput<Vec<u8>>,
+    pub aggregated_output: StreamOutput<Vec<u8>>,
     pub timed_out: bool,
 }
 
@@ -919,41 +853,16 @@ fn aggregate_output(
     }
 }
 
-fn aggregate_captured_output(
-    stdout: &CapturedStreamOutput,
-    stderr: &CapturedStreamOutput,
-    max_bytes: Option<usize>,
-) -> CapturedAggregateOutput {
-    let retained = aggregate_output(&stdout.retained, &stderr.retained, max_bytes);
-    let observed_bytes = stdout.observed_bytes.saturating_add(stderr.observed_bytes);
-    let omitted_bytes = observed_bytes.saturating_sub(retained.text.len());
-    let capture_incomplete = stdout.capture_incomplete || stderr.capture_incomplete;
-    CapturedAggregateOutput {
-        retained,
-        metadata: ExecCaptureMetadata {
-            observed_bytes,
-            omitted_bytes,
-            estimated_original_token_count: approx_tokens_from_byte_count(observed_bytes),
-            capture_incomplete,
-        },
-    }
-}
-
 #[cfg(target_os = "windows")]
-fn captured_windows_stream(mut text: Vec<u8>, max_bytes: Option<usize>) -> CapturedStreamOutput {
-    let observed_bytes = text.len();
+fn captured_windows_stream(mut text: Vec<u8>, max_bytes: Option<usize>) -> StreamOutput<Vec<u8>> {
     if let Some(max_bytes) = max_bytes
         && text.len() > max_bytes
     {
         text.truncate(max_bytes);
     }
-    CapturedStreamOutput {
-        retained: StreamOutput {
-            text,
-            truncated_after_lines: None,
-        },
-        observed_bytes,
-        capture_incomplete: false,
+    StreamOutput {
+        text,
+        truncated_after_lines: None,
     }
 }
 
@@ -1148,7 +1057,7 @@ async fn consume_output(
         &drain_cancellation,
     )
     .await?;
-    let aggregated_output = aggregate_captured_output(&stdout, &stderr, retained_bytes_cap);
+    let aggregated_output = aggregate_output(&stdout, &stderr, retained_bytes_cap);
 
     Ok(RawExecToolCallOutput {
         exit_status,
@@ -1160,10 +1069,10 @@ async fn consume_output(
 }
 
 async fn await_output(
-    handle: &mut tokio::task::JoinHandle<io::Result<CapturedStreamOutput>>,
+    handle: &mut tokio::task::JoinHandle<io::Result<StreamOutput<Vec<u8>>>>,
     timeout: Duration,
     cancellation: &CancellationToken,
-) -> io::Result<CapturedStreamOutput> {
+) -> io::Result<StreamOutput<Vec<u8>>> {
     match tokio::time::timeout(timeout, &mut *handle).await {
         Ok(joined) => joined.map_err(io::Error::other)?,
         Err(_) => {
@@ -1179,7 +1088,7 @@ async fn read_output<R: AsyncRead + Unpin + Send + 'static>(
     is_stderr: bool,
     max_bytes: Option<usize>,
     cancellation: CancellationToken,
-) -> io::Result<CapturedStreamOutput> {
+) -> io::Result<StreamOutput<Vec<u8>>> {
     let mut buf = Vec::with_capacity(
         max_bytes.map_or(AGGREGATE_BUFFER_INITIAL_CAPACITY, |max_bytes| {
             AGGREGATE_BUFFER_INITIAL_CAPACITY.min(max_bytes)
@@ -1187,18 +1096,12 @@ async fn read_output<R: AsyncRead + Unpin + Send + 'static>(
     );
     let mut tmp = [0u8; READ_CHUNK_SIZE];
     let mut emitted_deltas: usize = 0;
-    let mut observed_bytes = 0usize;
-
     loop {
         let n = tokio::select! {
             _ = cancellation.cancelled() => {
-                return Ok(CapturedStreamOutput {
-                    retained: StreamOutput {
-                        text: buf,
-                        truncated_after_lines: None,
-                    },
-                    observed_bytes,
-                    capture_incomplete: true,
+                return Ok(StreamOutput {
+                    text: buf,
+                    truncated_after_lines: None,
                 });
             }
             read = reader.read(&mut tmp) => read?,
@@ -1206,8 +1109,6 @@ async fn read_output<R: AsyncRead + Unpin + Send + 'static>(
         if n == 0 {
             break;
         }
-        observed_bytes = observed_bytes.saturating_add(n);
-
         if let Some(max_bytes) = max_bytes {
             append_capped(&mut buf, &tmp[..n], max_bytes);
         } else {
@@ -1233,13 +1134,9 @@ async fn read_output<R: AsyncRead + Unpin + Send + 'static>(
             };
             tokio::select! {
                 _ = cancellation.cancelled() => {
-                    return Ok(CapturedStreamOutput {
-                        retained: StreamOutput {
-                            text: buf,
-                            truncated_after_lines: None,
-                        },
-                        observed_bytes,
-                        capture_incomplete: true,
+                    return Ok(StreamOutput {
+                        text: buf,
+                        truncated_after_lines: None,
                     });
                 }
                 _ = stream.tx_event.send(event) => {}
@@ -1250,13 +1147,9 @@ async fn read_output<R: AsyncRead + Unpin + Send + 'static>(
         // Continue reading to EOF to avoid back-pressure
     }
 
-    Ok(CapturedStreamOutput {
-        retained: StreamOutput {
-            text: buf,
-            truncated_after_lines: None,
-        },
-        observed_bytes,
-        capture_incomplete: false,
+    Ok(StreamOutput {
+        text: buf,
+        truncated_after_lines: None,
     })
 }
 
