@@ -321,14 +321,14 @@ func TestStableModeValidatesStableSchemaAgainstCanonicalManifest(t *testing.T) {
 		t.Fatalf("err = %v, want stable schema coverage drift rejection", err)
 	}
 
-	stableInventory, err := extractProtocolSchemaInventory(stable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	metadata := renderServerNotificationMetadata(manifest, stableInventory.ServerNotifications)
+	metadata := renderServerNotificationMetadata(manifest)
 	processExited := generatedExcerpt(metadata, `"process/exited"`)
 	if !strings.Contains(processExited, "Experimental: false") {
 		t.Fatalf("process/exited metadata = %s, want stable schema notification", processExited)
+	}
+	eventStream := generatedExcerpt(metadata, `"mcpServer/event/stream/notification"`)
+	if !strings.Contains(eventStream, "Experimental: true") {
+		t.Fatalf("event stream metadata = %s, want experimental notification", eventStream)
 	}
 }
 
@@ -458,15 +458,6 @@ func TestServerMetadataPreservesManifestProtocolRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stable, err := LoadSchemaBundle(filepath.Join("..", "..", "..", "..", "codex-rs", "app-server-protocol", "schema"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	stableInventory, err := extractProtocolSchemaInventory(stable)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	serverRequests := renderServerRequestMetadata(manifest)
 	elicitation := generatedExcerpt(serverRequests, `"mcpServer/elicitation/request"`)
 	for _, required := range []string{
@@ -481,7 +472,7 @@ func TestServerMetadataPreservesManifestProtocolRefs(t *testing.T) {
 		}
 	}
 
-	notifications := renderServerNotificationMetadata(manifest, stableInventory.ServerNotifications)
+	notifications := renderServerNotificationMetadata(manifest)
 	threadStarted := generatedExcerpt(notifications, `"thread/started"`)
 	for _, required := range []string{
 		`PayloadType: "ThreadStartedNotification"`,

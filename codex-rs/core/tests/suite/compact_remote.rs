@@ -657,7 +657,7 @@ async fn provider_automatic_compaction_uses_v2_responses_endpoint(
     };
     let test = builder
         .with_config(|config| {
-            config.model_auto_compact_token_limit = Some(200);
+            config.model_auto_compact_token_limit = Some(100_000);
         })
         .build_with_auto_env(&server)
         .await?;
@@ -666,7 +666,7 @@ async fn provider_automatic_compaction_uses_v2_responses_endpoint(
         vec![
             sse(vec![
                 responses::ev_assistant_message("message-1", "before automatic compaction"),
-                responses::ev_completed_with_tokens("response-1", /*total_tokens*/ 500),
+                responses::ev_completed_with_tokens("response-1", /*total_tokens*/ 150_000),
             ]),
             sse(vec![
                 json!({
@@ -1571,7 +1571,7 @@ async fn remote_compact_progress_resets_loop_guard() -> Result<()> {
             remote_compaction_sse("compact-2", "SUMMARY_2"),
             responses::sse(vec![
                 responses::ev_response_created("sample-3"),
-                responses::ev_shell_command_call("progress-call", "echo progress"),
+                responses::ev_exec_command_call("progress-call", "echo progress"),
                 ev_follow_up_at_limit("sample-3"),
             ]),
             remote_compaction_sse("compact-3", "SUMMARY_3"),

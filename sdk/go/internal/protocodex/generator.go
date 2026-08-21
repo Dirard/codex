@@ -66,7 +66,7 @@ func Generate(opts GenerateOptions) error {
 	if opts.OutDir == "" || opts.RootOutDir == "" {
 		return fmt.Errorf("--out and --root-out are required for mode both")
 	}
-	files, err := renderFiles(manifest, stable, experimental)
+	files, err := renderFiles(manifest, experimental)
 	if err != nil {
 		return err
 	}
@@ -282,7 +282,7 @@ func checkModeCanonicalMetadata(opts GenerateOptions, manifest *Manifest, stable
 	if outDir == "" {
 		outDir = "protocol"
 	}
-	files, err := renderFiles(manifest, stable, experimental)
+	files, err := renderFiles(manifest, experimental)
 	if err != nil {
 		return err
 	}
@@ -366,14 +366,10 @@ func rawJSONEmptyOrNull(raw json.RawMessage) bool {
 	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
-func renderFiles(manifest *Manifest, stable, schema *SchemaBundle) (map[string]string, error) {
+func renderFiles(manifest *Manifest, schema *SchemaBundle) (map[string]string, error) {
 	types, err := renderTypes(schema, manifest)
 	if err != nil {
 		return nil, err
-	}
-	stableInventory, err := extractProtocolSchemaInventory(stable)
-	if err != nil {
-		return nil, fmt.Errorf("stable schema inventory: %w", err)
 	}
 	clientNotifications, err := renderClientNotifications(manifest, schema)
 	if err != nil {
@@ -385,7 +381,7 @@ func renderFiles(manifest *Manifest, stable, schema *SchemaBundle) (map[string]s
 		"metadata.go":                     renderMetadata(manifest),
 		"server_request_metadata.go":      renderServerRequestMetadata(manifest),
 		"client_notifications.go":         clientNotifications,
-		"server_notification_metadata.go": renderServerNotificationMetadata(manifest, stableInventory.ServerNotifications),
+		"server_notification_metadata.go": renderServerNotificationMetadata(manifest),
 	}, nil
 }
 

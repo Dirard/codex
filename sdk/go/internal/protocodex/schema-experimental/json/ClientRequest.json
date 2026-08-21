@@ -2143,6 +2143,43 @@
       ],
       "type": "object"
     },
+    "McpServerEventStreamStartParams": {
+      "properties": {
+        "_meta": true,
+        "arguments": true,
+        "name": {
+          "type": "string"
+        },
+        "server": {
+          "type": "string"
+        },
+        "subscriptionId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "arguments",
+        "name",
+        "server",
+        "subscriptionId",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "McpServerEventStreamStopParams": {
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId"
+      ],
+      "type": "object"
+    },
     "McpServerMigration": {
       "properties": {
         "name": {
@@ -3694,7 +3731,10 @@
         {
           "properties": {
             "call_id": {
-              "type": "string"
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "id": {
               "type": [
@@ -3712,6 +3752,18 @@
                 }
               ]
             },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "namespace": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "output": {
               "$ref": "#/definitions/FunctionCallOutputBody"
             },
@@ -3724,7 +3776,6 @@
             }
           },
           "required": [
-            "call_id",
             "output",
             "type"
           ],
@@ -9946,6 +9997,54 @@
         "params"
       ],
       "title": "McpServer/resource/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "mcpServer/event/stream/start"
+          ],
+          "title": "McpServer/event/stream/startRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/McpServerEventStreamStartParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "McpServer/event/stream/startRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "mcpServer/event/stream/stop"
+          ],
+          "title": "McpServer/event/stream/stopRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/McpServerEventStreamStopParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "McpServer/event/stream/stopRequest",
       "type": "object"
     },
     {

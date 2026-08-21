@@ -138,6 +138,9 @@ pub(crate) fn notification_routing_strategy(method: &'static str) -> Notificatio
         "mcpServer/oauthLogin/completed" | "mcpServer/startupStatus/updated" => {
             routed_notification(method, &[("name", false), ("threadId", true)])
         }
+        "mcpServer/event/stream/notification" => {
+            routed_notification(method, &[("subscriptionId", false)])
+        }
         "remoteControl/status/changed" => routed_notification(
             method,
             &[
