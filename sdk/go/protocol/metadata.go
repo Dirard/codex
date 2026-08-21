@@ -1,11 +1,11 @@
 package protocol
 
-const StableProtocolDigest = "7c7851ee4ad880470f31b50d2a4921510b73851f9aecd29d0dc602e61f7cfe89"
-const StableSchemaDigest = "b948c5f41ae07aec94c5d5fff52b2182e4f0099137f7c46ce58adc5113b3a7a8"
-const StableManifestDigest = "4e5e1a6b5257263b810b87e3bbf64fa00d5338e27a46dbdcf4df2d3ec62607b6"
-const ExperimentalProtocolDigest = "85b0003db1f60396a7078ef37289bc98c10c04575116e56d989af74520df5209"
-const ExperimentalSchemaDigest = "73be63e2c78d2dd5be2e09feca1f62d4d11a3a4d0a15370272b57ea858b9fca7"
-const ExperimentalManifestDigest = "b1e8edd5aa0de5ad4342bb749fa91971e32dd2cc826090b299dfaf5245aa02b6"
+const StableProtocolDigest = "e8e87d18c742456c50193a3f4060725649a0342fae7295fcf980af844978522b"
+const StableSchemaDigest = "a8ab1bec13adc1d3781c8a18f99974c3201a70d36d82398f27e27c2af39eb8cf"
+const StableManifestDigest = "6d108cf57746d7db55a51f47f42ae19b83ca768ed9095b1ed8ff2028e1abfcfb"
+const ExperimentalProtocolDigest = "0afe77ba68116ebe0b78bbd86f18b329dd711cd784424bfe845a014454c7ea36"
+const ExperimentalSchemaDigest = "319870d880836a569aaea47032fdbc584b5eac7bedaf70938bc22f810ba2a2af"
+const ExperimentalManifestDigest = "9493e9cd6abc9c34db00b3f2051ba4767b9c8bf1acbb510021ff2970a282a1d8"
 
 const MaxAdditionalContextEntries = 8
 const MaxAdditionalContextKeyBytes = 128
@@ -157,6 +157,8 @@ var MethodMetadataByMethod = map[string]MethodMetadata{
 	"config/mcpServer/reload":                  {Method: "config/mcpServer/reload", Visibility: "public", ParamsType: "Option<()>", ResponseType: "McpServerRefreshResponse", ParamsSchemaRef: "", ResponseSchemaRef: "#/definitions/McpServerRefreshResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"mcpServerStatus/list":                     {Method: "mcpServerStatus/list", Visibility: "public", ParamsType: "ListMcpServerStatusParams", ResponseType: "ListMcpServerStatusResponse", ParamsSchemaRef: "#/definitions/ListMcpServerStatusParams", ResponseSchemaRef: "#/definitions/ListMcpServerStatusResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"mcpServer/resource/read":                  {Method: "mcpServer/resource/read", Visibility: "public", ParamsType: "McpResourceReadParams", ResponseType: "McpResourceReadResponse", ParamsSchemaRef: "#/definitions/McpResourceReadParams", ResponseSchemaRef: "#/definitions/McpResourceReadResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
+	"mcpServer/event/stream/start":             {Method: "mcpServer/event/stream/start", Visibility: "public", ParamsType: "McpServerEventStreamStartParams", ResponseType: "McpServerEventStreamStartResponse", ParamsSchemaRef: "#/definitions/McpServerEventStreamStartParams", ResponseSchemaRef: "#/definitions/McpServerEventStreamStartResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: true, Retry: "neverRetryAfterWrite"},
+	"mcpServer/event/stream/stop":              {Method: "mcpServer/event/stream/stop", Visibility: "public", ParamsType: "McpServerEventStreamStopParams", ResponseType: "McpServerEventStreamStopResponse", ParamsSchemaRef: "#/definitions/McpServerEventStreamStopParams", ResponseSchemaRef: "#/definitions/McpServerEventStreamStopResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: true, Retry: "neverRetryAfterWrite"},
 	"mcpServer/tool/call":                      {Method: "mcpServer/tool/call", Visibility: "public", ParamsType: "McpServerToolCallParams", ResponseType: "McpServerToolCallResponse", ParamsSchemaRef: "#/definitions/McpServerToolCallParams", ResponseSchemaRef: "#/definitions/McpServerToolCallResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"windowsSandbox/setupStart":                {Method: "windowsSandbox/setupStart", Visibility: "public", ParamsType: "WindowsSandboxSetupStartParams", ResponseType: "WindowsSandboxSetupStartResponse", ParamsSchemaRef: "#/definitions/WindowsSandboxSetupStartParams", ResponseSchemaRef: "#/definitions/WindowsSandboxSetupStartResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"windowsSandbox/readiness":                 {Method: "windowsSandbox/readiness", Visibility: "public", ParamsType: "Option<()>", ResponseType: "WindowsSandboxReadinessResponse", ParamsSchemaRef: "", ResponseSchemaRef: "#/definitions/WindowsSandboxReadinessResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},

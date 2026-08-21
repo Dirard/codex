@@ -120,7 +120,7 @@ func renderServerRequestMetadata(manifest *Manifest) string {
 	return b.String()
 }
 
-func renderServerNotificationMetadata(manifest *Manifest, stableServerNotifications map[string]protocolSchemaVariant) string {
+func renderServerNotificationMetadata(manifest *Manifest) string {
 	var b strings.Builder
 	b.WriteString("package protocol\n\n")
 	b.WriteString("import \"encoding/json\"\n\n")
@@ -130,7 +130,7 @@ func renderServerNotificationMetadata(manifest *Manifest, stableServerNotificati
 	b.WriteString("type LifecycleTriggerMetadata struct { Kind string; Method string; Predicate string }\n\n")
 	b.WriteString("type RoutingLifecycleMetadata struct { ResourceDomain string; StartMethod string; WireIdentitySource string; StartCompletion LifecycleTriggerMetadata; CleanupTriggers []LifecycleTriggerMetadata; NotificationOptOutDependencies []string }\n\n")
 	b.WriteString("var ServerNotificationRoutingByMethod = map[string]ServerNotificationRoutingMetadata{\n")
-	stable := stableServerNotificationMethods(manifest, stableServerNotifications)
+	stable := mapNotifications(manifest.Stable.ServerNotifications)
 	for _, entry := range manifest.Experimental.ServerNotifications {
 		if !hasPublicGeneratedProtocolSurface(entry.SDKVisibility) {
 			continue
@@ -178,17 +178,6 @@ func renderServerNotificationMetadata(manifest *Manifest, stableServerNotificati
 	}
 	b.WriteString("}\n")
 	return b.String()
-}
-
-func stableServerNotificationMethods(manifest *Manifest, stableServerNotifications map[string]protocolSchemaVariant) map[string]bool {
-	stable := make(map[string]bool, len(stableServerNotifications)+len(manifest.Stable.ServerNotifications))
-	for method := range stableServerNotifications {
-		stable[method] = true
-	}
-	for _, entry := range manifest.Stable.ServerNotifications {
-		stable[entry.Method] = true
-	}
-	return stable
 }
 
 func renderLifecycleTriggerMetadata(trigger LifecycleTrigger) string {
