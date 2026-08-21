@@ -688,6 +688,18 @@ func (c RawClient) McpServerResourceRead(ctx context.Context, params McpResource
 	return result, err
 }
 
+func (c RawClient) McpServerEventStreamStart(ctx context.Context, params McpServerEventStreamStartParams) (McpServerEventStreamStartResponse, error) {
+	var result McpServerEventStreamStartResponse
+	err := c.sender.Call(ctx, "mcpServer/event/stream/start", params, &result, MethodMetadataByMethod["mcpServer/event/stream/start"])
+	return result, err
+}
+
+func (c RawClient) McpServerEventStreamStop(ctx context.Context, params McpServerEventStreamStopParams) (McpServerEventStreamStopResponse, error) {
+	var result McpServerEventStreamStopResponse
+	err := c.sender.Call(ctx, "mcpServer/event/stream/stop", params, &result, MethodMetadataByMethod["mcpServer/event/stream/stop"])
+	return result, err
+}
+
 func (c RawClient) McpServerToolCall(ctx context.Context, params McpServerToolCallParams) (McpServerToolCallResponse, error) {
 	var result McpServerToolCallResponse
 	err := c.sender.Call(ctx, "mcpServer/tool/call", params, &result, MethodMetadataByMethod["mcpServer/tool/call"])

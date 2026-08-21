@@ -338,7 +338,6 @@ fn network_approval_error_message(err: ToolError) -> String {
     match err {
         ToolError::Rejected(message) => message,
         ToolError::Codex(err) => err.to_string(),
-        ToolError::CapturedExec(captured) => captured.error.to_string(),
     }
 }
 
@@ -1537,7 +1536,6 @@ impl UnifiedExecProcessManager {
             .map_err(|tool_error| {
                 let err = match &tool_error {
                     ToolError::Codex(err) => err,
-                    ToolError::CapturedExec(captured) => &captured.error,
                     ToolError::Rejected(_) => {
                         return UnifiedExecError::create_process(format!("{tool_error:?}"));
                     }
