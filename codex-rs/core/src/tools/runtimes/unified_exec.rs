@@ -636,7 +636,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                     ToolError::Rejected("missing command line for PTY".to_string())
                 }
                 error @ ToolError::Codex(_) => error,
-                error @ ToolError::CapturedExec(_) => error,
             })?;
             let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
             let mut exec_env = attempt
@@ -707,7 +706,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                 ToolError::Rejected("missing command line for PTY".to_string())
             }
             error @ ToolError::Codex(_) => error,
-            error @ ToolError::CapturedExec(_) => error,
         })?;
         let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
         let process = self
