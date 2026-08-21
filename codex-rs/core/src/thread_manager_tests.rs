@@ -1844,6 +1844,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
             agent_control: manager.agent_control(),
             session_source,
             parent_thread_id,
+            environment_selections: None,
             inherited_environments: None,
             inherited_exec_policy: None,
             turn_spawn_budget: None,

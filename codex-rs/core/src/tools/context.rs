@@ -444,9 +444,9 @@ impl ToolOutput for ExecCommandToolOutput {
             return None;
         }
 
-        Some(JsonValue::String(
-            self.truncated_output_with_policy(self.model_output_policy()),
-        ))
+        Some(JsonValue::String(self.truncated_output_with_config(
+            self.truncation.with_policy(self.model_output_policy()),
+        )))
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
@@ -493,12 +493,14 @@ impl ExecCommandToolOutput {
     }
 
     pub(crate) fn truncated_output(&self, max_tokens: usize) -> String {
-        self.truncated_output_with_policy(TruncationPolicy::Tokens(max_tokens))
+        self.truncated_output_with_config(
+            self.truncation
+                .with_policy(TruncationPolicy::Tokens(max_tokens)),
+        )
     }
 
-    fn truncated_output_with_policy(&self, policy: TruncationPolicy) -> String {
+    fn truncated_output_with_config(&self, truncation: OutputTruncation) -> String {
         let text = String::from_utf8_lossy(&self.raw_output).to_string();
-        let truncation = self.truncation.with_policy(policy);
         let Some(omitted_bytes) = self.output_omitted_bytes else {
             return formatted_truncate_text_with_config(&text, truncation);
         };
@@ -558,7 +560,12 @@ impl ExecCommandToolOutput {
             .byte_budget()
             .saturating_sub(header.len().saturating_add(/*rhs*/ 1));
         let mut policy = self.model_output_policy();
-        let mut output = self.truncated_output_with_policy(policy);
+        let response_truncation = |policy| OutputTruncation {
+            policy,
+            max_lines: None,
+            ..self.truncation
+        };
+        let mut output = self.truncated_output_with_config(response_truncation(policy));
 
         // History applies this same serialization budget to the complete response.
         // Reserve room for metadata, warning headers, and the truncation marker so
@@ -573,7 +580,7 @@ impl ExecCommandToolOutput {
                     tokens.saturating_sub(TruncationPolicy::Bytes(excess_bytes).token_budget()),
                 ),
             };
-            output = self.truncated_output_with_policy(policy);
+            output = self.truncated_output_with_config(response_truncation(policy));
         }
 
         format!("{header}\n{output}")

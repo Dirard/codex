@@ -314,11 +314,9 @@ impl ToolOrchestrator {
                     deferred_network_approval: first_deferred_network_approval,
                 })
             }
-            Err(tool_error @ ToolError::Codex(_))
-            | Err(tool_error @ ToolError::CapturedExec(_)) => {
+            Err(tool_error @ ToolError::Codex(_)) => {
                 let err = match &tool_error {
                     ToolError::Codex(err) => err,
-                    ToolError::CapturedExec(captured) => &captured.error,
                     ToolError::Rejected(_) => unreachable!(),
                 };
                 let CodexErrorDetails::Sandbox(SandboxErr::Denied {
@@ -535,7 +533,6 @@ impl ToolOrchestrator {
 fn sandbox_outcome_from_tool_error(err: &ToolError) -> Option<&'static str> {
     let err = match err {
         ToolError::Codex(err) => err,
-        ToolError::CapturedExec(captured) => &captured.error,
         ToolError::Rejected(_) => return None,
     };
     match err.details() {
