@@ -2252,6 +2252,10 @@ fn expected_server_notification_routes() -> Vec<(&'static str, ExpectedRouting)>
             "mcpServer/startupStatus/updated",
             ExpectedRouting::Routed(&["name", "threadId?"]),
         ),
+        (
+            "mcpServer/event/stream/notification",
+            ExpectedRouting::Routed(&["subscriptionId"]),
+        ),
         ("account/updated", ExpectedRouting::Global),
         ("account/rateLimits/updated", ExpectedRouting::Global),
         ("app/list/updated", ExpectedRouting::Global),
