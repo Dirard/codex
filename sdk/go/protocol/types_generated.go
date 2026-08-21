@@ -1867,6 +1867,34 @@ func (v ClientRequest) McpServerResourceReadParams() (McpResourceReadParams, boo
 	return params, true, nil
 }
 
+func (v ClientRequest) McpServerEventStreamStartParams() (McpServerEventStreamStartParams, bool, error) {
+	if v.Method != "mcpServer/event/stream/start" {
+		return McpServerEventStreamStartParams{}, false, nil
+	}
+	var params McpServerEventStreamStartParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) McpServerEventStreamStopParams() (McpServerEventStreamStopParams, bool, error) {
+	if v.Method != "mcpServer/event/stream/stop" {
+		return McpServerEventStreamStopParams{}, false, nil
+	}
+	var params McpServerEventStreamStopParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
 func (v ClientRequest) McpServerToolCallParams() (McpServerToolCallParams, bool, error) {
 	if v.Method != "mcpServer/tool/call" {
 		return McpServerToolCallParams{}, false, nil
@@ -7119,6 +7147,20 @@ func (v ServerNotification) McpServerStartupStatusUpdatedParams() (McpServerStat
 		return McpServerStatusUpdatedNotification{}, false, nil
 	}
 	var params McpServerStatusUpdatedNotification
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ServerNotification) McpServerEventStreamNotificationParams() (McpServerEventStreamNotification, bool, error) {
+	if v.Method != "mcpServer/event/stream/notification" {
+		return McpServerEventStreamNotification{}, false, nil
+	}
+	var params McpServerEventStreamNotification
 	if len(bytes.TrimSpace(v.Params)) == 0 {
 		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
 	}
@@ -13295,6 +13337,7 @@ func (v *ConfigReadResponse) UnmarshalJSON(data []byte) error {
 }
 
 type ConfigRequirements struct {
+	AdditionalDeveloperInstructions      Optional[string]                      `json:"additionalDeveloperInstructions,omitempty"`
 	AllowAppshots                        Optional[bool]                        `json:"allowAppshots,omitempty"`
 	AllowLoginShell                      Optional[bool]                        `json:"allowLoginShell,omitempty"`
 	AllowManagedHooksOnly                Optional[bool]                        `json:"allowManagedHooksOnly,omitempty"`
@@ -13316,6 +13359,7 @@ type ConfigRequirements struct {
 	FeatureRequirements                  Optional[map[string]bool]             `json:"featureRequirements,omitempty"`
 	Feedback                             Optional[FeedbackRequirements]        `json:"feedback,omitempty"`
 	Hooks                                Optional[ManagedHooksRequirements]    `json:"hooks,omitempty"`
+	InAppBrowser                         Optional[InAppBrowserRequirements]    `json:"inAppBrowser,omitempty"`
 	LogDir                               Optional[string]                      `json:"logDir,omitempty"`
 	ModelCatalogJSON                     Optional[string]                      `json:"modelCatalogJson,omitempty"`
 	Models                               Optional[ModelsRequirements]          `json:"models,omitempty"`
@@ -13326,6 +13370,9 @@ type ConfigRequirements struct {
 
 func (v ConfigRequirements) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
+	if v.AdditionalDeveloperInstructions.IsSet() {
+		out["additionalDeveloperInstructions"] = v.AdditionalDeveloperInstructions
+	}
 	if v.AllowAppshots.IsSet() {
 		out["allowAppshots"] = v.AllowAppshots
 	}
@@ -13389,6 +13436,9 @@ func (v ConfigRequirements) MarshalJSON() ([]byte, error) {
 	if v.Hooks.IsSet() {
 		out["hooks"] = v.Hooks
 	}
+	if v.InAppBrowser.IsSet() {
+		out["inAppBrowser"] = v.InAppBrowser
+	}
 	if v.LogDir.IsSet() {
 		out["logDir"] = v.LogDir
 	}
@@ -13418,6 +13468,12 @@ func (v *ConfigRequirements) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
+	}
+	rawAdditionalDeveloperInstructions, ok := raw["additionalDeveloperInstructions"]
+	if ok {
+		if err := json.Unmarshal(rawAdditionalDeveloperInstructions, &v.AdditionalDeveloperInstructions); err != nil {
+			return fmt.Errorf("field additionalDeveloperInstructions: %w", err)
+		}
 	}
 	rawAllowAppshots, ok := raw["allowAppshots"]
 	if ok {
@@ -13543,6 +13599,12 @@ func (v *ConfigRequirements) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawHooks, &v.Hooks); err != nil {
 			return fmt.Errorf("field hooks: %w", err)
+		}
+	}
+	rawInAppBrowser, ok := raw["inAppBrowser"]
+	if ok {
+		if err := json.Unmarshal(rawInAppBrowser, &v.InAppBrowser); err != nil {
+			return fmt.Errorf("field inAppBrowser: %w", err)
 		}
 	}
 	rawLogDir, ok := raw["logDir"]
@@ -20313,6 +20375,36 @@ func (v *ImageGenerationFailure) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type InAppBrowserRequirements struct {
+	AllowExternalBrowserSettingsImport Optional[bool] `json:"allowExternalBrowserSettingsImport,omitempty"`
+}
+
+func (v InAppBrowserRequirements) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if v.AllowExternalBrowserSettingsImport.IsSet() {
+		out["allowExternalBrowserSettingsImport"] = v.AllowExternalBrowserSettingsImport
+	}
+	return json.Marshal(out)
+}
+
+func (v *InAppBrowserRequirements) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawAllowExternalBrowserSettingsImport, ok := raw["allowExternalBrowserSettingsImport"]
+	if ok {
+		if err := json.Unmarshal(rawAllowExternalBrowserSettingsImport, &v.AllowExternalBrowserSettingsImport); err != nil {
+			return fmt.Errorf("field allowExternalBrowserSettingsImport: %w", err)
+		}
+	}
+	return nil
+}
+
 type InputModality string
 
 const (
@@ -22093,6 +22185,252 @@ func (v *McpResourceReadResponse) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field originCallId: %w", err)
 		}
 	}
+	return nil
+}
+
+type McpServerEventNotification struct {
+	Method string          `json:"method,omitempty"`
+	Params json.RawMessage `json:"params,omitempty"`
+}
+
+func (v McpServerEventNotification) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["method"] = v.Method
+	out["params"] = v.Params
+	return json.Marshal(out)
+}
+
+func (v *McpServerEventNotification) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawMethod, ok := raw["method"]
+	if !ok {
+		return DecodeError{Field: "method", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawMethod, []byte("null")) {
+		return DecodeError{Field: "method", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawMethod, &v.Method); err != nil {
+		return fmt.Errorf("field method: %w", err)
+	}
+	rawParams, ok := raw["params"]
+	if !ok {
+		return DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(rawParams, &v.Params); err != nil {
+		return fmt.Errorf("field params: %w", err)
+	}
+	return nil
+}
+
+type McpServerEventStreamNotification struct {
+	Notification   McpServerEventNotification `json:"notification,omitempty"`
+	SubscriptionID string                     `json:"subscriptionId,omitempty"`
+}
+
+func (v McpServerEventStreamNotification) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["notification"] = v.Notification
+	out["subscriptionId"] = v.SubscriptionID
+	return json.Marshal(out)
+}
+
+func (v *McpServerEventStreamNotification) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawNotification, ok := raw["notification"]
+	if !ok {
+		return DecodeError{Field: "notification", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawNotification, []byte("null")) {
+		return DecodeError{Field: "notification", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawNotification, &v.Notification); err != nil {
+		return fmt.Errorf("field notification: %w", err)
+	}
+	rawSubscriptionID, ok := raw["subscriptionId"]
+	if !ok {
+		return DecodeError{Field: "subscriptionId", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawSubscriptionID, []byte("null")) {
+		return DecodeError{Field: "subscriptionId", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawSubscriptionID, &v.SubscriptionID); err != nil {
+		return fmt.Errorf("field subscriptionId: %w", err)
+	}
+	return nil
+}
+
+type McpServerEventStreamStartParams struct {
+	Meta           json.RawMessage `json:"_meta,omitempty"`
+	Arguments      json.RawMessage `json:"arguments,omitempty"`
+	Name           string          `json:"name,omitempty"`
+	Server         string          `json:"server,omitempty"`
+	SubscriptionID string          `json:"subscriptionId,omitempty"`
+	ThreadID       string          `json:"threadId,omitempty"`
+}
+
+func (v McpServerEventStreamStartParams) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if len(v.Meta) > 0 {
+		out["_meta"] = v.Meta
+	}
+	out["arguments"] = v.Arguments
+	out["name"] = v.Name
+	out["server"] = v.Server
+	out["subscriptionId"] = v.SubscriptionID
+	out["threadId"] = v.ThreadID
+	return json.Marshal(out)
+}
+
+func (v *McpServerEventStreamStartParams) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawMeta, ok := raw["_meta"]
+	if ok {
+		if err := json.Unmarshal(rawMeta, &v.Meta); err != nil {
+			return fmt.Errorf("field _meta: %w", err)
+		}
+	}
+	rawArguments, ok := raw["arguments"]
+	if !ok {
+		return DecodeError{Field: "arguments", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(rawArguments, &v.Arguments); err != nil {
+		return fmt.Errorf("field arguments: %w", err)
+	}
+	rawName, ok := raw["name"]
+	if !ok {
+		return DecodeError{Field: "name", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawName, []byte("null")) {
+		return DecodeError{Field: "name", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawName, &v.Name); err != nil {
+		return fmt.Errorf("field name: %w", err)
+	}
+	rawServer, ok := raw["server"]
+	if !ok {
+		return DecodeError{Field: "server", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawServer, []byte("null")) {
+		return DecodeError{Field: "server", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawServer, &v.Server); err != nil {
+		return fmt.Errorf("field server: %w", err)
+	}
+	rawSubscriptionID, ok := raw["subscriptionId"]
+	if !ok {
+		return DecodeError{Field: "subscriptionId", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawSubscriptionID, []byte("null")) {
+		return DecodeError{Field: "subscriptionId", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawSubscriptionID, &v.SubscriptionID); err != nil {
+		return fmt.Errorf("field subscriptionId: %w", err)
+	}
+	rawThreadID, ok := raw["threadId"]
+	if !ok {
+		return DecodeError{Field: "threadId", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawThreadID, []byte("null")) {
+		return DecodeError{Field: "threadId", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawThreadID, &v.ThreadID); err != nil {
+		return fmt.Errorf("field threadId: %w", err)
+	}
+	return nil
+}
+
+type McpServerEventStreamStartResponse map[string]json.RawMessage
+
+func (v McpServerEventStreamStartResponse) MarshalJSON() ([]byte, error) {
+	if v == nil {
+		return []byte("{}"), nil
+	}
+	return json.Marshal(map[string]json.RawMessage(v))
+}
+
+func (v *McpServerEventStreamStartResponse) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*v = McpServerEventStreamStartResponse(raw)
+	return nil
+}
+
+type McpServerEventStreamStopParams struct {
+	SubscriptionID string `json:"subscriptionId,omitempty"`
+}
+
+func (v McpServerEventStreamStopParams) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["subscriptionId"] = v.SubscriptionID
+	return json.Marshal(out)
+}
+
+func (v *McpServerEventStreamStopParams) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawSubscriptionID, ok := raw["subscriptionId"]
+	if !ok {
+		return DecodeError{Field: "subscriptionId", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawSubscriptionID, []byte("null")) {
+		return DecodeError{Field: "subscriptionId", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawSubscriptionID, &v.SubscriptionID); err != nil {
+		return fmt.Errorf("field subscriptionId: %w", err)
+	}
+	return nil
+}
+
+type McpServerEventStreamStopResponse map[string]json.RawMessage
+
+func (v McpServerEventStreamStopResponse) MarshalJSON() ([]byte, error) {
+	if v == nil {
+		return []byte("{}"), nil
+	}
+	return json.Marshal(map[string]json.RawMessage(v))
+}
+
+func (v *McpServerEventStreamStopResponse) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*v = McpServerEventStreamStopResponse(raw)
 	return nil
 }
 
@@ -30799,12 +31137,6 @@ func (v ResponseItem) MarshalJSON() ([]byte, error) {
 			return nil, DecodeError{Field: "execution", Reason: "missing required field for type tool_search_call"}
 		}
 	case "function_call_output":
-		if !v.CallID.IsSet() {
-			return nil, DecodeError{Field: "call_id", Reason: "missing required field for type function_call_output"}
-		}
-		if v.CallID.IsNull() {
-			return nil, DecodeError{Field: "call_id", Reason: "cannot be null"}
-		}
 		if !v.Output.IsSet() {
 			return nil, DecodeError{Field: "output", Reason: "missing required field for type function_call_output"}
 		}
@@ -31126,11 +31458,6 @@ func (v *ResponseItem) UnmarshalJSON(data []byte) error {
 			return DecodeError{Field: "execution", Reason: "cannot be null"}
 		}
 	case "function_call_output":
-		if rawValue, ok := raw["call_id"]; !ok {
-			return DecodeError{Field: "call_id", Reason: "missing required field for type function_call_output"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "call_id", Reason: "cannot be null"}
-		}
 		if rawValue, ok := raw["output"]; !ok {
 			return DecodeError{Field: "output", Reason: "missing required field for type function_call_output"}
 		} else if bytes.Equal(rawValue, []byte("null")) {

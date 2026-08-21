@@ -60,6 +60,7 @@ pub(super) async fn handle_message_string_tool(
     let message = message_content(message)?;
     let ToolInvocation {
         session,
+        step_context,
         turn,
         call_id,
         source,

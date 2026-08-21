@@ -3971,6 +3971,52 @@
         "boundedModelContextFields": [],
         "direction": "clientToServer",
         "exception": null,
+        "experimental": {
+          "fieldPaths": [],
+          "reason": "mcpServer/event/stream/start"
+        },
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": null,
+        "method": "mcpServer/event/stream/start",
+        "paramsSchemaRef": "#/definitions/McpServerEventStreamStartParams",
+        "paramsType": "McpServerEventStreamStartParams",
+        "requestSerializationScopes": [],
+        "responseSchemaRef": "#/definitions/McpServerEventStreamStartResponse",
+        "responseType": "McpServerEventStreamStartResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "McpServerEventStreamStart"
+      },
+      {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
+        "experimental": {
+          "fieldPaths": [],
+          "reason": "mcpServer/event/stream/stop"
+        },
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": null,
+        "method": "mcpServer/event/stream/stop",
+        "paramsSchemaRef": "#/definitions/McpServerEventStreamStopParams",
+        "paramsType": "McpServerEventStreamStopParams",
+        "requestSerializationScopes": [],
+        "responseSchemaRef": "#/definitions/McpServerEventStreamStopResponse",
+        "responseType": "McpServerEventStreamStopResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "McpServerEventStreamStop"
+      },
+      {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
         "experimental": null,
         "experimentalFields": [],
         "inspectParams": false,
@@ -5186,9 +5232,9 @@
       }
     ],
     "digests": {
-      "manifestDigest": "b1e8edd5aa0de5ad4342bb749fa91971e32dd2cc826090b299dfaf5245aa02b6",
-      "protocolDigest": "85b0003db1f60396a7078ef37289bc98c10c04575116e56d989af74520df5209",
-      "schemaDigest": "73be63e2c78d2dd5be2e09feca1f62d4d11a3a4d0a15370272b57ea858b9fca7"
+      "manifestDigest": "9493e9cd6abc9c34db00b3f2051ba4767b9c8bf1acbb510021ff2970a282a1d8",
+      "protocolDigest": "0afe77ba68116ebe0b78bbd86f18b329dd711cd784424bfe845a014454c7ea36",
+      "schemaDigest": "319870d880836a569aaea47032fdbc584b5eac7bedaf70938bc22f810ba2a2af"
     },
     "protocolMode": "experimental",
     "routingLifecycle": [
@@ -11119,6 +11165,27 @@
         "variantAliases": []
       },
       {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "InAppBrowserRequirements",
+        "schemaRef": "#/definitions/v2/InAppBrowserRequirements",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
         "fields": [
           {
             "aliases": [],
@@ -12352,6 +12419,132 @@
         "metadataStatus": "schemaSufficient",
         "rustType": "McpServerElicitationRequestResponse",
         "schemaRef": "#/definitions/McpServerElicitationRequestResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "McpServerEventNotification",
+        "schemaRef": "#/definitions/v2/McpServerEventNotification",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "McpServerEventStreamNotification",
+        "schemaRef": "#/definitions/v2/McpServerEventStreamNotification",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "McpServerEventStreamStartParams",
+        "schemaRef": "#/definitions/v2/McpServerEventStreamStartParams",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "McpServerEventStreamStartResponse",
+        "schemaRef": "#/definitions/v2/McpServerEventStreamStartResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "McpServerEventStreamStopParams",
+        "schemaRef": "#/definitions/v2/McpServerEventStreamStopParams",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "McpServerEventStreamStopResponse",
+        "schemaRef": "#/definitions/v2/McpServerEventStreamStopResponse",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -24192,6 +24385,40 @@
       {
         "direction": "serverNotification",
         "exception": null,
+        "experimental": {
+          "fieldPaths": [],
+          "reason": "mcpServer/event/stream/notification"
+        },
+        "experimentalFields": [],
+        "manualPayloadConversion": null,
+        "method": "mcpServer/event/stream/notification",
+        "payloadSchemaRef": "#/definitions/McpServerEventStreamNotification",
+        "payloadType": "McpServerEventStreamNotification",
+        "routingStrategy": {
+          "kind": "routed",
+          "routes": [
+            {
+              "identityExtractors": [
+                {
+                  "fieldPath": "subscriptionId",
+                  "identityName": "subscriptionId",
+                  "optional": false,
+                  "terminalPredicate": null
+                }
+              ],
+              "resourceDomain": "mcpServer",
+              "wireIdentitySource": "mcpServer/event/stream/notification"
+            }
+          ]
+        },
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "McpServerEventStream"
+      },
+      {
+        "direction": "serverNotification",
+        "exception": null,
         "experimental": null,
         "experimentalFields": [],
         "manualPayloadConversion": null,
@@ -28823,9 +29050,9 @@
       }
     ],
     "digests": {
-      "manifestDigest": "4e5e1a6b5257263b810b87e3bbf64fa00d5338e27a46dbdcf4df2d3ec62607b6",
-      "protocolDigest": "7c7851ee4ad880470f31b50d2a4921510b73851f9aecd29d0dc602e61f7cfe89",
-      "schemaDigest": "b948c5f41ae07aec94c5d5fff52b2182e4f0099137f7c46ce58adc5113b3a7a8"
+      "manifestDigest": "6d108cf57746d7db55a51f47f42ae19b83ca768ed9095b1ed8ff2028e1abfcfb",
+      "protocolDigest": "e8e87d18c742456c50193a3f4060725649a0342fae7295fcf980af844978522b",
+      "schemaDigest": "a8ab1bec13adc1d3781c8a18f99974c3201a70d36d82398f27e27c2af39eb8cf"
     },
     "protocolMode": "stable",
     "routingLifecycle": [
@@ -33701,6 +33928,27 @@
         "metadataStatus": "schemaSufficient",
         "rustType": "ImageGenerationFailure",
         "schemaRef": "#/definitions/v2/ImageGenerationFailure",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "InAppBrowserRequirements",
+        "schemaRef": "#/definitions/v2/InAppBrowserRequirements",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
