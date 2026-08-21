@@ -37,6 +37,7 @@ impl Handler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
+            step_context,
             turn,
             payload,
             call_id,

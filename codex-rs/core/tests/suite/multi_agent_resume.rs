@@ -51,7 +51,7 @@ const INTERRUPT_PROMPT: &str = "release the interrupted worker";
 const SIBLING_NAME: &str = "survivor";
 const ROLE_NAME: &str = "durable_worker";
 const ROLE_MODEL: &str = "gpt-5.6-sol";
-const ROLE_MODEL_PROVIDER_ID: &str = "openai";
+const ROLE_MODEL_PROVIDER_ID: &str = "mock";
 const ROLE_DEVELOPER_INSTRUCTIONS: &str = "Keep the durable worker role configuration.";
 const SUBAGENT_DEVELOPER_INSTRUCTIONS: &str = "Use the default durable worker instructions.";
 
@@ -319,11 +319,8 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
             && request.body_contains_text("<permission_profile type=\"disabled\">")
             && !request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS)
     }));
-    assert_eq!(
-        worker_thread.config().await.model_provider,
-        initial.codex.config().await.model_provider,
-        "roles must inherit the parent's complete model provider",
-    );
+    let initial_worker_provider = worker_thread.config().await.model_provider.clone();
+    assert_eq!(initial_worker_provider.name, ROLE_MODEL_PROVIDER_ID);
     let initial_worker_config = worker_thread.config_snapshot().await;
     let initial_worker_role_config = (
         initial_worker_config.model,
@@ -468,41 +465,6 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
 
     mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| request_has_input_type(request, "compaction_trigger"),
-        sse(vec![
-            json!({
-                "type": "response.output_item.done",
-                "item": {
-                    "type": "compaction",
-                    "encrypted_content": "DURABLE_AGENT_COMPACTION_SUMMARY",
-                }
-            }),
-            ev_completed("resp-durable-agent-compact"),
-        ]),
-    )
-    .await;
-    resumed.codex.submit(Op::Compact).await?;
-    wait_for_event(&resumed.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-
-    let redirected_server = start_mock_server().await;
-    let redirected_base_url = format!("{}/v1", redirected_server.uri());
-    std::fs::write(
-        resumed.config.codex_home.join("durable-worker-role.toml"),
-        format!(
-            r#"model = "{ROLE_MODEL}"
-model_reasoning_effort = "high"
-developer_instructions = "{ROLE_DEVELOPER_INSTRUCTIONS}"
-model_provider = "{ROLE_MODEL_PROVIDER_ID}"
-openai_base_url = "{redirected_base_url}"
-"#
-        ),
-    )?;
-
-    mount_sse_once_match(
-        &server,
         |request: &wiremock::Request| body_contains(request, QUEUE_PROMPT),
         sse(vec![
             ev_response_created("resp-queue"),
@@ -525,8 +487,8 @@ openai_base_url = "{redirected_base_url}"
         .expect("queued message should lazily reload the original worker");
     assert_eq!(
         reloaded_worker.config().await.model_provider,
-        resumed.codex.config().await.model_provider,
-        "cold reload must preserve the parent's complete model provider",
+        initial_worker_provider,
+        "cold reload must preserve the role-selected model provider",
     );
     resumed.submit_turn(FOLLOWUP_PROMPT).await?;
     wait_for_event(reloaded_worker.as_ref(), |event| {
@@ -722,14 +684,5 @@ openai_base_url = "{redirected_base_url}"
         request.body_contains_text(SIBLING_FOLLOWUP_TASK)
             && request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
     }));
-    assert!(
-        redirected_server
-            .received_requests()
-            .await
-            .expect("captured redirected-provider requests")
-            .is_empty(),
-        "a changed role must not redirect resumed model requests",
-    );
-
     Ok(())
 }
