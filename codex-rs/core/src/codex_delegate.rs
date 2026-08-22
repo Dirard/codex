@@ -118,7 +118,7 @@ pub(crate) async fn run_codex_thread_interactive(
             .services
             .local_agent_runtime
             .control(parent_session.session_id()),
-        dynamic_tools: Vec::new(),
+        dynamic_tools: parent_session.dynamic_tools().await,
         metrics_service_name: None,
         user_shell_override: None,
         inherited_environments: Some(parent_environments.clone()),
