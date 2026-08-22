@@ -4,6 +4,8 @@ use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
@@ -272,6 +274,44 @@ async fn guardian_delegates_do_not_inherit_parent_extensions() {
             .await
             .expect("delegate session should shut down");
     }
+}
+
+#[tokio::test]
+async fn run_codex_thread_interactive_inherits_parent_dynamic_tools() {
+    let dynamic_tools = vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+        name: "read_parent_context".to_string(),
+        description: "Read parent-provided context.".to_string(),
+        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        defer_loading: false,
+    })];
+    let (parent_session, parent_ctx, _rx_events) =
+        crate::session::tests::make_session_and_context_with_dynamic_tools_and_rx(
+            dynamic_tools.clone(),
+        )
+        .await;
+    let mut config = parent_ctx.config.as_ref().clone();
+    config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
+
+    let (session, io) = run_codex_thread_interactive(
+        config,
+        Arc::clone(&parent_session.services.auth_manager),
+        Arc::clone(&parent_session.services.models_manager),
+        Arc::clone(&parent_session),
+        Arc::clone(&parent_ctx),
+        parent_ctx.environments.clone(),
+        CancellationToken::new(),
+        SubAgentSource::Review,
+        /*initial_history*/ None,
+        crate::session::GitEnrichmentPolicy::Fresh,
+        codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
+    )
+    .await
+    .expect("delegate session should start");
+
+    assert_eq!(session.dynamic_tools().await, dynamic_tools);
+    io.shutdown_and_wait()
+        .await
+        .expect("delegate session should shut down");
 }
 
 #[tokio::test]
