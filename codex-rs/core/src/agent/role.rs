@@ -39,6 +39,8 @@ const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not availabl
 struct AgentRoleOverrides {
     developer_instructions: Option<String>,
     model: Option<String>,
+    model_auto_compact_token_limit: Option<i64>,
+    model_context_window: Option<i64>,
     model_provider: Option<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     model_providers: BTreeMap<String, ModelProviderInfo>,
@@ -90,6 +92,8 @@ async fn apply_role_to_config_inner(
     let mut overrides = AgentRoleOverrides {
         developer_instructions: role_config.developer_instructions,
         model: role_config.model,
+        model_auto_compact_token_limit: role_config.model_auto_compact_token_limit,
+        model_context_window: role_config.model_context_window,
         model_provider,
         model_providers: role_config.model_providers.into_iter().collect(),
         model_reasoning_effort: role_config.model_reasoning_effort,
@@ -196,6 +200,12 @@ mod role_overrides {
         next_config.config_layer_stack = build_config_layer_stack(config, &role_layer_toml)?;
         if let Some(model) = &overrides.model {
             next_config.model = Some(model.clone());
+        }
+        if let Some(limit) = overrides.model_auto_compact_token_limit {
+            next_config.model_auto_compact_token_limit = Some(limit);
+        }
+        if let Some(context_window) = overrides.model_context_window {
+            next_config.model_context_window = Some(context_window);
         }
         for (provider_id, provider) in &overrides.model_providers {
             next_config

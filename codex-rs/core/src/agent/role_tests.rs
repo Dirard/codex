@@ -551,6 +551,47 @@ async fn apply_role_takes_precedence_over_existing_session_flags_for_same_key() 
     assert_eq!(session_flags_layer_count(&config), before_layers + 1);
 }
 
+#[tokio::test]
+async fn apply_role_overrides_parent_context_limits() {
+    let (home, mut config) = test_config_with_cli_overrides(vec![
+        (
+            "model_context_window".to_string(),
+            TomlValue::Integer(500_000),
+        ),
+        (
+            "model_auto_compact_token_limit".to_string(),
+            TomlValue::Integer(400_000),
+        ),
+    ])
+    .await;
+    let role_path = write_role_config(
+        &home,
+        "context-limits-role.toml",
+        "model_context_window = 1_000_000\nmodel_auto_compact_token_limit = 900_000",
+    )
+    .await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    apply_role_to_config(&mut config, Some("custom"))
+        .await
+        .expect("custom role should apply");
+
+    assert_eq!(
+        (
+            config.model_context_window,
+            config.model_auto_compact_token_limit,
+        ),
+        (Some(1_000_000), Some(900_000)),
+    );
+}
+
 #[cfg_attr(windows, ignore)]
 #[tokio::test]
 async fn apply_role_skills_config_disables_skill_for_spawned_agent() {
