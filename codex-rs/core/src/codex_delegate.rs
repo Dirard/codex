@@ -110,7 +110,7 @@ pub(crate) async fn run_codex_thread_interactive(
         thread_source: Some(ThreadSource::Subagent),
         originator: parent_ctx.originator.clone(),
         agent_control: parent_session.services.agent_control.clone(),
-        dynamic_tools: Vec::new(),
+        dynamic_tools: parent_session.dynamic_tools().await,
         metrics_service_name: None,
         user_shell_override: None,
         inherited_environments: Some(parent_environments.clone()),
