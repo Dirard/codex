@@ -2236,7 +2236,7 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
             ev_function_call_with_namespace(
                 "wait-agent-call",
                 MULTI_AGENT_V2_NAMESPACE,
-                "wait_agent",
+                "check_agent_status",
                 "{}",
             ),
             ev_completed("resp-parent-3"),
@@ -2839,7 +2839,7 @@ async fn multi_agent_v2_wait_agent_does_not_resample_before_long_child_mailbox_d
             ev_function_call_with_namespace(
                 WAIT_CALL_ID,
                 MULTI_AGENT_V2_NAMESPACE,
-                "wait_agent",
+                "check_agent_status",
                 "{}",
             ),
             ev_completed("resp-parent-long-2"),
