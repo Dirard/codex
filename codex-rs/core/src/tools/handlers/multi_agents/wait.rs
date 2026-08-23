@@ -29,7 +29,7 @@ impl Handler {
 
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
-        ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "wait_agent")
+        ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "check_agent_status")
     }
 
     fn spec(&self) -> ToolSpec {
@@ -38,7 +38,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
 
     fn search_info(&self) -> Option<ToolSearchInfo> {
         multi_agent_tool_search_info(
-            "wait_agent wait agent subagent status final result complete timeout targets",
+            "check_agent_status check agent status subagent status final result complete timeout targets",
             self.spec(),
         )
     }
@@ -285,7 +285,7 @@ pub(crate) struct WaitAgentResult {
 
 impl ToolOutput for WaitAgentResult {
     fn log_output(&self) -> String {
-        tool_output_json_text(self, "wait_agent")
+        tool_output_json_text(self, "check_agent_status")
     }
 
     fn success_for_logging(&self) -> bool {
@@ -293,11 +293,17 @@ impl ToolOutput for WaitAgentResult {
     }
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
-        tool_output_response_item(call_id, payload, self, /*success*/ None, "wait_agent")
+        tool_output_response_item(
+            call_id,
+            payload,
+            self,
+            /*success*/ None,
+            "check_agent_status",
+        )
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
-        tool_output_code_mode_result(self, "wait_agent")
+        tool_output_code_mode_result(self, "check_agent_status")
     }
 }
 
