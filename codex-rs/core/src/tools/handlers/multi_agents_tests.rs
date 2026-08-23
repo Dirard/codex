@@ -3211,7 +3211,7 @@ async fn wait_agent_rejects_non_positive_timeout() {
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait_agent",
+        "check_agent_status",
         function_payload(json!({
             "targets": [ThreadId::new().to_string()],
             "timeout_ms": 0
@@ -3232,7 +3232,7 @@ async fn wait_agent_rejects_invalid_target() {
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait_agent",
+        "check_agent_status",
         function_payload(json!({"targets": ["invalid"]})),
     );
     let Err(err) = WaitAgentHandler::default().handle(invocation).await else {
@@ -3250,7 +3250,7 @@ async fn wait_agent_rejects_empty_targets() {
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait_agent",
+        "check_agent_status",
         function_payload(json!({"targets": []})),
     );
     let Err(err) = WaitAgentHandler::default().handle(invocation).await else {
@@ -3315,7 +3315,7 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
                 .handle(invocation(
                     session,
                     turn,
-                    "wait_agent",
+                    "check_agent_status",
                     function_payload(json!({"timeout_ms": 10_000})),
                 ))
                 .await
@@ -3377,7 +3377,7 @@ async fn multi_agent_v2_wait_agent_returns_immediately_without_active_agents() {
         WaitAgentHandlerV2::default().handle(invocation(
             Arc::new(session),
             Arc::new(turn),
-            "wait_agent",
+            "check_agent_status",
             function_payload(json!({"timeout_ms": 10_000})),
         )),
     )
@@ -3426,7 +3426,7 @@ async fn multi_agent_v2_wait_agent_clamps_timeout_below_configured_min() {
         .handle(invocation(
             session,
             turn,
-            "wait_agent",
+            "check_agent_status",
             function_payload(json!({"timeout_ms": 1})),
         ))
         .await
@@ -3479,7 +3479,7 @@ async fn multi_agent_v2_wait_agent_accepts_explicit_timeout_at_configured_min() 
         .handle(invocation(
             session,
             turn,
-            "wait_agent",
+            "check_agent_status",
             function_payload(json!({"timeout_ms": 1})),
         ))
         .await
@@ -3526,7 +3526,7 @@ async fn multi_agent_v2_wait_agent_uses_configured_default_timeout() {
         WaitAgentHandlerV2::default().handle(invocation(
             session.clone(),
             turn.clone(),
-            "wait_agent",
+            "check_agent_status",
             function_payload(json!({})),
         )),
     )
@@ -3541,7 +3541,7 @@ async fn multi_agent_v2_wait_agent_uses_configured_default_timeout() {
         WaitAgentHandlerV2::default().handle(invocation(
             session,
             turn,
-            "wait_agent",
+            "check_agent_status",
             function_payload(json!({})),
         )),
     )
@@ -3588,7 +3588,7 @@ async fn multi_agent_v2_wait_agent_zero_timeout_checks_once_without_spinning() {
         WaitAgentHandlerV2::default().handle(invocation(
             session,
             turn,
-            "wait_agent",
+            "check_agent_status",
             function_payload(json!({"timeout_ms": 0})),
         )),
     )
@@ -3663,7 +3663,7 @@ async fn multi_agent_v2_wait_agent_timeout_includes_bounded_status_snapshot() {
         .handle(invocation(
             session,
             turn,
-            "wait_agent",
+            "check_agent_status",
             function_payload(json!({"timeout_ms": 1})),
         ))
         .await
@@ -3702,7 +3702,7 @@ async fn multi_agent_v2_wait_agent_rejects_timeout_above_configured_max() {
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
-            "wait_agent",
+            "check_agent_status",
             function_payload(json!({"timeout_ms": 500})),
         ))
         .await
@@ -3742,7 +3742,7 @@ async fn multi_agent_v2_wait_agent_accepts_explicit_timeout_at_configured_max() 
         .handle(invocation(
             session,
             turn,
-            "wait_agent",
+            "check_agent_status",
             function_payload(json!({"timeout_ms": 1})),
         ))
         .await
@@ -3771,7 +3771,7 @@ async fn wait_agent_returns_not_found_for_missing_agents() {
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait_agent",
+        "check_agent_status",
         function_payload(json!({
             "targets": [id_a.to_string(), id_b.to_string()],
             "timeout_ms": 10_000
@@ -3811,7 +3811,7 @@ async fn wait_agent_times_out_when_status_is_not_final() {
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait_agent",
+        "check_agent_status",
         function_payload(json!({
             "targets": [agent_id.to_string()],
             "timeout_ms": MIN_WAIT_TIMEOUT_MS
@@ -3854,7 +3854,7 @@ async fn wait_agent_clamps_short_timeouts_to_minimum() {
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait_agent",
+        "check_agent_status",
         function_payload(json!({
             "targets": [agent_id.to_string()],
             "timeout_ms": 10
@@ -3903,7 +3903,7 @@ async fn wait_agent_returns_final_status_without_timeout() {
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait_agent",
+        "check_agent_status",
         function_payload(json!({
             "targets": [agent_id.to_string()],
             "timeout_ms": 10_000
@@ -3980,7 +3980,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
                 .handle(invocation(
                     session,
                     turn,
-                    "wait_agent",
+                    "check_agent_status",
                     function_payload(json!({"timeout_ms": 10_000})),
                 ))
                 .await
@@ -4085,7 +4085,7 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
         WaitAgentHandlerV2::default().handle(invocation(
             session,
             turn,
-            "wait_agent",
+            "check_agent_status",
             function_payload(json!({"timeout_ms": 10_000})),
         )),
     )
@@ -4160,7 +4160,7 @@ async fn multi_agent_v2_wait_agent_wakes_on_any_mailbox_notification() {
                 .handle(invocation(
                     session,
                     turn,
-                    "wait_agent",
+                    "check_agent_status",
                     function_payload(json!({"timeout_ms": 10_000})),
                 ))
                 .await
@@ -4252,7 +4252,7 @@ async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
                 .handle(invocation(
                     session,
                     turn,
-                    "wait_agent",
+                    "check_agent_status",
                     function_payload(json!({"timeout_ms": 10_000})),
                 ))
                 .await

@@ -61,7 +61,7 @@ async fn ignores_unrelated_turn_completion_before_backfilling_primary_turn() -> 
             responses::ev_function_call_with_namespace(
                 WAIT_CALL_ID,
                 "collaboration",
-                "wait_agent",
+                "check_agent_status",
                 "{}",
             ),
             responses::ev_completed("resp-parent-2"),
