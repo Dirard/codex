@@ -411,7 +411,20 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
 
 #[test]
 fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
+    let ToolSpec::Namespace(namespace) = create_wait_agent_tool_v1(WaitAgentTimeoutOptions {
+        default_timeout_ms: 1_800_000,
+        min_timeout_ms: 10_000,
+        max_timeout_ms: 3_600_000,
+    }) else {
+        panic!("wait_agent v1 should be a namespace tool");
+    };
+    let [ResponsesApiNamespaceTool::Function(v1)] = namespace.tools.as_slice() else {
+        panic!("wait_agent v1 should contain function tools");
+    };
+    assert_eq!(v1.name, "check_agent_status");
+
     let ToolSpec::Function(ResponsesApiTool {
+        name,
         description,
         parameters,
         output_schema,
@@ -424,6 +437,7 @@ fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
     else {
         panic!("wait_agent should be a function tool");
     };
+    assert_eq!(name, "check_agent_status");
     assert_eq!(
         parameters.schema_type,
         Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object))
