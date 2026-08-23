@@ -3329,7 +3329,7 @@ fn collab_agent_tool_name(tool: &CollabAgentTool) -> &'static str {
         CollabAgentTool::SpawnAgent => "spawn_agent",
         CollabAgentTool::SendInput => "send_input",
         CollabAgentTool::ResumeAgent => "resume_agent",
-        CollabAgentTool::Wait => "wait_agent",
+        CollabAgentTool::Wait => "check_agent_status",
         CollabAgentTool::CloseAgent => "close_agent",
         CollabAgentTool::SendMessage => "send_message",
         CollabAgentTool::FollowupTask => "followup_task",

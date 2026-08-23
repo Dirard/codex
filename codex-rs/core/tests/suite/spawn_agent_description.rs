@@ -366,14 +366,15 @@ async fn multi_agent_v2_wait_guidance_uses_overridable_developer_instructions(
     let developer_messages = request.message_input_texts("developer");
     let has_wait_guidance = developer_messages.iter().any(|message| {
         message.contains(
-            "When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.",
+            "When calling `check_agent_status`, prefer longer waits (minutes) to avoid busy polling.",
         )
     });
     assert_eq!(has_wait_guidance, expected_wait_guidance);
 
     let body = request.body_json();
-    let wait_agent_tool = namespace_child_tool(&body, MULTI_AGENT_V2_NAMESPACE, "wait_agent")
-        .expect("wait_agent should be exposed");
+    let wait_agent_tool =
+        namespace_child_tool(&body, MULTI_AGENT_V2_NAMESPACE, "check_agent_status")
+            .expect("wait_agent should be exposed");
     assert_eq!(
         wait_agent_tool
             .pointer("/parameters/properties/timeout_ms/description")
@@ -401,7 +402,7 @@ async fn multi_agent_v2_cold_resume_refreshes_legacy_usage_hints_once(
     let resumed_root_agent_usage_hint_text = resumed_root_agent_usage_hint_text.map(str::to_string);
     let legacy_root_agent_usage_hint_text = "Legacy root instructions.";
     let wait_guidance =
-        "When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.";
+        "When calling `check_agent_status`, prefer longer waits (minutes) to avoid busy polling.";
     let config_toml = format!(
         "[features.multi_agent_v2]\nenabled = true\nwait_agent_enabled = {wait_agent_enabled}\n"
     );
@@ -550,7 +551,8 @@ async fn multi_agent_v2_cold_resume_refreshes_legacy_usage_hints_once(
         );
 
         let body = request.body_json();
-        let wait_agent_tool = namespace_child_tool(&body, MULTI_AGENT_V2_NAMESPACE, "wait_agent");
+        let wait_agent_tool =
+            namespace_child_tool(&body, MULTI_AGENT_V2_NAMESPACE, "check_agent_status");
         assert_eq!(wait_agent_tool.is_some(), wait_agent_enabled);
         if let Some(wait_agent_tool) = wait_agent_tool {
             assert_eq!(
@@ -577,7 +579,7 @@ async fn multi_agent_v2_resume_refreshes_changed_wait_guidance(
     resumed_wait_agent_enabled: bool,
 ) -> Result<()> {
     let wait_guidance =
-        "When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.";
+        "When calling `check_agent_status`, prefer longer waits (minutes) to avoid busy polling.";
     let initial_config_toml = format!(
         "[features.multi_agent_v2]\nenabled = true\nwait_agent_enabled = {initial_wait_agent_enabled}\n"
     );
@@ -607,7 +609,7 @@ async fn multi_agent_v2_resume_refreshes_changed_wait_guidance(
         namespace_child_tool(
             &initial_request.body_json(),
             MULTI_AGENT_V2_NAMESPACE,
-            "wait_agent"
+            "check_agent_status"
         )
         .is_some(),
         initial_wait_agent_enabled
@@ -688,8 +690,12 @@ async fn multi_agent_v2_resume_refreshes_changed_wait_guidance(
         );
 
         assert_eq!(
-            namespace_child_tool(&request.body_json(), MULTI_AGENT_V2_NAMESPACE, "wait_agent")
-                .is_some(),
+            namespace_child_tool(
+                &request.body_json(),
+                MULTI_AGENT_V2_NAMESPACE,
+                "check_agent_status"
+            )
+            .is_some(),
             resumed_wait_agent_enabled
         );
     }
@@ -742,7 +748,7 @@ wait_agent_enabled = {wait_agent_enabled}
     let body = request.body_json();
     assert!(namespace_child_tool(&body, MULTI_AGENT_V2_NAMESPACE, SPAWN_AGENT_TOOL_NAME).is_some());
     assert_eq!(
-        namespace_child_tool(&body, MULTI_AGENT_V2_NAMESPACE, "wait_agent").is_some(),
+        namespace_child_tool(&body, MULTI_AGENT_V2_NAMESPACE, "check_agent_status").is_some(),
         wait_agent_enabled
     );
     assert_eq!(
@@ -755,7 +761,7 @@ wait_agent_enabled = {wait_agent_enabled}
             .iter()
             .any(|message| {
                 message.contains(
-                "When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.",
+                "When calling `check_agent_status`, prefer longer waits (minutes) to avoid busy polling.",
             )
             }),
         wait_agent_enabled

@@ -625,7 +625,7 @@ async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
             ev_function_call_with_namespace(
                 WAIT_CALL_ID,
                 MULTI_AGENT_V2_NAMESPACE,
-                "wait_agent",
+                "check_agent_status",
                 r#"{"timeout_ms":10000}"#,
             ),
             ev_completed("resp-2"),
