@@ -885,7 +885,7 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
         "spawn_agent",
         "send_input",
         "resume_agent",
-        "wait_agent",
+        "check_agent_status",
         "close_agent",
     ] {
         assert!(

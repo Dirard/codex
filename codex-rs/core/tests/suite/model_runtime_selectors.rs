@@ -374,7 +374,7 @@ async fn agents_disabled_overrides_multi_agent_v2_and_model_selector() -> Result
             | MULTI_AGENT_V2_NAMESPACE
             | "spawn_agent"
             | "send_message"
-            | "wait_agent"
+            | "check_agent_status"
             | "list_agents"
     )));
 
@@ -409,7 +409,7 @@ async fn agents_disabled_overrides_multi_agent_v2_and_model_selector() -> Result
             | MULTI_AGENT_V2_NAMESPACE
             | "spawn_agent"
             | "send_message"
-            | "wait_agent"
+            | "check_agent_status"
             | "list_agents"
     )));
 

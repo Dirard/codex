@@ -268,7 +268,7 @@ fn dispatched_tool_kind(tool_name: &str, _payload: &ToolDispatchPayload) -> Tool
         "spawn_agent" => ToolCallKind::SpawnAgent,
         "send_message" => ToolCallKind::SendMessage,
         "followup_task" | "assign_task" => ToolCallKind::AssignAgentTask,
-        "wait_agent" => ToolCallKind::WaitAgent,
+        "wait_agent" | "check_agent_status" => ToolCallKind::WaitAgent,
         "close_agent" | "interrupt_agent" => ToolCallKind::CloseAgent,
         other => ToolCallKind::Other {
             name: other.to_string(),
@@ -436,6 +436,21 @@ mod tests {
             ),
             ToolCallKind::CloseAgent
         );
+    }
+
+    #[test]
+    fn classifies_agent_status_tool_names_as_wait_agent() {
+        for tool_name in ["check_agent_status", "wait_agent"] {
+            assert_eq!(
+                dispatched_tool_kind(
+                    tool_name,
+                    &ToolDispatchPayload::Function {
+                        arguments: String::new(),
+                    },
+                ),
+                ToolCallKind::WaitAgent
+            );
+        }
     }
 
     #[test]
