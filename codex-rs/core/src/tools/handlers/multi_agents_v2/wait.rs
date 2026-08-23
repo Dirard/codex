@@ -22,7 +22,7 @@ impl Handler {
 
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain("wait_agent")
+        ToolName::plain("check_agent_status")
     }
 
     fn spec(&self) -> ToolSpec {
@@ -185,7 +185,7 @@ impl WaitAgentResult {
 
 impl ToolOutput for WaitAgentResult {
     fn log_output(&self) -> String {
-        tool_output_json_text(self, "wait_agent")
+        tool_output_json_text(self, "check_agent_status")
     }
 
     fn success_for_logging(&self) -> bool {
@@ -193,11 +193,17 @@ impl ToolOutput for WaitAgentResult {
     }
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
-        tool_output_response_item(call_id, payload, self, /*success*/ None, "wait_agent")
+        tool_output_response_item(
+            call_id,
+            payload,
+            self,
+            /*success*/ None,
+            "check_agent_status",
+        )
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
-        tool_output_code_mode_result(self, "wait_agent")
+        tool_output_code_mode_result(self, "check_agent_status")
     }
 }
 
