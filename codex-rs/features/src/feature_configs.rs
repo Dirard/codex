@@ -322,7 +322,7 @@ pub struct MultiAgentV2ConfigToml {
     /// corresponding guidance to root and subagent usage hints.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expose_spawn_agent_model_overrides: Option<bool>,
-    /// Expose the multi-agent v2 `wait_agent` tool.
+    /// Expose the multi-agent v2 `check_agent_status` tool.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait_agent_enabled: Option<bool>,
     /// Disable the model's direct-message tools; spawning and automatic child results remain available.
