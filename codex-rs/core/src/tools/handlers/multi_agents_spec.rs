@@ -251,7 +251,7 @@ pub fn create_resume_agent_tool() -> ToolSpec {
         tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
             name: "resume_agent".to_string(),
             description:
-                "Resume a previously closed agent by id so it can receive send_input and wait_agent calls."
+                "Resume a previously closed agent by id so it can receive send_input and check_agent_status calls."
                     .to_string(),
             strict: false,
             defer_loading: None,
@@ -266,7 +266,7 @@ pub fn create_wait_agent_tool_v1(options: WaitAgentTimeoutOptions) -> ToolSpec {
         name: MULTI_AGENT_V1_NAMESPACE.to_string(),
         description: MULTI_AGENT_V1_NAMESPACE_DESCRIPTION.to_string(),
         tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-            name: "wait_agent".to_string(),
+            name: "check_agent_status".to_string(),
             description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches a final status, a notification message will be received containing the same completed status."
                 .to_string(),
             strict: false,
@@ -279,7 +279,7 @@ pub fn create_wait_agent_tool_v1(options: WaitAgentTimeoutOptions) -> ToolSpec {
 
 pub fn create_wait_agent_tool_v2(options: WaitAgentTimeoutOptions) -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
-        name: "wait_agent".to_string(),
+        name: "check_agent_status".to_string(),
         description: "Wait for a mailbox update from any active descendant, including queued messages and completion or error notifications. For normal background work, omit `timeout_ms`. Passing `0` performs one immediate check. A positive value sets one absolute deadline; mailbox activity or steered user input can return earlier. Does not return the content; returns either a summary of which agents have updates (if any), an interruption summary for steered input, a no-active-agents summary, or one bounded timeout snapshot."
             .to_string(),
         strict: false,
@@ -714,7 +714,7 @@ Requests for depth, thoroughness, research, investigation, or detailed codebase 
 - For code-edit subtasks, decompose work so each delegated task has a disjoint write set.
 
 ### After you delegate
-- Call wait_agent very sparingly. Only call wait_agent when you need the result immediately for the next critical-path step and you are blocked until it returns.
+- Call check_agent_status very sparingly. Only call check_agent_status when you need the result immediately for the next critical-path step and you are blocked until it returns.
 - Do not redo delegated subagent tasks yourself; focus on integrating results or tackling non-overlapping work.
 - While the subagent is running in the background, do meaningful non-overlapping work immediately.
 - Do not repeatedly wait by reflex.
