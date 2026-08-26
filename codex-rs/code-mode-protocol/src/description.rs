@@ -8,8 +8,8 @@ use crate::PUBLIC_TOOL_NAME;
 use crate::json_schema_types::render_json_schema_to_typescript;
 
 const MAX_JS_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
-const DEFERRED_NESTED_TOOLS_GUIDANCE: &str = r#"Some deferred nested tools may be omitted from this description. They are still available on the global `tools` object and listed in `ALL_TOOLS`.
-To find one, filter `ALL_TOOLS` by `name` and `description`."#;
+const DEFERRED_NESTED_TOOLS_GUIDANCE: &str = r#"Some deferred nested tools may be omitted from this description. They are still available on the global `tools` object and listed in `EXEC_TOOLS`.
+To find one, filter `EXEC_TOOLS` by `name` and `description`."#;
 const LEGACY_IMAGE_HELPER_DESCRIPTION: &str = r#"`image(imageUrlOrItem: string | { image_url: string; detail?: "auto" | "low" | "high" | "original" | null } | ImageContent, detail?: "auto" | "low" | "high" | "original" | null)`: Appends an image item. `image_url` should be a base64-encoded `data:` URL. To forward an MCP tool image, pass an individual `ImageContent` block from `result.content`, for example `image(result.content[0])`. MCP image blocks may request detail with `_meta: { "codex/imageDetail": "original" }`. When provided, the second `detail` argument overrides any detail embedded in the first argument."#;
 const UNIFIED_IMAGE_HELPER_DESCRIPTION: &str = r#"`image(imageUrlOrItem: string | { image_url: string } | ImageContent)`: Appends an image item. `image_url` should be a base64-encoded `data:` URL. To forward an MCP tool image, pass an individual `ImageContent` block from `result.content`, for example `image(result.content[0])`."#;
 const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/compose tool calls
@@ -40,7 +40,7 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - `notify(value: string | number | boolean | undefined | null)`: immediately injects an extra `custom_tool_call_output` for the current `exec` call. Values are stringified like `text(...)`.
 - `setTimeout(callback: () => void, delayMs?: number)`: schedules a callback to run later and returns a timeout id. Pending timeouts do not keep `exec` alive by themselves; await an explicit promise if you need to wait for one.
 - `clearTimeout(timeoutId?: number)`: cancels a timeout created by `setTimeout`.
-- `ALL_TOOLS`: metadata for the enabled nested tools as `{ name, description }` entries.
+- `EXEC_TOOLS`: metadata for tools exposed inside `exec` as `{ name, description }` entries. Entries marked as direct-only must be called directly, not through `tools.*`.
 - `yield_control()`: yields the accumulated output to the model immediately while the script keeps running."#;
 const WAIT_DESCRIPTION_TEMPLATE: &str = r#"- Use `wait` only after `exec` returns `Script running with cell ID ...`.
 - `cell_id` identifies the running `exec` cell to resume.
@@ -1025,7 +1025,7 @@ bar"
         );
 
         assert!(description.contains("Some deferred nested tools may be omitted"));
-        assert!(description.contains("filter `ALL_TOOLS` by `name` and `description`"));
-        assert!(!description.contains("do not print the full `ALL_TOOLS` array"));
+        assert!(description.contains("filter `EXEC_TOOLS` by `name` and `description`"));
+        assert!(!description.contains("do not print the full `EXEC_TOOLS` array"));
     }
 }

@@ -20,7 +20,7 @@ pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), St
     delete_global(scope, global, "WebAssembly")?;
 
     let tools = build_tools_object(scope)?;
-    let all_tools = build_all_tools_value(scope)?;
+    let exec_tools = build_exec_tools_value(scope)?;
     let clear_timeout = helper_function(scope, "clearTimeout", clear_timeout_callback)?;
     let set_timeout = helper_function(scope, "setTimeout", set_timeout_callback)?;
     let text = helper_function(scope, "text", text_callback)?;
@@ -34,7 +34,7 @@ pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), St
     let exit = helper_function(scope, "exit", exit_callback)?;
 
     set_global(scope, global, "tools", tools.into())?;
-    set_global(scope, global, "ALL_TOOLS", all_tools)?;
+    set_global(scope, global, "EXEC_TOOLS", exec_tools)?;
     set_global(scope, global, "clearTimeout", clear_timeout.into())?;
     set_global(scope, global, "setTimeout", set_timeout.into())?;
     set_global(scope, global, "text", text.into())?;
@@ -67,7 +67,7 @@ fn build_tools_object<'s>(
     Ok(tools)
 }
 
-fn build_all_tools_value<'s>(
+fn build_exec_tools_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Result<v8::Local<'s, v8::Value>, String> {
     let enabled_tools = scope
@@ -76,25 +76,25 @@ fn build_all_tools_value<'s>(
         .unwrap_or_default();
     let array = v8::Array::new(scope, enabled_tools.len() as i32);
     let name_key = v8::String::new(scope, "name")
-        .ok_or_else(|| "failed to allocate ALL_TOOLS name key".to_string())?;
+        .ok_or_else(|| "failed to allocate EXEC_TOOLS name key".to_string())?;
     let description_key = v8::String::new(scope, "description")
-        .ok_or_else(|| "failed to allocate ALL_TOOLS description key".to_string())?;
+        .ok_or_else(|| "failed to allocate EXEC_TOOLS description key".to_string())?;
 
     for (index, tool) in enabled_tools.iter().enumerate() {
         let item = v8::Object::new(scope);
         let name = v8::String::new(scope, &tool.global_name)
-            .ok_or_else(|| "failed to allocate ALL_TOOLS name".to_string())?;
+            .ok_or_else(|| "failed to allocate EXEC_TOOLS name".to_string())?;
         let description = v8::String::new(scope, &tool.description)
-            .ok_or_else(|| "failed to allocate ALL_TOOLS description".to_string())?;
+            .ok_or_else(|| "failed to allocate EXEC_TOOLS description".to_string())?;
 
         if item.set(scope, name_key.into(), name.into()) != Some(true) {
-            return Err("failed to set ALL_TOOLS name".to_string());
+            return Err("failed to set EXEC_TOOLS name".to_string());
         }
         if item.set(scope, description_key.into(), description.into()) != Some(true) {
-            return Err("failed to set ALL_TOOLS description".to_string());
+            return Err("failed to set EXEC_TOOLS description".to_string());
         }
         if array.set_index(scope, index as u32, item.into()) != Some(true) {
-            return Err("failed to append ALL_TOOLS metadata".to_string());
+            return Err("failed to append EXEC_TOOLS metadata".to_string());
         }
     }
 
