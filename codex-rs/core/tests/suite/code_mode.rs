@@ -847,7 +847,6 @@ async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
         vec![
             "exec".to_string(),
             "wait".to_string(),
-            "request_user_input".to_string(),
             "web_search".to_string()
         ]
     );
@@ -1324,7 +1323,7 @@ await new Promise(() => {});
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_only_guides_all_tools_search_and_calls_deferred_app_tools() -> Result<()> {
+async fn code_mode_only_guides_exec_tools_search_and_calls_deferred_app_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1334,7 +1333,7 @@ async fn code_mode_only_guides_all_tools_search_and_calls_deferred_app_tools() -
         "call-1",
         "exec",
         r#"
-const tool = ALL_TOOLS.find(
+const tool = EXEC_TOOLS.find(
   ({ name }) => name === "mcp__codex_apps__calendar_timezone_option_99"
 );
 if (!tool) {
@@ -1405,7 +1404,6 @@ if (!tool) {
         vec![
             "exec".to_string(),
             "wait".to_string(),
-            "request_user_input".to_string(),
             "web_search".to_string()
         ]
     );
@@ -1428,7 +1426,7 @@ if (!tool) {
             })
         })
         .expect("exec description should be present");
-    assert!(exec_description.contains("filter `ALL_TOOLS` by `name` and `description`"));
+    assert!(exec_description.contains("filter `EXEC_TOOLS` by `name` and `description`"));
     assert!(exec_description.contains("Shared MCP Types:"));
     assert!(!exec_description.contains("calendar_timezone_option_99"));
 
@@ -1468,8 +1466,8 @@ async fn app_only_tools_are_not_visible_or_runnable_by_code_mode_model() -> Resu
         AppsTestServer::mount_with_app_only_tool(&server, AppsTestToolLoading::Searchable).await?;
     let code = format!(
         r#"
-const visibleTool = ALL_TOOLS.find(({{ name }}) => name === {visible_tool_name:?});
-const tool = ALL_TOOLS.find(({{ name }}) => name === {tool_name:?});
+const visibleTool = EXEC_TOOLS.find(({{ name }}) => name === {visible_tool_name:?});
+const tool = EXEC_TOOLS.find(({{ name }}) => name === {tool_name:?});
 let error = null;
 try {{
   await tools[{tool_name:?}]({{}});
@@ -5183,7 +5181,7 @@ async fn code_mode_exposes_and_dispatches_namespaced_custom_tools() -> Result<()
         });
     let test = builder.build(&server).await?;
     let code = r#"
-const tool = ALL_TOOLS.find(({ name }) => name === "editor__apply_patch");
+const tool = EXEC_TOOLS.find(({ name }) => name === "editor__apply_patch");
 const result = await tools.editor__apply_patch("nested patch");
 text(JSON.stringify({
   name: tool?.name ?? null,
@@ -5361,29 +5359,29 @@ text(`echo=${result.structuredContent.echo}`);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exports_all_tools_metadata_for_builtin_tools() -> Result<()> {
+async fn code_mode_exports_exec_tools_metadata_for_builtin_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const tool = ALL_TOOLS.find(({ name }) => name === "view_image");
+const tool = EXEC_TOOLS.find(({ name }) => name === "view_image");
 text(JSON.stringify(tool));
 "#;
 
     let (_test, second_mock) =
-        run_code_mode_turn(&server, "use exec to inspect ALL_TOOLS", code).await?;
+        run_code_mode_turn(&server, "use exec to inspect EXEC_TOOLS", code).await?;
 
     let req = second_mock.single_request();
     let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "exec ALL_TOOLS lookup failed unexpectedly: {output}"
+        "exec EXEC_TOOLS lookup failed unexpectedly: {output}"
     );
 
     let parsed: Value = serde_json::from_str(
         &custom_tool_output_last_non_empty_text(&req, "call-1")
-            .expect("exec ALL_TOOLS lookup should emit JSON"),
+            .expect("exec EXEC_TOOLS lookup should emit JSON"),
     )?;
     assert_eq!(
         parsed,
@@ -5397,31 +5395,83 @@ text(JSON.stringify(tool));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exports_all_tools_metadata_for_namespaced_mcp_tools() -> Result<()> {
+async fn code_mode_exposes_direct_tools_only_as_runtime_stubs() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const tool = ALL_TOOLS.find(
-  ({ name }) => name === "mcp__rmcp__echo"
-);
-text(JSON.stringify(tool));
+let error = null;
+try {
+  await tools.request_user_input({});
+} catch (caught) {
+  error = String(caught);
+}
+text(JSON.stringify({
+  type: typeof tools.request_user_input,
+  error,
+}));
 "#;
 
-    let (_test, second_mock) =
-        run_code_mode_turn_with_rmcp(&server, "use exec to inspect ALL_TOOLS", code).await?;
+    let (_test, second_mock) = run_code_mode_turn_with_config(
+        &server,
+        "inspect a direct-only tool from exec",
+        code,
+        |config| {
+            config
+                .features
+                .enable(Feature::DefaultModeRequestUserInput)
+                .expect("test config should allow feature update");
+        },
+    )
+    .await?;
 
     let req = second_mock.single_request();
     let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "exec ALL_TOOLS MCP lookup failed unexpectedly: {output}"
+        "exec direct-only stub lookup failed unexpectedly: {output}"
+    );
+    let parsed: Value = serde_json::from_str(
+        &custom_tool_output_last_non_empty_text(&req, "call-1")
+            .expect("exec direct-only stub lookup should emit JSON"),
+    )?;
+    assert_eq!(parsed["type"], "function");
+    assert!(
+        parsed["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("direct_tool_required"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exports_exec_tools_metadata_for_namespaced_mcp_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+const tool = EXEC_TOOLS.find(
+  ({ name }) => name === "mcp__rmcp__echo"
+);
+text(JSON.stringify(tool));
+"#;
+
+    let (_test, second_mock) =
+        run_code_mode_turn_with_rmcp(&server, "use exec to inspect EXEC_TOOLS", code).await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec EXEC_TOOLS MCP lookup failed unexpectedly: {output}"
     );
 
     let parsed: Value = serde_json::from_str(
         &custom_tool_output_last_non_empty_text(&req, "call-1")
-            .expect("exec ALL_TOOLS MCP lookup should emit JSON"),
+            .expect("exec EXEC_TOOLS MCP lookup should emit JSON"),
     )?;
     assert_eq!(
         parsed,
@@ -5496,7 +5546,7 @@ async fn code_mode_uses_the_first_dynamic_tool_for_a_normalized_name() -> Result
                     "call-1",
                     "exec",
                     r#"
-const matches = ALL_TOOLS.filter(({ name }) => name === "foo_bar");
+const matches = EXEC_TOOLS.filter(({ name }) => name === "foo_bar");
 const output = await tools.foo_bar({});
 text(JSON.stringify({
   count: matches.length,
@@ -5806,7 +5856,7 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
     test.session_configured = new_thread.session_configured;
 
     let code = r#"
-const tool = ALL_TOOLS.find(({ name }) => name === "codex_app__hidden_dynamic_tool");
+const tool = EXEC_TOOLS.find(({ name }) => name === "codex_app__hidden_dynamic_tool");
 const out = await tools.codex_app__hidden_dynamic_tool({ city: "Paris" });
 text(
   JSON.stringify({
@@ -5979,9 +6029,9 @@ async fn code_mode_excludes_configured_nested_tool_namespaces() -> Result<()> {
                 r#"
 text(JSON.stringify({
   excludedType: typeof tools.excluded__lookup,
-  excludedMetadata: ALL_TOOLS.some(({ name }) => name === "excluded__lookup"),
+  excludedMetadata: EXEC_TOOLS.some(({ name }) => name === "excluded__lookup"),
   allowedType: typeof tools.update_plan,
-  allowedMetadata: ALL_TOOLS.some(({ name }) => name === "update_plan"),
+  allowedMetadata: EXEC_TOOLS.some(({ name }) => name === "update_plan"),
 }));
 "#,
             ),
@@ -6072,9 +6122,9 @@ async fn code_mode_omits_configured_mcp_server_tools() -> Result<()> {
                 r#"
 text(JSON.stringify({
   excludedType: typeof tools.mcp__rmcp__echo,
-  excludedMetadata: ALL_TOOLS.some(({ name }) => name === "mcp__rmcp__echo"),
+  excludedMetadata: EXEC_TOOLS.some(({ name }) => name === "mcp__rmcp__echo"),
   allowedType: typeof tools.update_plan,
-  allowedMetadata: ALL_TOOLS.some(({ name }) => name === "update_plan"),
+  allowedMetadata: EXEC_TOOLS.some(({ name }) => name === "update_plan"),
 }));
 "#,
             ),

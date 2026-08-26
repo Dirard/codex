@@ -14,6 +14,7 @@ use crate::memory_usage::shell_script_for_invocation;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -513,7 +514,7 @@ impl ToolRegistry {
         }
 
         let dispatch_trace = ToolDispatchTrace::start(&invocation);
-        let tool = match self.tool(&tool_name) {
+        let registered_tool = match self.tools.get(&tool_name.clone().with_default_namespace()) {
             Some(tool) => tool,
             None => {
                 let message = unsupported_tool_call_message(&invocation.payload, &tool_name);
@@ -535,6 +536,36 @@ impl ToolRegistry {
                 return Err(err);
             }
         };
+        if matches!(&invocation.source, ToolCallSource::CodeMode { .. })
+            && registered_tool.exposure == ToolExposure::DirectModelOnly
+        {
+            let code_mode_name = codex_tools::code_mode_name_for_tool_name(&tool_name);
+            let message = serde_json::json!({
+                "error": {
+                    "code": "direct_tool_required",
+                    "tool": code_mode_name,
+                    "message": format!(
+                        "Call `{code_mode_name}` directly; it cannot be invoked through `exec` or `tools.*`."
+                    ),
+                }
+            })
+            .to_string();
+            let log_payload = tool_log_payload(&invocation.payload, &invocation.source);
+            otel.tool_result_with_tags(
+                &tool_name,
+                &call_id_owned,
+                log_payload.as_ref(),
+                Duration::ZERO,
+                /*success*/ false,
+                &message,
+                &base_tool_result_tags,
+                /*extra_trace_fields*/ &[],
+            );
+            let err = FunctionCallError::RespondToModel(message);
+            dispatch_trace.record_failed(&err);
+            return Err(err);
+        }
+        let tool = Arc::clone(&registered_tool.runtime);
         let telemetry_tags = tool.telemetry_tags(&invocation);
         let mut tool_result_tags = Vec::with_capacity(2 + telemetry_tags.len() + 1);
         let mut extra_trace_fields = Vec::new();
