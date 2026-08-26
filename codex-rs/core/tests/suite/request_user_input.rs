@@ -361,7 +361,7 @@ where
         ev_function_call(&call_id, "request_user_input", &request_args),
         ev_completed("resp-1"),
     ]);
-    responses::mount_sse_once(&server, first_response).await;
+    let first_mock = responses::mount_sse_once(&server, first_response).await;
 
     let second_response = sse(vec![
         ev_assistant_message("msg-1", "thanks"),
@@ -392,6 +392,17 @@ where
         .await?;
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let first_request = first_mock.single_request().body_json();
+    assert!(
+        first_request
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| tools.iter().all(|tool| {
+                tool.get("name").and_then(Value::as_str) != Some("request_user_input")
+            })),
+        "request_user_input should not be model-visible when unavailable"
+    );
 
     let req = second_mock.single_request();
     let (output, success) = call_output_content_and_success(&req, &call_id);

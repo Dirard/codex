@@ -924,7 +924,6 @@ async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
         vec![
             "exec".to_string(),
             "wait".to_string(),
-            "request_user_input".to_string(),
             "web_search".to_string()
         ]
     );
@@ -1009,10 +1008,10 @@ pub(super) async fn mcp_schema_max_bytes_scenario() -> Result<Vec<ResponsesReque
     wait_for_mcp_server(&test.codex, "expanded_schema").await?;
     let lookup = r#"
 const results = ["default_schema", "expanded_schema"].map(server => {
-  const description = ALL_TOOLS.find(({name}) => name === `mcp__${server}__search`)?.description ?? "";
+  const description = EXEC_TOOLS.find(({name}) => name === `mcp__${server}__search`)?.description ?? "";
   return [description.includes("budget_description_marker"), description.includes("query: string;")];
 });
-const shared = ALL_TOOLS.find(({name}) => name === "mcp__default_schema__shared")?.description ?? "";
+const shared = EXEC_TOOLS.find(({name}) => name === "mcp__default_schema__shared")?.description ?? "";
 results.push([shared.includes("code_mode_description_marker"), shared.includes("term: string;")]);
 text(JSON.stringify(results));"#;
     let responses = responses::mount_sse_sequence(
@@ -1069,9 +1068,9 @@ text(JSON.stringify(results));"#;
     assert!(shared_declaration.contains("code_mode_description_marker"));
     assert!(shared_declaration.contains("term: string;"));
     let (output, success) = custom_tool_output_body_and_success(&requests[1], "lookup");
-    assert_ne!(success, Some(false), "ALL_TOOLS lookup failed: {output}");
+    assert_ne!(success, Some(false), "EXEC_TOOLS lookup failed: {output}");
     let output =
-        custom_tool_output_last_non_empty_text(&requests[1], "lookup").expect("ALL_TOOLS output");
+        custom_tool_output_last_non_empty_text(&requests[1], "lookup").expect("EXEC_TOOLS output");
     assert_eq!(output, "[[false,true],[true,true],[true,true]]");
     Ok(requests)
 }
@@ -1443,7 +1442,7 @@ async fn code_mode_finished_discovery_has_empty_tool_inventory(
     let (_test, follow_up) = run_code_mode_turn_with_config(
         &server,
         "Discover tools without calling any",
-        r#"text(ALL_TOOLS.filter(({ name }) => name === "test_sync_tool").map(({ name }) => name));"#,
+        r#"text(EXEC_TOOLS.filter(({ name }) => name === "test_sync_tool").map(({ name }) => name));"#,
         move |config| {
             if !metadata_enabled {
                 config.features.disable(Feature::ExecutedToolCallMetadata).unwrap();
@@ -2045,7 +2044,7 @@ async fn code_mode_mcp_metadata_keeps_originating_window_after_compaction() -> R
         "call-exec",
         "exec",
         &format!(
-            r#"const tool = ALL_TOOLS.find(({{ name }}) => name.endsWith("{RESULT_METADATA_TOOL}"));
+            r#"const tool = EXEC_TOOLS.find(({{ name }}) => name.endsWith("{RESULT_METADATA_TOOL}"));
 const pending = tools[tool.name]({{}});
 yield_control();
 await pending;
@@ -2420,7 +2419,7 @@ async fn result_metadata_preserves_results_within_request_budget(
     } else {
         let arguments = serde_json::to_string(&arguments)?;
         let code = format!(
-            "const tool = ALL_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
+            "const tool = EXEC_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
              const results = []; \
              for (const args of {arguments}) {{ \
                  const result = await tools[tool.name](args); \
@@ -2642,7 +2641,7 @@ async fn result_metadata_follows_call_binding(
         (test, follow_up)
     } else {
         let code = format!(
-            "const tool = ALL_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
+            "const tool = EXEC_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
              const result = await tools[tool.name]({arguments}); \
              text(JSON.stringify({{ isError: Boolean(result.isError), hasMeta: Object.hasOwn(result, \"_meta\") }}));"
         );
@@ -2745,7 +2744,7 @@ async fn code_mode_result_metadata_follows_runtime_recording_enablement() -> Res
     let test = builder.build_with_auto_env(&server).await?;
     let arguments = serde_json::json!({ "search": "launch plan" });
     let code = format!(
-        "const tool = ALL_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
+        "const tool = EXEC_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
          const result = await tools[tool.name]({arguments}); \
          text(JSON.stringify({{ isError: Boolean(result.isError), hasMeta: Object.hasOwn(result, \"_meta\") }}));"
     );
@@ -2868,7 +2867,7 @@ async fn code_mode_result_metadata_keeps_prepared_call_binding_across_runtime_re
         "content_types": "messages",
     });
     let code = format!(
-        "const tool = ALL_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
+        "const tool = EXEC_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
          const pending = tools[tool.name]({arguments}); yield_control(); await pending; \
          await tools[tool.name]({arguments}); text(\"done\");"
     );
@@ -3020,7 +3019,7 @@ async fn code_mode_late_result_metadata_with_large_arguments_survives_waits() ->
     let arguments = serde_json::json!({ "query": "x".repeat(9_000) });
     let later_arguments = serde_json::json!({ "query": "later" });
     let code = format!(
-        "const tool = ALL_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
+        "const tool = EXEC_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
          const pending = tools[tool.name]({arguments}); yield_control(); await pending; \
          await tools[tool.name]({later_arguments}); text(\"accepted\"); \
          yield_control(); await new Promise(() => {{}});"
@@ -3669,7 +3668,7 @@ const tool = matches[0];
 "#
     } else {
         r#"
-const tool = ALL_TOOLS.find(
+const tool = EXEC_TOOLS.find(
   ({ name }) => name === "mcp__codex_apps__calendar_timezone_option_99"
 );
 "#
@@ -3687,7 +3686,7 @@ if (!tool) {
     hasSchemaDescription: tool.description.includes("schema_budget_marker"),
     hasNamespacePrefix: tool.description.startsWith("Calendar search context.\n\n"),
     descriptionPrefix: tool.description.split("\n\nexec tool declaration:")[0],
-    matchesCatalog: tool.description === ALL_TOOLS.find(({ name }) => name === tool.name)?.description,
+    matchesCatalog: tool.description === EXEC_TOOLS.find(({ name }) => name === tool.name)?.description,
     isError: Boolean(result.isError),
     text: result.content?.[0]?.text ?? "",
   }));
@@ -3793,7 +3792,6 @@ if (!tool) {
         vec![
             "exec".to_string(),
             "wait".to_string(),
-            "request_user_input".to_string(),
             "web_search".to_string()
         ]
     );
@@ -3816,7 +3814,7 @@ if (!tool) {
             })
         })
         .expect("exec description should be present");
-    assert!(exec_description.contains("filter `ALL_TOOLS` by `name` and `description`"));
+    assert!(exec_description.contains("filter `EXEC_TOOLS` by `name` and `description`"));
     let has_ranked_search = exec_description.contains("await tools.tool_search(");
     assert_eq!(has_ranked_search, ranked_search);
     assert!(exec_description.contains("Shared MCP Types:"));
@@ -3878,8 +3876,8 @@ async fn app_only_tools_are_not_visible_or_runnable_by_code_mode_model() -> Resu
         AppsTestServer::mount_with_app_only_tool(&server, AppsTestToolLoading::Searchable).await?;
     let code = format!(
         r#"
-const visibleTool = ALL_TOOLS.find(({{ name }}) => name === {visible_tool_name:?});
-const tool = ALL_TOOLS.find(({{ name }}) => name === {tool_name:?});
+const visibleTool = EXEC_TOOLS.find(({{ name }}) => name === {visible_tool_name:?});
+const tool = EXEC_TOOLS.find(({{ name }}) => name === {tool_name:?});
 const search = await tools.tool_search({{ query: {tool_name:?} }});
 let error = null;
 try {{
@@ -4030,7 +4028,7 @@ async fn code_mode_does_not_expose_update_plan_by_default() -> Result<()> {
         r#"
 text(JSON.stringify({
   callable: typeof tools.update_plan === "function",
-  listed: ALL_TOOLS.some(({ name }) => name === "update_plan"),
+  listed: EXEC_TOOLS.some(({ name }) => name === "update_plan"),
 }));
 "#,
     )
@@ -7803,7 +7801,7 @@ async fn code_mode_exposes_and_dispatches_namespaced_custom_tools() -> Result<()
         });
     let test = builder.build(&server).await?;
     let code = r#"
-const tool = ALL_TOOLS.find(({ name }) => name === "editor__apply_patch");
+const tool = EXEC_TOOLS.find(({ name }) => name === "editor__apply_patch");
 const result = await tools.editor__apply_patch("nested patch");
 text(JSON.stringify({
   name: tool?.name ?? null,
@@ -7981,29 +7979,29 @@ text(`echo=${result.structuredContent.echo}`);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exports_all_tools_metadata_for_builtin_tools() -> Result<()> {
+async fn code_mode_exports_exec_tools_metadata_for_builtin_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const tool = ALL_TOOLS.find(({ name }) => name === "view_image");
+const tool = EXEC_TOOLS.find(({ name }) => name === "view_image");
 text(JSON.stringify(tool));
 "#;
 
     let (_test, second_mock) =
-        run_code_mode_turn(&server, "use exec to inspect ALL_TOOLS", code).await?;
+        run_code_mode_turn(&server, "use exec to inspect EXEC_TOOLS", code).await?;
 
     let req = second_mock.single_request();
     let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "exec ALL_TOOLS lookup failed unexpectedly: {output}"
+        "exec EXEC_TOOLS lookup failed unexpectedly: {output}"
     );
 
     let parsed: Value = serde_json::from_str(
         &custom_tool_output_last_non_empty_text(&req, "call-1")
-            .expect("exec ALL_TOOLS lookup should emit JSON"),
+            .expect("exec EXEC_TOOLS lookup should emit JSON"),
     )?;
     assert_eq!(
         parsed,
@@ -8017,31 +8015,83 @@ text(JSON.stringify(tool));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exports_all_tools_metadata_for_namespaced_mcp_tools() -> Result<()> {
+async fn code_mode_exposes_direct_tools_only_as_runtime_stubs() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const tool = ALL_TOOLS.find(
-  ({ name }) => name === "mcp__rmcp__echo"
-);
-text(JSON.stringify(tool));
+let error = null;
+try {
+  await tools.request_user_input({});
+} catch (caught) {
+  error = String(caught);
+}
+text(JSON.stringify({
+  type: typeof tools.request_user_input,
+  error,
+}));
 "#;
 
-    let (_test, second_mock) =
-        run_code_mode_turn_with_rmcp(&server, "use exec to inspect ALL_TOOLS", code).await?;
+    let (_test, second_mock) = run_code_mode_turn_with_config(
+        &server,
+        "inspect a direct-only tool from exec",
+        code,
+        |config| {
+            config
+                .features
+                .enable(Feature::DefaultModeRequestUserInput)
+                .expect("test config should allow feature update");
+        },
+    )
+    .await?;
 
     let req = second_mock.single_request();
     let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "exec ALL_TOOLS MCP lookup failed unexpectedly: {output}"
+        "exec direct-only stub lookup failed unexpectedly: {output}"
+    );
+    let parsed: Value = serde_json::from_str(
+        &custom_tool_output_last_non_empty_text(&req, "call-1")
+            .expect("exec direct-only stub lookup should emit JSON"),
+    )?;
+    assert_eq!(parsed["type"], "function");
+    assert!(
+        parsed["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("direct_tool_required"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exports_exec_tools_metadata_for_namespaced_mcp_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+const tool = EXEC_TOOLS.find(
+  ({ name }) => name === "mcp__rmcp__echo"
+);
+text(JSON.stringify(tool));
+"#;
+
+    let (_test, second_mock) =
+        run_code_mode_turn_with_rmcp(&server, "use exec to inspect EXEC_TOOLS", code).await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec EXEC_TOOLS MCP lookup failed unexpectedly: {output}"
     );
 
     let parsed: Value = serde_json::from_str(
         &custom_tool_output_last_non_empty_text(&req, "call-1")
-            .expect("exec ALL_TOOLS MCP lookup should emit JSON"),
+            .expect("exec EXEC_TOOLS MCP lookup should emit JSON"),
     )?;
     assert_eq!(
         parsed,
@@ -8116,7 +8166,7 @@ async fn code_mode_uses_the_first_dynamic_tool_for_a_normalized_name() -> Result
                     "call-1",
                     "exec",
                     r#"
-const matches = ALL_TOOLS.filter(({ name }) => name === "foo_bar");
+const matches = EXEC_TOOLS.filter(({ name }) => name === "foo_bar");
 const output = await tools.foo_bar({});
 text(JSON.stringify({
   count: matches.length,
@@ -8677,9 +8727,9 @@ async fn code_mode_excludes_configured_nested_tool_namespaces() -> Result<()> {
                 r#"
 text(JSON.stringify({
   excludedType: typeof tools.excluded__lookup,
-  excludedMetadata: ALL_TOOLS.some(({ name }) => name === "excluded__lookup"),
+  excludedMetadata: EXEC_TOOLS.some(({ name }) => name === "excluded__lookup"),
   allowedType: typeof tools.update_plan,
-  allowedMetadata: ALL_TOOLS.some(({ name }) => name === "update_plan"),
+  allowedMetadata: EXEC_TOOLS.some(({ name }) => name === "update_plan"),
 }));
 "#,
             ),
@@ -8770,9 +8820,9 @@ async fn code_mode_omits_configured_mcp_server_tools() -> Result<()> {
                 r#"
 text(JSON.stringify({
   excludedType: typeof tools.mcp__rmcp__echo,
-  excludedMetadata: ALL_TOOLS.some(({ name }) => name === "mcp__rmcp__echo"),
+  excludedMetadata: EXEC_TOOLS.some(({ name }) => name === "mcp__rmcp__echo"),
   allowedType: typeof tools.update_plan,
-  allowedMetadata: ALL_TOOLS.some(({ name }) => name === "update_plan"),
+  allowedMetadata: EXEC_TOOLS.some(({ name }) => name === "update_plan"),
 }));
 "#,
             ),
