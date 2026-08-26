@@ -13,8 +13,8 @@ use crate::json_schema_types::render_json_schema_to_typescript;
 use crate::json_schema_types::render_json_schema_to_typescript_with_budget;
 
 const MAX_JS_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
-const DEFERRED_NESTED_TOOLS_GUIDANCE: &str = r#"Some deferred nested tools may be omitted from this description. They are still available on the global `tools` object and listed in `ALL_TOOLS`.
-To find one, filter `ALL_TOOLS` by `name` and `description`.
+const DEFERRED_NESTED_TOOLS_GUIDANCE: &str = r#"Some deferred nested tools may be omitted from this description. They are still available on the global `tools` object and listed in `EXEC_TOOLS`.
+To find one, filter `EXEC_TOOLS` by `name` and `description`.
 
 Tool availability can change between calls."#;
 pub const TOOL_SEARCH_GUIDANCE: &str = r#"Use `await tools.tool_search({query: "...", limit: 8})` for BM25-ranked discovery of deferred tools (up to `limit` matches; 8 by default). It returns `{tools: [{name, description}]}` with callable names and full TypeScript declarations. Print results with `text()` and inspect unfamiliar declarations before calling `tools[result.name](arguments)` in a later execution."#;
@@ -48,7 +48,7 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - `notify(value: string | number | boolean | undefined | null)`: immediately injects an extra `custom_tool_call_output` for the current `exec` call. Values are stringified like `text(...)`.
 - `setTimeout(callback: () => void, delayMs?: number)`: schedules a callback to run later and returns a timeout id. Pending timeouts do not keep `exec` alive by themselves; await an explicit promise if you need to wait for one.
 - `clearTimeout(timeoutId?: number)`: cancels a timeout created by `setTimeout`.
-- `ALL_TOOLS`: metadata for the enabled nested tools as `{ name, description }` entries.
+- `EXEC_TOOLS`: metadata for tools exposed inside `exec` as `{ name, description }` entries. Entries marked as direct-only must be called directly, not through `tools.*`.
 - `yield_control()`: yields the accumulated output to the model immediately while the script keeps running."#;
 const WAIT_DESCRIPTION_TEMPLATE: &str = r#"- Use `wait` only after `exec` returns `Script running with cell ID ...`.
 - `cell_id` identifies the running `exec` cell to resume.
@@ -1113,7 +1113,7 @@ bar"
                     /*messages*/ None,
                 );
                 assert!(description.contains("Some deferred nested tools may be omitted"));
-                assert!(description.contains("filter `ALL_TOOLS` by `name` and `description`"));
+                assert!(description.contains("filter `EXEC_TOOLS` by `name` and `description`"));
                 assert_eq!(
                     description.matches("await tools.tool_search(").count(),
                     usize::from(discovery == DeferredToolDiscovery::RankedSearch),

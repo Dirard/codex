@@ -26,13 +26,19 @@ type CodeModeNestedTool = (Arc<ToolSpec>, Option<Arc<dyn CoreToolRuntime>>);
 pub struct CodeModeExecuteHandler {
     spec: ToolSpec,
     nested_tool_specs: Vec<CodeModeNestedTool>,
+    direct_tool_stubs: Vec<codex_code_mode::ToolDefinition>,
 }
 
 impl CodeModeExecuteHandler {
-    pub(crate) fn new(spec: ToolSpec, nested_tool_specs: Vec<CodeModeNestedTool>) -> Self {
+    pub(crate) fn new(
+        spec: ToolSpec,
+        nested_tool_specs: Vec<CodeModeNestedTool>,
+        direct_tool_stubs: Vec<codex_code_mode::ToolDefinition>,
+    ) -> Self {
         Self {
             spec,
             nested_tool_specs,
+            direct_tool_stubs,
         }
     }
 
@@ -61,7 +67,8 @@ impl CodeModeExecuteHandler {
             .config
             .features
             .enabled(Feature::CodeModeToolDescriptionFirst);
-        let mut enabled_tools = Vec::with_capacity(self.nested_tool_specs.len());
+        let mut enabled_tools =
+            Vec::with_capacity(self.nested_tool_specs.len() + self.direct_tool_stubs.len());
         for (spec, cached_runtime) in &self.nested_tool_specs {
             let definitions = prepare_code_mode_tool_definitions(
                 cached_runtime.as_deref(),
@@ -74,6 +81,7 @@ impl CodeModeExecuteHandler {
                 Cow::Owned(definitions) => enabled_tools.extend(definitions),
             }
         }
+        enabled_tools.extend(self.direct_tool_stubs.iter().cloned());
         enabled_tools.sort_by(|left, right| left.name.cmp(&right.name));
         enabled_tools.dedup_by(|left, right| left.name == right.name);
         let model_messages = ResolvedModelMessages::from_model(&step_context.settings.model_info);
