@@ -727,18 +727,36 @@ fn register_code_mode_executors(
 
     let mut code_mode_tool_names = BTreeMap::new();
     let mut code_mode_nested_tool_specs = Vec::new();
+    let mut direct_tool_stubs = Vec::new();
     let mut exec_prompt_tool_specs = Vec::new();
     let mut deferred_exec_prompt_tool_specs = Vec::new();
     let mut included_deferred_mcp_output_schema = false;
     let deferred_tools_guidance_enabled = search_tool_enabled(turn_context);
     for tool in registry.entries() {
         let exposure = tool.exposure;
-        if !exposure.is_available_in_code_mode() {
-            continue;
-        }
-
         let tool_name = tool.runtime.tool_name();
         if is_excluded_from_code_mode(turn_context, &tool_name) {
+            continue;
+        }
+        if exposure == ToolExposure::DirectModelOnly {
+            let spec = tool.runtime.spec();
+            direct_tool_stubs.extend(
+                collect_code_mode_exec_prompt_tool_definitions(std::iter::once(&spec))
+                    .into_iter()
+                    .map(|mut definition| {
+                        let name = definition.name.clone();
+                        definition.description = format!(
+                            "Direct model tool only. Call the matching tool directly; do not invoke `{name}` through `exec` or `tools.*`.\n\n{}",
+                            definition.description
+                        );
+                        definition.input_schema = None;
+                        definition.output_schema = None;
+                        definition
+                    }),
+            );
+            continue;
+        }
+        if !exposure.is_available_in_code_mode() {
             continue;
         }
 
@@ -818,6 +836,7 @@ fn register_code_mode_executors(
             },
         ),
         code_mode_nested_tool_specs,
+        direct_tool_stubs,
     );
 
     registry.prepend_trusted(Arc::new(CodeModeWaitHandler));
@@ -1057,12 +1076,13 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     }
 
     if turn_context.config.experimental_request_user_input_enabled {
-        registry.add_with_exposure(
-            RequestUserInputHandler {
-                available_modes: request_user_input_available_modes(features),
-            },
-            ToolExposure::DirectModelOnly,
-        );
+        let available_modes = request_user_input_available_modes(features);
+        let exposure = if available_modes.contains(&turn_context.mode) {
+            ToolExposure::DirectModelOnly
+        } else {
+            ToolExposure::Hidden
+        };
+        registry.add_with_exposure(RequestUserInputHandler { available_modes }, exposure);
     }
 
     if !turn_context.session_source.is_non_root_agent()
