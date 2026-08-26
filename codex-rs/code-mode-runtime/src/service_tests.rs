@@ -1262,7 +1262,7 @@ async fn global_scope_contains_only_allowed_items() {
         .expect("global scope inspection should return a JSON array");
     let expected = [
         "AggregateError",
-        "ALL_TOOLS",
+        "EXEC_TOOLS",
         "Array",
         "ArrayBuffer",
         "AsyncDisposableStack",
@@ -1347,6 +1347,8 @@ async fn global_scope_contains_only_allowed_items() {
             "unexpected global {global} in {globals:?}"
         );
     }
+    assert!(globals.iter().any(|global| global == "EXEC_TOOLS"));
+    assert!(!globals.iter().any(|global| global == "ALL_TOOLS"));
 }
 
 #[tokio::test]

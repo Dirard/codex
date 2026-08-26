@@ -712,6 +712,62 @@ async fn dispatch_uses_canonical_tool_names_for_lifecycle_contributors() -> anyh
     Ok(())
 }
 
+#[tokio::test]
+async fn code_mode_rejects_direct_model_only_tools_before_dispatch() {
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let tool_name = codex_tools::ToolName::plain("direct_only");
+    let mut registry = ToolRegistry::default();
+    registry.add_with_exposure(
+        TestHandler {
+            tool_name: tool_name.clone(),
+        },
+        ToolExposure::DirectModelOnly,
+    );
+
+    assert!(
+        registry
+            .dispatch_any_with_terminal_outcome(
+                test_invocation(
+                    Arc::clone(&session),
+                    Arc::clone(&turn),
+                    "direct-call",
+                    tool_name.clone(),
+                ),
+                /*terminal_outcome_reached*/ None,
+            )
+            .await
+            .is_ok()
+    );
+
+    let mut invocation = test_invocation(session, turn, "nested-call", tool_name);
+    invocation.source = crate::tools::context::ToolCallSource::CodeMode {
+        cell_id: "cell-1".to_string(),
+        runtime_tool_call_id: "tool-1".to_string(),
+    };
+    let error = match registry
+        .dispatch_any_with_terminal_outcome(invocation, /*terminal_outcome_reached*/ None)
+        .await
+    {
+        Ok(_) => panic!("direct-model-only tool should be rejected in code mode"),
+        Err(error) => error,
+    };
+    let FunctionCallError::RespondToModel(message) = error else {
+        panic!("expected a model-visible rejection, got {error:?}");
+    };
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&message).expect("valid structured error"),
+        serde_json::json!({
+            "error": {
+                "code": "direct_tool_required",
+                "tool": "direct_only",
+                "message": "Call `direct_only` directly; it cannot be invoked through `exec` or `tools.*`."
+            }
+        })
+    );
+}
+
 fn test_invocation(
     session: Arc<crate::session::session::Session>,
     turn: Arc<crate::session::turn_context::TurnContext>,
