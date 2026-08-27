@@ -133,6 +133,9 @@ func TestRealtimeStreamsAreThreadScoped(t *testing.T) {
 	defer secondStream.Close()
 
 	transport.deliverNotification("thread/realtime/started", json.RawMessage(`{"threadId":"thread-1","version":"v1"}`), nil)
+	transport.deliverNotification("thread/realtime/item/started", json.RawMessage(`{"threadId":"thread-1","item":{"id":"item-1","realtimeSessionId":"session-1","type":"realtimeSessionStarted"}}`), nil)
+	transport.deliverNotification("thread/realtime/item/transcript/delta", json.RawMessage(`{"threadId":"thread-1","itemId":"item-1","delta":"hello"}`), nil)
+	transport.deliverNotification("thread/realtime/item/completed", json.RawMessage(`{"threadId":"thread-1","item":{"id":"item-1","realtimeSessionId":"session-1","type":"realtimeSessionStarted"}}`), nil)
 
 	notification, ok := firstStream.Next(ctx)
 	if !ok {
@@ -140,6 +143,19 @@ func TestRealtimeStreamsAreThreadScoped(t *testing.T) {
 	}
 	if notification.Method != "thread/realtime/started" {
 		t.Fatalf("notification method = %q", notification.Method)
+	}
+	for _, method := range []string{
+		"thread/realtime/item/started",
+		"thread/realtime/item/transcript/delta",
+		"thread/realtime/item/completed",
+	} {
+		notification, ok = firstStream.Next(ctx)
+		if !ok {
+			t.Fatalf("first stream closed before %s: %v", method, firstStream.Err())
+		}
+		if notification.Method != method {
+			t.Fatalf("notification method = %q, want %q", notification.Method, method)
+		}
 	}
 	timeout, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
 	defer cancel()

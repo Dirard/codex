@@ -1565,10 +1565,7 @@
         "boundedModelContextFields": [],
         "direction": "clientToServer",
         "exception": null,
-        "experimental": {
-          "fieldPaths": [],
-          "reason": "thread/revert"
-        },
+        "experimental": null,
         "experimentalFields": [],
         "inspectParams": false,
         "manualPayloadConversion": null,
@@ -2068,10 +2065,7 @@
         "boundedModelContextFields": [],
         "direction": "clientToServer",
         "exception": null,
-        "experimental": {
-          "fieldPaths": [],
-          "reason": "thread/turns/list"
-        },
+        "experimental": null,
         "experimentalFields": [],
         "inspectParams": false,
         "manualPayloadConversion": null,
@@ -2091,10 +2085,7 @@
         "boundedModelContextFields": [],
         "direction": "clientToServer",
         "exception": null,
-        "experimental": {
-          "fieldPaths": [],
-          "reason": "thread/items/list"
-        },
+        "experimental": null,
         "experimentalFields": [],
         "inspectParams": false,
         "manualPayloadConversion": null,
@@ -3017,6 +3008,44 @@
         "variant": "TurnStart"
       },
       {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
+        "experimental": {
+          "fieldPaths": [],
+          "reason": "turn/settings/update"
+        },
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": null,
+        "method": "turn/settings/update",
+        "paramsSchemaRef": "#/definitions/TurnSettingsUpdateParams",
+        "paramsType": "TurnSettingsUpdateParams",
+        "requestSerializationScopes": [
+          {
+            "condition": "always",
+            "identityExtractors": [
+              {
+                "fieldPath": "thread_id",
+                "identityName": "threadId",
+                "optional": false,
+                "terminalPredicate": null
+              }
+            ],
+            "kind": "thread",
+            "precedence": 0,
+            "queueKey": null
+          }
+        ],
+        "responseSchemaRef": "#/definitions/TurnSettingsUpdateResponse",
+        "responseType": "TurnSettingsUpdateResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "TurnSettingsUpdate"
+      },
+      {
         "boundedModelContextFields": [
           {
             "fieldPath": "additional_context.*.value",
@@ -3296,6 +3325,44 @@
         "sdkVisibility": "public",
         "serdeShapeRequirement": "schemaSufficient",
         "variant": "ThreadRealtimeStop"
+      },
+      {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
+        "experimental": {
+          "fieldPaths": [],
+          "reason": "thread/timeline/list"
+        },
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": null,
+        "method": "thread/timeline/list",
+        "paramsSchemaRef": "#/definitions/ThreadTimelineListParams",
+        "paramsType": "ThreadTimelineListParams",
+        "requestSerializationScopes": [
+          {
+            "condition": "always",
+            "identityExtractors": [
+              {
+                "fieldPath": "thread_id",
+                "identityName": "threadId",
+                "optional": false,
+                "terminalPredicate": null
+              }
+            ],
+            "kind": "thread",
+            "precedence": 0,
+            "queueKey": null
+          }
+        ],
+        "responseSchemaRef": "#/definitions/ThreadTimelineListResponse",
+        "responseType": "ThreadTimelineListResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "ThreadTimelineList"
       },
       {
         "boundedModelContextFields": [],
@@ -5232,9 +5299,9 @@
       }
     ],
     "digests": {
-      "manifestDigest": "9493e9cd6abc9c34db00b3f2051ba4767b9c8bf1acbb510021ff2970a282a1d8",
-      "protocolDigest": "0afe77ba68116ebe0b78bbd86f18b329dd711cd784424bfe845a014454c7ea36",
-      "schemaDigest": "319870d880836a569aaea47032fdbc584b5eac7bedaf70938bc22f810ba2a2af"
+      "manifestDigest": "2210d0215a27a50353e1502bc157f3c12c5c34c6d03b9e3e4ba20964e90094d2",
+      "protocolDigest": "16777121c4c95843bb14ea92ed9e0f455714103a32c1824bf279ed20428e0b36",
+      "schemaDigest": "a97ae5307590b248e16f60d74e3c406ce6517081954ee0ac1be3e610b47fe94e"
     },
     "protocolMode": "experimental",
     "routingLifecycle": [
@@ -5895,6 +5962,27 @@
         "metadataStatus": "schemaSufficient",
         "rustType": "AgentPath",
         "schemaRef": "#/definitions/v2/AgentPath",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "AllowDenyRequirement",
+        "schemaRef": "#/definitions/v2/AllowDenyRequirement",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -6818,6 +6906,90 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "BrowserUseAccessApprovalLifetime",
+        "schemaRef": "#/definitions/v2/BrowserUseAccessApprovalLifetime",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "BrowserUseConfig",
+        "schemaRef": "#/definitions/v2/BrowserUseConfig",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "BrowserUseOriginPolicy",
+        "schemaRef": "#/definitions/v2/BrowserUseOriginPolicy",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "BrowserUseOriginPolicyConfig",
+        "schemaRef": "#/definitions/v2/BrowserUseOriginPolicyConfig",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "BrowserUseRequirements",
         "schemaRef": "#/definitions/v2/BrowserUseRequirements",
         "schemaSufficientProof": {
@@ -7608,6 +7780,27 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "CommandExecutionApprovalKind",
+        "schemaRef": "#/definitions/CommandExecutionApprovalKind",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "CommandExecutionOutputDeltaNotification",
         "schemaRef": "#/definitions/v2/CommandExecutionOutputDeltaNotification",
         "schemaSufficientProof": {
@@ -7803,8 +7996,155 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "ComputerUseConfig",
+        "schemaRef": "#/definitions/v2/ComputerUseConfig",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ComputerUseMacosConfig",
+        "schemaRef": "#/definitions/v2/ComputerUseMacosConfig",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ComputerUseMacosRequirements",
+        "schemaRef": "#/definitions/v2/ComputerUseMacosRequirements",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "ComputerUseRequirements",
         "schemaRef": "#/definitions/v2/ComputerUseRequirements",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ComputerUseWindowsConfig",
+        "schemaRef": "#/definitions/v2/ComputerUseWindowsConfig",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ComputerUseWindowsExeConfig",
+        "schemaRef": "#/definitions/v2/ComputerUseWindowsExeConfig",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ComputerUseWindowsExeRequirement",
+        "schemaRef": "#/definitions/v2/ComputerUseWindowsExeRequirement",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ComputerUseWindowsRequirements",
+        "schemaRef": "#/definitions/v2/ComputerUseWindowsRequirements",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -8346,6 +8686,27 @@
         "metadataStatus": "schemaSufficient",
         "rustType": "CurrentTimeReadResponse",
         "schemaRef": "#/definitions/CurrentTimeReadResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "CyberAccessProgram",
+        "schemaRef": "#/definitions/v2/CyberAccessProgram",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -12373,6 +12734,27 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "McpServerConnectionStatus",
+        "schemaRef": "#/definitions/v2/McpServerConnectionStatus",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "McpServerElicitationAction",
         "schemaRef": "#/definitions/McpServerElicitationAction",
         "schemaSufficientProof": {
@@ -13244,6 +13626,48 @@
         "rustType": "MigrationDetails",
         "schemaRef": "#/definitions/v2/MigrationDetails",
         "schemaSufficientProof": null,
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "MisalignmentErrorDetails",
+        "schemaRef": "#/definitions/v2/MisalignmentErrorDetails",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "MisalignmentSteer",
+        "schemaRef": "#/definitions/v2/MisalignmentSteer",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
         "variantAliases": []
       },
       {
@@ -17074,6 +17498,27 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "ResponseUsageMetadata",
+        "schemaRef": "#/definitions/v2/ResponseUsageMetadata",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "ResponsesApiWebSearchAction",
         "schemaRef": "#/definitions/v2/ResponsesApiWebSearchAction",
         "schemaSufficientProof": {
@@ -20023,6 +20468,27 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadRealtimeBemItemPresentation",
+        "schemaRef": "#/definitions/v2/ThreadRealtimeBemItemPresentation",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "ThreadRealtimeClosedNotification",
         "schemaRef": "#/definitions/v2/ThreadRealtimeClosedNotification",
         "schemaSufficientProof": {
@@ -20086,8 +20552,92 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadRealtimeItem",
+        "schemaRef": "#/definitions/v2/ThreadRealtimeItem",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "ThreadRealtimeItemAddedNotification",
         "schemaRef": "#/definitions/v2/ThreadRealtimeItemAddedNotification",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadRealtimeItemCompletedNotification",
+        "schemaRef": "#/definitions/v2/ThreadRealtimeItemCompletedNotification",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadRealtimeItemStartedNotification",
+        "schemaRef": "#/definitions/v2/ThreadRealtimeItemStartedNotification",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadRealtimeItemTranscriptDeltaNotification",
+        "schemaRef": "#/definitions/v2/ThreadRealtimeItemTranscriptDeltaNotification",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -20172,6 +20722,27 @@
         "metadataStatus": "schemaSufficient",
         "rustType": "ThreadRealtimeSdpNotification",
         "schemaRef": "#/definitions/v2/ThreadRealtimeSdpNotification",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadRealtimeSessionOutcome",
+        "schemaRef": "#/definitions/v2/ThreadRealtimeSessionOutcome",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -20340,6 +20911,27 @@
         "metadataStatus": "schemaSufficient",
         "rustType": "ThreadRealtimeTranscriptDoneNotification",
         "schemaRef": "#/definitions/v2/ThreadRealtimeTranscriptDoneNotification",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadRealtimeTranscriptRole",
+        "schemaRef": "#/definitions/v2/ThreadRealtimeTranscriptRole",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -21505,6 +22097,69 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadTimelineEntry",
+        "schemaRef": "#/definitions/v2/ThreadTimelineEntry",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadTimelineListParams",
+        "schemaRef": "#/definitions/v2/ThreadTimelineListParams",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadTimelineListResponse",
+        "schemaRef": "#/definitions/v2/ThreadTimelineListResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "ThreadTokenUsage",
         "schemaRef": "#/definitions/v2/ThreadTokenUsage",
         "schemaSufficientProof": {
@@ -22192,6 +22847,69 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "TurnSettingsUpdateParams",
+        "schemaRef": "#/definitions/v2/TurnSettingsUpdateParams",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "TurnSettingsUpdateResponse",
+        "schemaRef": "#/definitions/v2/TurnSettingsUpdateResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "TurnSettingsUpdateStatus",
+        "schemaRef": "#/definitions/v2/TurnSettingsUpdateStatus",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "TurnStartParams",
         "schemaRef": "#/definitions/v2/TurnStartParams",
         "schemaSufficientProof": {
@@ -22299,6 +23017,27 @@
         "metadataStatus": "schemaSufficient",
         "rustType": "TurnSteerResponse",
         "schemaRef": "#/definitions/v2/TurnSteerResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "TurnToolOutput",
+        "schemaRef": "#/definitions/v2/TurnToolOutput",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -22930,10 +23669,7 @@
       {
         "direction": "serverNotification",
         "exception": null,
-        "experimental": {
-          "fieldPaths": [],
-          "reason": "thread/reverted"
-        },
+        "experimental": null,
         "experimentalFields": [],
         "manualPayloadConversion": null,
         "method": "thread/reverted",
@@ -25175,6 +25911,126 @@
         "exception": null,
         "experimental": {
           "fieldPaths": [],
+          "reason": "thread/realtime/item/started"
+        },
+        "experimentalFields": [],
+        "manualPayloadConversion": null,
+        "method": "thread/realtime/item/started",
+        "payloadSchemaRef": "#/definitions/ThreadRealtimeItemStartedNotification",
+        "payloadType": "ThreadRealtimeItemStartedNotification",
+        "routingStrategy": {
+          "kind": "routed",
+          "routes": [
+            {
+              "identityExtractors": [
+                {
+                  "fieldPath": "threadId",
+                  "identityName": "threadId",
+                  "optional": false,
+                  "terminalPredicate": null
+                },
+                {
+                  "fieldPath": "item.id",
+                  "identityName": "id",
+                  "optional": false,
+                  "terminalPredicate": null
+                }
+              ],
+              "resourceDomain": "thread",
+              "wireIdentitySource": "thread/realtime/item/started"
+            }
+          ]
+        },
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "ThreadRealtimeItemStarted"
+      },
+      {
+        "direction": "serverNotification",
+        "exception": null,
+        "experimental": {
+          "fieldPaths": [],
+          "reason": "thread/realtime/item/transcript/delta"
+        },
+        "experimentalFields": [],
+        "manualPayloadConversion": null,
+        "method": "thread/realtime/item/transcript/delta",
+        "payloadSchemaRef": "#/definitions/ThreadRealtimeItemTranscriptDeltaNotification",
+        "payloadType": "ThreadRealtimeItemTranscriptDeltaNotification",
+        "routingStrategy": {
+          "kind": "routed",
+          "routes": [
+            {
+              "identityExtractors": [
+                {
+                  "fieldPath": "threadId",
+                  "identityName": "threadId",
+                  "optional": false,
+                  "terminalPredicate": null
+                },
+                {
+                  "fieldPath": "itemId",
+                  "identityName": "itemId",
+                  "optional": false,
+                  "terminalPredicate": null
+                }
+              ],
+              "resourceDomain": "thread",
+              "wireIdentitySource": "thread/realtime/item/transcript/delta"
+            }
+          ]
+        },
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "ThreadRealtimeItemTranscriptDelta"
+      },
+      {
+        "direction": "serverNotification",
+        "exception": null,
+        "experimental": {
+          "fieldPaths": [],
+          "reason": "thread/realtime/item/completed"
+        },
+        "experimentalFields": [],
+        "manualPayloadConversion": null,
+        "method": "thread/realtime/item/completed",
+        "payloadSchemaRef": "#/definitions/ThreadRealtimeItemCompletedNotification",
+        "payloadType": "ThreadRealtimeItemCompletedNotification",
+        "routingStrategy": {
+          "kind": "routed",
+          "routes": [
+            {
+              "identityExtractors": [
+                {
+                  "fieldPath": "threadId",
+                  "identityName": "threadId",
+                  "optional": false,
+                  "terminalPredicate": null
+                },
+                {
+                  "fieldPath": "item.id",
+                  "identityName": "id",
+                  "optional": false,
+                  "terminalPredicate": null
+                }
+              ],
+              "resourceDomain": "thread",
+              "wireIdentitySource": "thread/realtime/item/completed"
+            }
+          ]
+        },
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "ThreadRealtimeItemCompleted"
+      },
+      {
+        "direction": "serverNotification",
+        "exception": null,
+        "experimental": {
+          "fieldPaths": [],
           "reason": "thread/realtime/transcript/delta"
         },
         "experimentalFields": [],
@@ -26701,6 +27557,41 @@
         "direction": "clientToServer",
         "exception": null,
         "experimental": null,
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": null,
+        "method": "thread/revert",
+        "paramsSchemaRef": "#/definitions/ThreadRevertParams",
+        "paramsType": "ThreadRevertParams",
+        "requestSerializationScopes": [
+          {
+            "condition": "always",
+            "identityExtractors": [
+              {
+                "fieldPath": "thread_id",
+                "identityName": "threadId",
+                "optional": false,
+                "terminalPredicate": null
+              }
+            ],
+            "kind": "thread",
+            "precedence": 0,
+            "queueKey": null
+          }
+        ],
+        "responseSchemaRef": "#/definitions/ThreadRevertResponse",
+        "responseType": "ThreadRevertResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "ThreadRevert"
+      },
+      {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
+        "experimental": null,
         "experimentalFields": [
           {
             "containingType": "ThreadListParams",
@@ -26897,6 +27788,46 @@
         "sdkVisibility": "public",
         "serdeShapeRequirement": "manifestRequired",
         "variant": "ThreadRead"
+      },
+      {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
+        "experimental": null,
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": null,
+        "method": "thread/turns/list",
+        "paramsSchemaRef": "#/definitions/ThreadTurnsListParams",
+        "paramsType": "ThreadTurnsListParams",
+        "requestSerializationScopes": [],
+        "responseSchemaRef": "#/definitions/ThreadTurnsListResponse",
+        "responseType": "ThreadTurnsListResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "ThreadTurnsList"
+      },
+      {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
+        "experimental": null,
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": null,
+        "method": "thread/items/list",
+        "paramsSchemaRef": "#/definitions/ThreadItemsListParams",
+        "paramsType": "ThreadItemsListParams",
+        "requestSerializationScopes": [],
+        "responseSchemaRef": "#/definitions/ThreadItemsListResponse",
+        "responseType": "ThreadItemsListResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "ThreadItemsList"
       },
       {
         "boundedModelContextFields": [],
@@ -29050,9 +29981,9 @@
       }
     ],
     "digests": {
-      "manifestDigest": "6d108cf57746d7db55a51f47f42ae19b83ca768ed9095b1ed8ff2028e1abfcfb",
-      "protocolDigest": "e8e87d18c742456c50193a3f4060725649a0342fae7295fcf980af844978522b",
-      "schemaDigest": "a8ab1bec13adc1d3781c8a18f99974c3201a70d36d82398f27e27c2af39eb8cf"
+      "manifestDigest": "db6ab15079f82f9b322f8945609369d9743cc9d8d94e101aced1579c3b444e8b",
+      "protocolDigest": "4a2077e01cab7f91e73b857160e896320f15d4e2d9b50422b3c3f15e74998430",
+      "schemaDigest": "d7c4f9621ec480388842219755341ff63776a58a3844a7880a680fac3eca6598"
     },
     "protocolMode": "stable",
     "routingLifecycle": [
@@ -29538,6 +30469,27 @@
         "metadataStatus": "schemaSufficient",
         "rustType": "AgentPath",
         "schemaRef": "#/definitions/v2/AgentPath",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "AllowDenyRequirement",
+        "schemaRef": "#/definitions/v2/AllowDenyRequirement",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -30168,6 +31120,90 @@
         "metadataStatus": "schemaSufficient",
         "rustType": "AutoReviewRequirements",
         "schemaRef": "#/definitions/v2/AutoReviewRequirements",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "BrowserUseAccessApprovalLifetime",
+        "schemaRef": "#/definitions/v2/BrowserUseAccessApprovalLifetime",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "BrowserUseConfig",
+        "schemaRef": "#/definitions/v2/BrowserUseConfig",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "BrowserUseOriginPolicy",
+        "schemaRef": "#/definitions/v2/BrowserUseOriginPolicy",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "BrowserUseOriginPolicyConfig",
+        "schemaRef": "#/definitions/v2/BrowserUseOriginPolicyConfig",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -30849,6 +31885,27 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "CommandExecutionApprovalKind",
+        "schemaRef": "#/definitions/CommandExecutionApprovalKind",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "CommandExecutionOutputDeltaNotification",
         "schemaRef": "#/definitions/v2/CommandExecutionOutputDeltaNotification",
         "schemaSufficientProof": {
@@ -31044,8 +32101,155 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "ComputerUseConfig",
+        "schemaRef": "#/definitions/v2/ComputerUseConfig",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ComputerUseMacosConfig",
+        "schemaRef": "#/definitions/v2/ComputerUseMacosConfig",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ComputerUseMacosRequirements",
+        "schemaRef": "#/definitions/v2/ComputerUseMacosRequirements",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "ComputerUseRequirements",
         "schemaRef": "#/definitions/v2/ComputerUseRequirements",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ComputerUseWindowsConfig",
+        "schemaRef": "#/definitions/v2/ComputerUseWindowsConfig",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ComputerUseWindowsExeConfig",
+        "schemaRef": "#/definitions/v2/ComputerUseWindowsExeConfig",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ComputerUseWindowsExeRequirement",
+        "schemaRef": "#/definitions/v2/ComputerUseWindowsExeRequirement",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ComputerUseWindowsRequirements",
+        "schemaRef": "#/definitions/v2/ComputerUseWindowsRequirements",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -35131,6 +36335,27 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "McpServerConnectionStatus",
+        "schemaRef": "#/definitions/v2/McpServerConnectionStatus",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "McpServerElicitationAction",
         "schemaRef": "#/definitions/McpServerElicitationAction",
         "schemaSufficientProof": {
@@ -35855,6 +37080,48 @@
         "rustType": "MigrationDetails",
         "schemaRef": "#/definitions/v2/MigrationDetails",
         "schemaSufficientProof": null,
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "MisalignmentErrorDetails",
+        "schemaRef": "#/definitions/v2/MisalignmentErrorDetails",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "MisalignmentSteer",
+        "schemaRef": "#/definitions/v2/MisalignmentSteer",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
         "variantAliases": []
       },
       {
@@ -38250,6 +39517,27 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "ResponseUsageMetadata",
+        "schemaRef": "#/definitions/v2/ResponseUsageMetadata",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "ResponsesApiWebSearchAction",
         "schemaRef": "#/definitions/v2/ResponsesApiWebSearchAction",
         "schemaSufficientProof": {
@@ -39891,6 +41179,27 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadHistoryMode",
+        "schemaRef": "#/definitions/v2/ThreadHistoryMode",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "ThreadId",
         "schemaRef": "#/definitions/v2/ThreadId",
         "schemaSufficientProof": {
@@ -39958,6 +41267,69 @@
         "rustType": "ThreadItem",
         "schemaRef": "#/definitions/v2/ThreadItem",
         "schemaSufficientProof": null,
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadItemEntry",
+        "schemaRef": "#/definitions/v2/ThreadItemEntry",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadItemsListParams",
+        "schemaRef": "#/definitions/v2/ThreadItemsListParams",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadItemsListResponse",
+        "schemaRef": "#/definitions/v2/ThreadItemsListResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
         "variantAliases": []
       },
       {
@@ -40333,6 +41705,69 @@
         "rustType": "ThreadResumeResponse",
         "schemaRef": "#/definitions/ThreadResumeResponse",
         "schemaSufficientProof": null,
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadRevertParams",
+        "schemaRef": "#/definitions/v2/ThreadRevertParams",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadRevertResponse",
+        "schemaRef": "#/definitions/v2/ThreadRevertResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadRevertedNotification",
+        "schemaRef": "#/definitions/v2/ThreadRevertedNotification",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
         "variantAliases": []
       },
       {
@@ -41054,6 +42489,48 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadTurnsListParams",
+        "schemaRef": "#/definitions/v2/ThreadTurnsListParams",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadTurnsListResponse",
+        "schemaRef": "#/definitions/v2/ThreadTurnsListResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "ThreadUnarchiveParams",
         "schemaRef": "#/definitions/v2/ThreadUnarchiveParams",
         "schemaSufficientProof": {
@@ -41740,6 +43217,27 @@
       {
         "fields": [],
         "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "TurnToolOutput",
+        "schemaRef": "#/definitions/v2/TurnToolOutput",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
         "metadataStatus": "manifestRequired",
         "reviewNote": "reviewed manifest-required type with no field-level serde metadata",
         "rustType": "UserInput",
@@ -42328,6 +43826,37 @@
         "sdkVisibility": "public",
         "serdeShapeRequirement": "schemaSufficient",
         "variant": "ThreadClosed"
+      },
+      {
+        "direction": "serverNotification",
+        "exception": null,
+        "experimental": null,
+        "experimentalFields": [],
+        "manualPayloadConversion": null,
+        "method": "thread/reverted",
+        "payloadSchemaRef": "#/definitions/ThreadRevertedNotification",
+        "payloadType": "ThreadRevertedNotification",
+        "routingStrategy": {
+          "kind": "routed",
+          "routes": [
+            {
+              "identityExtractors": [
+                {
+                  "fieldPath": "threadId",
+                  "identityName": "threadId",
+                  "optional": false,
+                  "terminalPredicate": null
+                }
+              ],
+              "resourceDomain": "thread",
+              "wireIdentitySource": "thread/reverted"
+            }
+          ]
+        },
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "ThreadReverted"
       },
       {
         "direction": "serverNotification",
