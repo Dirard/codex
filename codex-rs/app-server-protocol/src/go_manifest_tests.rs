@@ -2328,6 +2328,18 @@ fn expected_server_notification_routes() -> Vec<(&'static str, ExpectedRouting)>
             ExpectedRouting::Routed(&["threadId"]),
         ),
         (
+            "thread/realtime/item/started",
+            ExpectedRouting::Routed(&["threadId", "item.id"]),
+        ),
+        (
+            "thread/realtime/item/transcript/delta",
+            ExpectedRouting::Routed(&["threadId", "itemId"]),
+        ),
+        (
+            "thread/realtime/item/completed",
+            ExpectedRouting::Routed(&["threadId", "item.id"]),
+        ),
+        (
             "thread/realtime/transcript/delta",
             ExpectedRouting::Routed(&["threadId", "role"]),
         ),

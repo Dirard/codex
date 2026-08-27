@@ -44,6 +44,7 @@ func TestThreadAndTurnOptionCoverageAgainstGeneratedParams(t *testing.T) {
 		"ClientUserMessageID":        "TurnOptions.ClientUserMessageID",
 		"CollaborationMode":          "TurnOptions.CollaborationMode",
 		"Cwd":                        "TurnOptions.CWD",
+		"CyberAccessProgram":         "TurnOptions.CyberAccessProgram",
 		"Effort":                     "TurnOptions.Effort",
 		"Environments":               "TurnOptions.Environments",
 		"Model":                      "TurnOptions.Model",
@@ -55,7 +56,10 @@ func TestThreadAndTurnOptionCoverageAgainstGeneratedParams(t *testing.T) {
 		"RuntimeWorkspaceRoots":      "TurnOptions.RuntimeWorkspaceRoots",
 		"SandboxPolicy":              "TurnOptions.SandboxPolicy",
 		"ServiceTier":                "TurnOptions.ServiceTier",
+		"ServiceTierForTurn":         "TurnOptions.ServiceTierForTurn",
 		"Summary":                    "TurnOptions.Summary",
+		"ToolOutput":                 "TurnOptions.ToolOutput",
+		"TurnTrigger":                "TurnOptions.TurnTrigger",
 	}, map[string]string{
 		"Input":    "SDK-owned required argument from Thread.Run/Thread.Turn input",
 		"ThreadID": "SDK-owned from Thread.ID",
