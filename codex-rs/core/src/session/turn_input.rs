@@ -387,7 +387,9 @@ async fn start_if_idle(
             return Err(error);
         }
     };
-    if has_user_input && !matches!(&turn_context.session_source, SessionSource::SubAgent(_)) {
+    if kind == TurnStartKind::User
+        && !matches!(&turn_context.session_source, SessionSource::SubAgent(_))
+    {
         session
             .start_turn_spawn_budget(turn_context.config.max_spawned_threads_per_turn)
             .await;

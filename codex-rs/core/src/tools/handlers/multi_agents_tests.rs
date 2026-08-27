@@ -2064,32 +2064,34 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
     )
     .expect("completed status should render");
 
+    let (mailbox_items, start_options) = root
+        .thread
+        .session
+        .input_queue
+        .drain_mailbox_input_items()
+        .await;
     assert_eq!(
-        root.thread
-            .session
-            .input_queue
-            .drain_mailbox_input_items()
-            .await,
-        (
-            vec![
-                TurnInput::InterAgentCommunication(InterAgentCommunication::new(
-                    worker_path.clone(),
-                    AgentPath::root(),
-                    Vec::new(),
-                    first_notification,
-                    /*trigger_turn*/ false,
-                )),
-                TurnInput::InterAgentCommunication(InterAgentCommunication::new(
-                    worker_path,
-                    AgentPath::root(),
-                    Vec::new(),
-                    second_notification,
-                    /*trigger_turn*/ false,
-                )),
-            ],
-            None,
-            None,
-        )
+        mailbox_items,
+        vec![
+            TurnInput::InterAgentCommunication(InterAgentCommunication::new(
+                worker_path.clone(),
+                AgentPath::root(),
+                Vec::new(),
+                first_notification,
+                /*trigger_turn*/ false,
+            )),
+            TurnInput::InterAgentCommunication(InterAgentCommunication::new(
+                worker_path,
+                AgentPath::root(),
+                Vec::new(),
+                second_notification,
+                /*trigger_turn*/ false,
+            )),
+        ]
+    );
+    assert_eq!(
+        (start_options.parent_turn_id, start_options.root_turn_id),
+        (None, None)
     );
 }
 
