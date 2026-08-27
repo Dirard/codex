@@ -1997,8 +1997,7 @@ impl Session {
                 self,
                 id.clone(),
                 communication,
-                /*parent_turn_id*/ None,
-                /*root_turn_id*/ None,
+                TurnStartOptions::default(),
             )
             .await;
             id

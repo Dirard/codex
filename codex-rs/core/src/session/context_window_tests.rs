@@ -1,13 +1,16 @@
 use super::*;
+use crate::session::tests::update_turn_settings_for_test;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use std::sync::Arc;
 
 async fn total_scope_turn(auto_limit: i64, full_limit: i64) -> TurnContext {
     let (_, mut turn) = crate::session::tests::make_session_and_context().await;
-    let model_info = Arc::make_mut(&mut turn.model_info);
-    model_info.auto_compact_token_limit = Some(auto_limit);
-    model_info.context_window = Some(full_limit);
-    model_info.effective_context_window_percent = 100;
+    update_turn_settings_for_test(&mut turn, |settings| {
+        let model_info = Arc::make_mut(&mut settings.model_info);
+        model_info.auto_compact_token_limit = Some(auto_limit);
+        model_info.context_window = Some(full_limit);
+        model_info.effective_context_window_percent = 100;
+    });
     turn
 }
 
@@ -16,9 +19,11 @@ async fn body_scope_turn(auto_limit: i64, full_limit: i64) -> TurnContext {
     Arc::make_mut(&mut turn.config).model_auto_compact_token_limit = Some(auto_limit);
     Arc::make_mut(&mut turn.config).model_auto_compact_token_limit_scope =
         AutoCompactTokenLimitScope::BodyAfterPrefix;
-    let model_info = Arc::make_mut(&mut turn.model_info);
-    model_info.context_window = Some(full_limit);
-    model_info.effective_context_window_percent = 100;
+    update_turn_settings_for_test(&mut turn, |settings| {
+        let model_info = Arc::make_mut(&mut settings.model_info);
+        model_info.context_window = Some(full_limit);
+        model_info.effective_context_window_percent = 100;
+    });
     turn
 }
 
