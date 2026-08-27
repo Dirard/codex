@@ -14,13 +14,19 @@ func TestTurnHandleInjectsThreadAndTurnIdentity(t *testing.T) {
 	client, transport := newStage5Client(t)
 	transport.responses["turn/start"] = json.RawMessage(`{"turn":{"id":"turn-1","items":[],"status":"inProgress"}}`)
 	transport.responses["turn/steer"] = json.RawMessage(`{"turnId":"turn-1"}`)
+	transport.responses["turn/settings/update"] = json.RawMessage(`{"status":"accepted"}`)
 
 	thread := &Thread{client: client, id: "thread-1"}
-	handle, err := thread.Turn(ctx, Text("inspect"), TurnOptions{})
+	handle, err := thread.Turn(ctx, Text("inspect"), TurnOptions{
+		ServiceTierForTurn: "default",
+		CyberAccessProgram: protocol.CyberAccessProgramStandard,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertRequestThreadID(t, requestParamsForMethod(t, transport, "turn/start"), "thread-1")
+	assertRequestStringField(t, requestParamsForMethod(t, transport, "turn/start"), "serviceTierForTurn", "default")
+	assertRequestStringField(t, requestParamsForMethod(t, transport, "turn/start"), "cyberAccessProgram", "standard")
 	if handle.ID() != "turn-1" {
 		t.Fatalf("turn id = %q, want turn-1", handle.ID())
 	}
@@ -38,6 +44,52 @@ func TestTurnHandleInjectsThreadAndTurnIdentity(t *testing.T) {
 	interruptParams := requestParamsForMethod(t, transport, "turn/interrupt")
 	assertRequestThreadID(t, interruptParams, "thread-1")
 	assertRequestStringField(t, interruptParams, "turnId", "turn-1")
+
+	if _, err := handle.UpdateSettings(ctx, protocol.TurnSettingsUpdateParams{}); err != nil {
+		t.Fatal(err)
+	}
+	settingsParams := requestParamsForMethod(t, transport, "turn/settings/update")
+	assertRequestThreadID(t, settingsParams, "thread-1")
+	assertRequestStringField(t, settingsParams, "turnId", "turn-1")
+}
+
+func TestThreadTurnAcceptsStandaloneToolOutput(t *testing.T) {
+	ctx := context.Background()
+	client, transport := newStage5Client(t)
+	transport.responses["turn/start"] = json.RawMessage(`{"turn":{"id":"turn-1","items":[],"status":"inProgress"}}`)
+	thread := &Thread{client: client, id: "thread-1"}
+
+	_, err := thread.Turn(ctx, Input{}, TurnOptions{
+		TurnTrigger: "sdk",
+		ToolOutput: &protocol.TurnToolOutput{
+			Name:   "search",
+			Output: protocol.FunctionCallOutputBody(json.RawMessage(`{"ok":true}`)),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := requestParamsForMethod(t, transport, "turn/start")
+	assertRequestStringField(t, params, "turnTrigger", "sdk")
+	var raw struct {
+		ToolOutput struct {
+			Name string `json:"name"`
+		} `json:"toolOutput"`
+	}
+	if err := json.Unmarshal(params, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw.ToolOutput.Name != "search" {
+		t.Fatalf("toolOutput.name = %q, want search", raw.ToolOutput.Name)
+	}
+
+	_, err = thread.Turn(ctx, Text("user input"), TurnOptions{
+		ToolOutput: &protocol.TurnToolOutput{Name: "search"},
+	})
+	var configErr *ConfigError
+	if !errors.As(err, &configErr) {
+		t.Fatalf("err = %T(%v), want *ConfigError", err, err)
+	}
 }
 
 func TestCollectRunResultRejectsStreamClosedBeforeTerminalNotification(t *testing.T) {

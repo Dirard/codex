@@ -386,6 +386,12 @@ func realtimeNotificationThreadID(payload any) (string, bool) {
 		return p.ThreadID, true
 	case protocol.ThreadRealtimeItemAddedNotification:
 		return p.ThreadID, true
+	case protocol.ThreadRealtimeItemStartedNotification:
+		return p.ThreadID, true
+	case protocol.ThreadRealtimeItemTranscriptDeltaNotification:
+		return p.ThreadID, true
+	case protocol.ThreadRealtimeItemCompletedNotification:
+		return p.ThreadID, true
 	case protocol.ThreadRealtimeOutputAudioDeltaNotification:
 		return p.ThreadID, true
 	case protocol.ThreadRealtimeSdpNotification:
