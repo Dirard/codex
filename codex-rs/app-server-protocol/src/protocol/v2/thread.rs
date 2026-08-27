@@ -1808,22 +1808,28 @@ pub enum ThreadTimelineEntry {
     TurnStarted {
         #[ts(type = "number")]
         position: u64,
+        #[schemars(rename = "turnId")]
         #[ts(rename = "turnId")]
         turn_id: String,
+        #[schemars(rename = "startedAt")]
         #[ts(rename = "startedAt", type = "number | null")]
         started_at: Option<i64>,
     },
     TurnCompleted {
         #[ts(type = "number")]
         position: u64,
+        #[schemars(rename = "turnId")]
         #[ts(rename = "turnId")]
         turn_id: String,
         status: TurnStatus,
         error: Option<TurnError>,
+        #[schemars(rename = "startedAt")]
         #[ts(rename = "startedAt", type = "number | null")]
         started_at: Option<i64>,
+        #[schemars(rename = "completedAt")]
         #[ts(rename = "completedAt", type = "number | null")]
         completed_at: Option<i64>,
+        #[schemars(rename = "durationMs")]
         #[ts(rename = "durationMs", type = "number | null")]
         duration_ms: Option<i64>,
     },
