@@ -22698,14 +22698,14 @@
               "minimum": 0.0,
               "type": "integer"
             },
-            "started_at": {
+            "startedAt": {
               "format": "int64",
               "type": [
                 "integer",
                 "null"
               ]
             },
-            "turn_id": {
+            "turnId": {
               "type": "string"
             },
             "type": {
@@ -22718,7 +22718,7 @@
           },
           "required": [
             "position",
-            "turn_id",
+            "turnId",
             "type"
           ],
           "title": "TurnStartedThreadTimelineEntry",
@@ -22726,14 +22726,14 @@
         },
         {
           "properties": {
-            "completed_at": {
+            "completedAt": {
               "format": "int64",
               "type": [
                 "integer",
                 "null"
               ]
             },
-            "duration_ms": {
+            "durationMs": {
               "format": "int64",
               "type": [
                 "integer",
@@ -22755,7 +22755,7 @@
               "minimum": 0.0,
               "type": "integer"
             },
-            "started_at": {
+            "startedAt": {
               "format": "int64",
               "type": [
                 "integer",
@@ -22765,7 +22765,7 @@
             "status": {
               "$ref": "#/definitions/TurnStatus"
             },
-            "turn_id": {
+            "turnId": {
               "type": "string"
             },
             "type": {
@@ -22779,7 +22779,7 @@
           "required": [
             "position",
             "status",
-            "turn_id",
+            "turnId",
             "type"
           ],
           "title": "TurnCompletedThreadTimelineEntry",

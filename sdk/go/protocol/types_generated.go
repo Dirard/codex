@@ -44085,26 +44085,25 @@ func (v *ThreadStatusChangedNotification) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadTimelineEntry struct {
-	CompletedAt     Optional[int64]             `json:"completed_at,omitempty"`
-	DurationMs      Optional[int64]             `json:"duration_ms,omitempty"`
-	Error           Optional[TurnError]         `json:"error,omitempty"`
-	Item            OptionalNonNull[ThreadItem] `json:"item,omitempty"`
-	Position        OptionalNonNull[uint64]     `json:"position,omitempty"`
-	StartedAt       Optional[int64]             `json:"started_at,omitempty"`
-	Status          OptionalNonNull[TurnStatus] `json:"status,omitempty"`
-	TurnID          OptionalNonNull[string]     `json:"turnId,omitempty"`
-	TurnIDSnakeCase OptionalNonNull[string]     `json:"turn_id,omitempty"`
-	TypeValue       string                      `json:"type,omitempty"`
-	RawJSON         json.RawMessage             `json:"-"`
+	CompletedAt Optional[int64]             `json:"completedAt,omitempty"`
+	DurationMs  Optional[int64]             `json:"durationMs,omitempty"`
+	Error       Optional[TurnError]         `json:"error,omitempty"`
+	Item        OptionalNonNull[ThreadItem] `json:"item,omitempty"`
+	Position    OptionalNonNull[uint64]     `json:"position,omitempty"`
+	StartedAt   Optional[int64]             `json:"startedAt,omitempty"`
+	Status      OptionalNonNull[TurnStatus] `json:"status,omitempty"`
+	TurnID      OptionalNonNull[string]     `json:"turnId,omitempty"`
+	TypeValue   string                      `json:"type,omitempty"`
+	RawJSON     json.RawMessage             `json:"-"`
 }
 
 func (v ThreadTimelineEntry) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
 	if v.CompletedAt.IsSet() {
-		out["completed_at"] = v.CompletedAt
+		out["completedAt"] = v.CompletedAt
 	}
 	if v.DurationMs.IsSet() {
-		out["duration_ms"] = v.DurationMs
+		out["durationMs"] = v.DurationMs
 	}
 	if v.Error.IsSet() {
 		out["error"] = v.Error
@@ -44116,16 +44115,13 @@ func (v ThreadTimelineEntry) MarshalJSON() ([]byte, error) {
 		out["position"] = v.Position
 	}
 	if v.StartedAt.IsSet() {
-		out["started_at"] = v.StartedAt
+		out["startedAt"] = v.StartedAt
 	}
 	if v.Status.IsSet() {
 		out["status"] = v.Status
 	}
 	if v.TurnID.IsSet() {
 		out["turnId"] = v.TurnID
-	}
-	if v.TurnIDSnakeCase.IsSet() {
-		out["turn_id"] = v.TurnIDSnakeCase
 	}
 	out["type"] = v.TypeValue
 	switch v.TypeValue {
@@ -44150,8 +44146,8 @@ func (v ThreadTimelineEntry) MarshalJSON() ([]byte, error) {
 		if !v.Position.IsSet() {
 			return nil, DecodeError{Field: "position", Reason: "missing required field for type turnStarted"}
 		}
-		if !v.TurnIDSnakeCase.IsSet() {
-			return nil, DecodeError{Field: "turn_id", Reason: "missing required field for type turnStarted"}
+		if !v.TurnID.IsSet() {
+			return nil, DecodeError{Field: "turnId", Reason: "missing required field for type turnStarted"}
 		}
 	case "turnCompleted":
 		if !v.Position.IsSet() {
@@ -44160,8 +44156,8 @@ func (v ThreadTimelineEntry) MarshalJSON() ([]byte, error) {
 		if !v.Status.IsSet() {
 			return nil, DecodeError{Field: "status", Reason: "missing required field for type turnCompleted"}
 		}
-		if !v.TurnIDSnakeCase.IsSet() {
-			return nil, DecodeError{Field: "turn_id", Reason: "missing required field for type turnCompleted"}
+		if !v.TurnID.IsSet() {
+			return nil, DecodeError{Field: "turnId", Reason: "missing required field for type turnCompleted"}
 		}
 	default:
 		if len(v.RawJSON) > 0 {
@@ -44202,16 +44198,16 @@ func (v *ThreadTimelineEntry) UnmarshalJSON(data []byte) error {
 		v.RawJSON = append(v.RawJSON[:0], data...)
 		return nil
 	}
-	rawCompletedAt, ok := raw["completed_at"]
+	rawCompletedAt, ok := raw["completedAt"]
 	if ok {
 		if err := json.Unmarshal(rawCompletedAt, &v.CompletedAt); err != nil {
-			return fmt.Errorf("field completed_at: %w", err)
+			return fmt.Errorf("field completedAt: %w", err)
 		}
 	}
-	rawDurationMs, ok := raw["duration_ms"]
+	rawDurationMs, ok := raw["durationMs"]
 	if ok {
 		if err := json.Unmarshal(rawDurationMs, &v.DurationMs); err != nil {
-			return fmt.Errorf("field duration_ms: %w", err)
+			return fmt.Errorf("field durationMs: %w", err)
 		}
 	}
 	rawError, ok := raw["error"]
@@ -44237,10 +44233,10 @@ func (v *ThreadTimelineEntry) UnmarshalJSON(data []byte) error {
 			}
 		}
 	}
-	rawStartedAt, ok := raw["started_at"]
+	rawStartedAt, ok := raw["startedAt"]
 	if ok {
 		if err := json.Unmarshal(rawStartedAt, &v.StartedAt); err != nil {
-			return fmt.Errorf("field started_at: %w", err)
+			return fmt.Errorf("field startedAt: %w", err)
 		}
 	}
 	rawStatus, ok := raw["status"]
@@ -44253,12 +44249,6 @@ func (v *ThreadTimelineEntry) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawTurnID, &v.TurnID); err != nil {
 			return fmt.Errorf("field turnId: %w", err)
-		}
-	}
-	rawTurnIDSnakeCase, ok := raw["turn_id"]
-	if ok {
-		if err := json.Unmarshal(rawTurnIDSnakeCase, &v.TurnIDSnakeCase); err != nil {
-			return fmt.Errorf("field turn_id: %w", err)
 		}
 	}
 	rawTypeValue, ok := raw["type"]
@@ -44306,10 +44296,10 @@ func (v *ThreadTimelineEntry) UnmarshalJSON(data []byte) error {
 		} else if bytes.Equal(rawValue, []byte("null")) {
 			return DecodeError{Field: "position", Reason: "cannot be null"}
 		}
-		if rawValue, ok := raw["turn_id"]; !ok {
-			return DecodeError{Field: "turn_id", Reason: "missing required field for type turnStarted"}
+		if rawValue, ok := raw["turnId"]; !ok {
+			return DecodeError{Field: "turnId", Reason: "missing required field for type turnStarted"}
 		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "turn_id", Reason: "cannot be null"}
+			return DecodeError{Field: "turnId", Reason: "cannot be null"}
 		}
 	case "turnCompleted":
 		if rawValue, ok := raw["position"]; !ok {
@@ -44322,10 +44312,10 @@ func (v *ThreadTimelineEntry) UnmarshalJSON(data []byte) error {
 		} else if bytes.Equal(rawValue, []byte("null")) {
 			return DecodeError{Field: "status", Reason: "cannot be null"}
 		}
-		if rawValue, ok := raw["turn_id"]; !ok {
-			return DecodeError{Field: "turn_id", Reason: "missing required field for type turnCompleted"}
+		if rawValue, ok := raw["turnId"]; !ok {
+			return DecodeError{Field: "turnId", Reason: "missing required field for type turnCompleted"}
 		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "turn_id", Reason: "cannot be null"}
+			return DecodeError{Field: "turnId", Reason: "cannot be null"}
 		}
 	default:
 		v.RawJSON = append(v.RawJSON[:0], data...)
