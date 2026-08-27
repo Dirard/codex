@@ -135,20 +135,27 @@ func TestThreadItemAgentMessageDoesNotRequireSubAgentKind(t *testing.T) {
 	}
 }
 
-func TestThreadTimelineEntryUsesVariantSpecificTurnIDWireNames(t *testing.T) {
+func TestThreadTimelineEntryUsesCanonicalCamelCaseWireNames(t *testing.T) {
 	tests := []struct {
-		name string
-		json string
-		item bool
+		name        string
+		json        string
+		startedAt   int64
+		completedAt int64
+		durationMs  int64
 	}{
 		{
 			name: "item",
 			json: `{"type":"item","item":{"type":"agentMessage","id":"item-1","text":"ok","phase":"final_answer"},"position":1,"turnId":"turn-1"}`,
-			item: true,
 		},
 		{
-			name: "turn started",
-			json: `{"type":"turnStarted","position":2,"turn_id":"turn-1"}`,
+			name:      "turn started",
+			json:      `{"type":"turnStarted","position":2,"turnId":"turn-1","startedAt":10}`,
+			startedAt: 10,
+		},
+		{
+			name:      "turn completed",
+			json:      `{"type":"turnCompleted","position":3,"turnId":"turn-1","status":"completed","error":null,"startedAt":10,"completedAt":20,"durationMs":10}`,
+			startedAt: 10, completedAt: 20, durationMs: 10,
 		},
 	}
 	for _, tt := range tests {
@@ -157,12 +164,23 @@ func TestThreadTimelineEntryUsesVariantSpecificTurnIDWireNames(t *testing.T) {
 			if err := json.Unmarshal([]byte(tt.json), &entry); err != nil {
 				t.Fatal(err)
 			}
-			if tt.item {
-				if !entry.TurnID.IsSet() || entry.TurnIDSnakeCase.IsSet() {
-					t.Fatalf("item turn ID fields = %#v, %#v", entry.TurnID, entry.TurnIDSnakeCase)
+			if turnID, ok := entry.TurnID.Value(); !ok || turnID != "turn-1" {
+				t.Fatalf("turn ID = %q, %t", turnID, ok)
+			}
+			if tt.startedAt != 0 {
+				if startedAt, ok := entry.StartedAt.Value(); !ok || startedAt != tt.startedAt {
+					t.Fatalf("startedAt = %d, %t", startedAt, ok)
 				}
-			} else if !entry.TurnIDSnakeCase.IsSet() || entry.TurnID.IsSet() {
-				t.Fatalf("turn boundary turn ID fields = %#v, %#v", entry.TurnID, entry.TurnIDSnakeCase)
+			}
+			if tt.completedAt != 0 {
+				if completedAt, ok := entry.CompletedAt.Value(); !ok || completedAt != tt.completedAt {
+					t.Fatalf("completedAt = %d, %t", completedAt, ok)
+				}
+			}
+			if tt.durationMs != 0 {
+				if durationMs, ok := entry.DurationMs.Value(); !ok || durationMs != tt.durationMs {
+					t.Fatalf("durationMs = %d, %t", durationMs, ok)
+				}
 			}
 			encoded, err := json.Marshal(entry)
 			if err != nil {

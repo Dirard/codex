@@ -5300,8 +5300,8 @@
     ],
     "digests": {
       "manifestDigest": "2210d0215a27a50353e1502bc157f3c12c5c34c6d03b9e3e4ba20964e90094d2",
-      "protocolDigest": "16777121c4c95843bb14ea92ed9e0f455714103a32c1824bf279ed20428e0b36",
-      "schemaDigest": "a97ae5307590b248e16f60d74e3c406ce6517081954ee0ac1be3e610b47fe94e"
+      "protocolDigest": "b6fb14bb2c93aac4f82d64706a75f169f6f762ca1e9bbcd9937aaf965d50596f",
+      "schemaDigest": "0c98b73da3ba714717e8f47c412cdacd645b1e15e0f369949c63542919a65373"
     },
     "protocolMode": "experimental",
     "routingLifecycle": [
