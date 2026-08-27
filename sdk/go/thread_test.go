@@ -281,6 +281,13 @@ func TestThreadsResourceWrappersSendMatrixMethods(t *testing.T) {
 				return err
 			},
 		},
+		{
+			name: "list timeline", method: "thread/timeline/list", threadID: "thread-1",
+			call: func() error {
+				_, err := client.Threads.ListTimeline(ctx, protocol.ThreadTimelineListParams{ThreadID: "thread-1"})
+				return err
+			},
+		},
 	}
 
 	for _, tt := range calls {
