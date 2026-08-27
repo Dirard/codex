@@ -176,6 +176,12 @@ pub(crate) fn notification_routing_strategy(method: &'static str) -> Notificatio
         "fuzzyFileSearch/sessionUpdated" | "fuzzyFileSearch/sessionCompleted" => {
             routed_notification(method, &[("sessionId", false)])
         }
+        "thread/realtime/item/started" | "thread/realtime/item/completed" => {
+            routed_notification(method, &[("threadId", false), ("item.id", false)])
+        }
+        "thread/realtime/item/transcript/delta" => {
+            routed_notification(method, &[("threadId", false), ("itemId", false)])
+        }
         "thread/realtime/transcript/delta" | "thread/realtime/transcript/done" => {
             routed_notification(method, &[("threadId", false), ("role", false)])
         }

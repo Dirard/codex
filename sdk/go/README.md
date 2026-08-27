@@ -112,6 +112,7 @@ Threads are started through `Threads.Start`, then turns are started with `Thread
 <!-- codex-go-sdk-docs:thread/inject_items -->
 <!-- codex-go-sdk-docs:thread/turns/list -->
 <!-- codex-go-sdk-docs:thread/items/list -->
+<!-- codex-go-sdk-docs:thread/timeline/list -->
 <!-- codex-go-sdk-docs:thread/loaded/list -->
 
 ```go
@@ -138,6 +139,7 @@ _, _ = client.Threads.TerminateBackgroundTerminal(ctx, protocol.ThreadBackground
 _, _ = client.Threads.InjectItems(ctx, protocol.ThreadInjectItemsParams{})
 _, _ = client.Threads.ListTurns(ctx, protocol.ThreadTurnsListParams{})
 _, _ = client.Threads.ListItems(ctx, protocol.ThreadItemsListParams{})
+_, _ = client.Threads.ListTimeline(ctx, protocol.ThreadTimelineListParams{})
 _, _ = client.Threads.ListLoaded(ctx, protocol.ThreadLoadedListParams{})
 ```
 
@@ -145,7 +147,7 @@ _, _ = client.Threads.ListLoaded(ctx, protocol.ThreadLoadedListParams{})
 
 `examples/run` shows sync-style `Run`, images through `DataURL` or `LocalImage`, and structured output through `TurnOptions.OutputSchema`. This is the per-turn SDK surface; the README does not promise a separate general response-format API beyond the app-server protocol fields implemented and tested by the SDK.
 
-`examples/streaming` shows `Thread.Turn`, streamed notifications, `Steer`, and `Interrupt`.
+`examples/streaming` shows `Thread.Turn`, streamed notifications, `Steer`, `Interrupt`, and live turn-settings updates.
 
 ## Examples
 
