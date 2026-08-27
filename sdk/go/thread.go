@@ -93,6 +93,10 @@ type TurnOptions struct {
 	Permissions                string
 	Model                      string
 	ServiceTier                string
+	ServiceTierForTurn         string
+	CyberAccessProgram         protocol.CyberAccessProgram
+	TurnTrigger                string
+	ToolOutput                 *protocol.TurnToolOutput
 	Effort                     protocol.ReasoningEffort
 	Summary                    protocol.ReasoningSummary
 	Personality                protocol.Personality
@@ -417,6 +421,13 @@ func (c *ThreadsClient) ListItems(ctx context.Context, params protocol.ThreadIte
 	return c.client.Raw().ThreadItemsList(ctx, params)
 }
 
+func (c *ThreadsClient) ListTimeline(ctx context.Context, params protocol.ThreadTimelineListParams) (protocol.ThreadTimelineListResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.ThreadTimelineListResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().ThreadTimelineList(ctx, params)
+}
+
 func (t *Thread) Run(ctx context.Context, input Input, opts TurnOptions) (*RunResult, error) {
 	handle, err := t.Turn(ctx, input, opts)
 	if err != nil {
@@ -440,6 +451,9 @@ func (t *Thread) Turn(ctx context.Context, input Input, opts TurnOptions) (*Turn
 	wireInput, err := input.wire(t.client.limits)
 	if err != nil {
 		return nil, err
+	}
+	if opts.ToolOutput != nil && len(wireInput) > 0 {
+		return nil, &ConfigError{Reason: "turn tool output cannot be combined with user input"}
 	}
 	params := turnStartParams(t.id, wireInput, opts)
 	response, err := t.client.Raw().TurnStart(ctx, params)
@@ -692,6 +706,18 @@ func applyTurnOptions(params *protocol.TurnStartParams, opts TurnOptions) {
 	}
 	if opts.ServiceTier != "" {
 		params.ServiceTier = protocol.Some(opts.ServiceTier)
+	}
+	if opts.ServiceTierForTurn != "" {
+		params.ServiceTierForTurn = protocol.Some(opts.ServiceTierForTurn)
+	}
+	if opts.CyberAccessProgram != "" {
+		params.CyberAccessProgram = protocol.Some(opts.CyberAccessProgram)
+	}
+	if opts.TurnTrigger != "" {
+		params.TurnTrigger = protocol.Some(opts.TurnTrigger)
+	}
+	if opts.ToolOutput != nil {
+		params.ToolOutput = protocol.Some(*opts.ToolOutput)
 	}
 	if opts.Effort != "" {
 		params.Effort = protocol.Some(opts.Effort)

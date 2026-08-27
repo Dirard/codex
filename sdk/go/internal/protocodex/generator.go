@@ -179,7 +179,7 @@ func knownIntegerFormat(format string) bool {
 }
 
 func validateManifestSchemaRefs(modeName string, mode ManifestMode, bundle *SchemaBundle) error {
-	names := definitionNameMap(sortedDefinitionKeys(bundle))
+	names := definitionNameMap(bundle)
 	for _, entry := range mode.ClientRequests {
 		if err := validateRequestManifestSchemaRefs(modeName, "client request", entry.Method, entry.ParamsType, entry.ParamsSchemaRef, entry.ResponseType, entry.ResponseSchemaRef, entry.SDKVisibility, entry.SchemaExcludedReason, entry.ManualPayloadConversion, bundle, names); err != nil {
 			return err

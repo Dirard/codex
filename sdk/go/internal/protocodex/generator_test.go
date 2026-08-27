@@ -65,6 +65,38 @@ func TestRenderTaggedObjectUnionRequiresOnlyTheDiscriminatorGlobally(t *testing.
 	}
 }
 
+func TestRenderTaggedObjectUnionDisambiguatesCollidingFieldNames(t *testing.T) {
+	schema := Schema{OneOf: []Schema{
+		{
+			Type:     "object",
+			Required: []string{"type", "turnId"},
+			Properties: map[string]Schema{
+				"type":   {Type: "string", Enum: []json.RawMessage{json.RawMessage(`"item"`)}},
+				"turnId": {Type: "string"},
+			},
+		},
+		{
+			Type:     "object",
+			Required: []string{"type", "turn_id"},
+			Properties: map[string]Schema{
+				"type":    {Type: "string", Enum: []json.RawMessage{json.RawMessage(`"turnStarted"`)}},
+				"turn_id": {Type: "string"},
+			},
+		},
+	}}
+	rendered := renderDefinitionType("ThreadTimelineEntry", "v2/ThreadTimelineEntry", schema, map[string]string{}, nil, nil, nil)
+	for _, required := range []string{
+		"TurnID OptionalNonNull[string]",
+		"TurnIDSnakeCase OptionalNonNull[string]",
+		`json:"turnId,omitempty"`,
+		`json:"turn_id,omitempty"`,
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("colliding fields were not rendered distinctly; missing %q\n%s", required, rendered)
+		}
+	}
+}
+
 func TestGenerateWritesProtocol(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "protocol")
 	rootOut := t.TempDir()
@@ -83,6 +115,9 @@ func TestGenerateWritesProtocol(t *testing.T) {
 	types := readGeneratedFile(t, out, "types_generated.go")
 	for _, required := range []string{
 		"type AppScreenshot struct",
+		"type ActiveProtocolMode string",
+		"type ThreadTimelineListParams struct",
+		"type TurnSettingsUpdateParams struct",
 		"FileID",
 		"Optional[string]",
 		"UserPrompt",
@@ -109,6 +144,7 @@ func TestGenerateWritesProtocol(t *testing.T) {
 		"type ExecCommandApprovalParams",
 		"func (v ServerRequest) ExecCommandApprovalParams()",
 		"type JSONRPCMessage json.RawMessage",
+		"type V2AbsolutePathBuf string",
 	} {
 		if strings.Contains(types, forbidden) {
 			t.Fatalf("types_generated.go leaked non-public protocol surface %q", forbidden)
@@ -116,8 +152,14 @@ func TestGenerateWritesProtocol(t *testing.T) {
 	}
 
 	rawClient := readGeneratedFile(t, out, "raw_client.go")
-	if !strings.Contains(rawClient, "func (c RawClient) ThreadStart(") {
-		t.Fatal("raw client missing ThreadStart")
+	for _, required := range []string{
+		"func (c RawClient) ThreadStart(",
+		"func (c RawClient) ThreadTimelineList(",
+		"func (c RawClient) TurnSettingsUpdate(",
+	} {
+		if !strings.Contains(rawClient, required) {
+			t.Fatalf("raw client missing %q", required)
+		}
 	}
 	if strings.Contains(rawClient, "func (c RawClient) Initialize(") {
 		t.Fatal("raw client must not expose Initialize")
@@ -168,6 +210,9 @@ func TestGenerateWritesProtocol(t *testing.T) {
 		"ServerNotificationRoutingByMethod",
 		"func DecodeServerNotificationPayload(method string, params json.RawMessage) (any, error)",
 		"case \"item/plan/delta\":",
+		"case \"thread/realtime/item/started\":",
+		"case \"thread/realtime/item/transcript/delta\":",
+		"case \"thread/realtime/item/completed\":",
 		"var payload PlanDeltaNotification",
 		"type RoutingLifecycleMetadata struct",
 		"RoutingLifecycleByStartMethod",

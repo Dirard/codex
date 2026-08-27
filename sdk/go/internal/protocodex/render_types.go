@@ -3,6 +3,7 @@ package protocodex
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 )
@@ -14,7 +15,7 @@ func renderTypes(bundle *SchemaBundle, manifest *Manifest) (string, error) {
 	b.WriteString("type DecodeError struct { Field string; Reason string }\n\n")
 	b.WriteString("func (e DecodeError) Error() string { return fmt.Sprintf(\"field %s: %s\", e.Field, e.Reason) }\n\n")
 	keys := sortedDefinitionKeys(bundle)
-	names := definitionNameMap(keys)
+	names := definitionNameMap(bundle)
 	serdeShapes := mapSerdeShapes(manifest.Experimental.SerdeShapes)
 	written := map[string]bool{"ClientNotification": true, "RequestID": true}
 	skipped := publicDefinitionSkipSet(manifest)
@@ -81,12 +82,17 @@ func sortedDefinitionKeys(bundle *SchemaBundle) []string {
 	return keys
 }
 
-func definitionNameMap(keys []string) map[string]string {
+func definitionNameMap(bundle *SchemaBundle) map[string]string {
+	keys := sortedDefinitionKeys(bundle)
 	names := make(map[string]string, len(keys))
 	used := map[string]string{"RequestID": "handwritten"}
 	for _, key := range keys {
 		name := typeNameForDefinition(key)
 		if prior, ok := used[name]; ok && prior != key {
+			if reflect.DeepEqual(bundle.Definitions[prior], bundle.Definitions[key]) {
+				names[key] = name
+				continue
+			}
 			name = namespaceTypeName(key)
 		}
 		used[name] = key
@@ -721,6 +727,7 @@ func renderStruct(name, key string, schema Schema, names map[string]string, serd
 	stringUnionValues, hasStringObjectUnion := mixedStringObjectUnionValues(schema)
 	var b strings.Builder
 	var fields []renderedField
+	usedFieldNames := map[string]bool{}
 	b.WriteString(fmt.Sprintf("type %s struct {\n", name))
 	if hasStringObjectUnion {
 		b.WriteString("\tStringValue string `json:\"-\"`\n")
@@ -728,8 +735,17 @@ func renderStruct(name, key string, schema Schema, names map[string]string, serd
 	for _, propertyName := range sortedPropertyNames(properties) {
 		property := properties[propertyName]
 		fieldType := goTypeForSchema(property, names, required, required[propertyName])
+		fieldName := goFieldName(propertyName)
+		if usedFieldNames[fieldName] {
+			if strings.Contains(propertyName, "_") {
+				fieldName += "SnakeCase"
+			} else {
+				fieldName += "CamelCase"
+			}
+		}
+		usedFieldNames[fieldName] = true
 		field := renderedField{
-			FieldName:       goFieldName(propertyName),
+			FieldName:       fieldName,
 			WireName:        propertyName,
 			Type:            fieldType,
 			Required:        required[propertyName],

@@ -158,7 +158,7 @@ func validateReachableSerdeShapeCoverage(modeName string, mode ManifestMode, bun
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	names := definitionNameMap(sortedDefinitionKeys(bundle))
+	names := definitionNameMap(bundle)
 	shapes := mapSerdeShapes(mode.SerdeShapes)
 	var problems []string
 	for _, key := range keys {
@@ -189,7 +189,7 @@ func validateReachableSerdeShapeCoverage(modeName string, mode ManifestMode, bun
 }
 
 func reachableSchemaDefinitions(mode ManifestMode, bundle *SchemaBundle) (map[string]bool, error) {
-	names := definitionNameMap(sortedDefinitionKeys(bundle))
+	names := definitionNameMap(bundle)
 	reachable := map[string]bool{}
 	var problems []string
 	var visitDefinition func(key string)
