@@ -337,7 +337,7 @@ impl Session {
         // using the model policy as a deterministic fallback for older raw
         // rollout items rather than depending on today's config.
         let replay_output_truncation = codex_utils_output_truncation::OutputTruncation::new(
-            turn_context.model_info.truncation_policy.into(),
+            turn_context.model_info().truncation_policy.into(),
             /*max_lines*/ None,
         );
         // Materialize exact history semantics from the replay-derived suffix. The eventual lazy

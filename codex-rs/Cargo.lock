@@ -1917,7 +1917,7 @@ dependencies = [
 
 [[package]]
 name = "codex-agent-roles"
-version = "0.0.0"
+version = "0.149.3"
 dependencies = [
  "codex-config",
  "codex-file-system",
@@ -4733,7 +4733,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-redacted-string"
-version = "0.0.0"
+version = "0.149.3"
 dependencies = [
  "schemars 0.8.22",
  "serde",
@@ -4877,7 +4877,7 @@ dependencies = [
 
 [[package]]
 name = "codex-worktree"
-version = "0.0.0"
+version = "0.149.3"
 dependencies = [
  "anyhow",
  "codex-git-utils",

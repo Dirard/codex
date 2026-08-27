@@ -447,7 +447,7 @@ impl TurnContext {
 
     pub(crate) fn output_truncation(&self) -> codex_utils_output_truncation::OutputTruncation {
         let policy = effective_output_truncation_policy(
-            self.model_info.truncation_policy.into(),
+            self.model_info().truncation_policy.into(),
             self.config.output_truncation.max_bytes,
         );
         codex_utils_output_truncation::OutputTruncation::new_with_mcp_max_lines(

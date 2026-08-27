@@ -353,8 +353,7 @@ async fn run_remote_compact_task_inner_impl(
     )
     .await;
     let base_instructions = sess.get_base_instructions().await;
-    let retain_client_developer_messages =
-        sess.enabled(Feature::RetainClientDeveloperMessages);
+    let retain_client_developer_messages = sess.enabled(Feature::RetainClientDeveloperMessages);
     let retained_image_budget = if sess.enabled(Feature::CompactionImageBudget) {
         RetainedImageBudget::Enabled
     } else {
@@ -746,19 +745,30 @@ fn truncate_retained_messages(
 
         let client_developer = is_client_authored_developer_message(&group.source);
         let charge_images = image_budget == RetainedImageBudget::Enabled && !client_developer;
+        let image_count = retained_input_image_count(&group.source.item);
+        let has_uncharged_audio = matches!(&group.source.item,
+            ResponseItem::Message { content, .. } if content
+                .iter()
+                .any(|content_item| matches!(content_item, ContentItem::InputAudio { .. })));
         let notice_tokens = group
             .attached_notice
             .as_ref()
             .map_or(0, |notice| message_text_token_count(&notice.item).max(1));
-        // Client-authored developer messages already charge non-text content via
-        // the serialized estimate. Preserve their text-only boundary correction.
+        // The image-budget path charges content items. Other content is bounded by
+        // the serialized estimate, except audio which intentionally remains free.
         let content_tokens = if charge_images {
             message_content_token_count(&group.source.item)
         } else {
             message_text_token_count(&group.source.item)
         };
-        let source_tokens = if client_developer {
-            usize::try_from(estimate_item_token_count(&group.source.item)).unwrap_or(usize::MAX)
+        let serialized_tokens =
+            usize::try_from(estimate_item_token_count(&group.source.item)).unwrap_or(usize::MAX);
+        let charge_serialized_estimate =
+            client_developer || (!charge_images && (image_count > 0 || !has_uncharged_audio));
+        let recheck_serialized_estimate =
+            charge_serialized_estimate || (!has_uncharged_audio && image_count == 0);
+        let source_tokens = if charge_serialized_estimate {
+            serialized_tokens
         } else {
             content_tokens.max(1)
         };
@@ -776,41 +786,55 @@ fn truncate_retained_messages(
             } else {
                 available_tokens
             };
-            let image_count = retained_input_image_count(&group.source.item);
             if charge_images && image_count > 0 {
                 // An oversized image can leave no boundary content. Do not backfill
                 // the remaining budget with older messages in that case.
                 remaining = 0;
             }
             let truncated_item = if charge_images && image_count > 0 {
-                images::truncate_message_to_token_budget(group.source, content_budget)
+                images::truncate_message_to_token_budget(group.source.clone(), content_budget)
             } else {
-                truncate_message_text_to_token_budget(group.source, content_budget)
+                truncate_message_text_to_token_budget(group.source.clone(), content_budget)
             };
-            let Some(mut truncated_item) = truncated_item else {
-                continue;
+            let mut truncated_item = match truncated_item {
+                Some(item) => Some(item),
+                None => continue,
             };
-            if client_developer {
-                let item_tokens = usize::try_from(estimate_item_token_count(&truncated_item.item))
-                    .unwrap_or(usize::MAX);
-                if item_tokens > available_tokens {
-                    let adjusted_budget = content_budget
-                        .saturating_sub(item_tokens - available_tokens)
-                        .saturating_sub(1);
-                    let Some(adjusted) =
-                        truncate_message_text_to_token_budget(truncated_item, adjusted_budget)
-                    else {
-                        continue;
-                    };
-                    if usize::try_from(estimate_item_token_count(&adjusted.item))
-                        .unwrap_or(usize::MAX)
-                        > available_tokens
-                    {
-                        continue;
+            if recheck_serialized_estimate {
+                let mut content_budget = content_budget;
+                while let Some(item) = truncated_item.as_ref() {
+                    let item_tokens = usize::try_from(estimate_item_token_count(&item.item))
+                        .unwrap_or(usize::MAX);
+                    if item_tokens <= available_tokens {
+                        break;
                     }
-                    truncated_item = adjusted;
+                    let next_budget = content_budget
+                        .saturating_sub(item_tokens.saturating_sub(available_tokens))
+                        .saturating_sub(1);
+                    if next_budget == content_budget {
+                        truncated_item = None;
+                        break;
+                    }
+                    content_budget = next_budget;
+                    match if charge_images && image_count > 0 {
+                        images::truncate_message_to_token_budget(
+                            group.source.clone(),
+                            content_budget,
+                        )
+                    } else {
+                        truncate_message_text_to_token_budget(group.source.clone(), content_budget)
+                    } {
+                        Some(adjusted) => truncated_item = Some(adjusted),
+                        None => {
+                            truncated_item = None;
+                            break;
+                        }
+                    }
                 }
             }
+            let Some(truncated_item) = truncated_item else {
+                continue;
+            };
             if let Some(notice) = group.attached_notice {
                 truncated_reversed.push(notice);
             }
@@ -1166,7 +1190,7 @@ mod tests {
     }
 
     #[test]
-    fn retained_history_truncation_preserves_images_and_truncates_later_text_parts() {
+    fn message_truncation_preserves_images_and_truncates_later_text_parts() {
         let item = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -1205,7 +1229,13 @@ mod tests {
             ),
         };
 
-        let truncated = truncate_without_metadata(vec![item], /*max_tokens*/ 3);
+        let truncated = truncate_message_text_to_token_budget(
+            ResponseItemEnvelope::new(item),
+            /*max_tokens*/ 3,
+        )
+        .map(ResponseItemEnvelope::into_item)
+        .into_iter()
+        .collect::<Vec<_>>();
 
         assert_eq!(
             truncated,
@@ -1276,7 +1306,9 @@ mod tests {
 
     #[test]
     fn retained_history_keeps_mixed_fixed_content_that_exactly_fits() {
-        let mixed = ResponseItemEnvelope::new(mixed_text_image_message("keep only what fits"));
+        let mixed = ResponseItemEnvelope::new(mixed_text_image_message(
+            &"keep only what fits ".repeat(/*count*/ 20),
+        ));
         let text_free = truncate_message_text_to_token_budget(mixed.clone(), /*max_tokens*/ 0)
             .expect("the image remains after text is removed");
         let fixed_cost = usize::try_from(estimate_item_token_count(&text_free.item))

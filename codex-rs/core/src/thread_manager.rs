@@ -985,7 +985,9 @@ impl ThreadManager {
             parent.session.services.agent_control.clone(),
         );
         request.parent_thread_id = Some(parent_thread_id);
-        Box::pin(self.state.spawn_thread(request)).await
+        Box::pin(self.state.spawn_thread(request))
+            .await
+            .map(ThreadSpawnOutcome::into_new_thread)
     }
 
     /// Allocates a thread ID before startup so a caller can associate host-owned state with it.
