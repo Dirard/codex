@@ -135,6 +135,44 @@ func TestThreadItemAgentMessageDoesNotRequireSubAgentKind(t *testing.T) {
 	}
 }
 
+func TestThreadTimelineEntryUsesVariantSpecificTurnIDWireNames(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+		item bool
+	}{
+		{
+			name: "item",
+			json: `{"type":"item","item":{"type":"agentMessage","id":"item-1","text":"ok","phase":"final_answer"},"position":1,"turnId":"turn-1"}`,
+			item: true,
+		},
+		{
+			name: "turn started",
+			json: `{"type":"turnStarted","position":2,"turn_id":"turn-1"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var entry ThreadTimelineEntry
+			if err := json.Unmarshal([]byte(tt.json), &entry); err != nil {
+				t.Fatal(err)
+			}
+			if tt.item {
+				if !entry.TurnID.IsSet() || entry.TurnIDSnakeCase.IsSet() {
+					t.Fatalf("item turn ID fields = %#v, %#v", entry.TurnID, entry.TurnIDSnakeCase)
+				}
+			} else if !entry.TurnIDSnakeCase.IsSet() || entry.TurnID.IsSet() {
+				t.Fatalf("turn boundary turn ID fields = %#v, %#v", entry.TurnID, entry.TurnIDSnakeCase)
+			}
+			encoded, err := json.Marshal(entry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertJSONEqual(t, encoded, tt.json)
+		})
+	}
+}
+
 func TestGeneratedTaggedUnionMarshalRejectsInvalidVariant(t *testing.T) {
 	_, err := json.Marshal(DynamicToolSpec{TypeValue: "function"})
 	var decodeErr DecodeError
