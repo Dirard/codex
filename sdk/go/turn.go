@@ -82,6 +82,18 @@ func (h *TurnHandle) Interrupt(ctx context.Context) error {
 	return err
 }
 
+func (h *TurnHandle) UpdateSettings(ctx context.Context, params protocol.TurnSettingsUpdateParams) (protocol.TurnSettingsUpdateResponse, error) {
+	if h == nil || h.client == nil {
+		return protocol.TurnSettingsUpdateResponse{}, &ClosedError{}
+	}
+	if err := h.client.ensureHighLevelEnabled("turn settings update"); err != nil {
+		return protocol.TurnSettingsUpdateResponse{}, err
+	}
+	params.ThreadID = h.threadID
+	params.TurnID = h.id
+	return h.client.Raw().TurnSettingsUpdate(ctx, params)
+}
+
 func collectRunResult(ctx context.Context, turnID string, stream *NotificationStream, limits ClientLimits) (*RunResult, error) {
 	return collectRunResultForThread(ctx, "", turnID, stream, limits)
 }
