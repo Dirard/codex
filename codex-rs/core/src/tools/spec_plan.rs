@@ -1172,7 +1172,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
 
     if turn_context.config.experimental_request_user_input_enabled {
         let available_modes = request_user_input_available_modes(features);
-        let exposure = if available_modes.contains(&turn_context.mode) {
+        let exposure = if available_modes.contains(&turn_context.mode()) {
             ToolExposure::DirectModelOnly
         } else {
             ToolExposure::Hidden

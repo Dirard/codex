@@ -1,3 +1,4 @@
+use crate::session::tests::update_selected_settings_for_test;
 use crate::session::tests::update_turn_settings_for_test;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -845,7 +846,11 @@ async fn request_user_input_tool_respects_mode_and_config_gates() {
     );
 
     let enabled = probe(|turn| {
-        turn.mode = codex_protocol::config_types::ModeKind::Plan;
+        update_turn_settings_for_test(turn, |settings| {
+            update_selected_settings_for_test(settings, |selected| {
+                selected.collaboration_mode.mode = codex_protocol::config_types::ModeKind::Plan;
+            });
+        });
     })
     .await;
     enabled.assert_visible_contains(&["request_user_input"]);
@@ -856,7 +861,11 @@ async fn request_user_input_tool_respects_mode_and_config_gates() {
     );
 
     let disabled = probe(|turn| {
-        turn.mode = codex_protocol::config_types::ModeKind::Plan;
+        update_turn_settings_for_test(turn, |settings| {
+            update_selected_settings_for_test(settings, |selected| {
+                selected.collaboration_mode.mode = codex_protocol::config_types::ModeKind::Plan;
+            });
+        });
         update_config(turn, |config| {
             config.experimental_request_user_input_enabled = false;
         });
@@ -885,7 +894,11 @@ async fn update_plan_tool_respects_config_gate() {
 #[tokio::test]
 async fn request_user_input_stays_direct_in_code_mode_only() {
     let plan = probe(|turn| {
-        turn.mode = codex_protocol::config_types::ModeKind::Plan;
+        update_turn_settings_for_test(turn, |settings| {
+            update_selected_settings_for_test(settings, |selected| {
+                selected.collaboration_mode.mode = codex_protocol::config_types::ModeKind::Plan;
+            });
+        });
         set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
     })
     .await;
@@ -2700,11 +2713,11 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
     assert_eq!(
         v1.namespace_function_names(MULTI_AGENT_V1_NAMESPACE),
         &[
+            "check_agent_status".to_string(),
             "close_agent".to_string(),
             "resume_agent".to_string(),
             "send_input".to_string(),
             "spawn_agent".to_string(),
-            "check_agent_status".to_string(),
         ]
     );
     let ToolSpec::Namespace(namespace) = v1.visible_spec(MULTI_AGENT_V1_NAMESPACE) else {
@@ -3116,6 +3129,7 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
             &[
                 Feature::CodeMode,
                 Feature::CodeModeOnly,
+                Feature::DefaultModeRequestUserInput,
                 Feature::MultiAgentV2,
             ],
         );
@@ -3284,6 +3298,11 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
     let code_mode_only = probe(|turn| {
         use_chatgpt_auth(turn);
         set_features(turn, &[Feature::CodeModeOnly, Feature::MultiAgentV2]);
+        set_feature(
+            turn,
+            Feature::DefaultModeRequestUserInput,
+            /*enabled*/ true,
+        );
         set_web_search_mode(turn, WebSearchMode::Live);
         update_turn_settings_for_test(turn, |settings| {
             Arc::make_mut(&mut settings.model_info).input_modalities = vec![InputModality::Image];

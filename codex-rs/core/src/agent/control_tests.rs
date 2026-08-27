@@ -16,9 +16,9 @@ use crate::context::SubagentNotification;
 use crate::init_state_db;
 use crate::session::TurnInput;
 use crate::thread_manager::StartThreadOptions;
-use crate::tools::handlers::multi_agents_common::thread_spawn_source;
 use crate::thread_manager::build_models_manager;
 use crate::thread_manager::thread_store_from_config;
+use crate::tools::handlers::multi_agents_common::thread_spawn_source;
 use assert_matches::assert_matches;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionFuture;
@@ -52,8 +52,8 @@ use codex_protocol::models::MessagePhase;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -835,6 +835,7 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
     let _ = config.features.enable(Feature::Sqlite);
     config.model = Some("gpt-5.6-sol".to_string());
     config.multi_agent_v2.max_concurrent_threads_per_session = 3;
+    config.max_spawned_threads_per_turn = 1;
     config.permissions.allow_login_shell = true;
     config
         .permissions
@@ -1227,6 +1228,7 @@ async fn cancelled_cold_resume_finishes_residency_accounting() {
                 .ensure_v2_agent_loaded(
                     config,
                     spawned_agent.thread_id,
+                    /*parent*/ None,
                     TurnSpawnBudget::new(/*limit*/ 1),
                 )
                 .await
@@ -3701,25 +3703,26 @@ async fn multi_agent_v2_terminal_status_is_published_after_parent_mailbox() {
         &expected_status,
     )
     .expect("completed status should render");
+    let (mailbox_items, start_options) = worker_thread
+        .session
+        .input_queue
+        .drain_mailbox_input_items()
+        .await;
     assert_eq!(
-        worker_thread
-            .session
-            .input_queue
-            .drain_mailbox_input_items()
-            .await,
-        (
-            vec![TurnInput::InterAgentCommunication(
-                InterAgentCommunication::new(
-                    tester_path,
-                    worker_path,
-                    Vec::new(),
-                    expected_message,
-                    /*trigger_turn*/ false,
-                )
-            )],
-            None,
-            None,
-        )
+        mailbox_items,
+        vec![TurnInput::InterAgentCommunication(
+            InterAgentCommunication::new(
+                tester_path,
+                worker_path,
+                Vec::new(),
+                expected_message,
+                /*trigger_turn*/ false,
+            )
+        )]
+    );
+    assert_eq!(
+        (start_options.parent_turn_id, start_options.root_turn_id),
+        (None, None)
     );
 }
 
@@ -3778,6 +3781,7 @@ async fn multi_agent_v2_terminal_error_is_published_after_parent_mailbox() {
         .send_event(
             tester_turn.as_ref(),
             EventMsg::Error(ErrorEvent {
+                misalignment: None,
                 message: "terminal-error-marker".to_string(),
                 codex_error_info: Some(CodexErrorInfo::InternalServerError),
             }),
@@ -3838,25 +3842,26 @@ async fn multi_agent_v2_terminal_error_is_published_after_parent_mailbox() {
         &expected_status,
     )
     .expect("errored status should render");
+    let (mailbox_items, start_options) = worker_thread
+        .session
+        .input_queue
+        .drain_mailbox_input_items()
+        .await;
     assert_eq!(
-        worker_thread
-            .session
-            .input_queue
-            .drain_mailbox_input_items()
-            .await,
-        (
-            vec![TurnInput::InterAgentCommunication(
-                InterAgentCommunication::new(
-                    tester_path,
-                    worker_path,
-                    Vec::new(),
-                    expected_message,
-                    /*trigger_turn*/ false,
-                )
-            )],
-            None,
-            None,
-        )
+        mailbox_items,
+        vec![TurnInput::InterAgentCommunication(
+            InterAgentCommunication::new(
+                tester_path,
+                worker_path,
+                Vec::new(),
+                expected_message,
+                /*trigger_turn*/ false,
+            )
+        )]
+    );
+    assert_eq!(
+        (start_options.parent_turn_id, start_options.root_turn_id),
+        (None, None)
     );
 }
 
@@ -3956,8 +3961,11 @@ async fn followup_to_non_v2_child_notifies_parent_on_second_completion() {
                 /*trigger_turn*/ true,
             ),
             AgentCommunicationContext::new(AgentCommunicationKind::Followup, parent_thread_id),
-            Some("parent-turn".to_string()),
-            Some("parent-turn".to_string()),
+            TurnStartOptions {
+                parent_turn_id: Some("parent-turn".to_string()),
+                root_turn_id: Some("parent-turn".to_string()),
+                ..Default::default()
+            },
         )
         .await
         .expect("follow-up should be accepted");
