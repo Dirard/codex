@@ -514,6 +514,12 @@ func (c RawClient) TurnStart(ctx context.Context, params TurnStartParams) (TurnS
 	return result, err
 }
 
+func (c RawClient) TurnSettingsUpdate(ctx context.Context, params TurnSettingsUpdateParams) (TurnSettingsUpdateResponse, error) {
+	var result TurnSettingsUpdateResponse
+	err := c.sender.Call(ctx, "turn/settings/update", params, &result, MethodMetadataByMethod["turn/settings/update"])
+	return result, err
+}
+
 func (c RawClient) TurnSteer(ctx context.Context, params TurnSteerParams) (TurnSteerResponse, error) {
 	var result TurnSteerResponse
 	err := c.sender.Call(ctx, "turn/steer", params, &result, MethodMetadataByMethod["turn/steer"])
@@ -553,6 +559,12 @@ func (c RawClient) ThreadRealtimeAppendSpeech(ctx context.Context, params Thread
 func (c RawClient) ThreadRealtimeStop(ctx context.Context, params ThreadRealtimeStopParams) (ThreadRealtimeStopResponse, error) {
 	var result ThreadRealtimeStopResponse
 	err := c.sender.Call(ctx, "thread/realtime/stop", params, &result, MethodMetadataByMethod["thread/realtime/stop"])
+	return result, err
+}
+
+func (c RawClient) ThreadTimelineList(ctx context.Context, params ThreadTimelineListParams) (ThreadTimelineListResponse, error) {
+	var result ThreadTimelineListResponse
+	err := c.sender.Call(ctx, "thread/timeline/list", params, &result, MethodMetadataByMethod["thread/timeline/list"])
 	return result, err
 }
 
