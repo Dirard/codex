@@ -57,17 +57,6 @@ use tracing::info;
 use tracing::warn;
 
 pub async fn interrupt(sess: &Arc<Session>) {
-    if let Err(err) = sess
-        .services
-        .agent_control
-        .interrupt_live_descendant_tasks(sess.thread_id())
-        .await
-    {
-        warn!(
-            thread_id = %sess.thread_id(),
-            "failed to interrupt live descendant tasks: {err}"
-        );
-    }
     sess.interrupt_task().await;
 }
 
@@ -209,7 +198,7 @@ pub async fn exec_approval(
     }
     match decision {
         ReviewDecision::Abort => {
-            interrupt(sess).await;
+            sess.interrupt_task().await;
         }
         other => sess.notify_approval(&approval_id, other).await,
     }
@@ -218,7 +207,7 @@ pub async fn exec_approval(
 pub async fn patch_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
     match decision {
         ReviewDecision::Abort => {
-            interrupt(sess).await;
+            sess.interrupt_task().await;
         }
         other => sess.notify_approval(&id, other).await,
     }
