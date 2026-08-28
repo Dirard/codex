@@ -15,6 +15,11 @@ use crate::context::MultiAgentRoleInstructions;
 use crate::context::SubagentNotification;
 use crate::init_state_db;
 use crate::session::TurnInput;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
+use crate::state::TaskKind;
+use crate::tasks::SessionTask;
+use crate::tasks::SessionTaskResult;
 use crate::thread_manager::StartThreadOptions;
 use crate::thread_manager::build_models_manager;
 use crate::thread_manager::thread_store_from_config;
@@ -259,6 +264,64 @@ impl AgentControlHarness {
             .expect("child spawn should succeed")
             .thread_id
     }
+}
+
+struct HeldTask {
+    cancelled: async_channel::Sender<()>,
+}
+
+impl SessionTask for HeldTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Regular
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.agent_control_interrupt_test"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        _session: Arc<Session>,
+        _ctx: Arc<TurnContext>,
+        _input: Vec<TurnInput>,
+        cancellation_token: CancellationToken,
+    ) -> SessionTaskResult {
+        cancellation_token.cancelled().await;
+        self.cancelled
+            .send(())
+            .await
+            .expect("cancellation observer should remain open");
+        Ok(None)
+    }
+}
+
+async fn start_held_task(thread: &Arc<CodexThread>) -> async_channel::Receiver<()> {
+    let (cancelled_tx, cancelled_rx) = async_channel::bounded(1);
+    let turn_context = thread.session.new_default_turn().await;
+    thread
+        .session
+        .spawn_task(
+            turn_context,
+            Vec::new(),
+            HeldTask {
+                cancelled: cancelled_tx,
+            },
+        )
+        .await;
+    cancelled_rx
+}
+
+async fn wait_for_agent_status(thread: &CodexThread, expected: AgentStatus) {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if thread.agent_status().await == expected {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("agent should reach expected status");
 }
 
 async fn persisted_originator(thread: &CodexThread) -> String {
@@ -4492,6 +4555,136 @@ async fn list_agent_subtree_thread_ids_finds_live_descendants_of_unloaded_root()
     expected_subtree_thread_ids.sort_by_key(ToString::to_string);
 
     assert_eq!(subtree_thread_ids, expected_subtree_thread_ids);
+}
+
+#[tokio::test]
+async fn interrupt_cascades_to_live_descendant_turns_only() {
+    let (home, mut config) = test_config().await;
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let (root_thread_id, root_thread) = harness.start_thread().await;
+    let (_unrelated_thread_id, unrelated_thread) = harness.start_thread().await;
+
+    let child_thread_id = harness
+        .spawn_anonymous_child(
+            root_thread_id,
+            SpawnAgentOptions {
+                parent_thread_id: Some(root_thread_id),
+                ..Default::default()
+            },
+        )
+        .await;
+    let sibling_thread_id = harness
+        .spawn_anonymous_child(
+            root_thread_id,
+            SpawnAgentOptions {
+                parent_thread_id: Some(root_thread_id),
+                ..Default::default()
+            },
+        )
+        .await;
+    let grandchild_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("grandchild task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: child_thread_id,
+                depth: 2,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("grandchild spawn should succeed");
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should exist");
+    let sibling_thread = harness
+        .manager
+        .get_thread(sibling_thread_id)
+        .await
+        .expect("sibling thread should exist");
+    let grandchild_thread = harness
+        .manager
+        .get_thread(grandchild_thread_id)
+        .await
+        .expect("grandchild thread should exist");
+    wait_for_live_thread_spawn_children(
+        &harness.control,
+        root_thread_id,
+        &[child_thread_id, sibling_thread_id],
+    )
+    .await;
+    wait_for_live_thread_spawn_children(&harness.control, child_thread_id, &[grandchild_thread_id])
+        .await;
+
+    let root_cancelled = start_held_task(&root_thread).await;
+    let child_cancelled = start_held_task(&child_thread).await;
+    let sibling_cancelled = start_held_task(&sibling_thread).await;
+    let grandchild_cancelled = start_held_task(&grandchild_thread).await;
+    let unrelated_cancelled = start_held_task(&unrelated_thread).await;
+    let unrelated_status = unrelated_thread.agent_status().await;
+
+    root_thread
+        .submit(Op::Interrupt)
+        .await
+        .expect("root interrupt should submit");
+
+    timeout(Duration::from_secs(5), async {
+        for cancelled in [
+            &root_cancelled,
+            &child_cancelled,
+            &sibling_cancelled,
+            &grandchild_cancelled,
+        ] {
+            cancelled
+                .recv()
+                .await
+                .expect("interrupted task should observe cancellation");
+        }
+    })
+    .await
+    .expect("root and descendant turns should all be interrupted");
+
+    for thread in [
+        &root_thread,
+        &child_thread,
+        &sibling_thread,
+        &grandchild_thread,
+    ] {
+        wait_for_agent_status(thread, AgentStatus::Interrupted).await;
+        assert!(thread.session.active_turn.lock().await.is_none());
+    }
+    assert_eq!(unrelated_thread.agent_status().await, unrelated_status);
+    assert!(unrelated_thread.session.active_turn.lock().await.is_some());
+    assert_matches!(
+        unrelated_cancelled.try_recv(),
+        Err(async_channel::TryRecvError::Empty)
+    );
+    for thread_id in [
+        root_thread_id,
+        child_thread_id,
+        sibling_thread_id,
+        grandchild_thread_id,
+    ] {
+        assert!(
+            harness.manager.get_thread(thread_id).await.is_ok(),
+            "interrupt must keep thread {thread_id} live"
+        );
+    }
+
+    unrelated_thread.session.interrupt_task().await;
+    let report = harness
+        .manager
+        .shutdown_all_threads_bounded(Duration::from_secs(5))
+        .await;
+    assert_eq!(report.submit_failed, Vec::<ThreadId>::new());
+    assert_eq!(report.timed_out, Vec::<ThreadId>::new());
 }
 
 #[tokio::test]
