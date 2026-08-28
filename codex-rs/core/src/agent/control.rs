@@ -18,6 +18,7 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::rollout_budget::RolloutBudget;
 use crate::session::emit_subagent_session_started;
 use crate::session::multi_agents::ResolvedMultiAgentV2UsageHints;
+use crate::session::session::Session;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session_prefix::format_subagent_context_line;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
@@ -58,6 +59,7 @@ use codex_protocol::turn_input::CyberAccessProgram;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::ReadThreadParams;
+use futures::future::join_all;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -433,6 +435,24 @@ impl AgentControl {
                 .await,
         )
         .await
+    }
+
+    /// Interrupt every live descendant task without recursively submitting interrupt ops.
+    pub(crate) async fn interrupt_live_descendant_tasks(
+        &self,
+        agent_id: ThreadId,
+    ) -> CodexResult<()> {
+        let descendant_ids = self.live_thread_spawn_descendants(agent_id).await?;
+        let state = self.upgrade()?;
+        let mut sessions = Vec::with_capacity(descendant_ids.len());
+        for descendant_id in descendant_ids {
+            if let Ok(thread) = state.get_thread(descendant_id).await {
+                sessions.push(Arc::clone(&thread.session));
+            }
+        }
+
+        join_all(sessions.iter().map(Session::interrupt_task)).await;
+        Ok(())
     }
 
     async fn handle_thread_request_result(
