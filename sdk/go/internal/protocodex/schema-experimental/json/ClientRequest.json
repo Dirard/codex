@@ -3094,6 +3094,28 @@
             "integer",
             "null"
           ]
+        },
+        "sortDirection": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SortDirection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Requires sortKey. Defaults to asc for position and desc for recencyAt."
+        },
+        "sortKey": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProjectSortKey"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Defaults to position. Recency sorting always places empty projects last."
         }
       },
       "type": "object"
@@ -3136,6 +3158,13 @@
         "path"
       ],
       "type": "object"
+    },
+    "ProjectSortKey": {
+      "enum": [
+        "position",
+        "recencyAt"
+      ],
+      "type": "string"
     },
     "ProjectUpdateParams": {
       "properties": {
@@ -6404,6 +6433,14 @@
         },
         "threadId": {
           "type": "string"
+        },
+        "timeoutMs": {
+          "description": "Maximum execution time in milliseconds. Defaults to one hour when omitted or null. Must be non-negative; zero requests an immediate timeout, not unlimited execution. Does not affect the immediate RPC acknowledgement.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [
