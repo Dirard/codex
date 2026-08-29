@@ -21,6 +21,7 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
@@ -607,11 +608,11 @@ pub(crate) fn truncate_function_output_payload(
 ) -> FunctionCallOutputPayload {
     let body = match &output.body {
         FunctionCallOutputBody::Text(content) => {
-            FunctionCallOutputBody::Text(truncate_text_with_config(content, truncation))
+            FunctionCallOutputBody::Text(truncate_text_with_config(content.as_str(), truncation))
         }
         FunctionCallOutputBody::ContentItems(items) => {
             FunctionCallOutputBody::ContentItems(truncate_function_output_items_with_config(
-                items,
+                items.as_slice(),
                 truncation,
                 estimate_audio_token_count,
             ))

@@ -1536,6 +1536,31 @@ fn record_items_truncates_custom_tool_call_output_content() {
 }
 
 #[test]
+fn record_items_applies_configured_line_limit_to_dynamic_tool_output() {
+    let mut history = ContextManager::new();
+    let item = custom_tool_call_output("dynamic-1", "one\ntwo\nthree\nfour\nfive");
+
+    history.record_items(
+        [&item],
+        OutputTruncation::new(TruncationPolicy::Bytes(100_000), Some(2)),
+    );
+
+    let [
+        ResponseItemEnvelope {
+            item: ResponseItem::CustomToolCallOutput { output, .. },
+            ..
+        },
+    ] = history.items.as_slice()
+    else {
+        panic!("expected one dynamic tool output");
+    };
+    assert_eq!(
+        output.text_content().as_deref(),
+        Some("one\n... 3 lines truncated ...\nfive"),
+    );
+}
+
+#[test]
 fn record_items_respects_custom_token_limit() {
     let mut history = ContextManager::new();
     let policy = TruncationPolicy::Tokens(10);

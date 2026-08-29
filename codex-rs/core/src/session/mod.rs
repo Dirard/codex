@@ -3546,7 +3546,7 @@ impl Session {
                 tool_router
                     .tool_namespaces_info()
                     .cloned()
-                .unwrap_or_default(),
+                    .unwrap_or_default(),
             );
         }
         let turn_spawn_budget = self
