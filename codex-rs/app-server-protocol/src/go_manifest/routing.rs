@@ -88,6 +88,8 @@ pub(crate) fn notification_routing_strategy(method: &'static str) -> Notificatio
         | "thread/compacted"
         | "model/rerouted"
         | "model/verification"
+        | "modelProvider/authRecoveryStarted"
+        | "modelProvider/authRecoveryCompleted"
         | "turn/moderationMetadata"
         | "model/safetyBuffering/updated" => {
             routed_notification(method, &[("threadId", false), ("turnId", false)])
