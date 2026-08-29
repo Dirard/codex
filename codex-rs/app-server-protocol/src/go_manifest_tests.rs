@@ -2297,6 +2297,14 @@ fn expected_server_notification_routes() -> Vec<(&'static str, ExpectedRouting)>
             ExpectedRouting::Routed(&["threadId", "turnId"]),
         ),
         (
+            "modelProvider/authRecoveryStarted",
+            ExpectedRouting::Routed(&["threadId", "turnId"]),
+        ),
+        (
+            "modelProvider/authRecoveryCompleted",
+            ExpectedRouting::Routed(&["threadId", "turnId"]),
+        ),
+        (
             "turn/moderationMetadata",
             ExpectedRouting::Routed(&["threadId", "turnId"]),
         ),
