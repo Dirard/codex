@@ -55,15 +55,14 @@ async fn context_window_token_status_with_config(
     model_info: &ModelInfo,
 ) -> ContextWindowTokenStatus {
     let active_context_tokens = sess.get_total_token_usage().await;
-    let auto_compact_window_prefill_tokens =
-        match config.model_auto_compact_token_limit_scope {
-            AutoCompactTokenLimitScope::Total => None,
-            AutoCompactTokenLimitScope::BodyAfterPrefix => {
-                sess.auto_compact_window_snapshot()
-                    .await
-                    .prefill_input_tokens
-            }
-        };
+    let auto_compact_window_prefill_tokens = match config.model_auto_compact_token_limit_scope {
+        AutoCompactTokenLimitScope::Total => None,
+        AutoCompactTokenLimitScope::BodyAfterPrefix => {
+            sess.auto_compact_window_snapshot()
+                .await
+                .prefill_input_tokens
+        }
+    };
     context_window_token_status_for_usage(
         config,
         model_info,
@@ -81,10 +80,9 @@ pub(crate) fn context_window_token_status_for_usage(
     // Count either the full active context or only the tokens added after the initial prefix.
     let (auto_compact_scope_tokens, auto_compact_scope_limit) =
         match config.model_auto_compact_token_limit_scope {
-            AutoCompactTokenLimitScope::Total => (
-                active_context_tokens,
-                model_info.auto_compact_token_limit(),
-            ),
+            AutoCompactTokenLimitScope::Total => {
+                (active_context_tokens, model_info.auto_compact_token_limit())
+            }
             AutoCompactTokenLimitScope::BodyAfterPrefix => {
                 let baseline = auto_compact_window_prefill_tokens.unwrap_or(active_context_tokens);
                 let scope_limit = config
