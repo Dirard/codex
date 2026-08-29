@@ -372,7 +372,8 @@ async fn run_remote_compact_task_inner_impl(
         );
         let candidate_tokens = estimate_history_token_count(&new_history, &base_instructions);
         let status = context_window_token_status_for_usage(
-            compaction_turn_context,
+            compaction_turn_context.config.as_ref(),
+            compaction_turn_context.model_info().as_ref(),
             candidate_tokens,
             matches!(
                 compaction_turn_context
@@ -413,7 +414,8 @@ async fn run_remote_compact_task_inner_impl(
             );
             let candidate_tokens = estimate_history_token_count(&new_history, &base_instructions);
             let status = context_window_token_status_for_usage(
-                compaction_turn_context,
+                compaction_turn_context.config.as_ref(),
+                compaction_turn_context.model_info().as_ref(),
                 candidate_tokens,
                 matches!(
                     compaction_turn_context
