@@ -1748,7 +1748,7 @@ fn record_items_applies_configured_line_limit_to_dynamic_tool_output() {
         panic!("expected one dynamic tool output");
     };
     assert_eq!(
-        output.text_content().as_deref(),
+        output.text_content(),
         Some("one\n... 3 lines truncated ...\nfive"),
     );
 }
