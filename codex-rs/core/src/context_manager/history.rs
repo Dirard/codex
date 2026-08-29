@@ -770,11 +770,11 @@ pub(crate) fn truncate_function_output_payload(
 ) -> FunctionCallOutputPayload {
     let body = match &output.body {
         FunctionCallOutputBody::Text(content) => {
-            FunctionCallOutputBody::Text(truncate_text_with_config(content, truncation))
+            FunctionCallOutputBody::Text(truncate_text_with_config(content.as_str(), truncation))
         }
         FunctionCallOutputBody::ContentItems(items) => {
             FunctionCallOutputBody::ContentItems(truncate_function_output_items_with_config(
-                items,
+                items.as_slice(),
                 truncation,
                 estimate_audio_token_count,
             ))

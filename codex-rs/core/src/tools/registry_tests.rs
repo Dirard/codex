@@ -3,6 +3,7 @@ use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::models::ResponseItem;
+use codex_utils_output_truncation::OutputTruncation;
 use codex_utils_output_truncation::TruncationPolicy;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
@@ -611,7 +612,7 @@ fn post_tool_use_feedback_output_preserves_fallback_token_limit_override(
                 tool_input: serde_json::json!({}),
                 wall_time: Duration::ZERO,
                 original_image_detail_supported: false,
-                truncation_policy,
+                truncation: OutputTruncation::from(truncation_policy),
             }),
             model_visible: crate::tools::context::FunctionToolOutput::from_text(
                 "hook feedback".to_string(),
