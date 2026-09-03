@@ -543,6 +543,24 @@ impl ContextManager {
         }
     }
 
+    /// Appends rollout items that were already truncated before persistence.
+    pub(crate) fn record_replayed_annotated_items(&mut self, items: &[ResponseItemEnvelope]) {
+        for envelope in items {
+            if !is_api_message(&envelope.item, envelope.metadata.as_ref()) {
+                continue;
+            }
+            if let Some(review_history) = &mut self.review_history
+                && !is_guardian_context_message(&envelope.item)
+            {
+                review_history.record(envelope);
+            }
+            Arc::make_mut(&mut self.items).push(envelope.clone());
+            if crate::context::is_user_authorization_message(&envelope.item) {
+                self.user_message_revision = self.user_message_revision.saturating_add(1);
+            }
+        }
+    }
+
     /// Replays persisted originals without assigning new identities to known versions.
     pub(crate) fn replay_annotated_item(
         &mut self,
@@ -980,7 +998,6 @@ impl ContextManager {
     }
 
     fn process_item(item: &ResponseItem, truncation: OutputTruncation) -> ResponseItem {
-        let truncation_with_serialization_budget = truncation.with_policy(truncation.policy * 1.2);
         match item {
             ResponseItem::FunctionCallOutput {
                 id,
@@ -994,10 +1011,7 @@ impl ContextManager {
                 call_id: call_id.clone(),
                 name: name.clone(),
                 namespace: namespace.clone(),
-                output: truncate_function_output_payload(
-                    output,
-                    truncation_with_serialization_budget,
-                ),
+                output: truncate_function_output_payload(output, truncation),
                 internal_chat_message_metadata_passthrough: metadata.clone(),
             },
             ResponseItem::CustomToolCallOutput {
@@ -1010,10 +1024,7 @@ impl ContextManager {
                 id: id.clone(),
                 call_id: call_id.clone(),
                 name: name.clone(),
-                output: truncate_function_output_payload(
-                    output,
-                    truncation_with_serialization_budget,
-                ),
+                output: truncate_function_output_payload(output, truncation),
                 internal_chat_message_metadata_passthrough: metadata.clone(),
             },
             ResponseItem::AdditionalTools { .. }
@@ -1030,6 +1041,7 @@ impl ContextManager {
             | ResponseItem::Compaction { .. }
             | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }
+            | ResponseItem::ConfigurationUpdate { .. }
             | ResponseItem::Other => item.clone(),
         }
     }

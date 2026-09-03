@@ -771,7 +771,12 @@ fn required_child_management_tool_names(
         MultiAgentVersion::Disabled => return Vec::new(),
         MultiAgentVersion::V1 => (
             Some(MULTI_AGENT_V1_NAMESPACE),
-            &["send_input", "wait_agent", "resume_agent", "close_agent"],
+            &[
+                "send_input",
+                "check_agent_status",
+                "resume_agent",
+                "close_agent",
+            ],
         ),
         MultiAgentVersion::V2 => (
             turn_context.config.multi_agent_v2.tool_namespace.as_deref(),
@@ -793,7 +798,10 @@ fn required_child_management_tool_names(
         .collect::<Vec<_>>();
     if multi_agent_v2_enabled(turn_context) && turn_context.config.multi_agent_v2.wait_agent_enabled
     {
-        tools.push(ToolName::new(namespace.map(str::to_owned), "wait_agent"));
+        tools.push(ToolName::new(
+            namespace.map(str::to_owned),
+            "check_agent_status",
+        ));
     }
     tools
 }
@@ -980,7 +988,8 @@ fn code_mode_tools<'a>(
     registry.entries().filter_map(move |tool| {
         if !enabled
             || !(tool.exposure.is_available_in_code_mode()
-                || tool.exposure == ToolExposure::DirectModelOnly)
+                || (tool.exposure == ToolExposure::DirectModelOnly
+                    && tool.runtime.mcp_server_name().is_none()))
         {
             return None;
         }
@@ -1373,13 +1382,12 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     }
 
     if turn_context.config.experimental_request_user_input_enabled {
-        let available_modes = request_user_input_available_modes(features);
-        let exposure = if available_modes.contains(&turn_context.mode()) {
-            ToolExposure::DirectModelOnly
-        } else {
-            ToolExposure::Hidden
-        };
-        registry.add_with_exposure(RequestUserInputHandler { available_modes }, exposure);
+        registry.add_with_exposure(
+            RequestUserInputHandler {
+                available_modes: request_user_input_available_modes(features),
+            },
+            ToolExposure::DirectModelOnly,
+        );
     }
 
     if turn_context.config.experimental_request_user_input_enabled
