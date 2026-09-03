@@ -679,7 +679,7 @@ fn truncate_retained_messages(
         let serialized_tokens =
             usize::try_from(estimate_item_token_count(&group.source.item)).unwrap_or(usize::MAX);
         let charge_serialized_estimate =
-            client_developer || (!charge_images && (image_count > 0 || !has_uncharged_audio));
+            client_developer || (!charge_images && image_count == 0 && !has_uncharged_audio);
         let recheck_serialized_estimate =
             charge_serialized_estimate || (!has_uncharged_audio && image_count == 0);
         let source_tokens = if charge_serialized_estimate {
