@@ -57,7 +57,7 @@ fn main() -> anyhow::Result<()> {
             fs::remove_dir_all(&schema_output)?;
         }
         codex_app_server_protocol::generate_json_with_experimental(
-            &schema_output,
+            &schema_output.join("json"),
             /*experimental_api*/ true,
         )?;
     }
