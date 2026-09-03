@@ -38,6 +38,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -915,6 +916,7 @@ async fn code_mode_excludes_mcp_servers_using_their_configured_identity() -> Res
                         serde_json::from_value(serde_json::json!({
                             "command": rmcp_test_server_bin,
                             "environment_id": environment_id,
+                            "cwd": config.cwd,
                             "omit_tools_from": omit_tools_from,
                         }))
                         .expect("test MCP server config should be valid"),
@@ -1149,6 +1151,7 @@ async fn mcp_code_mode_exclusion_does_not_change_direct_mode_tool_exposure() -> 
                         serde_json::from_value(serde_json::json!({
                             "command": rmcp_test_server_bin,
                             "environment_id": environment_id,
+                            "cwd": config.cwd,
                             "omit_tools_from": omit_tools_from,
                         }))
                         .expect("test MCP server config should be valid"),
@@ -1595,11 +1598,36 @@ text(output.output);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_update_plan_nested_tool_result_is_empty_object() -> Result<()> {
+async fn code_mode_does_not_expose_update_plan_by_default() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "inspect the available tools",
+        r#"
+text(JSON.stringify({
+  callable: typeof tools.update_plan === "function",
+  listed: ALL_TOOLS.some(({ name }) => name === "update_plan"),
+}));
+"#,
+    )
+    .await?;
+
+    let (output, _) = custom_tool_output_body_and_success(&second_mock.single_request(), "call-1");
+    assert_eq!(
+        serde_json::from_str::<Value>(&output)?,
+        serde_json::json!({ "callable": false, "listed": false })
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_update_plan_nested_tool_result_is_empty_object() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn_with_config(
         &server,
         "use exec to run update_plan",
         r#"
@@ -1608,6 +1636,7 @@ const result = await tools.update_plan({
 });
 text(JSON.stringify(result));
 "#,
+        |config| config.update_plan_enabled = true,
     )
     .await?;
 
@@ -3829,6 +3858,89 @@ text("after");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_omits_short_audio_and_preserves_other_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let [short_audio_url, valid_audio_url] = [120_u32, 600].map(|frames| {
+        let sample_rate = 24_000_u32;
+        let data_size = frames * 2;
+        let mut wav = b"RIFF".to_vec();
+        wav.extend_from_slice(&(36 + data_size).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16_u32.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&sample_rate.to_le_bytes());
+        wav.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+        wav.extend_from_slice(&2_u16.to_le_bytes());
+        wav.extend_from_slice(&16_u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_size.to_le_bytes());
+        wav.resize(44 + data_size as usize, /*value*/ 0);
+        format!("data:audio/wav;base64,{}", BASE64_STANDARD.encode(wav))
+    });
+    let code = format!(
+        r#"
+text("before");
+audio({short_audio_url:?});
+text("between");
+audio({valid_audio_url:?});
+text("after");
+"#,
+    );
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.4", |model| {
+            model.input_modalities.push(InputModality::Audio);
+        })
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::CodeMode);
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call("call-1", "exec", &code),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("use exec to return short and valid audio with text")
+        .await?;
+
+    let req = second_mock.single_request();
+    let items = custom_tool_output_items(&req, "call-1");
+    let (_, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(success, Some(false));
+    assert_eq!(
+        &items[1..],
+        &[
+            serde_json::json!({ "type": "input_text", "text": "before" }),
+            serde_json::json!({
+                "type": "input_text",
+                "text": "Audio output omitted because the clip is shorter than 25 ms; use a longer clip."
+            }),
+            serde_json::json!({ "type": "input_text", "text": "between" }),
+            serde_json::json!({ "type": "input_audio", "audio_url": valid_audio_url }),
+            serde_json::json!({ "type": "input_text", "text": "after" }),
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_replaces_malformed_image() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -4347,6 +4459,7 @@ async fn code_mode_node_repl_screenshots_can_be_captured_without_guardian_transc
         let mcp = serde_json::from_value(serde_json::json!({
             "command": mcp_server_bin,
             "environment_id": remote_aware_environment_id(),
+            "cwd": config.cwd,
             "env": { "MCP_TEST_ENABLE_NODE_REPL_JS": "1" },
             "omit_tools_from": ["deferred"],
         }))
@@ -4440,6 +4553,7 @@ async fn code_mode_node_repl_image_flag_without_enhanced_stays_disabled(
             let mcp = serde_json::from_value(serde_json::json!({
                 "command": mcp_server_bin,
                 "environment_id": remote_aware_environment_id(),
+                "cwd": config.cwd,
                 "env": { "MCP_TEST_ENABLE_NODE_REPL_JS": "1" },
                 "omit_tools_from": ["deferred"],
             }))
@@ -4602,6 +4716,7 @@ async fn code_mode_node_repl_text_evidence_is_visible_only_to_guardian(
             let mcp: McpServerConfig = serde_json::from_value(serde_json::json!({
                 "command": mcp_server_bin,
                 "environment_id": remote_aware_environment_id(),
+                "cwd": config.cwd,
                 "env": {
                     "MCP_TEST_ENABLE_NODE_REPL_JS": "1",
                     "MCP_TEST_IMAGE_DATA_URL": format!("data:image/png;base64,{}", BASE64_STANDARD.encode(large_image.into_inner())),
@@ -5805,6 +5920,7 @@ async fn code_mode_excludes_configured_nested_tool_namespaces() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
+        config.update_plan_enabled = true;
         let _ = config.features.enable(Feature::CodeMode);
         config.code_mode.excluded_tool_namespaces = vec!["excluded".to_string()];
     });
@@ -5907,6 +6023,7 @@ async fn code_mode_omits_configured_mcp_server_tools() -> Result<()> {
             model.supports_search_tool = false;
         })
         .with_config(move |config| {
+            config.update_plan_enabled = true;
             let _ = config.features.enable(Feature::CodeMode);
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
@@ -5914,6 +6031,7 @@ async fn code_mode_omits_configured_mcp_server_tools() -> Result<()> {
                 serde_json::from_value(serde_json::json!({
                     "command": rmcp_test_server_bin,
                     "environment_id": environment_id,
+                    "cwd": config.cwd,
                     "omit_tools_from": ["code_mode"],
                 }))
                 .expect("test MCP server config should be valid"),
@@ -6005,6 +6123,7 @@ async fn code_mode_only_keeps_mcp_tools_direct_when_nested_exposure_is_omitted()
                 serde_json::from_value(serde_json::json!({
                     "command": rmcp_test_server_bin,
                     "environment_id": environment_id,
+                    "cwd": config.cwd,
                     "omit_tools_from": ["code_mode"],
                 }))
                 .expect("test MCP server config should be valid"),
@@ -6098,6 +6217,7 @@ async fn code_mode_only_can_call_mcp_tools_hidden_from_direct_and_deferred_expos
                 serde_json::from_value(serde_json::json!({
                     "command": rmcp_test_server_bin,
                     "environment_id": environment_id,
+                    "cwd": config.cwd,
                     "omit_tools_from": ["direct", "deferred"],
                     "supports_parallel_tool_calls": true,
                 }))

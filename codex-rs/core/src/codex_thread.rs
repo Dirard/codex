@@ -11,7 +11,6 @@ use crate::session::step_settings::StepSettingsUpdate;
 use codex_diagnostics::Gauge;
 use codex_diagnostics::GaugeGuard;
 use codex_exec_server::SelectedCapabilityRootsStatus;
-use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ThreadIdleCause;
 use codex_features::Feature;
 use codex_history::RolloutItem;
@@ -86,6 +85,8 @@ pub struct ThreadConfigSnapshot {
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
     pub permission_profile: PermissionProfile,
+    /// Resolved Full Access across the thread and every selected environment.
+    pub full_access: bool,
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub environments: TurnEnvironmentSelections,
     pub workspace_roots: Vec<AbsolutePathBuf>,
@@ -151,54 +152,17 @@ pub struct CodexThreadSettingsOverrides {
     pub personality: Option<Personality>,
 }
 
-/// One root conversation message exposed only to a worker's Guardian reviewers.
-#[derive(Debug, Eq, PartialEq)]
-pub enum GuardianRootMessage {
-    /// Genuine root-user input that can establish or revoke authorization.
-    User(String),
-    /// Root assistant final output that provides untrusted conversational context.
-    Assistant(String),
-    /// Bounded, already role-labeled genuine user answers and their assistant questions.
-    UserInput(String),
-}
+pub use codex_guardian_context::GuardianRootMessage;
 
-impl GuardianRootMessage {
-    /// Renders every line with its original role so message content cannot impersonate another role.
-    pub fn render(self) -> String {
-        let (role, text) = match self {
-            Self::User(text) => ("user", text),
-            Self::Assistant(text) => ("assistant", text),
-            Self::UserInput(fragment) => return fragment,
-        };
-        text.lines()
-            .map(|line| format!("{role}: {line}\n"))
-            .collect()
-    }
-}
-
-/// Authorization state that changes on history rewrites or genuine user input.
+/// Authorization state that changes on genuine user input or history resets.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GuardianAuthorizationVersion {
-    /// Conversation-history rewrite generation.
-    pub history_version: u64,
-    /// Number of genuine user messages in the conversation snapshot.
-    pub user_message_count: usize,
-    /// Number of successful, host-produced answers to genuine user-input requests.
+    /// User-message/reset revision, preserved across compaction and internal context.
+    pub user_message_revision: u64,
+    /// Successful host answers captured by the temporary legacy path.
     pub user_input_response_count: usize,
-}
-
-impl GuardianAuthorizationVersion {
-    /// Captures history replacement and genuine user input from the same snapshot.
-    pub fn from_history(history: &dyn ConversationHistorySnapshot) -> Self {
-        Self {
-            history_version: history.history_version(),
-            user_message_count: history
-                .items()
-                .filter(|item| item.is_user_message())
-                .count(),
-            user_input_response_count: 0,
-        }
-    }
+    /// False when required retained answers were lost or do not fit the request budget.
+    pub retained_context_complete: bool,
 }
 
 /// Bounded root conversation and authorization state from one history snapshot.
@@ -396,8 +360,15 @@ impl CodexThread {
             trace,
             cyber_access_program,
         } = request;
+        let root_turn_id = self
+            .session
+            .reference_context_item()
+            .await
+            .filter(|context| context.turn_id.as_deref() == Some(turn_id.as_str()))
+            .and_then(|context| context.root_turn_id);
         let start_options = TurnStartOptions {
             cyber_access_program,
+            root_turn_id,
             ..Default::default()
         };
         match self
@@ -518,18 +489,6 @@ impl CodexThread {
             return None;
         }
         task.turn_context.turn_metadata_state.root_turn_id()
-    }
-
-    /// Invalidates the trusted root when the expected turn is currently active.
-    pub async fn invalidate_turn_lineage(&self, expected_turn_id: &str) {
-        let active = self.session.active_turn.lock().await;
-        if let Some(task) = active.as_ref().and_then(|turn| turn.task.as_ref())
-            && task.turn_context.sub_id == expected_turn_id
-        {
-            task.turn_context
-                .turn_metadata_state
-                .mark_root_turn_ambiguous();
-        }
     }
 
     pub async fn set_app_server_client_info(
@@ -765,6 +724,20 @@ impl CodexThread {
         self.session.thread_config_snapshot().await
     }
 
+    /// Returns the active turn's reviewer, including live updates, or the thread default.
+    pub async fn approvals_reviewer_for_turn(&self, turn_id: &str) -> ApprovalsReviewer {
+        if let Some((turn, settings, _)) = self
+            .session
+            .active_turn_context_and_strict_auto_review()
+            .await
+            && turn.sub_id == turn_id
+        {
+            settings.approvals_reviewer()
+        } else {
+            self.config_snapshot().await.approvals_reviewer
+        }
+    }
+
     /// Returns thread-owned settings suitable for rollout persistence and resume.
     pub async fn thread_settings_snapshot(&self) -> ThreadSettingsSnapshot {
         self.session.thread_settings_snapshot().await
@@ -831,15 +804,12 @@ impl CodexThread {
         self.session.multi_agent_version()
     }
 
-    /// Returns the current history generation and genuine user-input counts for Guardian.
+    /// Returns the current user-authorization revision for Guardian.
     pub async fn guardian_authorization_version(&self) -> GuardianAuthorizationVersion {
         let history = self.session.conversation_history_snapshot().await;
         self.thread_extension_data()
-            .get::<GuardianReviewEvidence>()
-            .map_or_else(
-                || GuardianAuthorizationVersion::from_history(history.as_ref()),
-                |evidence| evidence.authorization_version(history.as_ref()),
-            )
+            .get_or_init(GuardianReviewEvidence::default)
+            .authorization_version(history.as_ref())
     }
 
     /// Returns bounded root conversation evidence and its authorization version atomically.

@@ -57,6 +57,7 @@ use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::InProcessTransportFactory;
 use codex_rmcp_client::McpAuthState;
 use codex_rmcp_client::McpLoginRequirement;
+use codex_rmcp_client::McpOAuthRefreshMode;
 use codex_rmcp_client::RmcpClient;
 use codex_utils_path_uri::PathUri;
 use futures::FutureExt;
@@ -102,6 +103,7 @@ impl McpConnectionSet {
     ) -> Self {
         Self {
             servers: HashMap::new(),
+            event_stream_connection: None,
             disabled_servers: Vec::new(),
             protocol_mode: crate::McpProtocolMode::Legacy,
             required_servers: Vec::new(),
@@ -229,6 +231,7 @@ async fn capture_binding(manager: &Arc<McpConnectionSet>) -> McpBinding {
             Arc::new(config),
             /*plugins_available*/ false,
             /*required_servers*/ &[],
+            /*required_plugins*/ &HashSet::new(),
         )
         .await
 }
@@ -1806,25 +1809,35 @@ fn test_normalize_tools_disambiguates_sanitized_namespace_collisions() {
     let tools = vec![
         create_test_tool("basic-server", "lookup"),
         create_test_tool("basic_server", "query"),
+        create_test_tool("npm:@scope/package.name", "lookup"),
+        create_test_tool("npm__scope_package_name", "lookup"),
     ];
 
     let model_tools =
         normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true, &[]);
 
-    assert_eq!(model_tools.len(), 2);
+    assert_eq!(model_tools.len(), 4);
     let mut namespaces = model_tools
         .iter()
         .map(|tool| tool.callable_namespace.as_str())
         .collect::<Vec<_>>();
     namespaces.sort();
     namespaces.dedup();
-    assert_eq!(namespaces.len(), 2);
+    assert_eq!(namespaces.len(), 4);
 
     let raw_servers = model_tools
         .iter()
         .map(|tool| tool.server_name.as_str())
         .collect::<HashSet<_>>();
-    assert_eq!(raw_servers, HashSet::from(["basic-server", "basic_server"]));
+    assert_eq!(
+        raw_servers,
+        HashSet::from([
+            "basic-server",
+            "basic_server",
+            "npm:@scope/package.name",
+            "npm__scope_package_name",
+        ])
+    );
     let model_names = model_tool_names(&model_tools);
     assert!(
         model_names.iter().all(is_code_mode_compatible_tool_name),
@@ -2580,10 +2593,17 @@ async fn capture_binding_skips_pending_optional_servers_after_configured_shared_
         serde_json::from_value(serde_json::json!({ "command": "optional-plugin" }))
             .expect("optional plugin MCP config"),
     ));
+    catalog.register(crate::McpServerRegistration::from_selected_plugin(
+        "pending-selected".to_string(),
+        crate::McpPluginAttribution::new("selected-plugin".to_string(), "Selected".to_string()),
+        /*selection_order*/ 0,
+        serde_json::from_value(serde_json::json!({ "command": "selected-plugin" }))
+            .expect("selected plugin MCP config"),
+    ));
     plugin_config.mcp_server_catalog = catalog.build();
     plugin_config.optional_mcp_startup_grace = Duration::from_millis(250);
     manager.tool_plugin_provenance = Arc::new(crate::tool_plugin_provenance(&plugin_config));
-    for server_name in ["pending-one", "pending-two"] {
+    for server_name in ["pending-one", "pending-two", "pending-selected"] {
         manager.insert_test_client(
             server_name.to_string(),
             AsyncManagedClient {
@@ -2601,19 +2621,34 @@ async fn capture_binding_skips_pending_optional_servers_after_configured_shared_
         );
     }
 
+    let mut required_manager = McpConnectionSet::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    required_manager.tool_plugin_provenance = Arc::clone(&manager.tool_plugin_provenance);
+    required_manager.insert_test_client(
+        "pending-selected",
+        manager.test_client("pending-selected").clone(),
+    );
+    required_manager.required_servers = vec!["pending-selected".to_string()];
+
     let manager = Arc::new(manager);
     assert_eq!(manager.stable_catalog_revision().await, None);
+    let started = tokio::time::Instant::now();
     let binding = tokio::time::timeout(
         Duration::from_millis(500),
         manager.capture_binding_with_metadata(
             Arc::new(plugin_config),
             /*plugins_available*/ false,
             /*required_servers*/ &[],
+            /*required_plugins*/ &HashSet::new(),
         ),
     )
     .await
     .expect("all optional servers should share the configured startup grace");
     assert!(binding.tools().is_empty());
+    assert_eq!(started.elapsed(), Duration::from_millis(250));
 
     let binding = tokio::time::timeout(Duration::from_millis(1), capture_binding(&manager))
         .await
@@ -2639,17 +2674,52 @@ async fn capture_binding_skips_pending_optional_servers_after_configured_shared_
         "resource discovery must not wait for an omitted optional server"
     );
 
-    let required_servers = vec!["pending-one".to_string()];
-    let binding = tokio::time::timeout(
-        Duration::from_millis(1),
-        manager.capture_binding_with_metadata(
-            Arc::new(crate::mcp::tests::test_mcp_config(std::env::temp_dir())),
-            /*plugins_available*/ false,
-            &required_servers,
-        ),
-    )
-    .await;
-    assert!(binding.is_err(), "explicitly requested servers must wait");
+    for server_name in ["pending-one", "pending-selected"] {
+        let required_servers = vec![server_name.to_string()];
+        let binding = tokio::time::timeout(
+            Duration::from_millis(1),
+            manager.capture_binding_with_metadata(
+                Arc::new(crate::mcp::tests::test_mcp_config(std::env::temp_dir())),
+                /*plugins_available*/ false,
+                &required_servers,
+                /*required_plugins*/ &HashSet::new(),
+            ),
+        )
+        .await;
+        assert!(binding.is_err(), "explicitly requested servers must wait");
+    }
+    // A plugin mention must still require startup after the optional grace has elapsed.
+    for (plugin_id, must_wait) in [
+        ("selected-plugin", true),
+        ("optional-plugin", false),
+        ("selected-plugin-other", false),
+    ] {
+        let required_plugins = HashSet::from([plugin_id.to_string()]);
+        let binding = tokio::time::timeout(
+            Duration::from_millis(1),
+            manager.capture_binding_with_metadata(
+                Arc::new(crate::mcp::tests::test_mcp_config(std::env::temp_dir())),
+                /*plugins_available*/ false,
+                /*required_servers*/ &[],
+                &required_plugins,
+            ),
+        )
+        .await;
+        assert_eq!(
+            binding.is_err(),
+            must_wait,
+            "plugin requirement {plugin_id}"
+        );
+    }
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(1500),
+            capture_binding(&Arc::new(required_manager)),
+        )
+        .await
+        .is_err(),
+        "configured-required selected plugin servers must wait beyond the optional grace"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -2678,6 +2748,7 @@ async fn capture_binding_waits_for_optional_startup_when_shared_grace_is_disable
                 Arc::new(config),
                 /*plugins_available*/ false,
                 /*required_servers*/ &[],
+                /*required_plugins*/ &HashSet::new(),
             )
             .await
     });
@@ -2806,6 +2877,7 @@ async fn capture_binding_shares_optional_startup_grace_across_connection_sets() 
                 Arc::new(disabled_config),
                 /*plugins_available*/ false,
                 /*required_servers*/ &[],
+                /*required_plugins*/ &HashSet::new(),
             ),
         )
         .await
@@ -2833,6 +2905,7 @@ async fn capture_binding_shares_optional_startup_grace_across_connection_sets() 
             Arc::new(updated_config),
             /*plugins_available*/ false,
             /*required_servers*/ &[],
+            /*required_plugins*/ &HashSet::new(),
         ),
     )
     .await
@@ -4142,6 +4215,7 @@ async fn executor_owned_chatgpt_mcp_accepts_only_safe_explicit_authorization() -
                 /*host_plugin_root*/ None,
                 OAuthCredentialsStoreMode::File,
                 keyring_backend_kind,
+                McpOAuthRefreshMode::Legacy,
                 &resolved_environment,
                 &runtime_context,
                 /*runtime_auth_provider*/ None,
@@ -4574,6 +4648,27 @@ fn mcp_init_error_display_reports_generic_errors() {
 }
 
 #[test]
+fn mcp_init_error_display_quotes_server_names() {
+    let github_config: McpServerConfig = serde_json::from_value(serde_json::json!({
+        "url": "https://api.githubcopilot.com/mcp/",
+    }))
+    .expect("GitHub MCP configuration should deserialize");
+    let error: StartupOutcomeError = anyhow::anyhow!("request timed out").into();
+    let mut displays = Vec::new();
+    for server_name in ["npm:@scope/package.name", "server.name"] {
+        for config in [None, Some(&github_config)] {
+            displays.push(mcp_init_error_display(
+                server_name,
+                config,
+                &error,
+                /*reason*/ None,
+            ));
+        }
+    }
+    insta::assert_snapshot!(displays.join("\n\n"));
+}
+
+#[test]
 fn mcp_init_error_display_includes_startup_timeout_hint() {
     let server_name = "slow";
     for error in [
@@ -4643,6 +4738,7 @@ fn reusable_server_identity(
         /*host_plugin_root*/ None,
         OAuthCredentialsStoreMode::default(),
         AuthKeyringBackendKind::default(),
+        McpOAuthRefreshMode::Legacy,
         &resolved_environment,
         runtime_context,
         /*runtime_auth_provider*/ None,
@@ -5022,6 +5118,7 @@ fn connection_identity_uses_effective_authorization_headers() {
         (Some("invalid\nheader"), None, false),
         (None, Some("PATH"), true),
         (None, Some(missing_env_var.as_str()), false),
+        (None, None, false),
     ] {
         let mut config = reusable_server_config("http://127.0.0.1:1");
         config.transport = McpServerTransportConfig::StreamableHttp {
@@ -5034,13 +5131,14 @@ fn connection_identity_uses_effective_authorization_headers() {
             http_headers_helper: None,
         };
         let server = EffectiveMcpServer::configured(config);
-        let identity = |keyring_backend_kind| {
+        let identity = |keyring_backend_kind, oauth_refresh_mode| {
             McpServerConnectionIdentity::new(
                 "docs",
                 &server,
                 /*host_plugin_root*/ None,
                 OAuthCredentialsStoreMode::File,
                 keyring_backend_kind,
+                oauth_refresh_mode,
                 &Ok(None),
                 &runtime_context,
                 /*runtime_auth_provider*/ None,
@@ -5053,8 +5151,19 @@ fn connection_identity_uses_effective_authorization_headers() {
         };
 
         assert_eq!(
-            identity(AuthKeyringBackendKind::Direct)
-                .has_same_connection_config(&identity(AuthKeyringBackendKind::Secrets)),
+            identity(AuthKeyringBackendKind::Direct, McpOAuthRefreshMode::Legacy)
+                .has_same_connection_config(&identity(
+                    AuthKeyringBackendKind::Secrets,
+                    McpOAuthRefreshMode::Legacy,
+                )),
+            has_authorization,
+        );
+        assert_eq!(
+            identity(AuthKeyringBackendKind::Direct, McpOAuthRefreshMode::Legacy)
+                .has_same_connection_config(&identity(
+                    AuthKeyringBackendKind::Direct,
+                    McpOAuthRefreshMode::Coordinated,
+                )),
             has_authorization,
         );
     }
@@ -5440,6 +5549,7 @@ async fn reconciliation_reconnects_when_host_plugin_root_changes() {
         Some(&original_root),
         OAuthCredentialsStoreMode::default(),
         AuthKeyringBackendKind::default(),
+        McpOAuthRefreshMode::Legacy,
         &resolved_environment,
         &runtime_context,
         /*runtime_auth_provider*/ None,
@@ -5518,6 +5628,7 @@ async fn connection_identity_distinguishes_accounts_with_the_same_token() -> any
             /*host_plugin_root*/ None,
             OAuthCredentialsStoreMode::default(),
             AuthKeyringBackendKind::default(),
+            McpOAuthRefreshMode::Legacy,
             &Ok(None),
             &runtime_context,
             Some(&provider),
@@ -5571,6 +5682,7 @@ async fn connection_identity_distinguishes_agent_account_runtime_and_task() -> a
             /*host_plugin_root*/ None,
             OAuthCredentialsStoreMode::default(),
             AuthKeyringBackendKind::default(),
+            McpOAuthRefreshMode::Legacy,
             &Ok(None),
             &runtime_context,
             Some(&provider),

@@ -9,6 +9,9 @@ use anyhow::Result;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::LoaderOverrides;
+use codex_core::context::ContextualUserFragment;
+use codex_core::context::InternalContextSource;
+use codex_core::context::InternalModelContextFragment;
 use codex_core::context::NodeReplReviewEvidence;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ExtensionData;
@@ -31,16 +34,23 @@ use codex_login::ExternalAuthRefreshContext;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::ResponseItemId;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
+use codex_protocol::models::LocalShellAction;
+use codex_protocol::models::LocalShellExecAction;
+use codex_protocol::models::LocalShellStatus;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::openai_models::GuardianV2ModelConfig;
 use codex_protocol::openai_models::GuardianV2TranscriptModelConfig;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TruncationPolicy;
@@ -52,6 +62,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -75,6 +86,8 @@ use crate::async_scorer::sampler::CLASSIFICATION_TOKEN_USAGE_METRIC;
 use crate::async_scorer::sampler::INITIAL_WEBSOCKET_CONNECTIONS;
 use crate::async_scorer::sampler::LunaSampler;
 use crate::async_scorer::sampler::MODEL;
+use crate::async_scorer::transcript::MAX_MESSAGE_ENTRY_TOKENS;
+use crate::async_scorer::transcript::MAX_TOOL_ENTRY_TOKENS;
 use crate::async_scorer::transcript::truncate_entry;
 use crate::async_scorer::truncation::CLASSIFICATION_TRUNCATION_BYTES_METRIC;
 use crate::async_scorer::truncation::CLASSIFICATION_TRUNCATION_METRIC;
@@ -104,7 +117,10 @@ async fn installed_extension_warms_connections_without_blocking_thread_start() -
     skip_if_no_network!(Ok(()));
 
     let thread_server = responses::start_mock_server().await;
-    let test = test_codex().build_with_auto_env(&thread_server).await?;
+    let test = test_codex()
+        .with_config(|config| config.approvals_reviewer = ApprovalsReviewer::AutoReview)
+        .build_with_auto_env(&thread_server)
+        .await?;
     let mut connections = vec![
         WebSocketConnectionConfig {
             requests: Vec::new(),
@@ -161,7 +177,10 @@ async fn installed_extension_reconnects_after_auth_refresh() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let thread_server = responses::start_mock_server().await;
-    let test = test_codex().build_with_auto_env(&thread_server).await?;
+    let test = test_codex()
+        .with_config(|config| config.approvals_reviewer = ApprovalsReviewer::AutoReview)
+        .build_with_auto_env(&thread_server)
+        .await?;
     let events = vec![
         ev_assistant_message("sample", "low"),
         ev_completed("response-1"),
@@ -211,6 +230,13 @@ async fn installed_extension_reconnects_after_auth_refresh() -> Result<()> {
     let progress = thread_store
         .get::<GuardianV2ScoreProgress>()
         .expect("Guardian v2 should initialize");
+    let mut model = test
+        .thread_manager
+        .get_models_manager()
+        .get_model_info("gpt-5.5", &config.to_models_manager_config())
+        .await;
+    model.node_repl_auto_review_required = true;
+    thread_store.insert(model);
     let turn_store = ExtensionData::new("turn-1");
     let tool_name = ToolName::namespaced("mcp__node_repl__", "js");
     let payload = ToolPayload::Function {
@@ -338,9 +364,36 @@ impl ExtensionMetrics for RecordingMetrics {
 
 struct TestConversationHistory(Vec<ResponseItem>);
 
+struct TestRetainedHistory {
+    current: TestConversationHistory,
+    retained: Vec<ResponseItem>,
+}
+
+impl ConversationHistorySnapshot for TestRetainedHistory {
+    fn history_version(&self) -> u64 {
+        self.current.history_version()
+    }
+
+    fn user_message_revision(&self) -> u64 {
+        self.current.user_message_revision()
+    }
+
+    fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
+        self.current.items()
+    }
+
+    fn review_items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
+        Box::new(self.retained.iter())
+    }
+}
+
 impl ConversationHistorySnapshot for TestConversationHistory {
     fn history_version(&self) -> u64 {
         0
+    }
+
+    fn user_message_revision(&self) -> u64 {
+        self.0.iter().filter(|item| item.is_user_message()).count() as u64
     }
 
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
@@ -505,6 +558,14 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
 
     let fixture = GuardianFailureFixture::new().await?;
     let thread_store = fixture.test.codex.thread_extension_data();
+    let mut model = fixture
+        .test
+        .thread_manager
+        .get_models_manager()
+        .get_model_info("gpt-5.5", &fixture.test.config.to_models_manager_config())
+        .await;
+    model.node_repl_auto_review_required = true;
+    thread_store.insert(model);
     let mut config = thread_store
         .get::<crate::async_scorer::config::GuardianV2Config>()
         .expect("Guardian v2 should have initialized")
@@ -641,6 +702,41 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
             fast_decision_metric("deferred", "missing_score"),
         ]
     );
+
+    let mut model = thread_store.get::<ModelInfo>().unwrap().as_ref().clone();
+    model.node_repl_auto_review_required = false;
+    thread_store.insert(model.clone());
+    fixture
+        .score_tool(ToolName::namespaced("mcp__node_repl__", "js"))
+        .await;
+    assert!(
+        progress.latest_failed_tool_call.load(Ordering::Acquire)
+            > progress.latest_scored_tool_call.load(Ordering::Acquire)
+    );
+    for required in [false, true] {
+        model.node_repl_auto_review_required = required;
+        thread_store.insert(model.clone());
+        // Also reject a low score published by an older, in-flight classifier.
+        thread_store.insert(SecurityRiskScore {
+            scores: BTreeMap::from([("action_risk".to_owned(), 0.0)]),
+            call_id: None,
+            action: None,
+            sampled_at: None,
+        });
+        assert_eq!(
+            fixture
+                .registry
+                .fast_approval_decision(
+                    &fixture.session_store,
+                    thread_store,
+                    r#"{"tool":"mcp_tool_call","server":"node_repl","tool_name":"js"}"#,
+                    /*extension_metrics*/ None,
+                )
+                .await,
+            None,
+            "switching back to a reviewed model must not revive a skipped score"
+        );
+    }
 
     Ok(())
 }
@@ -865,7 +961,10 @@ async fn sample_configured_conversation_history_with_source(
                 .policy = Some(TEST_CATALOG_GUARDIAN_POLICY.to_owned());
         })
         .with_model("gpt-5.5")
-        .with_config(move |config| config.guardian_policy_config = guardian_policy)
+        .with_config(move |config| {
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config.guardian_policy_config = guardian_policy;
+        })
         .with_pre_build_hook(move |home| {
             std::fs::write(home.join("config.toml"), guardian_config)
                 .expect("Guardian v2 configuration should be written");
@@ -1408,7 +1507,7 @@ max_recent_non_user_entries = 8
             .latest_scored_tool_call
             .load(Ordering::Acquire)
             == 0
-            || metrics.0.lock().unwrap().len() < 10
+            || metrics.0.lock().unwrap().len() < 14
         {
             tokio::task::yield_now().await;
         }
@@ -2133,6 +2232,7 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
     let test = test_codex()
         .with_home(Arc::clone(&initial.home))
         .with_config(move |config| {
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             config.config_layer_stack = config_layer_stack;
             config
                 .features
@@ -2249,6 +2349,84 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
         "protected models must not spawn Guardian v2 classifiers"
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cached_score_survives_compaction_and_internal_context_but_not_user_input() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (_, test, registry) = sample_configured_conversation_history(
+        Vec::new(),
+        r#"{"path":"README.md"}"#,
+        Some(TEST_GUARDIAN_POLICY),
+        "[features]\ntoken_budget = true\n[features.guardianv2]\nenabled = true\n",
+        /*model_defaults*/ None,
+    )
+    .await?;
+    let session_store = ExtensionData::new("session-1");
+    let thread_store = test.codex.thread_extension_data();
+    let progress = thread_store.get::<GuardianV2ScoreProgress>().unwrap();
+    tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
+        while progress.latest_scored_tool_call.load(Ordering::Acquire) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    thread_store.insert(SecurityRiskScore {
+        scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
+        call_id: None,
+        action: None,
+        sampled_at: None,
+    });
+
+    test.codex
+        .inject_response_items(vec![ContextualUserFragment::into(
+            InternalModelContextFragment::new(
+                InternalContextSource::from_static("goal"),
+                "Continue inspecting the repository.",
+            ),
+        )])
+        .await?;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(
+        registry
+            .fast_approval_decision(
+                &session_store,
+                thread_store,
+                "review action",
+                /*extension_metrics*/ None,
+            )
+            .await,
+        Some(ReviewDecision::Approved),
+    );
+
+    test.codex
+        .inject_response_items(vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_owned(),
+            content: vec![ContentItem::InputText {
+                text: "Stop. Do not change any files.".to_owned(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }])
+        .await?;
+    assert_eq!(
+        registry
+            .fast_approval_decision(
+                &session_store,
+                thread_store,
+                "review action",
+                /*extension_metrics*/ None
+            )
+            .await,
+        None,
+    );
     Ok(())
 }
 
@@ -2555,6 +2733,56 @@ async fn contributor_sends_compacted_conversation_history_to_luna() -> Result<()
             },
         ]
     }));
+    history.extend(
+        [
+            (None, None, "unattributed anonymous output"),
+            (Some("missing-call"), None, "unattributed orphaned output"),
+            (
+                Some("missing-named-call"),
+                Some("notifications"),
+                "named orphaned output",
+            ),
+            (None, Some("notifications"), "attributed notification"),
+        ]
+        .map(|(call_id, name, text)| ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: call_id.map(str::to_string),
+            name: name.map(str::to_string),
+            namespace: Some("slack".to_string()),
+            output: FunctionCallOutputPayload::from_text(text.to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        }),
+    );
+    history.push(ResponseItem::CustomToolCallOutput {
+        id: None,
+        call_id: "missing-custom-call".to_string(),
+        name: None,
+        output: FunctionCallOutputPayload::from_text("unattributed custom output".to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    });
+    history.extend([
+        ResponseItem::LocalShellCall {
+            id: None,
+            call_id: Some("shell-1".to_string()),
+            status: LocalShellStatus::Completed,
+            action: LocalShellAction::Exec(LocalShellExecAction {
+                command: vec!["echo".to_string(), "hello".to_string()],
+                timeout_ms: None,
+                working_directory: None,
+                env: None,
+                user: None,
+            }),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: Some("shell-1".to_string()),
+            name: None,
+            namespace: None,
+            output: FunctionCallOutputPayload::from_text("local shell evidence".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ]);
 
     let (request, _test, _registry) = sample_conversation_history(
         history,
@@ -2594,6 +2822,42 @@ async fn contributor_sends_compacted_conversation_history_to_luna() -> Result<()
             .any(|entry| entry.contains("result evidence 0:"))
     );
     assert!(entries.iter().any(|entry| entry.contains("<truncated")));
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry.contains("unattributed anonymous output"))
+    );
+    for output in [
+        "tool result: unattributed orphaned output",
+        "tool result: named orphaned output",
+        "tool result: unattributed custom output",
+        "tool result: local shell evidence",
+    ] {
+        assert!(
+            entries.iter().any(|entry| entry.contains(output)),
+            "missing {output}"
+        );
+    }
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.contains("tool shell call:"))
+    );
+    assert!(entries.iter().any(|entry| {
+        entry.contains("tool slack.notifications result: attributed notification")
+    }));
+
+    for entry in entries.into_iter().filter(|entry| entry.starts_with('[')) {
+        let (label, text) = entry.split_once(": ").expect("numbered transcript entry");
+        let max_tokens = if label.contains("tool ") {
+            MAX_TOOL_ENTRY_TOKENS
+        } else {
+            MAX_MESSAGE_ENTRY_TOKENS
+        };
+        assert!(
+            text.trim_end_matches('\n').len() <= TruncationPolicy::Tokens(max_tokens).byte_budget()
+        );
+    }
 
     Ok(())
 }
@@ -2604,6 +2868,7 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
 
     let thread_server = responses::start_mock_server().await;
     let test = test_codex()
+        .with_config(|config| config.approvals_reviewer = ApprovalsReviewer::AutoReview)
         .with_pre_build_hook(|home| {
             std::fs::write(
                 home.join("config.toml"),
@@ -2693,6 +2958,15 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
             .inject_response_items(conversation_history.0.clone()),
     )
     .await?;
+    let mut retained: Vec<ResponseItem> = serde_json::from_value(json!([
+        {"type":"function_call", "name":"check_repository", "arguments":"{}", "call_id":"before"},
+        {"type":"function_call_output", "call_id":"before", "output":"repository is private"}
+    ]))?;
+    retained.extend(conversation_history.0.clone());
+    let conversation_history = TestRetainedHistory {
+        retained,
+        current: conversation_history,
+    };
     thread_store.insert(parent_model);
 
     registry.tool_lifecycle_contributors()[0]
@@ -2738,6 +3012,9 @@ async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<
         serde_json::to_value(&latest_compaction)?
     );
     assert_eq!(request["input"][3]["role"], "user");
+    let transcript = serde_json::to_string(&request["input"][3])?;
+    assert!(transcript.contains("tool check_repository call"));
+    assert!(transcript.contains("tool check_repository result: repository is private"));
 
     let previous_score = tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
         loop {

@@ -217,6 +217,8 @@ pub struct TuiVimNormalKeymap {
     pub open_line_below: Option<KeybindingsSpec>,
     /// Open a new line above and enter insert mode (`O`).
     pub open_line_above: Option<KeybindingsSpec>,
+    /// Enter replace mode and overwrite characters under the cursor (`R`).
+    pub enter_replace_mode: Option<KeybindingsSpec>,
     /// Move cursor left (`h`).
     pub move_left: Option<KeybindingsSpec>,
     /// Move cursor right (`l`).
@@ -269,6 +271,10 @@ pub struct TuiVimNormalKeymap {
     pub start_yank_operator: Option<KeybindingsSpec>,
     /// Begin change operator; next keys select a text object.
     pub start_change_operator: Option<KeybindingsSpec>,
+    /// Undo the last complete edit (`u`).
+    pub undo: Option<KeybindingsSpec>,
+    /// Redo the last undone edit (`ctrl-r`).
+    pub redo: Option<KeybindingsSpec>,
     /// Cancel a pending operator and return to normal mode.
     pub cancel_operator: Option<KeybindingsSpec>,
 }
@@ -322,6 +328,21 @@ pub struct TuiVimOperatorKeymap {
     pub select_around_text_object: Option<KeybindingsSpec>,
     /// Cancel the pending operator and return to normal mode.
     pub cancel: Option<KeybindingsSpec>,
+}
+
+/// Search motions shared by Vim normal and operator-pending input.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiVimSearchKeymap {
+    /// Search forward in the active buffer (`/`).
+    pub forward: Option<KeybindingsSpec>,
+    /// Search backward in the active buffer (`?`).
+    pub backward: Option<KeybindingsSpec>,
+    /// Repeat the accepted search (`n`).
+    pub next: Option<KeybindingsSpec>,
+    /// Repeat in the opposite direction (`N`).
+    pub previous: Option<KeybindingsSpec>,
 }
 
 /// Vim text-object keybindings for modal editing inside text areas.
@@ -408,6 +429,8 @@ pub struct TuiListKeymap {
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiAgentsKeymap {
+    /// Open the session resume picker.
+    pub resume: Option<KeybindingsSpec>,
     /// Search the available agent tasks.
     pub search: Option<KeybindingsSpec>,
     /// Start composing a new agent task.
@@ -469,6 +492,8 @@ pub struct TuiKeymap {
     pub vim_normal: TuiVimNormalKeymap,
     #[serde(default)]
     pub vim_operator: TuiVimOperatorKeymap,
+    #[serde(default)]
+    pub vim_search: TuiVimSearchKeymap,
     #[serde(default)]
     pub vim_text_object: TuiVimTextObjectKeymap,
     #[serde(default)]
