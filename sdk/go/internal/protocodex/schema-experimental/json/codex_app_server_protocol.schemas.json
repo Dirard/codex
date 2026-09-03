@@ -1705,6 +1705,30 @@
             },
             "method": {
               "enum": [
+                "plugin/reconcile"
+              ],
+              "title": "Plugin/reconcileRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginReconcileParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/reconcileRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/read"
               ],
               "title": "Plugin/readRequestMethod",
@@ -3284,7 +3308,14 @@
               "type": "string"
             },
             "params": {
-              "type": "null"
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/v2/GetAccountRateLimitsParams"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -5759,7 +5790,7 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "cwd": {
-          "$ref": "#/definitions/v2/AbsolutePathBuf"
+          "$ref": "#/definitions/v2/LegacyAppPathString"
         },
         "environmentId": {
           "default": null,
@@ -8511,6 +8542,17 @@
             "default": true,
             "type": "boolean"
           },
+          "links": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppLinksConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per-account approval settings keyed by link ID."
+          },
           "open_world_enabled": {
             "type": [
               "boolean",
@@ -8637,6 +8679,36 @@
           "id",
           "name"
         ],
+        "type": "object"
+      },
+      "AppLinkConfig": {
+        "description": "Approval settings for a connected account within an app.",
+        "properties": {
+          "approvals_reviewer": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApprovalsReviewer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "default_tools_approval_mode": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppToolApproval"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "AppLinksConfig": {
+        "description": "Account settings for a single app.",
         "type": "object"
       },
       "AppListUpdatedNotification": {
@@ -8946,6 +9018,40 @@
       "AppToolsConfig": {
         "type": "object"
       },
+      "ApplicationNetworkRequirements": {
+        "properties": {
+          "domains": {
+            "additionalProperties": {
+              "$ref": "#/definitions/v2/NetworkDomainPermission"
+            },
+            "type": "object"
+          },
+          "enabled": {
+            "description": "When enabled, only explicitly allowed exact domains may be contacted.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "domains",
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "ApplicationRequirements": {
+        "properties": {
+          "network": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApplicationNetworkRequirements"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ApprovalsReviewer": {
         "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
         "enum": [
@@ -9204,6 +9310,27 @@
             "type": "object"
           }
         ]
+      },
+      "AsyncUserInputQuestion": {
+        "additionalProperties": false,
+        "properties": {
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
       },
       "AuthMode": {
         "description": "Authentication mode for OpenAI-backed providers.",
@@ -11373,6 +11500,16 @@
               "null"
             ]
           },
+          "application": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApplicationRequirements"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "autoReview": {
             "anyOf": [
               {
@@ -11650,6 +11787,18 @@
           "version"
         ],
         "title": "ConfigWriteResponse",
+        "type": "object"
+      },
+      "ConfigurationReasoning": {
+        "description": "Reasoning settings interpreted by the backend for the routed model.",
+        "properties": {
+          "effort": {
+            "$ref": "#/definitions/v2/ReasoningEffort"
+          }
+        },
+        "required": [
+          "effort"
+        ],
         "type": "object"
       },
       "ConfiguredHookHandler": {
@@ -14049,9 +14198,37 @@
         "title": "GetAccountParams",
         "type": "object"
       },
+      "GetAccountRateLimitsParams": {
+        "description": "Usage-read capabilities of the requesting client, never inferred from its experiment arm.",
+        "properties": {
+          "excludeResetCreditDetails": {
+            "description": "Skip the separate reset-credit detail lookup for background usage polls. The usage response still includes the available count; omitted/false preserves detailed reads.",
+            "type": "boolean"
+          },
+          "supportsLunaReserve": {
+            "description": "The client supports automatic Luna Reserve fallback. For eligible ChatGPT CLI users, allow the backend to record experiment exposure after ordinary usage is blocked.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "GetAccountRateLimitsResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "accountId": {
+            "description": "Account associated with this usage snapshot, when supplied by the backend.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ordinaryUsageAllowed": {
+            "description": "Backend permission for ordinary included usage, validated against the active account. Null means unavailable; clients must not infer recovery from percentages or reset times.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "rateLimitResetCredits": {
             "anyOf": [
               {
@@ -14061,6 +14238,9 @@
                 "type": "null"
               }
             ]
+          },
+          "rateLimitUpsell": {
+            "description": "Optional backend-owned banner from the same usage read. Its nested keys retain the backend's snake_case contract; an absent banner leaves the client's existing UI unchanged."
           },
           "rateLimits": {
             "allOf": [
@@ -17362,6 +17542,18 @@
         ],
         "type": "string"
       },
+      "NullableGetAccountRateLimitsParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "anyOf": [
+          {
+            "$ref": "#/definitions/v2/GetAccountRateLimitsParams"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Nullable_GetAccountRateLimitsParams"
+      },
       "NullableGetAccountTokenUsageParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "anyOf": [
@@ -18166,6 +18358,84 @@
           "plugin"
         ],
         "title": "PluginReadResponse",
+        "type": "object"
+      },
+      "PluginReconcileChangedPlugin": {
+        "description": "Runtime categories affected by this change, not just capabilities currently present. Flags describe declarations before runtime policy filtering. Updates OR the old and new bundle flags; enablement changes and cached reinstalls use the cached bundle; removals retain the old bundle's flags.",
+        "properties": {
+          "hasApps": {
+            "type": "boolean"
+          },
+          "hasHooks": {
+            "type": "boolean"
+          },
+          "hasMcps": {
+            "type": "boolean"
+          },
+          "hasSkills": {
+            "description": "Whether either bundle declares skill roots; not a validated inventory of enabled skills.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "Local plugin ID (`name@marketplace`), matching `PluginSummary.id`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hasApps",
+          "hasHooks",
+          "hasMcps",
+          "hasSkills",
+          "id"
+        ],
+        "type": "object"
+      },
+      "PluginReconcileParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "reason": {
+            "description": "Optional client-provided reason recorded with the reconciliation attempt.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "PluginReconcileParams",
+        "type": "object"
+      },
+      "PluginReconcileResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Bundle and installed-state changes observed by this pass, not a runtime-readiness acknowledgement or a cumulative diff since the client's last request. Other metadata-only changes are not listed.",
+        "properties": {
+          "changedPlugins": {
+            "description": "Plugins affected by bundle changes, enablement changes, or removals. Installed-state changes compare against the previous cached snapshot, including cached reinstalls. Removal hints survive cache cleanup failures; unchanged plugins are omitted.",
+            "items": {
+              "$ref": "#/definitions/v2/PluginReconcileChangedPlugin"
+            },
+            "type": "array"
+          },
+          "failedMaterializationRemotePluginIds": {
+            "description": "Subset of failures for which the requested bundle could not be materialized. A previously cached version may still be available.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "failedRemotePluginIds": {
+            "description": "Backend remote plugin IDs whose bundle or identity update failed.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "changedPlugins",
+          "failedMaterializationRemotePluginIds",
+          "failedRemotePluginIds"
+        ],
+        "title": "PluginReconcileResponse",
         "type": "object"
       },
       "PluginSearchParams": {
@@ -19779,6 +20049,13 @@
               "null"
             ]
           },
+          "normalModelSlug": {
+            "description": "Normal model whose display name and reasoning options describe this quota alias.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "planType": {
             "anyOf": [
               {
@@ -21357,6 +21634,27 @@
             "type": "object"
           },
           {
+            "description": "A durable input control interpreted by the backend at its position in history.",
+            "properties": {
+              "reasoning": {
+                "$ref": "#/definitions/v2/ConfigurationReasoning"
+              },
+              "type": {
+                "enum": [
+                  "configuration_update"
+                ],
+                "title": "ConfigurationUpdateResponseItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reasoning",
+              "type"
+            ],
+            "title": "ConfigurationUpdateResponseItem",
+            "type": "object"
+          },
+          {
             "properties": {
               "type": {
                 "enum": [
@@ -21436,7 +21734,8 @@
               "string",
               "null"
             ]
-          }
+          },
+          "metadata": true
         },
         "type": "object"
       },
@@ -22845,6 +23144,17 @@
             ],
             "description": "Working directory captured for the thread."
           },
+          "environments": {
+            "default": null,
+            "description": "Current environments for a loaded thread, in priority order, primary first. `null` means the thread is not loaded or the server does not expose its selection. An empty list means no environments are selected. This does not report connection status.",
+            "items": {
+              "$ref": "#/definitions/v2/ThreadEnvironment"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "ephemeral": {
             "description": "Whether the thread is ephemeral and should not be materialized on disk.",
             "type": "boolean"
@@ -22891,12 +23201,26 @@
             "description": "Identifier for this thread. Codex-generated thread IDs are UUIDv7.",
             "type": "string"
           },
+          "model": {
+            "description": "Current configured model when loaded, otherwise the latest persisted model. Null when unavailable. This is not per-turn execution telemetry.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "modelProvider": {
             "description": "Model provider used for this thread (for example, 'openai').",
             "type": "string"
           },
           "name": {
             "description": "Optional user-facing thread title.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "originator": {
+            "description": "Originator recorded when the thread was created, independent of its current client or executor. Null when the recorded originator is unavailable.",
             "type": [
               "string",
               "null"
@@ -22926,6 +23250,17 @@
               "string",
               "null"
             ]
+          },
+          "reasoningEffort": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningEffort"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Current configured reasoning effort when loaded, otherwise the latest persisted effort. Null when unset or unavailable. This is not per-turn execution telemetry."
           },
           "recencyAt": {
             "description": "Unix timestamp (in seconds) used for thread recency ordering.",
@@ -23319,6 +23654,29 @@
           "threadId"
         ],
         "title": "ThreadDeletedNotification",
+        "type": "object"
+      },
+      "ThreadEnvironment": {
+        "description": "An environment selected by a loaded thread, independent of connection status.",
+        "properties": {
+          "cwd": {
+            "$ref": "#/definitions/v2/LegacyAppPathString"
+          },
+          "environmentId": {
+            "type": "string"
+          },
+          "runtimeWorkspaceRoots": {
+            "items": {
+              "$ref": "#/definitions/v2/LegacyAppPathString"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cwd",
+          "environmentId",
+          "runtimeWorkspaceRoots"
+        ],
         "type": "object"
       },
       "ThreadExtra": {
@@ -23942,6 +24300,16 @@
                   }
                 ],
                 "default": null
+              },
+              "questions": {
+                "default": null,
+                "items": {
+                  "$ref": "#/definitions/v2/AsyncUserInputQuestion"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
               },
               "text": {
                 "type": "string"
@@ -24831,6 +25199,16 @@
           },
           "modelProviders": {
             "description": "Optional provider filter; when set, only sessions recorded under these providers are returned. When present but empty, includes all providers.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "originators": {
+            "description": "Optional originator allowlist, matching any supplied value exactly. Supported by hosted backends only; the local app-server rejects a nonempty list. Omitted or empty lists leave originators unrestricted.",
             "items": {
               "type": "string"
             },
@@ -28707,6 +29085,17 @@
         "additionalProperties": false,
         "description": "Experimental settings changes for one running turn, not future turns. Unsupported fields are rejected rather than silently ignored. Any live task kind may accept publication. Child sessions and consumers of frozen initial settings are unchanged.",
         "properties": {
+          "approvalsReviewer": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApprovalsReviewer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Changes the active turn's reviewer without changing future thread settings. Already captured steps and pending approvals retain their original reviewer."
+          },
           "effort": {
             "anyOf": [
               {

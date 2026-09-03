@@ -237,6 +237,7 @@ func resources(ctx context.Context, client *codex.Client) error {
 	// codex-go-sdk-resource:Plugins
 	// codex-go-sdk-docs:plugin/list
 	// codex-go-sdk-docs:plugin/read
+	// codex-go-sdk-docs:plugin/reconcile
 	// codex-go-sdk-docs:plugin/installed
 	// codex-go-sdk-docs:plugin/share/list
 	// codex-go-sdk-docs:plugin/share/save
@@ -247,6 +248,7 @@ func resources(ctx context.Context, client *codex.Client) error {
 	// codex-go-sdk-docs:plugin/uninstall
 	_, _ = client.Plugins.List(ctx, protocol.PluginListParams{})
 	_, _ = client.Plugins.Read(ctx, protocol.PluginReadParams{})
+	_, _ = client.Plugins.Reconcile(ctx, protocol.PluginReconcileParams{})
 	_, _ = client.Plugins.Installed(ctx, protocol.PluginInstalledParams{})
 	_, _ = client.Plugins.ListShares(ctx, protocol.PluginShareListParams{})
 	_, _ = client.Plugins.SaveShare(ctx, protocol.PluginShareSaveParams{})

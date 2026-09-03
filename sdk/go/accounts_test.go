@@ -57,6 +57,17 @@ func TestAccountsStage5EThinWrappers(t *testing.T) {
 		call   func(context.Context, *Client) error
 	}{
 		{
+			name:   "read-rate-limits-with-params",
+			method: "account/rateLimits/read",
+			call: func(ctx context.Context, client *Client) error {
+				_, err := client.Accounts.RateLimitsWithParams(ctx, protocol.GetAccountRateLimitsParams{
+					ExcludeResetCreditDetails: protocol.SomeNonNull(true),
+					SupportsLunaReserve:       protocol.SomeNonNull(true),
+				})
+				return err
+			},
+		},
+		{
 			name:   "consume-rate-limit-reset-credit",
 			method: "account/rateLimitResetCredit/consume",
 			call: func(ctx context.Context, client *Client) error {
