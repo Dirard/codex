@@ -916,6 +916,7 @@ mod tests {
                 response_id,
                 token_usage: None,
                 end_turn: Some(true),
+                ..
             } if response_id == "resp1"
         );
     }

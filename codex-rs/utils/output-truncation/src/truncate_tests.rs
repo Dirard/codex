@@ -113,31 +113,7 @@ fn truncate_text_with_config_truncates_by_lines_before_bytes() {
 }
 
 #[test]
-fn for_mcp_output_preserves_general_line_limit_without_override() {
-    let config = OutputTruncation::new_with_mcp_max_lines(
-        TruncationPolicy::Bytes(usize::MAX),
-        /*max_lines*/ Some(4),
-        /*mcp_max_lines*/ None,
-    )
-    .for_mcp_output();
-
-    assert_eq!(config.max_lines, Some(4));
-}
-
-#[test]
-fn for_mcp_output_clamps_mcp_line_limit_to_general_limit() {
-    let config = OutputTruncation::new_with_mcp_max_lines(
-        TruncationPolicy::Bytes(usize::MAX),
-        /*max_lines*/ Some(4),
-        /*mcp_max_lines*/ Some(10),
-    )
-    .for_mcp_output();
-
-    assert_eq!(config.max_lines, Some(4));
-}
-
-#[test]
-fn truncate_function_output_items_with_config_uses_mcp_line_limit() {
+fn truncate_function_output_items_with_config_uses_line_limit() {
     let items = vec![
         FunctionCallOutputContentItem::InputText {
             text: "line1\nline2\nline3".to_string(),
@@ -150,12 +126,7 @@ fn truncate_function_output_items_with_config_uses_mcp_line_limit() {
             text: "line4\nline5".to_string(),
         },
     ];
-    let config = OutputTruncation::new_with_mcp_max_lines(
-        TruncationPolicy::Bytes(usize::MAX),
-        Some(10),
-        Some(2),
-    )
-    .for_mcp_output();
+    let config = OutputTruncation::new(TruncationPolicy::Bytes(usize::MAX), Some(2));
 
     assert_eq!(
         truncate_function_output_items_with_config(&items, config, |_| 0),

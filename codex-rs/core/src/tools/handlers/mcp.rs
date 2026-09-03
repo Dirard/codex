@@ -225,11 +225,7 @@ impl McpHandler {
             .and_then(codex_mcp::PreparedMcpCall::output_token_limit)
             .map(TruncationPolicy::Tokens)
             .map_or(configured_truncation, |tool_policy| {
-                if tool_policy.byte_budget() < configured_truncation.policy.byte_budget() {
-                    configured_truncation.with_policy(tool_policy)
-                } else {
-                    configured_truncation
-                }
+                configured_truncation.with_policy(tool_policy)
             });
         let started = Instant::now();
         let result = handle_mcp_tool_call(

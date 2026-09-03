@@ -149,7 +149,17 @@ impl ToolOutput for McpToolOutput {
 
 impl McpToolOutput {
     fn response_payload(&self) -> FunctionCallOutputPayload {
-        let mcp_truncation = self.truncation.for_mcp_output();
+        let max_lines = match (self.truncation.max_lines, self.truncation.mcp_max_lines) {
+            (Some(max_lines), Some(mcp_max_lines)) if mcp_max_lines < max_lines => {
+                Some(mcp_max_lines)
+            }
+            (None, Some(mcp_max_lines)) => Some(mcp_max_lines),
+            _ => None,
+        };
+        let mcp_truncation = OutputTruncation {
+            max_lines,
+            ..self.truncation
+        };
         let mut payload = self.result.as_function_call_output_payload();
         if mcp_truncation.max_lines.is_some()
             && let Some(text_content) = mcp_text_content_for_line_limit(&self.result)

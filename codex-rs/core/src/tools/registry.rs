@@ -551,6 +551,8 @@ impl ToolRegistry {
             })
             .to_string();
             let log_payload = tool_log_payload(&invocation.payload, &invocation.source);
+            let mut tool_result_tags = Vec::with_capacity(2);
+            sandbox_tags.append_metric_tags(&mut tool_result_tags);
             otel.tool_result_with_tags(
                 &tool_name,
                 &call_id_owned,
@@ -558,7 +560,7 @@ impl ToolRegistry {
                 Duration::ZERO,
                 /*success*/ false,
                 &message,
-                &base_tool_result_tags,
+                &tool_result_tags,
                 /*extra_trace_fields*/ &[],
             );
             let err = FunctionCallError::RespondToModel(message);

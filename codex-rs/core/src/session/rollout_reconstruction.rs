@@ -366,10 +366,20 @@ impl Session {
                     history.record_retained_context(event);
                 }
                 RolloutItem::ResponseItem(response_item) => {
-                    history.record_annotated_items(
-                        std::slice::from_ref(response_item),
-                        replay_output_truncation,
-                    );
+                    if response_item
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.fallback_token_limit_override)
+                        .is_some()
+                    {
+                        history
+                            .record_replayed_annotated_items(std::slice::from_ref(response_item));
+                    } else {
+                        history.record_annotated_items(
+                            std::slice::from_ref(response_item),
+                            replay_output_truncation,
+                        );
+                    }
                 }
                 RolloutItem::InterAgentCommunication(communication) => {
                     let response_item = communication.to_model_input_item();

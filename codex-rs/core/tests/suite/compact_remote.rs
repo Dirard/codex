@@ -2030,7 +2030,7 @@ async fn remote_compact_v2_rebuilds_candidate_until_headroom_is_available() -> R
     let rollout_text = fs::read_to_string(rollout_path)?;
     let compacted = rollout_text
         .lines()
-        .filter_map(|line| serde_json::from_str::<RolloutLine>(line).ok())
+        .filter_map(|line| serde_json::from_str::<RolloutLineFixture>(line).ok())
         .find_map(|line| match line.item {
             RolloutItem::Compacted(compacted) => Some(compacted),
             _ => None,
@@ -2049,6 +2049,12 @@ async fn remote_compact_v2_rebuilds_candidate_until_headroom_is_available() -> R
         .expect("compacted metadata should include the installed window id");
     assert_ne!(window_id, first_window_id);
     Ok(())
+}
+
+#[derive(serde::Deserialize)]
+struct RolloutLineFixture {
+    #[serde(flatten)]
+    item: RolloutItem,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
