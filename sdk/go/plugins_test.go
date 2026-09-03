@@ -47,6 +47,14 @@ func TestPluginsThinWrappers(t *testing.T) {
 			},
 		},
 		{
+			name:   "reconcile",
+			method: "plugin/reconcile",
+			call: func(ctx context.Context, client *Client) error {
+				_, err := client.Plugins.Reconcile(ctx, protocol.PluginReconcileParams{})
+				return err
+			},
+		},
+		{
 			name:   "skill-read",
 			method: "plugin/skill/read",
 			call: func(ctx context.Context, client *Client) error {
