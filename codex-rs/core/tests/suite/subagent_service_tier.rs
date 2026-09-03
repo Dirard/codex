@@ -194,7 +194,7 @@ async fn root_service_tier_change_updates_existing_subagent(
             ev_function_call_with_namespace(
                 PAUSE_CALL_ID,
                 "collaboration",
-                "wait_agent",
+                "check_agent_status",
                 &json!({ "timeout_ms": 30_000 }).to_string(),
             ),
             ev_completed("child-paused"),

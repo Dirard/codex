@@ -343,6 +343,28 @@ impl ContextManager {
         )
     }
 
+    /// Appends rollout items that were already truncated before persistence.
+    pub(crate) fn record_replayed_annotated_items(&mut self, items: &[ResponseItemEnvelope]) {
+        for envelope in items {
+            if !is_api_message(&envelope.item, envelope.metadata.as_ref()) {
+                continue;
+            }
+            if let Some(review_history) = &mut self.review_history
+                && !matches!(
+                    &envelope.item,
+                    ResponseItem::Message { role, content, .. }
+                        if role == "user" && is_contextual_user_message_content(content)
+                )
+            {
+                review_history.record(&envelope.item);
+            }
+            Arc::make_mut(&mut self.items).push(envelope.clone());
+            if crate::context::is_user_authorization_message(&envelope.item) {
+                self.user_message_revision = self.user_message_revision.saturating_add(1);
+            }
+        }
+    }
+
     fn record_items_with_metadata<'a, I, T>(
         &mut self,
         items: I,
@@ -360,10 +382,11 @@ impl ContextManager {
                 continue;
             }
 
-            let item_truncation = metadata
-                .and_then(|metadata| metadata.fallback_token_limit_override)
-                .map(TruncationPolicy::Tokens)
-                .map_or(truncation, |policy| truncation.with_policy(policy));
+            let item_truncation =
+                match metadata.and_then(|metadata| metadata.fallback_token_limit_override) {
+                    Some(limit) => truncation.with_policy(TruncationPolicy::Tokens(limit)),
+                    None => truncation.with_policy(truncation.policy * 1.2),
+                };
             let processed = ResponseItemEnvelope {
                 item: Self::process_item(item, item_truncation),
                 metadata: metadata.cloned(),
@@ -757,7 +780,6 @@ impl ContextManager {
     }
 
     fn process_item(item: &ResponseItem, truncation: OutputTruncation) -> ResponseItem {
-        let truncation_with_serialization_budget = truncation.with_policy(truncation.policy * 1.2);
         match item {
             ResponseItem::FunctionCallOutput {
                 id,
@@ -771,10 +793,7 @@ impl ContextManager {
                 call_id: call_id.clone(),
                 name: name.clone(),
                 namespace: namespace.clone(),
-                output: truncate_function_output_payload(
-                    output,
-                    truncation_with_serialization_budget,
-                ),
+                output: truncate_function_output_payload(output, truncation),
                 internal_chat_message_metadata_passthrough: metadata.clone(),
             },
             ResponseItem::CustomToolCallOutput {
@@ -787,10 +806,7 @@ impl ContextManager {
                 id: id.clone(),
                 call_id: call_id.clone(),
                 name: name.clone(),
-                output: truncate_function_output_payload(
-                    output,
-                    truncation_with_serialization_budget,
-                ),
+                output: truncate_function_output_payload(output, truncation),
                 internal_chat_message_metadata_passthrough: metadata.clone(),
             },
             ResponseItem::AdditionalTools { .. }
@@ -807,6 +823,7 @@ impl ContextManager {
             | ResponseItem::Compaction { .. }
             | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }
+            | ResponseItem::ConfigurationUpdate { .. }
             | ResponseItem::Other => item.clone(),
         }
     }

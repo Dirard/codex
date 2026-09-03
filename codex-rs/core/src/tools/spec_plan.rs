@@ -672,7 +672,12 @@ fn required_child_management_tool_names(
         MultiAgentVersion::Disabled => return Vec::new(),
         MultiAgentVersion::V1 => (
             Some(MULTI_AGENT_V1_NAMESPACE),
-            &["send_input", "wait_agent", "resume_agent", "close_agent"],
+            &[
+                "send_input",
+                "check_agent_status",
+                "resume_agent",
+                "close_agent",
+            ],
         ),
         MultiAgentVersion::V2 => (
             namespace_tools_enabled(turn_context)
@@ -692,7 +697,10 @@ fn required_child_management_tool_names(
         .collect::<Vec<_>>();
     if multi_agent_v2_enabled(turn_context) && turn_context.config.multi_agent_v2.wait_agent_enabled
     {
-        tools.push(ToolName::new(namespace.map(str::to_owned), "wait_agent"));
+        tools.push(ToolName::new(
+            namespace.map(str::to_owned),
+            "check_agent_status",
+        ));
     }
     tools
 }
@@ -812,7 +820,7 @@ fn register_code_mode_executors(
         if is_excluded_from_code_mode(turn_context, &tool_name) {
             continue;
         }
-        if exposure == ToolExposure::DirectModelOnly {
+        if exposure == ToolExposure::DirectModelOnly && tool.runtime.mcp_server_name().is_none() {
             let spec = tool.runtime.spec();
             direct_tool_stubs.extend(
                 collect_code_mode_exec_prompt_tool_definitions(std::iter::once(&spec))
@@ -1176,13 +1184,12 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     }
 
     if turn_context.config.experimental_request_user_input_enabled {
-        let available_modes = request_user_input_available_modes(features);
-        let exposure = if available_modes.contains(&turn_context.mode()) {
-            ToolExposure::DirectModelOnly
-        } else {
-            ToolExposure::Hidden
-        };
-        registry.add_with_exposure(RequestUserInputHandler { available_modes }, exposure);
+        registry.add_with_exposure(
+            RequestUserInputHandler {
+                available_modes: request_user_input_available_modes(features),
+            },
+            ToolExposure::DirectModelOnly,
+        );
     }
 
     if !turn_context.session_source.is_non_root_agent()

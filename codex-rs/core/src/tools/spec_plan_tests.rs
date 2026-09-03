@@ -1,4 +1,3 @@
-use crate::session::tests::update_selected_settings_for_test;
 use crate::session::tests::update_turn_settings_for_test;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -836,23 +835,8 @@ async fn wait_for_environment_falls_back_for_oversized_host_configuration() {
 }
 
 #[tokio::test]
-async fn request_user_input_tool_respects_mode_and_config_gates() {
-    let unavailable = probe(|_| {}).await;
-    unavailable.assert_visible_lacks(&["request_user_input"]);
-    unavailable.assert_registered_contains(&["request_user_input"]);
-    assert_eq!(
-        unavailable.exposure("request_user_input"),
-        ToolExposure::Hidden
-    );
-
-    let enabled = probe(|turn| {
-        update_turn_settings_for_test(turn, |settings| {
-            update_selected_settings_for_test(settings, |selected| {
-                selected.collaboration_mode.mode = codex_protocol::config_types::ModeKind::Plan;
-            });
-        });
-    })
-    .await;
+async fn request_user_input_tool_respects_experimental_config_gate() {
+    let enabled = probe(|_| {}).await;
     enabled.assert_visible_contains(&["request_user_input"]);
     enabled.assert_registered_contains(&["request_user_input"]);
     assert_eq!(
@@ -861,11 +845,6 @@ async fn request_user_input_tool_respects_mode_and_config_gates() {
     );
 
     let disabled = probe(|turn| {
-        update_turn_settings_for_test(turn, |settings| {
-            update_selected_settings_for_test(settings, |selected| {
-                selected.collaboration_mode.mode = codex_protocol::config_types::ModeKind::Plan;
-            });
-        });
         update_config(turn, |config| {
             config.experimental_request_user_input_enabled = false;
         });
@@ -894,11 +873,6 @@ async fn update_plan_tool_respects_config_gate() {
 #[tokio::test]
 async fn request_user_input_stays_direct_in_code_mode_only() {
     let plan = probe(|turn| {
-        update_turn_settings_for_test(turn, |settings| {
-            update_selected_settings_for_test(settings, |selected| {
-                selected.collaboration_mode.mode = codex_protocol::config_types::ModeKind::Plan;
-            });
-        });
         set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
     })
     .await;

@@ -134,45 +134,58 @@ fn mcp_tool_output_response_item_includes_wall_time() {
 }
 
 #[test]
-fn mcp_tool_output_response_item_uses_general_line_limit_without_override() {
-    let output = McpToolOutput {
-        result: CallToolResult {
-            content: vec![serde_json::json!({
-                "type": "text",
-                "text": "line1\nline2\nline3\nline4",
-            })],
-            structured_content: None,
-            is_error: Some(false),
-            meta: None,
-        },
-        tool_input: json!({}),
-        wall_time: std::time::Duration::from_millis(1250),
-        original_image_detail_supported: false,
-        truncation: OutputTruncation::new_with_mcp_max_lines(
+fn mcp_tool_output_applies_line_limits_once_when_recorded() {
+    let recorded_text = |truncation| {
+        let response = McpToolOutput {
+            result: CallToolResult {
+                content: vec![serde_json::json!({
+                    "type": "text",
+                    "text": "line1\nline2\nline3\nline4",
+                })],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            },
+            tool_input: json!({}),
+            wall_time: std::time::Duration::from_millis(1250),
+            original_image_detail_supported: false,
+            truncation,
+        }
+        .to_response_item(
+            "mcp-call-lines",
+            &ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+        );
+        let item = ResponseItem::from(response);
+        let mut history = ContextManager::new();
+        history.record_items([&item], truncation);
+        let items = history.raw_items().cloned().collect::<Vec<_>>();
+        let [ResponseItem::FunctionCallOutput { output, .. }] = items.as_slice() else {
+            panic!("expected one FunctionCallOutput");
+        };
+        output
+            .body
+            .to_text()
+            .expect("MCP output should contain text")
+    };
+
+    assert_eq!(
+        recorded_text(OutputTruncation::new_with_mcp_max_lines(
             TruncationPolicy::Bytes(100_000),
             /*max_lines*/ Some(4),
             /*mcp_max_lines*/ None,
-        ),
-    };
-
-    let response = output.to_response_item(
-        "mcp-call-lines",
-        &ToolPayload::Function {
-            arguments: "{}".to_string(),
-        },
+        )),
+        "Wall time: 1.2500 seconds\nOutput:\n... 2 lines truncated ...\nline3\nline4",
     );
-
-    match response {
-        ResponseInputItem::FunctionCallOutput { call_id, output } => {
-            assert_eq!(call_id, "mcp-call-lines");
-            assert_eq!(output.success, Some(true));
-            assert_eq!(
-                output.body.to_text().as_deref(),
-                Some("Wall time: 1.2500 seconds\nOutput:\n... 2 lines truncated ...\nline3\nline4")
-            );
-        }
-        other => panic!("expected FunctionCallOutput, got {other:?}"),
-    }
+    assert_eq!(
+        recorded_text(OutputTruncation::new_with_mcp_max_lines(
+            TruncationPolicy::Bytes(100_000),
+            /*max_lines*/ Some(4),
+            /*mcp_max_lines*/ Some(2),
+        )),
+        "Wall time: 1.2500 seconds\n... 4 lines truncated ...\nline4",
+    );
 }
 
 #[test]

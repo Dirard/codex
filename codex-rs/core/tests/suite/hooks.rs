@@ -1787,6 +1787,12 @@ async fn async_hook_finishing_while_idle_waits_for_the_next_turn(
     fs_wait::wait_for_path_exists(finished_path, Duration::from_secs(5))
         .await
         .context("timed out waiting for the async hook to finish")?;
+    fs::write(
+        test.codex_home_path()
+            .join("async_user_prompt_submit_hook.py"),
+        "print('{\"continue\": true}', flush=True)\n",
+    )
+    .context("make the async hook one-shot")?;
 
     assert!(
         timeout(Duration::from_millis(150), test.codex.next_event())
@@ -1817,7 +1823,14 @@ async fn async_hook_finishing_while_idle_waits_for_the_next_turn(
             text_elements: Vec::new(),
         }])
     };
-    test.codex.start_turn_if_idle(next_turn).await?;
+    let submission = test.codex.start_turn_if_idle(next_turn).await?;
+    assert!(
+        matches!(
+            submission,
+            codex_core::StartIfIdleSubmission::Started { .. }
+        ),
+        "next turn was not started: {submission:?}"
+    );
 
     let mut warning_event = None;
     timeout(Duration::from_secs(5), async {

@@ -42,17 +42,6 @@ impl OutputTruncation {
     pub fn with_policy(self, policy: TruncationPolicy) -> Self {
         Self { policy, ..self }
     }
-
-    pub fn for_mcp_output(self) -> Self {
-        let max_lines = match (self.max_lines, self.mcp_max_lines) {
-            (Some(max_lines), Some(mcp_max_lines)) => Some(max_lines.min(mcp_max_lines)),
-            (Some(max_lines), None) => Some(max_lines),
-            (None, Some(mcp_max_lines)) => Some(mcp_max_lines),
-            (None, None) => None,
-        };
-
-        Self { max_lines, ..self }
-    }
 }
 
 impl From<TruncationPolicy> for OutputTruncation {
