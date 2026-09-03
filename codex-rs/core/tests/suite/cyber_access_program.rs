@@ -202,7 +202,7 @@ async fn cyber_access_program_survives_mid_turn_remote_compaction_v2(
         vec![
             responses::sse(vec![
                 responses::ev_function_call("call-before-compact", "test_tool", "{}"),
-                responses::ev_completed_with_tokens("resp-1", /*total_tokens*/ 500),
+                responses::ev_completed_with_tokens("resp-1", /*total_tokens*/ 20_000),
             ]),
             responses::sse(vec![
                 serde_json::json!({
@@ -223,7 +223,8 @@ async fn cyber_access_program_survives_mid_turn_remote_compaction_v2(
     let test = test_codex()
         .with_auth(auth)
         .with_config(|config| {
-            config.model_auto_compact_token_limit = Some(200);
+            let _ = config.features.enable(Feature::RemoteCompactionV2);
+            config.model_auto_compact_token_limit = Some(10_000);
             config
                 .features
                 .enable(Feature::ApiKeyModelDiscovery)
