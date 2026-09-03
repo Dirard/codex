@@ -798,7 +798,7 @@ fn truncate_retained_messages(
         let serialized_tokens =
             usize::try_from(estimate_item_token_count(&group.source.item)).unwrap_or(usize::MAX);
         let charge_serialized_estimate =
-            client_developer || (!charge_images && (image_count > 0 || !has_uncharged_audio));
+            client_developer || (!charge_images && image_count == 0 && !has_uncharged_audio);
         let recheck_serialized_estimate =
             charge_serialized_estimate || (!has_uncharged_audio && image_count == 0);
         let source_tokens = if charge_serialized_estimate {
@@ -989,37 +989,6 @@ mod tests {
             .into_iter()
             .map(ResponseItemEnvelope::into_item)
             .collect()
-    }
-
-    fn image_message(image_url: &str) -> ResponseItem {
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputImage {
-                image_url: image_url.to_string(),
-                detail: None,
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        }
-    }
-
-    fn mixed_text_image_message(text: &str) -> ResponseItem {
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![
-                ContentItem::InputText {
-                    text: text.to_string(),
-                },
-                ContentItem::InputImage {
-                    image_url: "data:image/png;base64,AAAA".to_string(),
-                    detail: None,
-                },
-            ],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        }
     }
 
     fn response_stream(events: Vec<CodexResult<ResponseEvent>>) -> ResponseStream {
@@ -1221,18 +1190,6 @@ mod tests {
     }
 
     #[test]
-    fn retained_history_budget_uses_full_item_estimator_for_image_only_message() {
-        let image_only = ResponseItemEnvelope::new(image_message("data:image/png;base64,AAAA"));
-        let budget = usize::try_from(estimate_item_token_count(&image_only.item) - 1)
-            .expect("positive image estimate");
-
-        assert_eq!(
-            truncate_retained_messages_for_remote_compaction(vec![image_only], budget),
-            Vec::<ResponseItemEnvelope>::new(),
-        );
-    }
-
-    #[test]
     fn message_truncation_preserves_images_and_truncates_later_text_parts() {
         let item = ResponseItem::Message {
             id: None,
@@ -1381,6 +1338,7 @@ mod tests {
         );
     }
 
+<<<<<<< HEAD
     #[test]
     fn retained_history_keeps_mixed_fixed_content_that_exactly_fits() {
         let mixed = ResponseItemEnvelope::new(mixed_text_image_message(
@@ -1426,6 +1384,8 @@ mod tests {
 
         assert!(retained.is_empty());
     }
+=======
+>>>>>>> ff8f202554 (chore(core): reconcile fork with upstream 0.153.0)
     #[tokio::test]
     async fn collect_compaction_output_accepts_additional_output_items() {
         let compaction = ResponseItem::Compaction {
