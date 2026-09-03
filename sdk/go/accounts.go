@@ -83,7 +83,17 @@ func (c *AccountsClient) RateLimits(ctx context.Context) (protocol.GetAccountRat
 	if c == nil || c.client == nil {
 		return protocol.GetAccountRateLimitsResponse{}, &ClosedError{}
 	}
-	return c.client.Raw().AccountRateLimitsRead(ctx)
+	return c.client.Raw().AccountRateLimitsRead(ctx, protocol.NullableGetAccountRateLimitsParams{})
+}
+
+func (c *AccountsClient) RateLimitsWithParams(ctx context.Context, params protocol.GetAccountRateLimitsParams) (protocol.GetAccountRateLimitsResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.GetAccountRateLimitsResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().AccountRateLimitsRead(
+		ctx,
+		protocol.NullableGetAccountRateLimitsParams(protocol.Some(params)),
+	)
 }
 
 func (c *AccountsClient) ConsumeRateLimitResetCredit(ctx context.Context, params protocol.ConsumeAccountRateLimitResetCreditParams) (protocol.ConsumeAccountRateLimitResetCreditResponse, error) {

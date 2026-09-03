@@ -34,6 +34,13 @@ func (c *PluginsClient) Read(ctx context.Context, params protocol.PluginReadPara
 	return c.client.Raw().PluginRead(ctx, params)
 }
 
+func (c *PluginsClient) Reconcile(ctx context.Context, params protocol.PluginReconcileParams) (protocol.PluginReconcileResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.PluginReconcileResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().PluginReconcile(ctx, params)
+}
+
 func (c *PluginsClient) ReadSkill(ctx context.Context, params protocol.PluginSkillReadParams) (protocol.PluginSkillReadResponse, error) {
 	if c == nil || c.client == nil {
 		return protocol.PluginSkillReadResponse{}, &ClosedError{}
