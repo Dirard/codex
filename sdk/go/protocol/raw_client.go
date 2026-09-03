@@ -376,6 +376,12 @@ func (c RawClient) PluginInstalled(ctx context.Context, params PluginInstalledPa
 	return result, err
 }
 
+func (c RawClient) PluginReconcile(ctx context.Context, params PluginReconcileParams) (PluginReconcileResponse, error) {
+	var result PluginReconcileResponse
+	err := c.sender.Call(ctx, "plugin/reconcile", params, &result, MethodMetadataByMethod["plugin/reconcile"])
+	return result, err
+}
+
 func (c RawClient) PluginRead(ctx context.Context, params PluginReadParams) (PluginReadResponse, error) {
 	var result PluginReadResponse
 	err := c.sender.Call(ctx, "plugin/read", params, &result, MethodMetadataByMethod["plugin/read"])
@@ -760,9 +766,9 @@ func (c RawClient) AccountLogout(ctx context.Context) (LogoutAccountResponse, er
 	return result, err
 }
 
-func (c RawClient) AccountRateLimitsRead(ctx context.Context) (GetAccountRateLimitsResponse, error) {
+func (c RawClient) AccountRateLimitsRead(ctx context.Context, params NullableGetAccountRateLimitsParams) (GetAccountRateLimitsResponse, error) {
 	var result GetAccountRateLimitsResponse
-	err := c.sender.Call(ctx, "account/rateLimits/read", nil, &result, MethodMetadataByMethod["account/rateLimits/read"])
+	err := c.sender.Call(ctx, "account/rateLimits/read", params, &result, MethodMetadataByMethod["account/rateLimits/read"])
 	return result, err
 }
 
