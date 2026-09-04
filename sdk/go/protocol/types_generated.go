@@ -1733,7 +1733,7 @@ func (v ClientRequest) RemoteControlEnableParams() (NullableRemoteControlEnableP
 	}
 	var params NullableRemoteControlEnableParams
 	if len(bytes.TrimSpace(v.Params)) == 0 {
-		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+		return params, true, nil
 	}
 	if err := json.Unmarshal(v.Params, &params); err != nil {
 		return params, true, err
@@ -1747,7 +1747,7 @@ func (v ClientRequest) RemoteControlDisableParams() (NullableRemoteControlDisabl
 	}
 	var params NullableRemoteControlDisableParams
 	if len(bytes.TrimSpace(v.Params)) == 0 {
-		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+		return params, true, nil
 	}
 	if err := json.Unmarshal(v.Params, &params); err != nil {
 		return params, true, err
@@ -2027,7 +2027,7 @@ func (v ClientRequest) AccountRateLimitsReadParams() (NullableGetAccountRateLimi
 	}
 	var params NullableGetAccountRateLimitsParams
 	if len(bytes.TrimSpace(v.Params)) == 0 {
-		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+		return params, true, nil
 	}
 	if err := json.Unmarshal(v.Params, &params); err != nil {
 		return params, true, err
@@ -2055,7 +2055,7 @@ func (v ClientRequest) AccountUsageReadParams() (NullableGetAccountTokenUsagePar
 	}
 	var params NullableGetAccountTokenUsageParams
 	if len(bytes.TrimSpace(v.Params)) == 0 {
-		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+		return params, true, nil
 	}
 	if err := json.Unmarshal(v.Params, &params); err != nil {
 		return params, true, err

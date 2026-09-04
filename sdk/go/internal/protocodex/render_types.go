@@ -181,7 +181,11 @@ func renderJSONRPCUnion(name string, manifest *Manifest) string {
 		b.WriteString(fmt.Sprintf("func (v %s) %s() (%s, bool, error) {\n", name, methodName, goType))
 		b.WriteString(fmt.Sprintf("\tif v.Method != %q { return %s{}, false, nil }\n", variant.Method, goType))
 		b.WriteString(fmt.Sprintf("\tvar params %s\n", goType))
-		b.WriteString("\tif len(bytes.TrimSpace(v.Params)) == 0 { return params, true, DecodeError{Field: \"params\", Reason: \"missing required field\"} }\n")
+		if strings.HasPrefix(variant.ParamsType, "Nullable") {
+			b.WriteString("\tif len(bytes.TrimSpace(v.Params)) == 0 { return params, true, nil }\n")
+		} else {
+			b.WriteString("\tif len(bytes.TrimSpace(v.Params)) == 0 { return params, true, DecodeError{Field: \"params\", Reason: \"missing required field\"} }\n")
+		}
 		b.WriteString("\tif err := json.Unmarshal(v.Params, &params); err != nil { return params, true, err }\n")
 		b.WriteString("\treturn params, true, nil\n}\n\n")
 	}
