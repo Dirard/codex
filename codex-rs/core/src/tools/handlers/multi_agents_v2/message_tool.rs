@@ -107,6 +107,7 @@ pub(super) async fn handle_message_string_tool(
         receiver_agent_path.clone(),
         message,
         &source,
+        turn.config.multi_agent_v2.message_delivery,
         mode.trigger_turn(),
     );
     let kind = match mode {

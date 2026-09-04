@@ -14,6 +14,7 @@ use crate::tools::handlers::multi_agents_common::*;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use codex_features::MultiAgentMessageDelivery;
 use codex_protocol::AgentPath;
 use codex_protocol::items::CollabAgentTool;
 use codex_protocol::items::CollabAgentToolCallItem;
@@ -45,6 +46,10 @@ mod send_message;
 mod spawn;
 pub(crate) mod wait;
 
+#[cfg(test)]
+#[path = "multi_agents_v2_tests.rs"]
+mod tests;
+
 pub(crate) async fn emit_sub_agent_activity(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
@@ -60,12 +65,15 @@ fn communication_from_tool_message(
     recipient: AgentPath,
     message: String,
     source: &crate::tools::context::ToolCallSource,
+    message_delivery: MultiAgentMessageDelivery,
     trigger_turn: bool,
 ) -> InterAgentCommunication {
-    if !matches!(
-        source,
-        crate::tools::context::ToolCallSource::DirectPlaintextMessage
-    ) {
+    let plaintext = message_delivery == MultiAgentMessageDelivery::Plaintext
+        || matches!(
+            source,
+            crate::tools::context::ToolCallSource::DirectPlaintextMessage
+        );
+    if !plaintext {
         return InterAgentCommunication::new_encrypted(
             author,
             recipient,
