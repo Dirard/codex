@@ -285,6 +285,18 @@ fn reviewed_manifest_required_fields(rust_type: &str) -> Vec<SerdeFieldEntry> {
 
 fn reviewed_manifest_required_variant_aliases(rust_type: &str) -> Vec<SerdeVariantAliasEntry> {
     match rust_type {
+        "ActiveProtocolMode" => vec![
+            SerdeVariantAliasEntry {
+                rust_variant: "Stable",
+                canonical_wire_value: "stable",
+                aliases: Vec::new(),
+            },
+            SerdeVariantAliasEntry {
+                rust_variant: "Experimental",
+                canonical_wire_value: "experimental",
+                aliases: Vec::new(),
+            },
+        ],
         "Account" => vec![
             SerdeVariantAliasEntry {
                 rust_variant: "ApiKey",
@@ -362,6 +374,7 @@ fn schema_sufficient_serde_shape(rust_type: String, schema_ref: Option<String>) 
 
 pub(crate) fn schema_reachable_serde_attribute_required_types() -> &'static [&'static str] {
     &[
+        "ActiveProtocolMode",
         "Account",
         "ActivePermissionProfile",
         "AdditionalFileSystemPermissions",
