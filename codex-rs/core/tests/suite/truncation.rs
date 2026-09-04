@@ -824,7 +824,7 @@ async fn mcp_tool_output_limit_preserves_output_that_fits(
     skip_if_wine_exec!(Ok(()), "requires a Windows test_stdio_server binary");
 
     let server = start_mock_server().await;
-    let builder = test_codex().with_config(|config| config.tool_output_token_limit = Some(50));
+    let builder = test_codex().with_config(|config| config.tool_output_token_limit = Some(50_000));
     let (_fixture, output) =
         call_mcp_echo(&server, builder, Some(output_token_limit), message_bytes).await?;
 
@@ -833,7 +833,7 @@ async fn mcp_tool_output_limit_preserves_output_that_fits(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_tool_output_limit_truncates_oversized_output() -> Result<()> {
+async fn mcp_tool_output_limit_uses_most_restrictive_policy() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_wine_exec!(Ok(()), "requires a Windows test_stdio_server binary");
 
@@ -848,8 +848,10 @@ async fn mcp_tool_output_limit_truncates_oversized_output() -> Result<()> {
     .await?;
 
     assert!(output.contains("truncated"));
-    // 30k tokens plus the serialization allowance leaves about 144k bytes.
-    assert!((140_000..145_000).contains(&output.len()));
+    assert!(
+        output.len() < 1_000,
+        "global 50-token limit was not applied"
+    );
     Ok(())
 }
 
