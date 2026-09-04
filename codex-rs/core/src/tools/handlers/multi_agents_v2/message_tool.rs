@@ -71,8 +71,7 @@ pub(super) async fn handle_message_string_tool(
                 FunctionCallError::RespondToModel(message)
             }
             MessageDeliveryError::Agent(err) => collab_agent_error(receiver_thread_id, err),
-        })?;
-    emit_sub_agent_activity(
+        })?;    emit_sub_agent_activity(
         &session,
         &turn,
         SubAgentActivityItem {

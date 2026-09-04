@@ -1337,54 +1337,6 @@ mod tests {
         );
     }
 
-<<<<<<< HEAD
-    #[test]
-    fn retained_history_keeps_mixed_fixed_content_that_exactly_fits() {
-        let mixed = ResponseItemEnvelope::new(mixed_text_image_message(
-            &"keep only what fits ".repeat(/*count*/ 20),
-        ));
-        let text_free = truncate_message_text_to_token_budget(mixed.clone(), /*max_tokens*/ 0)
-            .expect("the image remains after text is removed");        let fixed_cost = usize::try_from(estimate_item_token_count(&text_free.item))
-            .expect("positive fixed-content estimate");
-        let retained = truncate_retained_messages_for_remote_compaction(vec![mixed], fixed_cost);
-
-        assert_eq!(retained, vec![text_free]);
-    }
-
-    #[test]
-    fn retained_history_truncation_drops_image_only_messages_after_budget_is_spent() {
-        let image_only_message = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputImage {
-                image: ImageReference::Inline {
-                    image_url: "data:image/png;base64,abc".to_string(),
-                },
-                detail: None,
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        };
-        let newest = message("user", "new", /*phase*/ None);
-        let retained = vec![image_only_message, newest.clone()];
-
-        let truncated = truncate_without_metadata(retained, /*max_tokens*/ 1);
-
-        assert_eq!(truncated, vec![newest]);
-    }
-
-    #[test]
-    fn retained_history_truncation_rechecks_final_item_cost() {
-        let item = ResponseItemEnvelope::new(mixed_text_image_message(
-            "text that crosses the estimator rounding boundary",
-        ));
-        let retained =
-            truncate_retained_messages_for_remote_compaction(vec![item], /*max_tokens*/ 1);
-
-        assert!(retained.is_empty());
-    }
-=======
->>>>>>> ff8f202554 (chore(core): reconcile fork with upstream 0.153.0)
     #[tokio::test]
     async fn collect_compaction_output_accepts_additional_output_items() {
         let compaction = ResponseItem::Compaction {
