@@ -1140,6 +1140,7 @@ async fn cancelled_cold_resume_finishes_residency_accounting() {
         Arc::new(extensions.build()),
         Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
+        crate::thread_manager::passthrough_image_store(),
         thread_store_from_config(&config, state_db),
         /*agent_graph_store*/ None,
         uuid::Uuid::new_v4().to_string(),
