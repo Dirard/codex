@@ -116,3 +116,33 @@ func TestAccountsStage5EThinWrappers(t *testing.T) {
 		})
 	}
 }
+
+func TestAccountRateLimitsWireParams(t *testing.T) {
+	isolateTestCodexHome(t)
+	transport := newScriptedInitializedTransport(t, nil)
+	client, err := NewClient(context.Background(), ClientConfig{Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	failMethod(transport, "account/rateLimits/read")
+
+	if _, err := client.Accounts.RateLimits(context.Background()); err == nil {
+		t.Fatal("legacy rate-limits call unexpectedly succeeded")
+	}
+	if got := string(requestParamsForMethod(t, transport, "account/rateLimits/read")); got != "" {
+		t.Fatalf("legacy rate-limits params = %s; want omitted", got)
+	}
+
+	_, err = client.Accounts.RateLimitsWithParams(context.Background(), protocol.GetAccountRateLimitsParams{
+		ExcludeResetCreditDetails: protocol.SomeNonNull(true),
+		SupportsLunaReserve:       protocol.SomeNonNull(true),
+	})
+	if err == nil {
+		t.Fatal("parameterized rate-limits call unexpectedly succeeded")
+	}
+	const want = `{"excludeResetCreditDetails":true,"supportsLunaReserve":true}`
+	if got := string(requestParamsForMethod(t, transport, "account/rateLimits/read")); got != want {
+		t.Fatalf("parameterized rate-limits params = %s; want %s", got, want)
+	}
+}
