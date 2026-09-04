@@ -83,6 +83,13 @@ func TestGeneratedStructRejectsMissingRequiredField(t *testing.T) {
 	}
 }
 
+func TestClientRequestAllowsMissingOptionalParams(t *testing.T) {
+	params, ok, err := (ClientRequest{Method: "account/rateLimits/read"}).AccountRateLimitsReadParams()
+	if !ok || err != nil || params.IsSet() {
+		t.Fatalf("params = %#v, ok = %v, err = %v; want unset, true, nil", params, ok, err)
+	}
+}
+
 func TestGeneratedTaggedUnionUsesVariantAliases(t *testing.T) {
 	var path FileSystemSpecialPath
 	if err := json.Unmarshal([]byte(`{"kind":"current_working_directory"}`), &path); err != nil {
