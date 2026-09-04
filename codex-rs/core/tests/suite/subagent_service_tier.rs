@@ -1,10 +1,17 @@
 //! Verifies that root service-tier changes reach existing child turns and future work.
 
 use anyhow::Result;
+use chrono::Utc;
+use codex_core::SleepFuture;
+use codex_core::TimeFuture;
+use codex_core::TimeProvider;
 use codex_core::TurnInputRequest;
 use codex_core::config::AgentRoleConfig;
 use codex_core::config::Config;
+use codex_core::config::CurrentTimeReminderConfig;
+use codex_features::CurrentTimeSource;
 use codex_features::Feature;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -24,7 +31,10 @@ use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::sync::Arc;
+use std::time::Duration;
 use test_case::test_case;
+use tokio::sync::Notify;
 
 const ROOT_PROMPT: &str = "spawn the service-tier worker";
 const CHILD_PROMPT: &str = "pause the service-tier worker";
@@ -33,8 +43,32 @@ const FRESH_ROOT_PROMPT: &str = "spawn another service-tier worker";
 const FRESH_CHILD_PROMPT: &str = "finish the new service-tier worker";
 const SPAWN_CALL_ID: &str = "spawn-service-tier-worker";
 const FRESH_SPAWN_CALL_ID: &str = "spawn-fresh-service-tier-worker";
+const GRANDCHILD_SPAWN_CALL_ID: &str = "spawn-service-tier-grandchild";
 const PAUSE_CALL_ID: &str = "pause-service-tier-worker";
 const PRIORITY_ROLE: &str = "priority-worker";
+const GRANDCHILD_PROMPT: &str = "keep the service-tier worker busy";
+const GRANDCHILD_SLEEP_CALL_ID: &str = "grandchild-sleep-call";
+
+/// Keeps a `clock.sleep` call paused so a descendant remains deterministically active.
+#[derive(Default)]
+struct PausedSleepTimeProvider {
+    sleep_started: Notify,
+    sleep_completed: Notify,
+}
+
+impl TimeProvider for PausedSleepTimeProvider {
+    fn current_time(&self, _thread_id: ThreadId) -> TimeFuture<'_> {
+        Box::pin(async { Ok(Utc::now()) })
+    }
+
+    fn sleep(&self, _thread_id: ThreadId, _duration: Duration) -> SleepFuture<'_> {
+        Box::pin(async move {
+            self.sleep_started.notify_one();
+            self.sleep_completed.notified().await;
+            Ok(())
+        })
+    }
+}
 
 fn body_contains(request: &wiremock::Request, text: &str) -> bool {
     let body = match request
@@ -159,13 +193,26 @@ async fn root_service_tier_change_updates_existing_subagent(
     let initial_service_tier_owned = initial_service_tier.map(str::to_string);
     let updated_request_service_tier = updated_service_tier
         .filter(|service_tier| *service_tier != SERVICE_TIER_DEFAULT_REQUEST_VALUE);
-    let mut builder = test_codex()
+    let time_provider = Arc::new(PausedSleepTimeProvider::default());
+    let builder = test_codex()
         .with_model("gpt-5.6-sol")
         .with_config(move |config| {
             config.service_tier = initial_service_tier_owned;
             configure_priority_role(config);
+            config
+                .features
+                .enable(Feature::CurrentTimeReminder)
+                .expect("test config should allow feature update");
+            config.current_time_reminder = Some(CurrentTimeReminderConfig {
+                clock_source: CurrentTimeSource::External,
+                sleep_tool: true,
+                ..Default::default()
+            });
         });
-    let test = builder.build_with_auto_env(&server).await?;
+    let test = builder
+        .with_external_time_provider(time_provider.clone())
+        .build_with_auto_env(&server)
+        .await?;
     assert!(!test.config.features.enabled(Feature::StepModelSwitching));
     let mut created_threads = test.thread_manager.subscribe_thread_created();
 
@@ -186,6 +233,68 @@ async fn root_service_tier_change_updates_existing_subagent(
         &server,
         |request: &wiremock::Request| {
             body_contains(request, CHILD_PROMPT)
+                && !body_contains(request, ROOT_PROMPT)
+                && !body_contains(request, GRANDCHILD_SPAWN_CALL_ID)
+                && !body_contains(request, PAUSE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("child-spawned-grandchild"),
+            ev_function_call_with_namespace(
+                GRANDCHILD_SPAWN_CALL_ID,
+                "collaboration",
+                "spawn_agent",
+                &json!({
+                    "message": GRANDCHILD_PROMPT,
+                    "task_name": "grandchild",
+                    "fork_turns": "none",
+                })
+                .to_string(),
+            ),
+            ev_completed("child-spawned-grandchild"),
+        ]),
+    )
+    .await;
+
+    let _grandchild_request = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, GRANDCHILD_PROMPT)
+                && !body_contains(request, CHILD_PROMPT)
+                && !body_contains(request, ROOT_PROMPT)
+        },
+        sse(vec![
+            ev_response_created("grandchild-running"),
+            ev_function_call_with_namespace(
+                GRANDCHILD_SLEEP_CALL_ID,
+                "clock",
+                "sleep",
+                &json!({ "duration_ms": 3_600_000 }).to_string(),
+            ),
+            ev_completed("grandchild-running"),
+        ]),
+    )
+    .await;
+
+    let _grandchild_completion_request = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, GRANDCHILD_SLEEP_CALL_ID)
+                && !body_contains(request, GRANDCHILD_SPAWN_CALL_ID)
+                && !body_contains(request, PAUSE_CALL_ID)
+                && !body_contains(request, ROOT_PROMPT)
+        },
+        sse(vec![
+            ev_response_created("grandchild-completed"),
+            ev_assistant_message("grandchild-completed-message", "grandchild done"),
+            ev_completed("grandchild-completed"),
+        ]),
+    )
+    .await;
+
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, GRANDCHILD_SPAWN_CALL_ID)
                 && !body_contains(request, ROOT_PROMPT)
                 && !body_contains(request, PAUSE_CALL_ID)
         },
@@ -215,6 +324,10 @@ async fn root_service_tier_change_updates_existing_subagent(
     .await;
     test.submit_text_turn(ROOT_PROMPT).await?;
     let child_thread_id = created_threads.recv().await?;
+    let _grandchild_thread_id = created_threads.recv().await?;
+    // The grandchild cannot finish while its sleep is paused, so the child cannot
+    // observe an empty descendant set when it calls check_agent_status.
+    time_provider.sleep_started.notified().await;
     let child = test.thread_manager.get_thread(child_thread_id).await?;
     let original_child_service_tier = child.config_snapshot().await.service_tier;
     assert_eq!(original_child_service_tier.as_deref(), initial_service_tier);
@@ -301,6 +414,14 @@ async fn root_service_tier_change_updates_existing_subagent(
     let fresh_thread = test.thread_manager.get_thread(fresh_thread_id).await?;
     wait_for_turn_complete(&fresh_thread).await;
     assert_request_service_tier(&fresh_child_request, updated_request_service_tier);
+
+    // All service-tier assertions are done; let the grandchild finish cleanly.
+    time_provider.sleep_completed.notify_one();
+    let grandchild = test
+        .thread_manager
+        .get_thread(_grandchild_thread_id)
+        .await?;
+    wait_for_turn_complete(&grandchild).await;
     Ok(())
 }
 
