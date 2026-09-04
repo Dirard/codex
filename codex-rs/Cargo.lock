@@ -2486,7 +2486,7 @@ dependencies = [
 
 [[package]]
 name = "codex-attachment-store"
-version = "0.0.0"
+version = "0.151.0"
 dependencies = [
  "pretty_assertions",
  "serde",
