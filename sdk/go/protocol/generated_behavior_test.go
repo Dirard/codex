@@ -385,6 +385,25 @@ func TestGeneratedStructHonorsSkipSerializingIfFalse(t *testing.T) {
 	if !strings.Contains(encodedText, `"streamStdin":true`) {
 		t.Fatalf("encoded = %s, want streamStdin true", encodedText)
 	}
+
+	rateLimits := GetAccountRateLimitsParams{
+		ExcludeResetCreditDetails: SomeNonNull(false),
+		SupportsLunaReserve:       SomeNonNull(false),
+	}
+	encoded, err = json.Marshal(rateLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{}` {
+		t.Fatalf("encoded rate-limit defaults = %s, want {}", encoded)
+	}
+	var decoded GetAccountRateLimitsParams
+	if err := json.Unmarshal([]byte(`{}`), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(decoded, rateLimits) {
+		t.Fatalf("decoded rate-limit defaults = %#v, want %#v", decoded, rateLimits)
+	}
 }
 
 func TestGeneratedStructHonorsOptionAndVecSkipSerializingIf(t *testing.T) {

@@ -766,7 +766,13 @@ func (c RawClient) AccountLogout(ctx context.Context) (LogoutAccountResponse, er
 	return result, err
 }
 
-func (c RawClient) AccountRateLimitsRead(ctx context.Context, params NullableGetAccountRateLimitsParams) (GetAccountRateLimitsResponse, error) {
+func (c RawClient) AccountRateLimitsRead(ctx context.Context) (GetAccountRateLimitsResponse, error) {
+	var result GetAccountRateLimitsResponse
+	err := c.sender.Call(ctx, "account/rateLimits/read", nil, &result, MethodMetadataByMethod["account/rateLimits/read"])
+	return result, err
+}
+
+func (c RawClient) AccountRateLimitsReadWithParams(ctx context.Context, params NullableGetAccountRateLimitsParams) (GetAccountRateLimitsResponse, error) {
 	var result GetAccountRateLimitsResponse
 	err := c.sender.Call(ctx, "account/rateLimits/read", params, &result, MethodMetadataByMethod["account/rateLimits/read"])
 	return result, err
