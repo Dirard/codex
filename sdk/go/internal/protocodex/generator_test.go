@@ -125,6 +125,7 @@ func TestGenerateWritesProtocol(t *testing.T) {
 		"type JSONRPCMessage struct",
 		"NewJSONRPCRequestMessage",
 		"func (v JSONRPCMessage) JSONRPCRequest()",
+		"type NullableGetAccountRateLimitsParams = Optional[GetAccountRateLimitsParams]",
 	} {
 		if !strings.Contains(types, required) {
 			t.Fatalf("types_generated.go missing %q\n%s", required, generatedExcerpt(types, "type AppScreenshot struct"))
@@ -156,6 +157,8 @@ func TestGenerateWritesProtocol(t *testing.T) {
 		"func (c RawClient) ThreadStart(",
 		"func (c RawClient) ThreadTimelineList(",
 		"func (c RawClient) TurnSettingsUpdate(",
+		"func (c RawClient) AccountRateLimitsRead(ctx context.Context)",
+		"func (c RawClient) AccountRateLimitsReadWithParams(ctx context.Context, params NullableGetAccountRateLimitsParams)",
 	} {
 		if !strings.Contains(rawClient, required) {
 			t.Fatalf("raw client missing %q", required)

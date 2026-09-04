@@ -108,6 +108,10 @@ fn reviewed_manifest_required_fields(rust_type: &str) -> Vec<SerdeFieldEntry> {
         "FeedbackUploadParams" => vec![default_skip_false_field("include_logs", "includeLogs")],
         "FsCopyParams" => vec![default_skip_false_field("recursive", "recursive")],
         "GetAccountParams" => vec![default_skip_false_field("refresh_token", "refreshToken")],
+        "GetAccountRateLimitsParams" => vec![
+            default_skip_false_field("supports_luna_reserve", "supportsLunaReserve"),
+            default_skip_false_field("exclude_reset_credit_details", "excludeResetCreditDetails"),
+        ],
         "HooksListParams" => vec![default_skip_empty_vec_field("cwds", "cwds")],
         "InitializeCapabilities" => vec![
             default_bool_field("experimental_api", "experimentalApi"),
@@ -374,6 +378,7 @@ pub(crate) fn schema_reachable_serde_attribute_required_types() -> &'static [&'s
         "FeedbackUploadParams",
         "FsCopyParams",
         "GetAccountParams",
+        "GetAccountRateLimitsParams",
         "HookRunSummary",
         "HooksListParams",
         "InitializeCapabilities",

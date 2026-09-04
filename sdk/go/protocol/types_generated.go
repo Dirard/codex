@@ -19476,10 +19476,14 @@ type GetAccountRateLimitsParams struct {
 func (v GetAccountRateLimitsParams) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
 	if v.ExcludeResetCreditDetails.IsSet() {
-		out["excludeResetCreditDetails"] = v.ExcludeResetCreditDetails
+		if value, ok := v.ExcludeResetCreditDetails.Value(); !ok || value {
+			out["excludeResetCreditDetails"] = v.ExcludeResetCreditDetails
+		}
 	}
 	if v.SupportsLunaReserve.IsSet() {
-		out["supportsLunaReserve"] = v.SupportsLunaReserve
+		if value, ok := v.SupportsLunaReserve.Value(); !ok || value {
+			out["supportsLunaReserve"] = v.SupportsLunaReserve
+		}
 	}
 	return json.Marshal(out)
 }
@@ -19494,12 +19498,20 @@ func (v *GetAccountRateLimitsParams) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	rawExcludeResetCreditDetails, ok := raw["excludeResetCreditDetails"]
+	if !ok {
+		rawExcludeResetCreditDetails = []byte("false")
+		ok = true
+	}
 	if ok {
 		if err := json.Unmarshal(rawExcludeResetCreditDetails, &v.ExcludeResetCreditDetails); err != nil {
 			return fmt.Errorf("field excludeResetCreditDetails: %w", err)
 		}
 	}
 	rawSupportsLunaReserve, ok := raw["supportsLunaReserve"]
+	if !ok {
+		rawSupportsLunaReserve = []byte("false")
+		ok = true
+	}
 	if ok {
 		if err := json.Unmarshal(rawSupportsLunaReserve, &v.SupportsLunaReserve); err != nil {
 			return fmt.Errorf("field supportsLunaReserve: %w", err)
@@ -26180,7 +26192,7 @@ const (
 	NonSteerableTurnKindCompact NonSteerableTurnKind = "compact"
 )
 
-type NullableGetAccountRateLimitsParams Optional[GetAccountRateLimitsParams]
+type NullableGetAccountRateLimitsParams = Optional[GetAccountRateLimitsParams]
 
 type NullableGetAccountTokenUsageParams Optional[GetAccountTokenUsageParams]
 
