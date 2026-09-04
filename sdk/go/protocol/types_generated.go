@@ -24073,6 +24073,7 @@ type McpServerStatus struct {
 	RuntimeStatus     Optional[McpServerConnectionStatus] `json:"runtimeStatus,omitempty"`
 	ServerInfo        Optional[McpServerInfo]             `json:"serverInfo,omitempty"`
 	Tools             map[string]Tool                     `json:"tools,omitempty"`
+	ToolsError        Optional[string]                    `json:"toolsError,omitempty"`
 }
 
 func (v McpServerStatus) MarshalJSON() ([]byte, error) {
@@ -24091,6 +24092,9 @@ func (v McpServerStatus) MarshalJSON() ([]byte, error) {
 		out["serverInfo"] = v.ServerInfo
 	}
 	out["tools"] = v.Tools
+	if v.ToolsError.IsSet() {
+		out["toolsError"] = v.ToolsError
+	}
 	return json.Marshal(out)
 }
 
@@ -24170,6 +24174,12 @@ func (v *McpServerStatus) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawTools, &v.Tools); err != nil {
 		return fmt.Errorf("field tools: %w", err)
+	}
+	rawToolsError, ok := raw["toolsError"]
+	if ok {
+		if err := json.Unmarshal(rawToolsError, &v.ToolsError); err != nil {
+			return fmt.Errorf("field toolsError: %w", err)
+		}
 	}
 	return nil
 }
