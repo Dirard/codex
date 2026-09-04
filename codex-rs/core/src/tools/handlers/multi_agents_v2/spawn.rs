@@ -174,6 +174,7 @@ async fn handle_spawn_agent(
         new_agent_path.clone(),
         message,
         &source,
+        turn.config.multi_agent_v2.message_delivery,
         /*trigger_turn*/ true,
     );
     let context = AgentCommunicationContext::new(AgentCommunicationKind::Spawn, session.thread_id);
