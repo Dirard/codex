@@ -275,7 +275,7 @@ async fn root_service_tier_change_updates_existing_subagent(
     )
     .await;
 
-    let _grandchild_completion_request = mount_sse_once_match(
+    let grandchild_completion_request = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
             body_contains(request, GRANDCHILD_SLEEP_CALL_ID)
@@ -304,7 +304,7 @@ async fn root_service_tier_change_updates_existing_subagent(
                 PAUSE_CALL_ID,
                 "collaboration",
                 "check_agent_status",
-                &json!({ "timeout_ms": 30_000 }).to_string(),
+                &json!({}).to_string(),
             ),
             ev_completed("child-paused"),
         ]),
@@ -422,6 +422,22 @@ async fn root_service_tier_change_updates_existing_subagent(
         .get_thread(_grandchild_thread_id)
         .await?;
     wait_for_turn_complete(&grandchild).await;
+    let grandchild_request = grandchild_completion_request
+        .last_request()
+        .expect("grandchild completion request");
+    assert!(
+        grandchild_request
+            .function_call_output_text(GRANDCHILD_SLEEP_CALL_ID)
+            .is_some(),
+        "last captured request should complete the grandchild sleep"
+    );
+    assert_eq!(
+        grandchild_request
+            .body_json()
+            .get("service_tier")
+            .and_then(serde_json::Value::as_str),
+        updated_request_service_tier,
+    );
     Ok(())
 }
 
