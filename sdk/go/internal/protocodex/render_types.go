@@ -132,6 +132,9 @@ func renderDefinitionType(name, key string, schema Schema, names map[string]stri
 	if target == "" || target == "json.RawMessage" {
 		return fmt.Sprintf("type %s json.RawMessage\n", name)
 	}
+	if name == "NullableGetAccountRateLimitsParams" && strings.HasPrefix(target, "Optional[") {
+		return fmt.Sprintf("type %s = %s\n", name, target)
+	}
 	return fmt.Sprintf("type %s %s\n", name, target)
 }
 

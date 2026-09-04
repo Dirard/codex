@@ -889,6 +889,32 @@ fn command_exec_params_default_skip_false_fields_are_complete() {
 }
 
 #[test]
+fn get_account_rate_limits_params_default_skip_false_fields_are_manifest_required() {
+    let manifest = crate::go_manifest::go_sdk_manifest();
+    let shape = serde_shape(
+        &manifest.experimental.serde_shapes,
+        "GetAccountRateLimitsParams",
+    );
+
+    assert_eq!(
+        shape.metadata_status,
+        crate::go_manifest::SerdeMetadataStatus::ManifestRequired
+    );
+    let actual = shape
+        .fields
+        .iter()
+        .map(|field| (field.rust_field, field.shape.skip_serializing_if))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        actual,
+        BTreeSet::from([
+            ("supports_luna_reserve", Some("std::ops::Not::not")),
+            ("exclude_reset_credit_details", Some("std::ops::Not::not")),
+        ])
+    );
+}
+
+#[test]
 fn manifest_required_serde_shapes_are_not_silent_empty_rows() {
     let manifest = crate::go_manifest::go_sdk_manifest();
     let reviewed_empty_rows = BTreeSet::from([
