@@ -129,10 +129,10 @@ func renderDefinitionType(name, key string, schema Schema, names map[string]stri
 		return renderStruct(name, key, schema, names, serdeShapes, bundle)
 	}
 	target := goTypeForSchema(schema, names, nil, true)
-	if target == "" || target == "json.RawMessage" {
-		return fmt.Sprintf("type %s json.RawMessage\n", name)
+	if target == "" {
+		target = "json.RawMessage"
 	}
-	if name == "NullableGetAccountRateLimitsParams" && strings.HasPrefix(target, "Optional[") {
+	if target == "json.RawMessage" || strings.HasPrefix(target, "Optional[") || strings.HasPrefix(target, "OptionalNonNull[") {
 		return fmt.Sprintf("type %s = %s\n", name, target)
 	}
 	return fmt.Sprintf("type %s %s\n", name, target)
@@ -715,6 +715,7 @@ type renderedTaggedUnion struct {
 type renderedTaggedUnionVariant struct {
 	Tag      string
 	Required []string
+	Nullable map[string]bool
 }
 
 type renderedUntaggedUnion struct {
@@ -724,6 +725,8 @@ type renderedUntaggedUnion struct {
 type renderedUntaggedUnionVariant struct {
 	Required    []string
 	ConstFields map[string]string
+	Nullable    map[string]bool
+	NonNull     map[string]bool
 }
 
 func renderStruct(name, key string, schema Schema, names map[string]string, serdeShapes map[string]SerdeShape, bundle *SchemaBundle) string {
@@ -740,8 +743,10 @@ func renderStruct(name, key string, schema Schema, names map[string]string, serd
 		b.WriteString("\tStringValue string `json:\"-\"`\n")
 	}
 	for _, propertyName := range sortedPropertyNames(properties) {
-		property := properties[propertyName]
-		fieldType := goTypeForSchema(property, names, required, required[propertyName])
+		propertySchemas := properties[propertyName]
+		property := propertySchemas[0]
+		fieldType := goTypeForUnionField(propertySchemas, names, required[propertyName], bundle)
+		allowsNull := unionFieldAllowsJSONNull(propertySchemas)
 		fieldName := goFieldName(propertyName)
 		if usedFieldNames[fieldName] {
 			if strings.Contains(propertyName, "_") {
@@ -756,10 +761,12 @@ func renderStruct(name, key string, schema Schema, names map[string]string, serd
 			WireName:        propertyName,
 			Type:            fieldType,
 			Required:        required[propertyName],
-			RequiredNonNull: required[propertyName] && !strings.HasPrefix(fieldType, "Optional[") && !schemaAllowsJSONNull(property),
+			RequiredNonNull: (required[propertyName] || fieldType == "json.RawMessage") && !strings.HasPrefix(fieldType, "Optional[") && !allowsNull,
 			VariantAliases:  serdeShape.VariantAliases,
 		}
-		field.Minimum, field.Maximum = integerBoundsForSchema(property, names, bundle)
+		if fieldType != "json.RawMessage" {
+			field.Minimum, field.Maximum = integerBoundsForSchema(property, names, bundle)
+		}
 		if serdeField, ok := serdeFieldByWireName(serdeShape, propertyName); ok {
 			field.Aliases = serdeField.Aliases
 			field.Presence = serdeField.Shape.Presence
@@ -834,6 +841,9 @@ func renderStructMarshal(name string, fields []renderedField, taggedUnion render
 	for _, field := range fields {
 		if field.Flattened {
 			continue
+		}
+		if field.Type == "json.RawMessage" && field.RequiredNonNull {
+			b.WriteString(fmt.Sprintf("\tif bytes.Equal(v.%s, []byte(\"null\")) { return nil, DecodeError{Field: %q, Reason: \"cannot be null\"} }\n", field.FieldName, field.WireName))
 		}
 		if strings.HasPrefix(field.Type, "Optional[") || strings.HasPrefix(field.Type, "OptionalNonNull[") {
 			if field.SkipIf == skipSerializingIfNotNot {
@@ -1144,7 +1154,11 @@ func renderTaggedUnionValidation(union renderedTaggedUnion) string {
 				continue
 			}
 			reason := fmt.Sprintf("missing required field for %s %s", union.Discriminator, variant.Tag)
-			b.WriteString(fmt.Sprintf("\t\tif rawValue, ok := raw[%q]; !ok { return DecodeError{Field: %q, Reason: %q} } else if bytes.Equal(rawValue, []byte(\"null\")) { return DecodeError{Field: %q, Reason: \"cannot be null\"} }\n", required, required, reason, required))
+			if variant.Nullable[required] {
+				b.WriteString(fmt.Sprintf("\t\tif _, ok := raw[%q]; !ok { return DecodeError{Field: %q, Reason: %q} }\n", required, required, reason))
+			} else {
+				b.WriteString(fmt.Sprintf("\t\tif rawValue, ok := raw[%q]; !ok { return DecodeError{Field: %q, Reason: %q} } else if bytes.Equal(rawValue, []byte(\"null\")) { return DecodeError{Field: %q, Reason: \"cannot be null\"} }\n", required, required, reason, required))
+			}
 		}
 	}
 	b.WriteString("\tdefault:\n")
@@ -1174,7 +1188,7 @@ func renderTaggedUnionMarshalValidation(union renderedTaggedUnion, fields []rend
 			if !ok {
 				continue
 			}
-			b.WriteString(renderMarshalRequiredFieldCheck(field, union.Discriminator, variant.Tag))
+			b.WriteString(renderMarshalRequiredFieldCheck(field, union.Discriminator, variant.Tag, variant.Nullable[required]))
 		}
 	}
 	b.WriteString("\tdefault:\n")
@@ -1199,7 +1213,11 @@ func renderUntaggedUnionValidation(union renderedUntaggedUnion) string {
 			b.WriteString(fmt.Sprintf("\t%s := true\n", constMatchName))
 		}
 		for _, required := range sortedStrings(variant.Required) {
-			b.WriteString(fmt.Sprintf("\tif rawValue, ok := raw[%q]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte(\"null\")) { %s = false }\n", required, matchName))
+			if variant.Nullable[required] {
+				b.WriteString(fmt.Sprintf("\tif _, ok := raw[%q]; !ok { %s = false }\n", required, matchName))
+			} else {
+				b.WriteString(fmt.Sprintf("\tif rawValue, ok := raw[%q]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte(\"null\")) { %s = false }\n", required, matchName))
+			}
 		}
 		for _, fieldName := range sortedMapKeys(variant.ConstFields) {
 			value := variant.ConstFields[fieldName]
@@ -1236,6 +1254,9 @@ func renderUntaggedUnionMarshalValidation(name string, union renderedUntaggedUni
 		}
 		for _, required := range sortedStrings(variant.Required) {
 			b.WriteString(fmt.Sprintf("\tif _, ok := out[%q]; !ok { %s = false }\n", required, matchName))
+			if variant.NonNull[required] {
+				b.WriteString(fmt.Sprintf("\tif rawValue, ok := out[%q]; ok { if rawJSON, err := json.Marshal(rawValue); err != nil || bytes.Equal(bytes.TrimSpace(rawJSON), []byte(\"null\")) { %s = false } }\n", required, matchName))
+			}
 		}
 		for _, fieldName := range sortedMapKeys(variant.ConstFields) {
 			value := variant.ConstFields[fieldName]
@@ -1258,14 +1279,20 @@ func renderUntaggedUnionMarshalValidation(name string, union renderedUntaggedUni
 	return b.String()
 }
 
-func renderMarshalRequiredFieldCheck(field renderedField, discriminator, tag string) string {
+func renderMarshalRequiredFieldCheck(field renderedField, discriminator, tag string, nullable bool) string {
 	reason := fmt.Sprintf("missing required field for %s %s", discriminator, tag)
 	switch {
 	case strings.HasPrefix(field.Type, "Optional["):
+		if nullable {
+			return fmt.Sprintf("\t\tif !v.%s.IsSet() { return nil, DecodeError{Field: %q, Reason: %q} }\n", field.FieldName, field.WireName, reason)
+		}
 		return fmt.Sprintf("\t\tif !v.%s.IsSet() { return nil, DecodeError{Field: %q, Reason: %q} }\n\t\tif v.%s.IsNull() { return nil, DecodeError{Field: %q, Reason: \"cannot be null\"} }\n", field.FieldName, field.WireName, reason, field.FieldName, field.WireName)
 	case strings.HasPrefix(field.Type, "OptionalNonNull["):
 		return fmt.Sprintf("\t\tif !v.%s.IsSet() { return nil, DecodeError{Field: %q, Reason: %q} }\n", field.FieldName, field.WireName, reason)
 	case field.Type == "json.RawMessage":
+		if nullable {
+			return fmt.Sprintf("\t\tif len(v.%s) == 0 { return nil, DecodeError{Field: %q, Reason: %q} }\n", field.FieldName, field.WireName, reason)
+		}
 		return fmt.Sprintf("\t\tif len(v.%s) == 0 { return nil, DecodeError{Field: %q, Reason: %q} }\n\t\tif bytes.Equal(v.%s, []byte(\"null\")) { return nil, DecodeError{Field: %q, Reason: \"cannot be null\"} }\n", field.FieldName, field.WireName, reason, field.FieldName, field.WireName)
 	default:
 		return ""
@@ -1321,14 +1348,14 @@ func serdeFieldByWireName(shape SerdeShape, wireName string) (SerdeField, bool) 
 	return SerdeField{}, false
 }
 
-func collectStructProperties(schema Schema) (map[string]Schema, map[string]bool) {
-	properties := map[string]Schema{}
+func collectStructProperties(schema Schema) (map[string][]Schema, map[string]bool) {
+	properties := map[string][]Schema{}
 	required := map[string]bool{}
 	for _, name := range schema.Required {
 		required[name] = true
 	}
 	for name, property := range schema.Properties {
-		properties[name] = property
+		properties[name] = append(properties[name], property)
 	}
 	if oneOfObjectUnion(schema) {
 		if taggedUnion, ok := taggedObjectUnion(schema); ok {
@@ -1336,22 +1363,95 @@ func collectStructProperties(schema Schema) (map[string]Schema, map[string]bool)
 		}
 		for _, variant := range schema.OneOf {
 			for name, property := range variant.Properties {
-				if _, ok := properties[name]; !ok {
-					properties[name] = property
-				}
+				properties[name] = append(properties[name], property)
 			}
 		}
 	}
 	return properties, required
 }
 
-func sortedPropertyNames(properties map[string]Schema) []string {
+func sortedPropertyNames(properties map[string][]Schema) []string {
 	names := make([]string, 0, len(properties))
 	for name := range properties {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
+}
+
+func goTypeForUnionField(schemas []Schema, names map[string]string, isRequired bool, bundle *SchemaBundle) string {
+	if len(schemas) == 1 {
+		return goTypeForSchema(schemas[0], names, nil, isRequired)
+	}
+	baseType := unionFieldBaseGoType(schemas[0], names)
+	allowsNull := schemaAllowsJSONNull(schemas[0])
+	for _, schema := range schemas[1:] {
+		currentBaseType := unionFieldBaseGoType(schema, names)
+		allowsNull = allowsNull || schemaAllowsJSONNull(schema)
+		if currentBaseType == baseType {
+			continue
+		}
+		baseScalar, baseOK := scalarUnionFieldGoType(schemas[0], names, bundle)
+		currentScalar, currentOK := scalarUnionFieldGoType(schema, names, bundle)
+		if !baseOK || !currentOK || baseScalar != currentScalar {
+			return "json.RawMessage"
+		}
+	}
+	if baseType == "json.RawMessage" {
+		return baseType
+	}
+	if allowsNull {
+		return "Optional[" + baseType + "]"
+	}
+	if isRequired {
+		return baseType
+	}
+	return "OptionalNonNull[" + baseType + "]"
+}
+
+func unionFieldBaseGoType(schema Schema, names map[string]string) string {
+	goType := goTypeForSchema(schema, names, nil, true)
+	if strings.HasPrefix(goType, "Optional[") {
+		return strings.TrimSuffix(strings.TrimPrefix(goType, "Optional["), "]")
+	}
+	return goType
+}
+
+func scalarUnionFieldGoType(schema Schema, names map[string]string, bundle *SchemaBundle) (string, bool) {
+	if ref, ok := schema.SingleRef(); ok {
+		key, ok := schemaDefinitionKeyForRef(ref, bundle, names)
+		if !ok {
+			return "", false
+		}
+		definition, _ := bundle.Definition(key)
+		return scalarUnionFieldGoType(definition, names, bundle)
+	}
+	if ref, ok := schema.NullableRef(); ok {
+		key, ok := schemaDefinitionKeyForRef(ref, bundle, names)
+		if !ok {
+			return "", false
+		}
+		definition, _ := bundle.Definition(key)
+		return scalarUnionFieldGoType(definition, names, bundle)
+	}
+	if len(schema.Types) == 2 && hasType(schema.Types, "null") {
+		return scalarGoType(nonNullType(schema.Types), schema, names), true
+	}
+	switch schema.Type {
+	case "string", "boolean", "integer", "number":
+		return scalarGoType(schema.Type, schema, names), true
+	default:
+		return "", false
+	}
+}
+
+func unionFieldAllowsJSONNull(schemas []Schema) bool {
+	for _, schema := range schemas {
+		if schemaAllowsJSONNull(schema) {
+			return true
+		}
+	}
+	return false
 }
 
 func sortedStrings(values []string) []string {
@@ -1587,6 +1687,27 @@ func mixedStringObjectUnionValues(schema Schema) ([]string, bool) {
 	return values, hasObject && len(values) > 0
 }
 
+type unionFieldNullability struct {
+	allowsNull    bool
+	disallowsNull bool
+}
+
+func unionFieldNullabilityByName(schema Schema) map[string]unionFieldNullability {
+	nullabilityByField := map[string]unionFieldNullability{}
+	for _, variant := range schema.OneOf {
+		for name, property := range variant.Properties {
+			nullability := nullabilityByField[name]
+			if schemaAllowsJSONNull(property) {
+				nullability.allowsNull = true
+			} else {
+				nullability.disallowsNull = true
+			}
+			nullabilityByField[name] = nullability
+		}
+	}
+	return nullabilityByField
+}
+
 func taggedObjectUnion(schema Schema) (renderedTaggedUnion, bool) {
 	if len(schema.OneOf) == 0 {
 		return renderedTaggedUnion{}, false
@@ -1611,9 +1732,16 @@ func taggedObjectUnion(schema Schema) (renderedTaggedUnion, bool) {
 				break
 			}
 			seenTags[values[0]] = true
+			nullable := map[string]bool{}
+			for name, property := range variant.Properties {
+				if schemaAllowsJSONNull(property) {
+					nullable[name] = true
+				}
+			}
 			variants = append(variants, renderedTaggedUnionVariant{
 				Tag:      values[0],
 				Required: append([]string(nil), variant.Required...),
+				Nullable: nullable,
 			})
 		}
 		if ok {
@@ -1627,6 +1755,7 @@ func untaggedObjectUnion(schema Schema, hasTaggedUnion bool) (renderedUntaggedUn
 	if hasTaggedUnion || len(schema.OneOf) == 0 {
 		return renderedUntaggedUnion{}, false
 	}
+	nullabilityByField := unionFieldNullabilityByName(schema)
 	var variants []renderedUntaggedUnionVariant
 	for _, variant := range schema.OneOf {
 		if variant.Type == "string" && len(variant.Enum) > 0 {
@@ -1638,8 +1767,16 @@ func untaggedObjectUnion(schema Schema, hasTaggedUnion bool) (renderedUntaggedUn
 		rendered := renderedUntaggedUnionVariant{
 			Required:    append([]string(nil), variant.Required...),
 			ConstFields: map[string]string{},
+			Nullable:    map[string]bool{},
+			NonNull:     map[string]bool{},
 		}
 		for fieldName, property := range variant.Properties {
+			nullability := nullabilityByField[fieldName]
+			if schemaAllowsJSONNull(property) {
+				rendered.Nullable[fieldName] = true
+			} else if nullability.allowsNull && nullability.disallowsNull {
+				rendered.NonNull[fieldName] = true
+			}
 			values, ok := stringEnumValues(property)
 			if ok && len(values) == 1 {
 				rendered.ConstFields[fieldName] = values[0]
