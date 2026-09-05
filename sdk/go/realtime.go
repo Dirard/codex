@@ -93,19 +93,15 @@ func (s *RealtimeSession) Stream(ctx context.Context) (*RealtimeStream, error) {
 	if err := s.ensureActive(); err != nil {
 		return nil, err
 	}
-	stream := s.client.router.subscribeKeys(
+	stream := s.client.router.subscribeKeysWithOnClose(
 		[]routerKey{{domain: realtimeRouterDomain, identity: s.threadID}},
+		func(stream *NotificationStream) {
+			if s.client.Realtime != nil {
+				s.client.Realtime.unregisterSessionStream(s.threadID, s.id, stream)
+			}
+		},
 		realtimeThreadFilter(s.threadID),
 	)
-	onClose := stream.onClose
-	stream.onClose = func() {
-		if onClose != nil {
-			onClose()
-		}
-		if s.client.Realtime != nil {
-			s.client.Realtime.unregisterSessionStream(s.threadID, s.id, stream)
-		}
-	}
 	if err := s.client.Realtime.registerSessionStream(s.threadID, s.id, stream); err != nil {
 		_ = stream.Close()
 		return nil, err
@@ -258,6 +254,11 @@ func (c *RealtimeClient) registerSessionStream(threadID string, sessionID string
 	session := c.activeByThread[threadID]
 	if session == nil || session.id != sessionID || session.stopping {
 		return &ConflictError{Reason: fmt.Sprintf("realtime session %s is no longer active for thread %s", sessionID, threadID)}
+	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if stream.closed {
+		return nil
 	}
 	if session.streams == nil {
 		session.streams = map[*NotificationStream]struct{}{}
