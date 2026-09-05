@@ -65,19 +65,60 @@ func (r *notificationRouter) subscribeTurn(threadID string, turnID string) *Noti
 }
 
 func (r *notificationRouter) subscribeKeys(keys []routerKey, filter ...func(Notification) bool) *NotificationStream {
+	return r.subscribeKeysWithOnClose(keys, nil, filter...)
+}
+
+func (r *notificationRouter) subscribeKeysWithOnClose(
+	keys []routerKey,
+	onClose func(*NotificationStream),
+	filter ...func(Notification) bool,
+) *NotificationStream {
 	keys = dedupeRouterKeys(keys)
 	var streamFilter func(Notification) bool
 	if len(filter) > 0 {
 		streamFilter = filter[0]
 	}
-	stream := newFilteredNotificationStream(
+	var stream *NotificationStream
+	stream = newFilteredNotificationStream(
 		r.limits.ResourceStreamQueue,
 		r.limits.ResourceStreamQueueBytes,
-		nil,
+		func() {
+			r.unsubscribe(stream, keys)
+			if onClose != nil {
+				onClose(stream)
+			}
+		},
 		streamFilter,
 	)
-	stream.onClose = func() { r.unsubscribe(stream, keys) }
 	for {
+		r.mu.Lock()
+		if r.closed {
+			err := r.terminalErr
+			r.mu.Unlock()
+			stream.closeWithError(err)
+			return stream
+		}
+		var candidates []pendingNotification
+		for _, key := range keys {
+			candidates = append(candidates, r.pending[key]...)
+		}
+		r.mu.Unlock()
+
+		sort.SliceStable(candidates, func(i, j int) bool {
+			return candidates[i].seq < candidates[j].seq
+		})
+		observedSequences := make(map[uint64]struct{}, len(candidates))
+		acceptedSequences := make(map[uint64]struct{}, len(candidates))
+		for _, candidate := range candidates {
+			if _, ok := observedSequences[candidate.seq]; ok {
+				continue
+			}
+			observedSequences[candidate.seq] = struct{}{}
+			if stream.accepts(candidate.notification) {
+				acceptedSequences[candidate.seq] = struct{}{}
+			}
+		}
+
 		r.mu.Lock()
 		if r.closed {
 			err := r.terminalErr
@@ -87,16 +128,27 @@ func (r *notificationRouter) subscribeKeys(keys []routerKey, filter ...func(Noti
 		}
 		var pending []pendingNotification
 		var overflowErr error
+		hasUnobservedPending := false
 		for _, key := range keys {
-			if timer := r.timers[key]; timer != nil {
-				timer.Stop()
-				delete(r.timers, key)
+			for _, notification := range r.pending[key] {
+				if _, ok := observedSequences[notification.seq]; !ok {
+					hasUnobservedPending = true
+					continue
+				}
+				if _, ok := acceptedSequences[notification.seq]; ok {
+					pending = append(pending, notification)
+				}
 			}
-			pending = append(pending, r.removePendingLocked(key)...)
 			if err := r.overflow[key]; err != nil && overflowErr == nil {
 				overflowErr = err
 			}
 			delete(r.overflow, key)
+			if len(r.pending[key]) == 0 {
+				if timer := r.timers[key]; timer != nil {
+					timer.Stop()
+					delete(r.timers, key)
+				}
+			}
 		}
 		if len(pending) > 0 {
 			claimedSequences := make(map[uint64]struct{}, len(pending))
@@ -105,7 +157,7 @@ func (r *notificationRouter) subscribeKeys(keys []routerKey, filter ...func(Noti
 			}
 			r.dropPendingSequencesLocked(claimedSequences)
 		}
-		if len(pending) == 0 && overflowErr == nil {
+		if len(pending) == 0 && overflowErr == nil && !hasUnobservedPending {
 			for _, key := range keys {
 				if r.streams[key] == nil {
 					r.streams[key] = map[*NotificationStream]struct{}{}
