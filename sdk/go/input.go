@@ -3,6 +3,7 @@ package codex
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/openai/codex/sdk/go/protocol"
@@ -80,10 +81,14 @@ func (i Input) wire(limits ClientLimits) ([]protocol.UserInput, error) {
 			}
 			out = append(out, protocol.UserInput{TypeValue: "image", URL: protocol.SomeNonNull(item.url)})
 		case "localImage":
-			if err := validateLocalInputSize(item.path, limits.MaxLocalInputBytes); err != nil {
+			path, err := filepath.Abs(item.path)
+			if err != nil {
 				return nil, err
 			}
-			out = append(out, protocol.UserInput{TypeValue: "localImage", Path: protocol.SomeNonNull(item.path)})
+			if err := validateLocalInputSize(path, limits.MaxLocalInputBytes); err != nil {
+				return nil, err
+			}
+			out = append(out, protocol.UserInput{TypeValue: "localImage", Path: protocol.SomeNonNull(path)})
 		case "skill":
 			out = append(out, protocol.UserInput{TypeValue: "skill", Name: protocol.SomeNonNull(item.name), Path: protocol.SomeNonNull(item.path)})
 		case "mention":
