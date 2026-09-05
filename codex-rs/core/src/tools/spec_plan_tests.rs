@@ -1,5 +1,6 @@
 use crate::session::tests::update_turn_settings_for_test;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_features::Feature;
@@ -1770,6 +1771,7 @@ async fn strict_namespace_ownership_requires_tool_namespace_inventory_opt_in() {
             step_context.turn.model_info(),
             registry,
             hosted_specs,
+            &HashMap::new(),
             &Default::default(),
         );
 
@@ -2018,6 +2020,7 @@ async fn strict_tool_collisions_reject_external_and_synthetic_duplicates() {
             step_context.turn.model_info(),
             registry,
             hosted_specs,
+            &HashMap::new(),
             &Default::default(),
         )
         .err()
