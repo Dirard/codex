@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -79,6 +80,48 @@ func TestLocalImageInputSizeLimits(t *testing.T) {
 	var sizeErr *LocalInputSizeError
 	if !errors.As(err, &sizeErr) || sizeErr.Size != 4 || sizeErr.Limit != 3 {
 		t.Fatalf("err = %T %#v, want LocalInputSizeError size 4 limit 3", err, err)
+	}
+}
+
+func TestThreadTurnSendsAbsoluteLocalImagePath(t *testing.T) {
+	relativePath := "input_test.go"
+	imagePath, err := filepath.Abs(relativePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(imagePath); err != nil {
+		t.Fatal(err)
+	}
+	appServerCWD := t.TempDir()
+	if resolvedByServer := filepath.Clean(filepath.Join(appServerCWD, relativePath)); resolvedByServer == imagePath {
+		t.Fatal("test requires process and app-server working directories to resolve the relative path differently")
+	}
+
+	transport := newWorkflowTransport(t)
+	client, err := NewClient(context.Background(), ClientConfig{Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	thread, err := client.Threads.Start(context.Background(), ThreadStartOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := thread.Turn(context.Background(), LocalImage(relativePath), TurnOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var params struct {
+		Input []struct {
+			Type string `json:"type"`
+			Path string `json:"path"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(requestParamsForMethod(t, transport, "turn/start"), &params); err != nil {
+		t.Fatal(err)
+	}
+	if len(params.Input) != 1 || params.Input[0].Type != "localImage" || params.Input[0].Path != imagePath {
+		t.Fatalf("turn/start input = %#v, want localImage path %q", params.Input, imagePath)
 	}
 }
 
