@@ -520,10 +520,7 @@ pub(crate) async fn run_turn(
 
                 if should_roll_over {
                     if !made_progress && consecutive_compactions_without_progress >= 2 {
-                        let error = CodexErr::ContextWindowExceeded.to_codex_protocol_error();
-                        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error)
-                            .await;
-                        return Ok(None);
+                        return Err(CodexErr::ContextWindowExceeded);
                     }
                     if let Err(err) = run_auto_compact(
                         &sess,

@@ -47,6 +47,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationStartParams;
@@ -2148,11 +2149,36 @@ async fn remote_compact_without_progress_stops_after_two_retries() -> Result<()>
     )
     .await;
 
-    harness.test().submit_turn("loop guard").await?;
+    let codex = harness.test().codex.clone();
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "loop guard".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let public_error = wait_for_event_match(&codex, |event| match event {
+        EventMsg::Error(error)
+            if error.codex_error_info.as_ref() == Some(&CodexErrorInfo::ContextWindowExceeded) =>
+        {
+            Some(error.clone())
+        }
+        _ => None,
+    })
+    .await;
+    let completion_error = wait_for_event_match(&codex, |event| match event {
+        EventMsg::TurnComplete(event) => Some(event.error.clone()),
+        _ => None,
+    })
+    .await;
 
     assert_eq!(
         errors.lock().expect("turn error records lock").as_slice(),
         &[CodexErrorInfo::ContextWindowExceeded]
+    );
+    assert_eq!(completion_error, Some(public_error.clone()));
+    assert_eq!(
+        codex.agent_status().await,
+        AgentStatus::Errored(public_error.message)
     );
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 5);
