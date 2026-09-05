@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"runtime"
 	"testing"
 	"time"
 
@@ -201,6 +202,102 @@ func TestRealtimeClosedNotificationReleasesSessionAndClosesStream(t *testing.T) 
 	}
 	if got := methodCount(t, transport, "thread/realtime/start"); got != 2 {
 		t.Fatalf("thread/realtime/start sent %d times after own thread close, want 2", got)
+	}
+}
+
+func TestRealtimeClosedBacklogStreamIsNotRegistered(t *testing.T) {
+	ctx := context.Background()
+	transport := newScriptedInitializedTransport(t, nil)
+	client, err := NewClient(ctx, ClientConfig{
+		Transport: transport,
+		Limits:    ClientLimits{ResourceStreamQueue: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	transport.responses["thread/realtime/start"] = json.RawMessage(`{}`)
+
+	session, _, err := client.Realtime.Start(ctx, RealtimeStartOptions{ThreadID: "thread-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := client.HandleServerNotification(
+			ctx,
+			"thread/realtime/started",
+			json.RawMessage(`{"threadId":"thread-1","version":"v1"}`),
+			nil,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stream, err := session.Stream(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var overflow *OverflowError
+	if !errors.As(stream.Err(), &overflow) {
+		t.Fatalf("stream error = %T(%v), want *OverflowError", stream.Err(), stream.Err())
+	}
+	client.Realtime.mu.Lock()
+	_, registered := session.streams[stream]
+	client.Realtime.mu.Unlock()
+	if registered {
+		t.Fatal("closed realtime stream remained registered")
+	}
+}
+
+func TestRealtimeSessionStreamCloseCanRace(t *testing.T) {
+	client, _ := newStage5Client(t)
+	session, err := client.Realtime.reserveSession("thread-race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultCh := make(chan struct {
+		stream *RealtimeStream
+		err    error
+	}, 1)
+	go func() {
+		stream, err := session.Stream(context.Background())
+		resultCh <- struct {
+			stream *RealtimeStream
+			err    error
+		}{stream: stream, err: err}
+	}()
+
+	key := routerKey{domain: realtimeRouterDomain, identity: session.threadID}
+	var published *NotificationStream
+	deadline := time.Now().Add(time.Second)
+	for published == nil && time.Now().Before(deadline) {
+		client.router.mu.Lock()
+		for stream := range client.router.streams[key] {
+			published = stream
+			break
+		}
+		client.router.mu.Unlock()
+		runtime.Gosched()
+	}
+	if published == nil {
+		t.Fatal("realtime stream was not published")
+	}
+	if err := published.Close(); err != nil {
+		t.Fatal(err)
+	}
+	result := <-resultCh
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if result.stream != published {
+		t.Fatal("Stream returned a different realtime stream")
+	}
+
+	client.Realtime.mu.Lock()
+	_, registered := session.streams[published]
+	client.Realtime.mu.Unlock()
+	if registered {
+		t.Fatal("closed realtime stream remained registered")
 	}
 }
 
