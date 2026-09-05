@@ -235,7 +235,10 @@ fn request_param_experimental_fields(method: &'static str) -> Vec<ExperimentalFi
         ),
         "thread/metadata/update" => experimental_fields(
             "ThreadMetadataUpdateParams",
-            &[("project_id", "thread/metadata/update.projectId")],
+            &[
+                ("project_id", "thread/metadata/update.projectId"),
+                ("daybreak_enabled", "thread/metadata/update.daybreakEnabled"),
+            ],
         ),
         "turn/start" => experimental_fields(
             "TurnStartParams",
