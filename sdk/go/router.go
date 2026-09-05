@@ -380,12 +380,10 @@ func (r *notificationRouter) deliver(_ context.Context, notification Notificatio
 			retainedBytes: notificationRetainedBytes(notification),
 		}
 		for _, key := range dedupeRouterKeys(pendingKeys) {
-			if len(r.streams[key]) == 0 {
-				if err := r.appendPendingLocked(key, pending); err != nil {
-					r.mu.Unlock()
-					r.closeWithError(err)
-					return
-				}
+			if err := r.appendPendingLocked(key, pending); err != nil {
+				r.mu.Unlock()
+				r.closeWithError(err)
+				return
 			}
 		}
 	}
