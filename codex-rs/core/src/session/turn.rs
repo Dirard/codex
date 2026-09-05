@@ -696,11 +696,7 @@ pub(crate) async fn run_turn(
 
                 if should_roll_over {
                     if !made_progress && consecutive_compactions_without_progress >= 2 {
-                        let err = CodexErr::ContextWindowExceeded;
-                        let error = err.to_codex_protocol_error();
-                        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error, err.details())
-                            .await;
-                        return Ok(None);
+                        return Err(CodexErr::ContextWindowExceeded);
                     }
                     let compacted = run_auto_compact(
                         &sess,
