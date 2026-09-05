@@ -20,9 +20,11 @@ func renderRawClient(manifest *Manifest) string {
 		response := typeNameForDefinition(entry.ResponseType)
 		if entry.Method == "account/rateLimits/read" {
 			b.WriteString(fmt.Sprintf("func (c RawClient) %s(ctx context.Context) (%s, error) {\n\tvar result %s\n\terr := c.sender.Call(ctx, %q, nil, &result, MethodMetadataByMethod[%q])\n\treturn result, err\n}\n\n", methodName, response, response, entry.Method, entry.Method))
-			b.WriteString(fmt.Sprintf("func (c RawClient) %sWithParams(ctx context.Context, params %s) (%s, error) {\n\tvar result %s\n\terr := c.sender.Call(ctx, %q, params, &result, MethodMetadataByMethod[%q])\n\treturn result, err\n}\n\n", methodName, params, response, response, entry.Method, entry.Method))
+			b.WriteString(fmt.Sprintf("func (c RawClient) %sWithParams(ctx context.Context, params %s) (%s, error) {\n\tvar result %s\n\tvar callParams any\n\tif params.IsSet() { callParams = params }\n\terr := c.sender.Call(ctx, %q, callParams, &result, MethodMetadataByMethod[%q])\n\treturn result, err\n}\n\n", methodName, params, response, response, entry.Method, entry.Method))
 		} else if entry.ParamsType == "" || entry.ParamsType == "Option<()>" {
 			b.WriteString(fmt.Sprintf("func (c RawClient) %s(ctx context.Context) (%s, error) {\n\tvar result %s\n\terr := c.sender.Call(ctx, %q, nil, &result, MethodMetadataByMethod[%q])\n\treturn result, err\n}\n\n", methodName, response, response, entry.Method, entry.Method))
+		} else if strings.HasPrefix(params, "Nullable") {
+			b.WriteString(fmt.Sprintf("func (c RawClient) %s(ctx context.Context, params %s) (%s, error) {\n\tvar result %s\n\tvar callParams any\n\tif params.IsSet() { callParams = params }\n\terr := c.sender.Call(ctx, %q, callParams, &result, MethodMetadataByMethod[%q])\n\treturn result, err\n}\n\n", methodName, params, response, response, entry.Method, entry.Method))
 		} else {
 			b.WriteString(fmt.Sprintf("func (c RawClient) %s(ctx context.Context, params %s) (%s, error) {\n\tvar result %s\n\terr := c.sender.Call(ctx, %q, params, &result, MethodMetadataByMethod[%q])\n\treturn result, err\n}\n\n", methodName, params, response, response, entry.Method, entry.Method))
 		}
