@@ -2,22 +2,22 @@ package codex
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"testing"
-
-	"github.com/openai/codex/sdk/go/protocol"
 )
 
-func TestOutputSchemaMapsExactlyToTurnStartParams(t *testing.T) {
+func TestJSONSchemaSendsSchemaDirectlyInTurnStartRequest(t *testing.T) {
 	schema, err := JSONSchema("answer", ObjectSchema(map[string]JSONSchemaSpec{
 		"value": StringSchema(),
 	}, "value"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	params := turnStartParams("thread-1", []protocol.UserInput{}, TurnOptions{OutputSchema: schema})
-	if !jsonEqual(params.OutputSchema, schema.rawJSON()) {
-		t.Fatalf("OutputSchema = %s, want %s", params.OutputSchema, schema.rawJSON())
+	want := json.RawMessage(`{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`)
+	got := sendOutputSchema(t, schema)
+	if !jsonEqual(got, want) {
+		t.Fatalf("turn/start outputSchema = %s, want %s", got, want)
 	}
 }
 
@@ -30,25 +30,58 @@ func TestObjectSchemaBuildsTypedJSONSchema(t *testing.T) {
 	}
 
 	var raw struct {
-		Name   string `json:"name"`
-		Strict bool   `json:"strict"`
-		Schema struct {
-			Type       string `json:"type"`
-			Required   []string
-			Properties map[string]struct {
-				Type string `json:"type"`
-			} `json:"properties"`
-		} `json:"schema"`
+		Type                 string `json:"type"`
+		Required             []string
+		AdditionalProperties *bool `json:"additionalProperties"`
+		Properties           map[string]struct {
+			Type string `json:"type"`
+		} `json:"properties"`
 	}
 	if err := json.Unmarshal(schema.rawJSON(), &raw); err != nil {
 		t.Fatal(err)
 	}
-	if raw.Name != "answer" || !raw.Strict || raw.Schema.Type != "object" || raw.Schema.Properties["value"].Type != "string" {
+	if raw.Type != "object" || raw.Properties["value"].Type != "string" {
 		t.Fatalf("schema = %#v", raw)
 	}
-	if len(raw.Schema.Required) != 1 || raw.Schema.Required[0] != "value" {
-		t.Fatalf("required = %#v", raw.Schema.Required)
+	if len(raw.Required) != 1 || raw.Required[0] != "value" {
+		t.Fatalf("required = %#v", raw.Required)
 	}
+	if raw.AdditionalProperties == nil || *raw.AdditionalProperties {
+		t.Fatalf("additionalProperties = %#v, want false", raw.AdditionalProperties)
+	}
+}
+
+func TestRawOutputSchemaSendsExactSchemaInTurnStartRequest(t *testing.T) {
+	want := json.RawMessage(`{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`)
+	got := sendOutputSchema(t, RawOutputSchema(want))
+	if !jsonEqual(got, want) {
+		t.Fatalf("turn/start outputSchema = %s, want %s", got, want)
+	}
+}
+
+func sendOutputSchema(t *testing.T, schema OutputSchema) json.RawMessage {
+	t.Helper()
+	transport := newWorkflowTransport(t)
+	client, err := NewClient(context.Background(), ClientConfig{Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	thread, err := client.Threads.Start(context.Background(), ThreadStartOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := thread.Turn(context.Background(), Text("hello"), TurnOptions{OutputSchema: schema}); err != nil {
+		t.Fatal(err)
+	}
+
+	var params struct {
+		OutputSchema json.RawMessage `json:"outputSchema"`
+	}
+	if err := json.Unmarshal(requestParamsForMethod(t, transport, "turn/start"), &params); err != nil {
+		t.Fatal(err)
+	}
+	return params.OutputSchema
 }
 
 func jsonEqual(left json.RawMessage, right json.RawMessage) bool {

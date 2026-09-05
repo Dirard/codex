@@ -1072,13 +1072,13 @@ func assertTurnStartOutputSchema(t *testing.T, params json.RawMessage) {
 		t.Fatal("turn/start omitted outputSchema")
 	}
 	var schema struct {
-		Name string `json:"name"`
+		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(raw.OutputSchema, &schema); err != nil {
 		t.Fatal(err)
 	}
-	if schema.Name != "answer" {
-		t.Fatalf("output schema name = %q, want answer", schema.Name)
+	if schema.Type != "object" {
+		t.Fatalf("output schema type = %q, want object", schema.Type)
 	}
 }
 
