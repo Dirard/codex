@@ -121,3 +121,54 @@ func TestMCPOAuthWaitPreservesQueuedCompletionForAnotherThread(t *testing.T) {
 		t.Fatalf("pending backlog = %d keys, %d bytes; want empty", pendingKeys, pendingBytes)
 	}
 }
+
+func TestMCPOAuthWaitPreservesCompletionWhileAnotherThreadSubscribed(t *testing.T) {
+	ctx := context.Background()
+	transport := newWorkflowTransport(t)
+	transport.responses["mcpServer/oauth/login"] = mustJSON(t, protocol.McpServerOauthLoginResponse{
+		AuthorizationURL: "https://example.test/oauth",
+	})
+	client, err := NewClient(ctx, ClientConfig{Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	// Register the first Wait's subscription synchronously before the second completion.
+	first := client.router.subscribeKeys([]routerKey{
+		{domain: "mcpServer", identity: "server-1"},
+		{domain: "mcpServer", identity: "thread-1"},
+	}, mcpOAuthCompletionFilter("server-1", "thread-1"))
+	defer first.Close()
+	second, err := client.MCP.OAuthLogin(ctx, MCPOAuthLoginOptions{Name: "server-1", ThreadID: "thread-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.HandleServerNotification(ctx, "mcpServer/oauthLogin/completed", mustJSON(t,
+		protocol.McpServerOauthLoginCompletedNotification{
+			Name: "server-1", Success: true, ThreadID: protocol.Some("thread-2"),
+		}), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	result, err := second.Wait(waitCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := MCPOAuthResult{Name: "server-1", Success: true}
+	if result == nil || *result != want {
+		t.Fatalf("result = %#v, want %#v", result, want)
+	}
+
+	completion := protocol.McpServerOauthLoginCompletedNotification{
+		Name: "server-1", Success: false, ThreadID: protocol.Some("thread-1"),
+	}
+	if err := client.HandleServerNotification(ctx, "mcpServer/oauthLogin/completed", mustJSON(t, completion), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextNotificationForTest(t, first).Payload; got != completion {
+		t.Fatalf("first completion = %#v, want %#v", got, completion)
+	}
+}
