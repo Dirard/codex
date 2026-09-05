@@ -281,6 +281,67 @@ func TestRawStableModeHonorsExperimentalDiscriminators(t *testing.T) {
 	}
 }
 
+func TestRawStableModeOnlyRejectsGranularApprovalPolicies(t *testing.T) {
+	transport := newScriptedInitializedTransport(t, stableInitializePayload())
+	client, err := NewClient(context.Background(), ClientConfig{
+		Transport:    transport,
+		ProtocolMode: ProtocolModeStable,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	routes := []struct {
+		method string
+		params func(protocol.AskForApproval) any
+	}{
+		{method: "thread/start", params: func(policy protocol.AskForApproval) any {
+			return protocol.ThreadStartParams{ApprovalPolicy: protocol.Some(policy)}
+		}},
+		{method: "thread/resume", params: func(policy protocol.AskForApproval) any {
+			return protocol.ThreadResumeParams{ThreadID: "thread-1", ApprovalPolicy: protocol.Some(policy)}
+		}},
+		{method: "thread/fork", params: func(policy protocol.AskForApproval) any {
+			return protocol.ThreadForkParams{ThreadID: "thread-1", ApprovalPolicy: protocol.Some(policy)}
+		}},
+		{method: "turn/start", params: func(policy protocol.AskForApproval) any {
+			return protocol.TurnStartParams{ThreadID: "thread-1", Input: []protocol.UserInput{}, ApprovalPolicy: protocol.Some(policy)}
+		}},
+	}
+	stablePolicies := []protocol.AskForApproval{
+		protocol.AskForApprovalUntrusted,
+		protocol.AskForApprovalOnRequest,
+		protocol.AskForApprovalNever,
+	}
+	for _, route := range routes {
+		for _, policy := range stablePolicies {
+			before := len(transport.sentFrames())
+			if err := client.Call(context.Background(), route.method, route.params(policy), nil, protocol.MethodMetadataByMethod[route.method]); err != nil {
+				t.Fatalf("%s with %q: %v", route.method, policy.StringValue, err)
+			}
+			if len(transport.sentFrames()) != before+1 {
+				t.Fatalf("%s with %q did not reach transport", route.method, policy.StringValue)
+			}
+		}
+	}
+
+	granular := protocol.AskForApproval{
+		Granular: protocol.SomeNonNull(map[string]json.RawMessage{}),
+	}
+	for _, route := range routes {
+		before := len(transport.sentFrames())
+		err := client.Call(context.Background(), route.method, route.params(granular), nil, protocol.MethodMetadataByMethod[route.method])
+		var configErr *ConfigError
+		if !errors.As(err, &configErr) {
+			t.Fatalf("%s granular err = %T, want *ConfigError", route.method, err)
+		}
+		if len(transport.sentFrames()) != before {
+			t.Fatalf("%s granular approval policy reached transport", route.method)
+		}
+	}
+}
+
 func TestRawStableModeRejectsPresenceBasedExperimentalFieldBeforeWrite(t *testing.T) {
 	transport := newScriptedInitializedTransport(t, stableInitializePayload())
 	client, err := NewClient(context.Background(), ClientConfig{
