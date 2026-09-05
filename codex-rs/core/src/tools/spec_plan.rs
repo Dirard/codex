@@ -157,7 +157,7 @@ pub(crate) fn build_tool_router(
         model_info.supports_search_tool,
         &mut registry,
     );
-    apply_mcp_tool_exposure_policy(
+    let mcp_omitted_exposures = apply_mcp_tool_exposure_policy(
         turn_context,
         model_info,
         mcp,
@@ -182,6 +182,7 @@ pub(crate) fn build_tool_router(
         model_info,
         registry,
         hosted_specs,
+        &mcp_omitted_exposures,
         &session.services.tool_search_handler_cache,
     )
 }
@@ -201,7 +202,7 @@ fn apply_mcp_tool_exposure_policy(
     mcp: &codex_mcp::McpBinding,
     registered_mcp_tools: &HashSet<ToolName>,
     registry: &mut ToolRegistry,
-) {
+) -> HashMap<ToolName, ToolExposures> {
     let mut omitted_exposures_by_tool = HashMap::new();
     let apps_config = apps_config_from_layer_stack(&turn_context.config.config_layer_stack);
     for tool in mcp.tools() {
@@ -287,6 +288,7 @@ fn apply_mcp_tool_exposure_policy(
             (true, true, _) => unreachable!("direct and deferred exposure are mutually exclusive"),
         };
     }
+    omitted_exposures_by_tool
 }
 
 #[cfg(test)]
@@ -371,6 +373,7 @@ pub(crate) fn finalize_tool_router(
     model_info: &ModelInfo,
     mut registry: ToolRegistry,
     mut hosted_specs: Vec<ToolSpec>,
+    mcp_omitted_exposures: &HashMap<ToolName, ToolExposures>,
     tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> CodexResult<ToolRouter> {
     let model_messages = ResolvedModelMessages::from_model(model_info);
@@ -465,8 +468,13 @@ pub(crate) fn finalize_tool_router(
         registry.mcp_namespaces(),
     )
     .map_err(|error| CodexErrorDetails::InvalidRequest(error.to_string()))?;
-    let code_mode_tool_names =
-        register_code_mode_executors(turn_context, model_info, &mut registry, &indirect_prefixes);
+    let code_mode_tool_names = register_code_mode_executors(
+        turn_context,
+        model_info,
+        &mut registry,
+        &indirect_prefixes,
+        mcp_omitted_exposures,
+    );
     let include_tool_namespaces_info = turn_context
         .config
         .tool_registry
@@ -988,8 +996,7 @@ fn code_mode_tools<'a>(
     registry.entries().filter_map(move |tool| {
         if !enabled
             || !(tool.exposure.is_available_in_code_mode()
-                || (tool.exposure == ToolExposure::DirectModelOnly
-                    && tool.runtime.mcp_server_name().is_none()))
+                || tool.exposure == ToolExposure::DirectModelOnly)
         {
             return None;
         }
@@ -1045,6 +1052,7 @@ fn register_code_mode_executors(
     model_info: &ModelInfo,
     registry: &mut ToolRegistry,
     indirect_prefixes: &IndirectNamespacePrefixes<'_>,
+    mcp_omitted_exposures: &HashMap<ToolName, ToolExposures>,
 ) -> BTreeMap<String, ToolName> {
     let tool_mode = effective_tool_mode(turn_context, model_info);
     if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
@@ -1061,7 +1069,15 @@ fn register_code_mode_executors(
     let code_mode_input_schema_max_bytes =
         turn_context.config.code_mode.tool_input_schema_max_bytes;
     for (name, spec, tool) in code_mode_tools(turn_context, model_info, registry) {
-        code_mode_tool_names.insert(name, tool.runtime.tool_name());
+        let tool_name = tool.runtime.tool_name();
+        if !code_mode_only_strict_3p_tools(turn_context, model_info)
+            && mcp_omitted_exposures
+                .get(&tool_name)
+                .is_some_and(|exposures| exposures.contains(ToolExposures::CODE_MODE))
+        {
+            continue;
+        }
+        code_mode_tool_names.insert(name, tool_name);
         let exposure = tool.exposure;
         if exposure == ToolExposure::DirectModelOnly {
             direct_tool_stubs.extend(
