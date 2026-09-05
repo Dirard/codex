@@ -78,8 +78,11 @@ use codex_thread_store::ThreadStore;
 use codex_utils_path_uri::PathUri;
 use core_test_support::responses;
 use core_test_support::responses::strip_response_item_ids;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
+use tokio::sync::oneshot;
 use tokio::time::Duration;
 use tokio::time::sleep;
 use tokio::time::timeout;
@@ -4041,6 +4044,315 @@ async fn followup_to_non_v2_child_notifies_parent_on_second_completion() {
     .await
     .expect("follow-up completion should reach parent");
     response_mock.single_request();
+}
+
+#[tokio::test]
+async fn followup_completion_watcher_observes_coalesced_completion_when_started_late() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let child_thread_id = ThreadId::new();
+    let (status_tx, status_rx) = tokio::sync::watch::channel(AgentStatus::Completed(Some(
+        "previous completion".to_string(),
+    )));
+
+    harness
+        .control
+        .start_followup_completion_watcher(
+            child_thread_id,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("reviewer".to_string()),
+            }),
+            child_thread_id.to_string(),
+            /*child_agent_path*/ None,
+            status_rx,
+        )
+        .await;
+    let _ = status_tx.send_replace(AgentStatus::Running);
+    let _ = status_tx.send_replace(AgentStatus::Completed(Some(
+        "coalesced follow-up completion".to_string(),
+    )));
+
+    assert_eq!(wait_for_subagent_notification(&parent_thread).await, true);
+    assert!(history_contains_text(
+        parent_thread.session.clone_history().await.raw_items(),
+        "coalesced follow-up completion",
+    ));
+}
+
+#[tokio::test]
+async fn followup_completion_watcher_replaces_initial_watcher_after_interrupt() {
+    assert_followup_completion_watcher_replaces_initial_watcher(PreviousWatcherTurn::Interrupted)
+        .await;
+}
+
+#[tokio::test]
+async fn followup_completion_watcher_replaces_late_initial_watcher_after_completion() {
+    assert_followup_completion_watcher_replaces_initial_watcher(PreviousWatcherTurn::Completed)
+        .await;
+}
+
+#[derive(Clone, Copy)]
+enum PreviousWatcherTurn {
+    Completed,
+    Interrupted,
+}
+
+async fn assert_followup_completion_watcher_replaces_initial_watcher(
+    previous_turn: PreviousWatcherTurn,
+) {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let child_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id,
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: Some("reviewer".to_string()),
+    });
+    let child = harness
+        .manager
+        .start_thread(StartThreadOptions {
+            session_source: Some(child_source.clone()),
+            ..StartThreadOptions::new(harness.config.clone())
+        })
+        .await
+        .expect("child thread should start");
+    harness.control.maybe_start_completion_watcher(
+        child.thread_id,
+        Some(child_source.clone()),
+        "initial watcher".to_string(),
+        /*child_agent_path*/ None,
+    );
+
+    let previous_turn_context = child.thread.session.new_default_turn().await;
+    let (previous_terminal_event, expected_status) = match previous_turn {
+        PreviousWatcherTurn::Completed => (
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: previous_turn_context.sub_id.clone(),
+                started_at: None,
+                last_agent_message: Some("initial completion".to_string()),
+                error: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+            AgentStatus::Completed(Some("initial completion".to_string())),
+        ),
+        PreviousWatcherTurn::Interrupted => (
+            EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: Some(previous_turn_context.sub_id.clone()),
+                reason: TurnAbortReason::Interrupted,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            }),
+            AgentStatus::Interrupted,
+        ),
+    };
+    child
+        .thread
+        .session
+        .send_event(previous_turn_context.as_ref(), previous_terminal_event)
+        .await;
+    assert_eq!(child.thread.agent_status().await, expected_status);
+
+    let status_rx = harness
+        .control
+        .subscribe_status(child.thread_id)
+        .await
+        .expect("child status should be available");
+    harness
+        .control
+        .start_followup_completion_watcher(
+            child.thread_id,
+            child_source,
+            "followup watcher".to_string(),
+            /*child_agent_path*/ None,
+            status_rx,
+        )
+        .await;
+    let followup_turn = child.thread.session.new_default_turn().await;
+    child
+        .thread
+        .session
+        .send_event(
+            followup_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: followup_turn.sub_id.clone(),
+                started_at: None,
+                last_agent_message: Some("followup completion".to_string()),
+                error: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        )
+        .await;
+
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if history_contains_text(
+                parent_thread.session.clone_history().await.raw_items(),
+                "followup completion",
+            ) {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("followup completion should reach parent");
+    let parent_history = parent_thread.session.clone_history().await;
+    let history = serde_json::to_string(&parent_history.raw_items().collect::<Vec<_>>())
+        .expect("serialize parent history");
+    assert!(history.contains("followup watcher"));
+    match previous_turn {
+        PreviousWatcherTurn::Completed => {
+            assert!(history.contains("initial watcher"));
+            assert_eq!(history.matches("initial completion").count(), 1);
+        }
+        PreviousWatcherTurn::Interrupted => assert!(!history.contains("initial watcher")),
+    }
+    assert_eq!(history.matches("followup completion").count(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn busy_non_v2_child_followup_notifies_parent_on_second_completion() {
+    let (release_first_completion_tx, release_first_completion_rx) = oneshot::channel();
+    let first_response = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![
+                responses::ev_response_created("first-response"),
+                responses::ev_assistant_message("first-message", "first completion"),
+            ]),
+        },
+        StreamingSseChunk {
+            gate: Some(release_first_completion_rx),
+            body: responses::sse(vec![responses::ev_completed("first-response")]),
+        },
+    ];
+    let second_response = vec![StreamingSseChunk {
+        gate: None,
+        body: responses::sse(vec![
+            responses::ev_response_created("second-response"),
+            responses::ev_assistant_message("second-message", "second completion"),
+            responses::ev_completed("second-response"),
+        ]),
+    }];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_response, second_response]).await;
+    let (home, mut config) = test_config().await;
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    config.model_provider.supports_websockets = false;
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let mut parent_config = harness.config.clone();
+    let _ = parent_config.features.enable(Feature::MultiAgentV2);
+    let parent = harness
+        .manager
+        .start_thread(StartThreadOptions::new(parent_config))
+        .await
+        .expect("parent thread should start");
+    let child_path = AgentPath::root().join("reviewer").expect("child path");
+    let child_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: parent.thread_id,
+        depth: 1,
+        agent_path: Some(child_path.clone()),
+        agent_nickname: None,
+        agent_role: Some("reviewer".to_string()),
+    });
+    let mut child_config = harness.config.clone();
+    child_config.agents_enabled = false;
+    let child = harness
+        .manager
+        .start_thread(StartThreadOptions {
+            session_source: Some(child_source),
+            ..StartThreadOptions::new(child_config)
+        })
+        .await
+        .expect("child thread should start");
+    assert_eq!(
+        child.thread.multi_agent_version(),
+        Some(MultiAgentVersion::Disabled)
+    );
+
+    harness
+        .control
+        .send_input(
+            child.thread_id,
+            text_input("first prompt"),
+            Default::default(),
+        )
+        .await
+        .expect("first child turn should start");
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if history_contains_text(
+                child.thread.session.clone_history().await.raw_items(),
+                "first completion",
+            ) {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("first child answer should be recorded while the turn is active");
+    assert!(
+        child.thread.session.active_turn.lock().await.is_some(),
+        "follow-up should be sent while the child is still busy"
+    );
+
+    harness
+        .control
+        .send_inter_agent_communication(
+            child.thread_id,
+            InterAgentCommunication::new(
+                AgentPath::root(),
+                child_path,
+                Vec::new(),
+                "busy follow up".to_string(),
+                /*trigger_turn*/ true,
+            ),
+            AgentCommunicationContext::new(AgentCommunicationKind::Followup, parent.thread_id),
+            TurnStartOptions {
+                parent_turn_id: Some("parent-turn".to_string()),
+                root_turn_id: Some("parent-turn".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("busy follow-up should be accepted");
+    let _ = release_first_completion_tx.send(());
+
+    timeout(Duration::from_secs(5), server.wait_for_request_count(2))
+        .await
+        .expect("busy follow-up should start a second child request");
+    let requests = server.requests().await;
+    let second_request: serde_json::Value =
+        serde_json::from_slice(&requests[1]).expect("parse second child request");
+    assert!(
+        serde_json::to_string(&second_request["input"])
+            .expect("serialize second request input")
+            .contains("busy follow up")
+    );
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if history_contains_text(
+                parent.thread.session.clone_history().await.raw_items(),
+                "second completion",
+            ) {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("busy follow-up completion should reach parent");
 }
 
 #[tokio::test]

@@ -63,8 +63,10 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::Weak;
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -111,6 +113,16 @@ pub(crate) struct ListedAgent {
     pub(crate) agent_status: AgentStatus,
 }
 
+enum CompletionWatcherStart {
+    CurrentStatus,
+    AfterCurrentTurn(watch::Receiver<AgentStatus>),
+}
+
+enum PreviousWatcherAction {
+    Wait,
+    Abort,
+}
+
 /// Control-plane handle for multi-agent operations.
 /// `AgentControl` is held by each session (via `SessionServices`). It provides capability to
 /// spawn new agents and the inter-agent communication layer.
@@ -134,6 +146,8 @@ pub(crate) struct AgentControl {
     rollout_budget: Arc<RolloutBudget>,
     /// The user-selected root routing tier, shared by the entire agent tree.
     root_service_tier: Arc<ArcSwapOption<String>>,
+    /// Most recent detached completion watcher for each child thread.
+    completion_watchers: Arc<Mutex<HashMap<ThreadId, JoinHandle<()>>>>,
 }
 
 impl Default for AgentControl {
@@ -162,6 +176,7 @@ impl AgentControl {
             agent_execution_limiter: Arc::default(),
             rollout_budget: Arc::default(),
             root_service_tier: Arc::new(ArcSwapOption::from(None)),
+            completion_watchers: Arc::default(),
         };
         if let Some(rollout_budget) = rollout_budget {
             control.rollout_budget.configure(rollout_budget);
@@ -225,35 +240,11 @@ impl AgentControl {
         start_options: TurnStartOptions,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
-        let completion_watcher = if communication.trigger_turn {
+        if communication.trigger_turn {
             let thread = state.get_thread(agent_id).await?;
             self.ensure_execution_capacity_for_turn_start(&thread)
                 .await?;
-            let is_idle = thread.session.active_turn.lock().await.is_none();
-            if thread.multi_agent_version() != Some(MultiAgentVersion::V2) && is_idle {
-                let mut status_rx = self.subscribe_status(agent_id).await?;
-                let current_status = status_rx.borrow_and_update().clone();
-                if is_final(&current_status) {
-                    let child_agent_path = thread.session_source.get_agent_path();
-                    let child_reference = child_agent_path
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| agent_id.to_string());
-                    Some((
-                        thread.session_source.clone(),
-                        child_reference,
-                        child_agent_path,
-                        status_rx,
-                    ))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        }
         let submission_id = self
             .send_inter_agent_communication_after_capacity_check(
                 agent_id,
@@ -263,17 +254,6 @@ impl AgentControl {
                 start_options,
             )
             .await?;
-        if let Some((session_source, child_reference, child_agent_path, status_rx)) =
-            completion_watcher
-        {
-            self.start_followup_completion_watcher(
-                agent_id,
-                session_source,
-                child_reference,
-                child_agent_path,
-                status_rx,
-            );
-        }
         Ok(submission_id)
     }
 
@@ -651,26 +631,45 @@ impl AgentControl {
             session_source,
             child_reference,
             child_agent_path,
-            /*status_rx*/ None,
-            /*wait_for_change*/ false,
+            CompletionWatcherStart::CurrentStatus,
         );
     }
 
-    fn start_followup_completion_watcher(
+    pub(crate) async fn start_followup_completion_watcher(
         &self,
         child_thread_id: ThreadId,
         session_source: SessionSource,
         child_reference: String,
         child_agent_path: Option<AgentPath>,
-        status_rx: watch::Receiver<AgentStatus>,
+        mut status_rx: watch::Receiver<AgentStatus>,
     ) {
+        let previous_watcher_action = match status_rx.borrow_and_update().clone() {
+            AgentStatus::Completed(_) | AgentStatus::Errored(_) => PreviousWatcherAction::Wait,
+            AgentStatus::Interrupted => PreviousWatcherAction::Abort,
+            AgentStatus::PendingInit | AgentStatus::Running => {
+                // The first or still-active turn already owns its completion watcher.
+                return;
+            }
+            AgentStatus::Shutdown | AgentStatus::NotFound => return,
+        };
+        let previous_watcher = self
+            .completion_watchers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&child_thread_id);
+        if let Some(previous_watcher) = previous_watcher {
+            match previous_watcher_action {
+                PreviousWatcherAction::Wait => {}
+                PreviousWatcherAction::Abort => previous_watcher.abort(),
+            }
+            let _ = previous_watcher.await;
+        }
         self.start_completion_watcher(
             child_thread_id,
             Some(session_source),
             child_reference,
             child_agent_path,
-            Some(status_rx),
-            /*wait_for_change*/ true,
+            CompletionWatcherStart::AfterCurrentTurn(status_rx),
         );
     }
 
@@ -680,8 +679,7 @@ impl AgentControl {
         session_source: Option<SessionSource>,
         child_reference: String,
         child_agent_path: Option<AgentPath>,
-        status_rx: Option<watch::Receiver<AgentStatus>>,
-        wait_for_change: bool,
+        watcher_start: CompletionWatcherStart,
     ) {
         let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
@@ -690,21 +688,25 @@ impl AgentControl {
             return;
         };
         let control = self.clone();
-        tokio::spawn(async move {
-            let mut status_rx = match status_rx {
-                Some(status_rx) => status_rx,
-                None => match control.subscribe_status(child_thread_id).await {
-                    Ok(status_rx) => status_rx,
-                    Err(_) => {
-                        let (_, status_rx) =
-                            watch::channel(control.get_status(child_thread_id).await);
-                        status_rx
+        let watcher = tokio::spawn(async move {
+            let mut status_rx = match watcher_start {
+                CompletionWatcherStart::CurrentStatus => {
+                    match control.subscribe_status(child_thread_id).await {
+                        Ok(status_rx) => status_rx,
+                        Err(_) => {
+                            let (_, status_rx) =
+                                watch::channel(control.get_status(child_thread_id).await);
+                            status_rx
+                        }
                     }
-                },
+                }
+                CompletionWatcherStart::AfterCurrentTurn(mut status_rx) => {
+                    if status_rx.changed().await.is_err() {
+                        return;
+                    }
+                    status_rx
+                }
             };
-            if wait_for_change && status_rx.changed().await.is_err() {
-                return;
-            }
             let mut status = status_rx.borrow().clone();
             while !is_final(&status) {
                 if status_rx.changed().await.is_err() {
@@ -774,6 +776,14 @@ impl AgentControl {
                 ))
                 .await;
         });
+        if let Some(previous_watcher) = self
+            .completion_watchers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(child_thread_id, watcher)
+        {
+            previous_watcher.abort();
+        }
     }
 
     fn prepare_agent_metadata(

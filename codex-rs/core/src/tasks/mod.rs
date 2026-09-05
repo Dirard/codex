@@ -460,9 +460,10 @@ impl Session {
 
         let (input, mut start_options) =
             self.input_queue.get_pending_input(&self.active_turn).await;
-        if !input.iter().any(
+        let has_trigger_turn = input.iter().any(
             |item| matches!(item, TurnInput::InterAgentCommunication(mail) if mail.trigger_turn),
-        ) {
+        );
+        if !has_trigger_turn {
             // Queue-only mail wakes durable sleep without selecting a new task's settings.
             start_options.cyber_access_program = self
                 .reference_context_item()
@@ -497,6 +498,30 @@ impl Session {
         if let Some(id) = start_options.root_turn_id {
             turn_context.turn_metadata_state.set_root_turn_id(id);
         }
+        if has_trigger_turn
+            && turn_context.multi_agent_version != MultiAgentVersion::V2
+            && let Ok(status_rx) = self
+                .services
+                .agent_control
+                .subscribe_status(self.thread_id)
+                .await
+        {
+            let child_agent_path = turn_context.session_source.get_agent_path();
+            let child_reference = child_agent_path
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| self.thread_id.to_string());
+            self.services
+                .agent_control
+                .start_followup_completion_watcher(
+                    self.thread_id,
+                    turn_context.session_source.clone(),
+                    child_reference,
+                    child_agent_path,
+                    status_rx,
+                )
+                .await;
+        }
         self.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
             .await;
         // Task completion must still save this mail if pre-turn compaction fails.
@@ -508,18 +533,14 @@ impl Session {
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
-        let mut aborted_turn = false;
         let mut active_turn_to_clear = None;
         let mut turn_context = None;
         if let Some(mut active_turn) = self.take_active_turn(&reason).await {
             let task = active_turn.task.take();
-            aborted_turn = task.is_some();
             turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
             if let Some(task) = task {
                 self.handle_task_abort(task, reason.clone(), &active_turn.turn_state)
                     .await;
-            }
-            if aborted_turn {
                 active_turn_to_clear = Some(active_turn);
             }
         }
@@ -532,9 +553,6 @@ impl Session {
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             self.input_queue.clear_pending(&active_turn).await;
-        }
-        if reason == TurnAbortReason::Interrupted && aborted_turn {
-            self.maybe_start_turn_for_pending_work().await;
         }
     }
 
@@ -578,10 +596,6 @@ impl Session {
         // Let interrupted tasks observe cancellation before dropping pending approvals, or an
         // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
         self.input_queue.clear_pending(&active_turn).await;
-
-        if reason == TurnAbortReason::Interrupted {
-            self.maybe_start_turn_for_pending_work().await;
-        }
 
         true
     }
@@ -803,6 +817,7 @@ impl Session {
         } else {
             ThreadIdleCause::Completed
         };
+        let was_aborted = abort_reason.is_some();
         let event = if let Some(reason) = abort_reason {
             if reason == TurnAbortReason::Interrupted {
                 run_turn_interrupt_hooks(self, &turn_context, &turn_state).await;
@@ -861,7 +876,7 @@ impl Session {
         if let Err(err) = self.flush_rollout().await {
             warn!("failed to flush rollout after emitting terminal turn event: {err}");
         }
-        if cleared_active_turn {
+        if cleared_active_turn && !was_aborted {
             self.maybe_start_turn_for_pending_work().await;
         }
     }
