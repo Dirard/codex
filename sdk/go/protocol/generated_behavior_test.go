@@ -142,6 +142,139 @@ func TestThreadItemAgentMessageDoesNotRequireSubAgentKind(t *testing.T) {
 	}
 }
 
+func TestGeneratedCommandActionAcceptsVariantPathShapes(t *testing.T) {
+	tests := []struct {
+		name   string
+		action string
+	}{
+		{
+			name:   "read path",
+			action: `{"type":"read","command":"cat notes.txt","name":"notes.txt","path":"/tmp/notes.txt"}`,
+		},
+		{
+			name:   "search nullable path",
+			action: `{"type":"search","command":"rg needle","path":null,"query":"needle"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params := `{"item":{"type":"commandExecution","id":"item-1","command":"command","commandActions":[` + tt.action + `],"cwd":"/tmp","status":"inProgress"},"startedAtMs":1,"threadId":"thread-1","turnId":"turn-1"}`
+			decoded, err := DecodeServerNotificationPayload("item/started", json.RawMessage(params))
+			if err != nil {
+				t.Fatal(err)
+			}
+			notification, ok := decoded.(ItemStartedNotification)
+			if !ok {
+				t.Fatalf("payload = %T, want ItemStartedNotification", decoded)
+			}
+			actions, ok := notification.Item.CommandActions.Value()
+			if !ok || len(actions) != 1 {
+				t.Fatalf("command actions = %#v, %t, want one action", actions, ok)
+			}
+			encoded, err := json.Marshal(actions[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertJSONEqual(t, encoded, tt.action)
+		})
+	}
+
+	var read CommandAction
+	err := json.Unmarshal([]byte(`{"type":"read","command":"cat notes.txt","name":"notes.txt","path":null}`), &read)
+	var decodeErr DecodeError
+	if !errors.As(err, &decodeErr) || decodeErr.Field != "path" {
+		t.Fatalf("err = %v, want DecodeError for null read path", err)
+	}
+}
+
+func TestGeneratedResponseItemAcceptsVariantArgumentShapes(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+	}{
+		{
+			name: "function call string arguments",
+			json: `{"type":"function_call","arguments":"{\"query\":\"docs\"}","call_id":"call-1","name":"search"}`,
+		},
+		{
+			name: "tool search object arguments",
+			json: `{"type":"tool_search_call","arguments":{"query":"docs"},"execution":"exec-1"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var item ResponseItem
+			if err := json.Unmarshal([]byte(tt.json), &item); err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(item)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertJSONEqual(t, encoded, tt.json)
+		})
+	}
+}
+
+func TestGeneratedRawMessageAliasDecodesResourceContent(t *testing.T) {
+	payload := `{"uri":"file:///example.txt","mimeType":"text/plain","text":"hello"}`
+	var content ResourceContent
+	if err := json.Unmarshal([]byte(payload), &content); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertJSONEqual(t, encoded, payload)
+}
+
+func TestGeneratedNullableNamedParamsPreserveJSONMethods(t *testing.T) {
+	payload := `{"ephemeral":true}`
+	var params NullableRemoteControlEnableParams
+	if err := json.Unmarshal([]byte(payload), &params); err != nil {
+		t.Fatal(err)
+	}
+	value, ok := Optional[RemoteControlEnableParams](params).Value()
+	if !ok || value.Ephemeral != SomeNonNull(true) {
+		t.Fatalf("params = %#v, want non-null ephemeral params", params)
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertJSONEqual(t, encoded, payload)
+}
+
+func TestGeneratedAccountHonorsVariantRequiredNullability(t *testing.T) {
+	payload := `{"type":"chatgpt","email":null,"planType":"plus"}`
+	var account Account
+	if err := json.Unmarshal([]byte(payload), &account); err != nil {
+		t.Fatal(err)
+	}
+	if !account.Email.IsNull() {
+		t.Fatalf("email = %#v, want explicit null", account.Email)
+	}
+	encoded, err := json.Marshal(account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertJSONEqual(t, encoded, payload)
+
+	var missingEmail Account
+	err = json.Unmarshal([]byte(`{"type":"chatgpt","planType":"plus"}`), &missingEmail)
+	var decodeErr DecodeError
+	if !errors.As(err, &decodeErr) || decodeErr.Field != "email" {
+		t.Fatalf("err = %v, want DecodeError for missing email", err)
+	}
+
+	var nullPlanType Account
+	err = json.Unmarshal([]byte(`{"type":"chatgpt","email":null,"planType":null}`), &nullPlanType)
+	if err == nil || !strings.Contains(err.Error(), "field planType") {
+		t.Fatalf("err = %v, want null rejection for planType", err)
+	}
+}
+
 func TestThreadTimelineEntryUsesCanonicalCamelCaseWireNames(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -249,6 +382,17 @@ func TestGeneratedUntaggedObjectUnionPreservesUnknownVariant(t *testing.T) {
 	if !ok || mode != "form" {
 		t.Fatalf("Mode = %q, %v; want form, true", mode, ok)
 	}
+
+	openAIFormPayload := `{"serverName":"server-1","threadId":"thread-1","mode":"openai/form","message":"Fill this in","requestedSchema":null}`
+	var openAIForm McpServerElicitationRequestParams
+	if err := json.Unmarshal([]byte(openAIFormPayload), &openAIForm); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err = json.Marshal(openAIForm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertJSONEqual(t, encoded, openAIFormPayload)
 }
 
 func TestGeneratedMultiAgentModeSupportsBuiltInAndCustomUnion(t *testing.T) {

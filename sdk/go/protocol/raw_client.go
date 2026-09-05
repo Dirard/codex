@@ -618,13 +618,21 @@ func (c RawClient) ExperimentalFeatureEnablementSet(ctx context.Context, params 
 
 func (c RawClient) RemoteControlEnable(ctx context.Context, params NullableRemoteControlEnableParams) (RemoteControlEnableResponse, error) {
 	var result RemoteControlEnableResponse
-	err := c.sender.Call(ctx, "remoteControl/enable", params, &result, MethodMetadataByMethod["remoteControl/enable"])
+	var callParams any
+	if params.IsSet() {
+		callParams = params
+	}
+	err := c.sender.Call(ctx, "remoteControl/enable", callParams, &result, MethodMetadataByMethod["remoteControl/enable"])
 	return result, err
 }
 
 func (c RawClient) RemoteControlDisable(ctx context.Context, params NullableRemoteControlDisableParams) (RemoteControlDisableResponse, error) {
 	var result RemoteControlDisableResponse
-	err := c.sender.Call(ctx, "remoteControl/disable", params, &result, MethodMetadataByMethod["remoteControl/disable"])
+	var callParams any
+	if params.IsSet() {
+		callParams = params
+	}
+	err := c.sender.Call(ctx, "remoteControl/disable", callParams, &result, MethodMetadataByMethod["remoteControl/disable"])
 	return result, err
 }
 
@@ -774,7 +782,11 @@ func (c RawClient) AccountRateLimitsRead(ctx context.Context) (GetAccountRateLim
 
 func (c RawClient) AccountRateLimitsReadWithParams(ctx context.Context, params NullableGetAccountRateLimitsParams) (GetAccountRateLimitsResponse, error) {
 	var result GetAccountRateLimitsResponse
-	err := c.sender.Call(ctx, "account/rateLimits/read", params, &result, MethodMetadataByMethod["account/rateLimits/read"])
+	var callParams any
+	if params.IsSet() {
+		callParams = params
+	}
+	err := c.sender.Call(ctx, "account/rateLimits/read", callParams, &result, MethodMetadataByMethod["account/rateLimits/read"])
 	return result, err
 }
 
@@ -786,7 +798,11 @@ func (c RawClient) AccountRateLimitResetCreditConsume(ctx context.Context, param
 
 func (c RawClient) AccountUsageRead(ctx context.Context, params NullableGetAccountTokenUsageParams) (GetAccountTokenUsageResponse, error) {
 	var result GetAccountTokenUsageResponse
-	err := c.sender.Call(ctx, "account/usage/read", params, &result, MethodMetadataByMethod["account/usage/read"])
+	var callParams any
+	if params.IsSet() {
+		callParams = params
+	}
+	err := c.sender.Call(ctx, "account/usage/read", callParams, &result, MethodMetadataByMethod["account/usage/read"])
 	return result, err
 }
 
