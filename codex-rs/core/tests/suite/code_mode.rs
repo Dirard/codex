@@ -603,8 +603,13 @@ async fn run_code_mode_turn_with_rmcp_model(
     model: &'static str,
 ) -> Result<(TestCodex, ResponseMock)> {
     run_code_mode_turn_with_rmcp_config(
-        server, prompt, code, model, /*code_mode_only*/ false,
+        server,
+        prompt,
+        code,
+        model,
+        /*code_mode_only*/ false,
         /*non_prefixed_mcp_tool_names*/ false,
+        |_| {},
     )
     .await
 }
@@ -622,6 +627,7 @@ async fn run_code_mode_turn_with_rmcp_mode(
         "test-gpt-5.1-codex",
         code_mode_only,
         /*non_prefixed_mcp_tool_names*/ false,
+        |_| {},
     )
     .await
 }
@@ -633,6 +639,7 @@ async fn run_code_mode_turn_with_rmcp_config(
     model: &'static str,
     code_mode_only: bool,
     non_prefixed_mcp_tool_names: bool,
+    configure: impl FnOnce(&mut Config) + Send + 'static,
 ) -> Result<(TestCodex, ResponseMock)> {
     let rmcp_test_server_bin = stdio_server_bin()?;
     let mut builder = test_codex().with_model(model).with_config(move |config| {
@@ -681,6 +688,7 @@ async fn run_code_mode_turn_with_rmcp_config(
             .mcp_servers
             .set(servers)
             .expect("test mcp servers should accept any configuration");
+        configure(config);
     });
     let test = builder.build(server).await?;
     wait_for_mcp_server(&test.codex, "rmcp").await?;
@@ -5129,6 +5137,7 @@ text(JSON.stringify({
         "test-gpt-5.1-codex",
         /*code_mode_only*/ false,
         /*non_prefixed_mcp_tool_names*/ true,
+        |_| {},
     )
     .await?;
 
@@ -5499,6 +5508,68 @@ text(JSON.stringify({
         parsed["error"]
             .as_str()
             .is_some_and(|error| error.contains("direct_tool_required"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_direct_only_mcp_tools_return_direct_tool_required_stub() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+let error = null;
+try {
+  await tools.mcp__rmcp__echo({ message: "ping" });
+} catch (caught) {
+  error = String(caught);
+}
+text(JSON.stringify({
+  type: typeof tools.mcp__rmcp__echo,
+  error,
+}));
+"#;
+
+    let (_test, second_mock) = run_code_mode_turn_with_rmcp_config(
+        &server,
+        "use exec to inspect a direct-only MCP tool",
+        code,
+        "test-gpt-5.1-codex",
+        /*code_mode_only*/ false,
+        /*non_prefixed_mcp_tool_names*/ false,
+        |config| {
+            config.code_mode.direct_only_tool_namespaces = vec!["mcp__rmcp".to_string()];
+        },
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec direct-only MCP stub lookup failed unexpectedly: {output}"
+    );
+    let parsed: Value = serde_json::from_str(
+        &custom_tool_output_last_non_empty_text(&req, "call-1")
+            .expect("exec direct-only MCP stub lookup should emit JSON"),
+    )?;
+    assert_eq!(parsed["type"], "function");
+    let error = parsed["error"]
+        .as_str()
+        .expect("nested direct-only MCP call should be rejected");
+    assert!(
+        error.contains("direct_tool_required"),
+        "unexpected nested-call error: {error}"
+    );
+    assert!(
+        error.contains("mcp__rmcp__echo"),
+        "nested-call error must name the direct tool: {error}"
+    );
+    assert!(
+        !error.contains("ECHOING"),
+        "MCP backend must not run: {error}"
     );
 
     Ok(())

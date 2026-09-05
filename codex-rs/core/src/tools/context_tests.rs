@@ -189,6 +189,73 @@ fn mcp_tool_output_applies_line_limits_once_when_recorded() {
 }
 
 #[test]
+fn mcp_tool_output_applies_mcp_line_limit_to_mixed_content() {
+    let truncation = OutputTruncation::new_with_mcp_max_lines(
+        TruncationPolicy::Bytes(100_000),
+        /*max_lines*/ Some(10),
+        /*mcp_max_lines*/ Some(2),
+    );
+    let output = McpToolOutput {
+        result: CallToolResult {
+            content: vec![
+                serde_json::json!({
+                    "type": "text",
+                    "text": "line1\nline2\nline3\nline4\nline5",
+                }),
+                serde_json::json!({
+                    "type": "image",
+                    "mimeType": "image/png",
+                    "data": "AAA",
+                }),
+                serde_json::json!({
+                    "type": "text",
+                    "text": "last",
+                }),
+            ],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        },
+        tool_input: json!({}),
+        wall_time: std::time::Duration::from_millis(1250),
+        original_image_detail_supported: false,
+        truncation,
+    };
+
+    let expected_items = vec![
+        FunctionCallOutputContentItem::InputText {
+            text: "Wall time: 1.2500 seconds\n... 6 lines truncated ...".to_string(),
+        },
+        FunctionCallOutputContentItem::InputImage {
+            image_url: "data:image/png;base64,AAA".to_string(),
+            detail: Some(DEFAULT_IMAGE_DETAIL),
+        },
+        FunctionCallOutputContentItem::InputText {
+            text: "last".to_string(),
+        },
+    ];
+    let response = output.to_response_item(
+        "mcp-call-mixed-lines",
+        &ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+    );
+    let ResponseInputItem::FunctionCallOutput { output, .. } = &response else {
+        panic!("expected FunctionCallOutput");
+    };
+    assert_eq!(output.content_items(), Some(expected_items.as_slice()));
+
+    let item = ResponseItem::from(response);
+    let mut history = ContextManager::new();
+    history.record_items([&item], truncation);
+    let items = history.raw_items().cloned().collect::<Vec<_>>();
+    let [ResponseItem::FunctionCallOutput { output, .. }] = items.as_slice() else {
+        panic!("expected one FunctionCallOutput");
+    };
+    assert_eq!(output.content_items(), Some(expected_items.as_slice()));
+}
+
+#[test]
 fn mcp_tool_output_response_item_truncates_large_structured_content() {
     let output = McpToolOutput {
         result: CallToolResult {
