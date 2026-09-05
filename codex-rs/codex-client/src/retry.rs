@@ -56,6 +56,7 @@ pub fn backoff(base: Duration, attempt: u64) -> Duration {
 pub enum RetryOperation {
     HttpRequest,
     Sampling,
+    LocalCompaction,
     RemoteCompactionV2,
 }
 
@@ -66,6 +67,7 @@ macro_rules! record_retry {
         let (layer, operation) = match $operation {
             $crate::RetryOperation::HttpRequest => ("http", "request"),
             $crate::RetryOperation::Sampling => ("stream", "sampling"),
+            $crate::RetryOperation::LocalCompaction => ("stream", "local_compaction"),
             $crate::RetryOperation::RemoteCompactionV2 => ("stream", "remote_compaction_v2"),
         };
 
