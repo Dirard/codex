@@ -88,6 +88,16 @@ mod watch;
 const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
 const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;
 
+enum CompletionWatcherStart {
+    CurrentStatus,
+    AfterCurrentTurn(StatusSubscription),
+}
+
+enum PreviousWatcherAction {
+    Wait,
+    Abort,
+}
+
 /// Per-session controller handle for a local agent tree.
 /// Handles retain a session identity and share their tree's `LocalAgentRuntime`.
 /// Local startup preserves that state when creating or resuming children.
@@ -232,39 +242,11 @@ impl LocalAgentControl {
         turn_spawn_budget: Option<TurnSpawnBudget>,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
-        let completion_watcher = if communication.trigger_turn {
+        if communication.trigger_turn {
             let thread = state.get_thread(agent_id).await?;
             self.ensure_execution_capacity_for_turn_start(&thread)
                 .await?;
-            let is_idle = thread.session.active_turn.lock().await.is_none();
-            if thread.multi_agent_version() != Some(MultiAgentVersion::V2) && is_idle {
-                let mut status_updates = self.subscribe_status(agent_id).await?;
-                let current_status = status_updates
-                    .next()
-                    .await
-                    .and_then(Result::ok)
-                    .and_then(|snapshot| snapshot.status().cloned());
-                if current_status.as_ref().is_some_and(is_final) {
-                    let child_agent_path = thread.session_source.get_agent_path();
-                    let child_reference = child_agent_path
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| agent_id.to_string());
-                    Some((
-                        thread.session_source.clone(),
-                        child_reference,
-                        child_agent_path,
-                        status_updates,
-                    ))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        }
         let submission_id = self
             .send_inter_agent_communication_after_capacity_check(
                 agent_id,
@@ -275,17 +257,6 @@ impl LocalAgentControl {
                 turn_spawn_budget,
             )
             .await?;
-        if let Some((session_source, child_reference, child_agent_path, status_updates)) =
-            completion_watcher
-        {
-            self.start_followup_completion_watcher(
-                agent_id,
-                session_source,
-                child_reference,
-                child_agent_path,
-                status_updates,
-            );
-        }
         Ok(submission_id)
     }
 
@@ -676,24 +647,52 @@ impl LocalAgentControl {
             session_source,
             child_reference,
             child_agent_path,
-            /*status_rx*/ None,
+            CompletionWatcherStart::CurrentStatus,
         );
     }
 
-    fn start_followup_completion_watcher(
+    pub(crate) async fn start_followup_completion_watcher(
         &self,
         child_thread_id: ThreadId,
         session_source: SessionSource,
         child_reference: String,
         child_agent_path: Option<AgentPath>,
-        status_updates: StatusSubscription,
+        mut status_updates: StatusSubscription,
     ) {
+        let Some(Ok(initial_snapshot)) = status_updates.next().await else {
+            return;
+        };
+        let Some(initial_status) = initial_snapshot.status() else {
+            return;
+        };
+        let previous_watcher_action = match initial_status {
+            AgentStatus::Completed(_) | AgentStatus::Errored(_) => PreviousWatcherAction::Wait,
+            AgentStatus::Interrupted => PreviousWatcherAction::Abort,
+            AgentStatus::PendingInit | AgentStatus::Running => {
+                // The first or still-active turn already owns its completion watcher.
+                return;
+            }
+            AgentStatus::Shutdown | AgentStatus::NotFound => return,
+        };
+        let previous_watcher = self
+            .runtime
+            .completion_watchers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&child_thread_id);
+        if let Some(previous_watcher) = previous_watcher {
+            match previous_watcher_action {
+                PreviousWatcherAction::Wait => {}
+                PreviousWatcherAction::Abort => previous_watcher.abort(),
+            }
+            let _ = previous_watcher.await;
+        }
         self.start_completion_watcher(
             child_thread_id,
             Some(session_source),
             child_reference,
             child_agent_path,
-            Some(status_updates),
+            CompletionWatcherStart::AfterCurrentTurn(status_updates),
         );
     }
 
@@ -703,7 +702,7 @@ impl LocalAgentControl {
         session_source: Option<SessionSource>,
         child_reference: String,
         child_agent_path: Option<AgentPath>,
-        status_updates: Option<StatusSubscription>,
+        watcher_start: CompletionWatcherStart,
     ) {
         let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
@@ -712,41 +711,31 @@ impl LocalAgentControl {
             return;
         };
         let control = self.clone();
-        tokio::spawn(async move {
-            let status = match status_updates {
-                Some(mut updates) => {
-                    let mut final_status = None;
-                    while let Some(Ok(snapshot)) = updates.next().await {
-                        if let Some(status) = snapshot.status()
-                            && is_final(status)
-                        {
-                            final_status = Some(status.clone());
-                            break;
-                        }
-                    }
-                    match final_status {
-                        Some(status) => status,
-                        None => control.get_status(child_thread_id).await,
+        let watcher = tokio::spawn(async move {
+            let mut status_updates = match watcher_start {
+                CompletionWatcherStart::CurrentStatus => {
+                    match control.subscribe_status(child_thread_id).await {
+                        Ok(status_updates) => status_updates,
+                        Err(_) => return,
                     }
                 }
-                None => match control.subscribe_status(child_thread_id).await {
-                Ok(mut updates) => {
-                    let mut final_status = None;
-                    while let Some(Ok(snapshot)) = updates.next().await {
-                        if let Some(status) = snapshot.status()
-                            && is_final(status)
-                        {
-                            final_status = Some(status.clone());
-                            break;
-                        }
-                    }
-                    match final_status {
-                        Some(status) => status,
-                        None => control.get_status(child_thread_id).await,
-                    }
+                CompletionWatcherStart::AfterCurrentTurn(status_updates) => status_updates,
+            };
+            let mut final_status = None;
+            while let Some(update) = status_updates.next().await {
+                let Ok(snapshot) = update else {
+                    break;
+                };
+                if let Some(status) = snapshot.status()
+                    && is_final(status)
+                {
+                    final_status = Some(status.clone());
+                    break;
                 }
-                Err(_) => control.get_status(child_thread_id).await,
-                },
+            }
+            let status = match final_status {
+                Some(status) => status,
+                None => control.get_status(child_thread_id).await,
             };
             if !is_final(&status) {
                 return;
@@ -809,6 +798,15 @@ impl LocalAgentControl {
                 ))
                 .await;
         });
+        if let Some(previous_watcher) = self
+            .runtime
+            .completion_watchers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(child_thread_id, watcher)
+        {
+            previous_watcher.abort();
+        }
     }
 
     fn prepare_agent_metadata(

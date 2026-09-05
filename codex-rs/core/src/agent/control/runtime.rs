@@ -12,9 +12,13 @@ use crate::thread_manager::ThreadManagerState;
 use arc_swap::ArcSwapOption;
 use codex_extension_api::ThreadInstructionsProvider;
 use codex_protocol::SessionId;
+use codex_protocol::ThreadId;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::Weak;
+use tokio::task::JoinHandle;
 
 /// Local tree state, kept separate from the shared agent operation interface.
 #[derive(Clone)]
@@ -35,6 +39,8 @@ pub(crate) struct LocalAgentRuntime {
         Arc<OnceLock<Arc<dyn ThreadInstructionsProvider>>>,
     pub(super) registry: Arc<AgentRegistry>,
     pub(super) residency: Arc<V2Residency>,
+    /// Most recent detached legacy completion watcher for each child thread.
+    pub(super) completion_watchers: Arc<Mutex<HashMap<ThreadId, JoinHandle<()>>>>,
 }
 
 impl LocalAgentRuntime {
@@ -52,6 +58,7 @@ impl LocalAgentRuntime {
             rollout_budget: Arc::default(),
             root_service_tier: Arc::new(ArcSwapOption::from(None)),
             shared_thread_instructions_provider: Arc::default(),
+            completion_watchers: Arc::default(),
         };
         if let Some(rollout_budget) = rollout_budget {
             runtime.rollout_budget.configure(rollout_budget);
