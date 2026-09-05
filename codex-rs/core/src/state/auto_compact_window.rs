@@ -86,6 +86,7 @@ impl AutoCompactWindow {
         self.window_number = self.window_number.saturating_add(1);
         self.ids.previous_window_id = Some(self.ids.window_id);
         self.ids.window_id = Uuid::now_v7();
+        self.prefill_input_tokens = None;
         self.new_context_window_requested = false;
         self.token_budget_reminder_delivered = false;
         self.auto_compact_fallback_delivered = false;
@@ -113,6 +114,7 @@ impl AutoCompactWindow {
         }
         self.window_number = prepared.window_number;
         self.ids = prepared.ids;
+        self.prefill_input_tokens = None;
         self.new_context_window_requested = false;
         self.token_budget_reminder_delivered = false;
         self.auto_compact_fallback_delivered = false;
@@ -266,6 +268,61 @@ mod tests {
             window.snapshot(),
             AutoCompactWindowSnapshot {
                 prefill_input_tokens: Some(120),
+            }
+        );
+    }
+
+    #[test]
+    fn advance_starts_with_a_fresh_prefill_baseline() {
+        let mut window = AutoCompactWindow::new_with_ids(AutoCompactWindowIds::new_initial());
+        window.ensure_server_observed_prefill_from_usage(&TokenUsage {
+            input_tokens: 100_000,
+            ..Default::default()
+        });
+
+        window.advance();
+        window.set_estimated_prefill(/*tokens*/ 20_000);
+
+        assert_eq!(
+            window.snapshot(),
+            AutoCompactWindowSnapshot {
+                prefill_input_tokens: Some(20_000),
+            }
+        );
+    }
+
+    #[test]
+    fn committing_prepared_window_starts_with_a_fresh_prefill_baseline() {
+        let mut window = AutoCompactWindow::new_with_ids(AutoCompactWindowIds::new_initial());
+        window.ensure_server_observed_prefill_from_usage(&TokenUsage {
+            input_tokens: 100_000,
+            ..Default::default()
+        });
+        let prepared = window.prepare_advance();
+
+        assert!(window.commit_prepared(prepared));
+        window.set_estimated_prefill(/*tokens*/ 20_000);
+
+        assert_eq!(
+            window.snapshot(),
+            AutoCompactWindowSnapshot {
+                prefill_input_tokens: Some(20_000),
+            }
+        );
+    }
+
+    #[test]
+    fn stale_prepared_window_does_not_clear_current_prefill() {
+        let mut window = AutoCompactWindow::new_with_ids(AutoCompactWindowIds::new_initial());
+        let stale = window.prepare_advance();
+        window.advance();
+        window.set_estimated_prefill(/*tokens*/ 20_000);
+
+        assert!(!window.commit_prepared(stale));
+        assert_eq!(
+            window.snapshot(),
+            AutoCompactWindowSnapshot {
+                prefill_input_tokens: Some(20_000),
             }
         );
     }
