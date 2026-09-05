@@ -855,8 +855,13 @@ async fn mcp_tool_output_limit_uses_most_restrictive_policy() -> Result<()> {
     Ok(())
 }
 
+#[test_case(50, 100; "global limit is stricter")]
+#[test_case(100, 50; "tool limit is stricter")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_tool_output_limit_applies_to_hook_feedback() -> Result<()> {
+async fn mcp_tool_output_limit_applies_to_hook_feedback(
+    global_limit: usize,
+    tool_limit: usize,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_wine_exec!(Ok(()), "requires a Windows test_stdio_server binary");
 
@@ -873,17 +878,21 @@ async fn mcp_tool_output_limit_applies_to_hook_feedback() -> Result<()> {
             )
             .expect("write MCP post-tool hook");
         })
-        .with_config(|config| {
+        .with_config(move |config| {
             core_test_support::hooks::trust_discovered_hooks(config);
-            config.tool_output_token_limit = Some(50);
+            config.tool_output_token_limit = Some(global_limit);
         });
     let (_fixture, output) =
-        call_mcp_echo(&server, builder, Some(100), /*message_bytes*/ 0).await?;
+        call_mcp_echo(&server, builder, Some(tool_limit), /*message_bytes*/ 0).await?;
 
     assert!(output.starts_with("hook feedback "));
     assert!(output.contains("truncated"));
-    // The tool's 120-token budget applies, not the 60-token global budget.
-    assert!((400..600).contains(&output.len()));
+    // Hook feedback obeys the stricter limit, including the serialization allowance.
+    assert!(
+        (200..400).contains(&output.len()),
+        "unexpected hook feedback length: {}",
+        output.len()
+    );
     Ok(())
 }
 

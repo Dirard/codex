@@ -1,9 +1,5 @@
-# Release workflow for codex-rs.
-# To release, follow a workflow like:
-# ```
-# git tag -a rust-v0.1.0 -m "Release 0.1.0"
-# git push origin rust-v0.1.0
-# ```
+# Upstream signing workflow, invoked manually with a release tag as the ref.
+# Fork packages are built by fork-rust-release.yml.
 #
 # Tag releases sign macOS binaries and DMGs through the protected `codesigning`
 # GitHub environment and Azure Key Vault before final verification on macOS.
