@@ -14,13 +14,15 @@ use crate::hook_runtime::run_post_compact_hooks;
 use crate::hook_runtime::run_pre_compact_hooks;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CompactionTurnMetadata;
+use crate::responses_retry::ResponsesStreamRequest;
+use crate::responses_retry::ResponsesStreamRetryState;
+use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::RequestEffortUsage;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
 use crate::state::AutoCompactWindowIds;
-use crate::util::backoff;
 use codex_analytics::CodexCompactionEvent;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
@@ -275,7 +277,7 @@ async fn run_compact_task_inner_impl(
     );
 
     let max_retries = turn_context.provider.info().stream_max_retries();
-    let mut retries = 0;
+    let mut retry_state = ResponsesStreamRetryState::default();
     let mut client_session = sess.services.model_client.new_session();
     // Reuse one client session so turn-scoped state (sticky routing, websocket incremental
     // request tracking)
@@ -337,7 +339,7 @@ async fn run_compact_task_inner_impl(
                         "Context window exceeded while compacting; removing oldest history item. Error: {e}"
                     );
                     history.remove_first_item();
-                    retries = 0;
+                    retry_state = ResponsesStreamRetryState::default();
                     continue;
                 }
                 sess.set_total_tokens_full(turn_context.as_ref()).await;
@@ -349,18 +351,17 @@ async fn run_compact_task_inner_impl(
                 return Err(e);
             }
             Err(e) => {
-                if retries < max_retries {
-                    retries += 1;
-                    let delay = backoff(retries);
-                    sess.notify_stream_error(
-                        turn_context.as_ref(),
-                        format!("Reconnecting... {retries}/{max_retries}"),
-                        e,
-                    )
-                    .await;
-                    tokio::time::sleep(delay).await;
-                    continue;
-                } else {
+                if let Err(e) = handle_retryable_response_stream_error(
+                    &mut retry_state,
+                    max_retries,
+                    e,
+                    &mut client_session,
+                    &sess,
+                    turn_context.as_ref(),
+                    ResponsesStreamRequest::LocalCompaction,
+                )
+                .await
+                {
                     sess.track_turn_codex_error(turn_context.as_ref(), &e);
                     if !matches!(compaction_metadata.phase(), CompactionPhase::PreTurn) {
                         let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
