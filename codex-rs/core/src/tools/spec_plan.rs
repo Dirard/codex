@@ -150,39 +150,44 @@ pub(crate) fn build_tool_router(
     let mut registry = ToolRegistry::with_tool_policy(Arc::clone(&session.tool_policy));
     add_core_tool_sources(&context, &mut registry);
 
-    let registered_mcp_tools = session.services.mcp_handler_cache.append_mcp_tools(
-        mcp,
-        &turn_context.config,
-        apps_enabled,
-        &mcp.config().mcp_server_catalog,
-        search_tool_enabled(turn_context, model_info),
-        &mut registry,
-    );
-    apply_mcp_tool_exposure_policy(
-        turn_context,
-        model_info,
-        mcp,
-        &registered_mcp_tools,
-        &mut registry,
-    );
-    let standalone_web_search_tool = append_extension_tool_executors(
-        turn_context,
-        model_info,
-        extension_tool_executors(session, step_store),
-        &mut registry,
-    );
-    append_dynamic_tool_runtimes(&turn_context.dynamic_tools, &mut registry);
-    let hosted_specs = hosted_model_tool_specs(
-        turn_context,
-        model_info,
-        standalone_web_search_tool.as_slice(),
-    );
-
+    let mut mcp_omitted_exposures = HashMap::new();
+    let hosted_specs = if crate::guardian::is_basic_session_source(&turn_context.session_source) {
+        Vec::new()
+    } else {
+        let registered_mcp_tools = session.services.mcp_handler_cache.append_mcp_tools(
+            mcp,
+            &turn_context.config,
+            apps_enabled,
+            &mcp.config().mcp_server_catalog,
+            search_tool_enabled(turn_context, model_info),
+            &mut registry,
+        );
+        mcp_omitted_exposures = apply_mcp_tool_exposure_policy(
+            turn_context,
+            model_info,
+            mcp,
+            &registered_mcp_tools,
+            &mut registry,
+        );
+        let standalone_web_search_tool = append_extension_tool_executors(
+            turn_context,
+            model_info,
+            extension_tool_executors(session, step_store),
+            &mut registry,
+        );
+        append_dynamic_tool_runtimes(&turn_context.dynamic_tools, &mut registry);
+        hosted_model_tool_specs(
+            turn_context,
+            model_info,
+            standalone_web_search_tool.as_slice(),
+        )
+    };
     finalize_tool_router(
         turn_context,
         model_info,
         registry,
         hosted_specs,
+        &mcp_omitted_exposures,
         &session.services.tool_search_handler_cache,
     )
 }
@@ -193,7 +198,7 @@ fn apply_mcp_tool_exposure_policy(
     mcp: &codex_mcp::McpBinding,
     registered_mcp_tools: &HashSet<ToolName>,
     registry: &mut ToolRegistry,
-) {
+) -> HashMap<ToolName, ToolExposures> {
     let mut omitted_exposures_by_tool = HashMap::new();
     let apps_config = apps_config_from_layer_stack(&turn_context.config.config_layer_stack);
     for tool in mcp.tools() {
@@ -267,6 +272,7 @@ fn apply_mcp_tool_exposure_policy(
             (true, true, _) => unreachable!("direct and deferred exposure are mutually exclusive"),
         };
     }
+    omitted_exposures_by_tool
 }
 
 #[cfg(test)]
@@ -351,6 +357,7 @@ pub(crate) fn finalize_tool_router(
     model_info: &ModelInfo,
     mut registry: ToolRegistry,
     mut hosted_specs: Vec<ToolSpec>,
+    mcp_omitted_exposures: &HashMap<ToolName, ToolExposures>,
     tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> CodexResult<ToolRouter> {
     hosted_specs.retain(|spec| registry.tool_policy.allows(&ToolName::plain(spec.name())));
@@ -404,8 +411,12 @@ pub(crate) fn finalize_tool_router(
         append_tool_search_executor(turn_context, &mut registry, tool_search_handler_cache);
     }
 
-    let code_mode_tool_names =
-        register_code_mode_executors(turn_context, model_info, &mut registry);
+    let code_mode_tool_names = register_code_mode_executors(
+        turn_context,
+        model_info,
+        &mut registry,
+        mcp_omitted_exposures,
+    );
     let include_tool_namespaces_info = turn_context
         .config
         .tool_registry
@@ -796,6 +807,7 @@ fn register_code_mode_executors(
     turn_context: &TurnContext,
     model_info: &ModelInfo,
     registry: &mut ToolRegistry,
+    mcp_omitted_exposures: &HashMap<ToolName, ToolExposures>,
 ) -> BTreeMap<String, ToolName> {
     let tool_mode = effective_tool_mode(turn_context, model_info);
     if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
@@ -812,10 +824,14 @@ fn register_code_mode_executors(
     for tool in registry.entries() {
         let exposure = tool.exposure;
         let tool_name = tool.runtime.tool_name();
-        if is_excluded_from_code_mode(turn_context, &tool_name) {
+        if is_excluded_from_code_mode(turn_context, &tool_name)
+            || mcp_omitted_exposures
+                .get(&tool_name)
+                .is_some_and(|exposures| exposures.contains(ToolExposures::CODE_MODE))
+        {
             continue;
         }
-        if exposure == ToolExposure::DirectModelOnly && tool.runtime.mcp_server_name().is_none() {
+        if exposure == ToolExposure::DirectModelOnly {
             let spec = tool.runtime.spec();
             direct_tool_stubs.extend(
                 collect_code_mode_exec_prompt_tool_definitions(std::iter::once(&spec))
