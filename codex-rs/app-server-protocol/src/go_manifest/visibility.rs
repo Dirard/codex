@@ -166,7 +166,7 @@ fn request_param_experimental_fields(method: &'static str) -> Vec<ExperimentalFi
                     "runtime_workspace_roots",
                     "thread/start.runtimeWorkspaceRoots",
                 ),
-                ("approval_policy", "nested"),
+                ("approval_policy.granular", "askForApproval.granular"),
                 ("permissions", "thread/start.permissions"),
                 ("multi_agent_mode", "thread/start.multiAgentMode"),
                 ("history_mode", "thread/start.historyMode"),
@@ -195,7 +195,7 @@ fn request_param_experimental_fields(method: &'static str) -> Vec<ExperimentalFi
                     "runtime_workspace_roots",
                     "thread/resume.runtimeWorkspaceRoots",
                 ),
-                ("approval_policy", "nested"),
+                ("approval_policy.granular", "askForApproval.granular"),
                 ("permissions", "thread/resume.permissions"),
                 ("exclude_turns", "thread/resume.excludeTurns"),
                 ("initial_turns_page", "thread/resume.initialTurnsPage"),
@@ -209,7 +209,7 @@ fn request_param_experimental_fields(method: &'static str) -> Vec<ExperimentalFi
                     "runtime_workspace_roots",
                     "thread/fork.runtimeWorkspaceRoots",
                 ),
-                ("approval_policy", "nested"),
+                ("approval_policy.granular", "askForApproval.granular"),
                 ("permissions", "thread/fork.permissions"),
                 ("exclude_turns", "thread/fork.excludeTurns"),
             ],
@@ -217,7 +217,7 @@ fn request_param_experimental_fields(method: &'static str) -> Vec<ExperimentalFi
         "thread/settings/update" => experimental_fields(
             "ThreadSettingsUpdateParams",
             &[
-                ("approval_policy", "nested"),
+                ("approval_policy.granular", "askForApproval.granular"),
                 ("permissions", "thread/settings/update.permissions"),
                 (
                     "collaboration_mode",
@@ -253,7 +253,7 @@ fn request_param_experimental_fields(method: &'static str) -> Vec<ExperimentalFi
                     "runtime_workspace_roots",
                     "turn/start.runtimeWorkspaceRoots",
                 ),
-                ("approval_policy", "nested"),
+                ("approval_policy.granular", "askForApproval.granular"),
                 ("permissions", "turn/start.permissions"),
                 ("collaboration_mode", "turn/start.collaborationMode"),
                 ("multi_agent_mode", "turn/start.multiAgentMode"),
@@ -296,7 +296,7 @@ fn request_response_experimental_fields(method: &'static str) -> Vec<Experimenta
                     "runtime_workspace_roots",
                     "thread/start.runtimeWorkspaceRoots",
                 ),
-                ("approval_policy", "nested"),
+                ("approval_policy.granular", "askForApproval.granular"),
                 (
                     "active_permission_profile",
                     "thread/start.activePermissionProfile",
@@ -311,7 +311,7 @@ fn request_response_experimental_fields(method: &'static str) -> Vec<Experimenta
                     "runtime_workspace_roots",
                     "thread/resume.runtimeWorkspaceRoots",
                 ),
-                ("approval_policy", "nested"),
+                ("approval_policy.granular", "askForApproval.granular"),
                 (
                     "active_permission_profile",
                     "thread/resume.activePermissionProfile",
@@ -327,7 +327,7 @@ fn request_response_experimental_fields(method: &'static str) -> Vec<Experimenta
                     "runtime_workspace_roots",
                     "thread/fork.runtimeWorkspaceRoots",
                 ),
-                ("approval_policy", "nested"),
+                ("approval_policy.granular", "askForApproval.granular"),
                 (
                     "active_permission_profile",
                     "thread/fork.activePermissionProfile",
@@ -341,7 +341,7 @@ fn request_response_experimental_fields(method: &'static str) -> Vec<Experimenta
             fields.extend(experimental_response_fields(
                 "Config",
                 &[
-                    ("config.approval_policy", "nested"),
+                    ("config.approval_policy.granular", "askForApproval.granular"),
                     ("config.approvals_reviewer", "config/read.approvalsReviewer"),
                     ("config.apps", "config/read.apps"),
                 ],
