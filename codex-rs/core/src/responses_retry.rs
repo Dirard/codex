@@ -20,6 +20,7 @@ const MAX_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(60);
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ResponsesStreamRequest {
     Sampling,
+    LocalCompaction,
     RemoteCompactionV2,
 }
 
@@ -54,6 +55,7 @@ pub(crate) async fn handle_retryable_response_stream_error(
 ) -> Result<(), CodexErr> {
     let operation = match request {
         ResponsesStreamRequest::Sampling => RetryOperation::Sampling,
+        ResponsesStreamRequest::LocalCompaction => RetryOperation::LocalCompaction,
         ResponsesStreamRequest::RemoteCompactionV2 => RetryOperation::RemoteCompactionV2,
     };
 
@@ -155,6 +157,15 @@ fn log_retry(
                 max_retries,
                 sampling_error = %err,
                 "stream disconnected - retrying sampling request ({retries}/{max_retries} in {delay:?})...",
+            );
+        }
+        ResponsesStreamRequest::LocalCompaction => {
+            warn!(
+                turn_id = %turn_context.sub_id,
+                retries,
+                max_retries,
+                compact_error = %err,
+                "local compaction stream failed; retrying request after delay"
             );
         }
         ResponsesStreamRequest::RemoteCompactionV2 => {

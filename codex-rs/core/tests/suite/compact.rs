@@ -3837,6 +3837,78 @@ async fn manual_compact_retries_after_context_window_error() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_compact_retries_server_overloaded_with_zero_configured_retries() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", FIRST_REPLY),
+                ev_completed("r1"),
+            ]),
+            sse_failed(
+                "compact-overloaded-1",
+                "server_is_overloaded",
+                "Selected model is at capacity. Please try different model.",
+            ),
+            sse_failed(
+                "compact-overloaded-2",
+                "server_is_overloaded",
+                "Selected model is at capacity. Please try different model.",
+            ),
+            sse_failed(
+                "compact-overloaded-3",
+                "server_is_overloaded",
+                "Selected model is at capacity. Please try different model.",
+            ),
+            sse(vec![
+                ev_assistant_message("m2", SUMMARY_TEXT),
+                ev_completed("r2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", FINAL_REPLY),
+                ev_completed("r3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut model_provider = non_openai_model_provider(&server);
+    model_provider.request_max_retries = Some(0);
+    model_provider.stream_max_retries = Some(0);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(200_000);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("seed history for compaction").await?;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_turn("continue after compaction").await?;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 6);
+    assert!(body_contains_text(
+        &requests[4].body_json().to_string(),
+        SUMMARIZATION_PROMPT,
+    ));
+    assert!(body_contains_text(
+        &requests[5].body_json().to_string(),
+        "continue after compaction",
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // TODO(ccunningham): Re-enable after the follow-up compaction behavior PR lands.
 // Current main behavior around non-context manual /compact failures is known-incorrect.
 #[ignore = "behavior change covered in follow-up compaction PR"]
