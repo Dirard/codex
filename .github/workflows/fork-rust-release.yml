@@ -171,7 +171,7 @@ jobs:
 
           expected_listing="$(printf '%s\n' "${expected_entries[@]}" | sort)"
           test "${actual_entries}" = "${expected_listing}"
-          "${stage_dir}/bin/codex${extension}" --version | grep -F "${VERSION}"
+          test "$("${stage_dir}/bin/codex${extension}" --version)" = "codex-cli ${VERSION}"
 
       - name: Upload release binaries
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
