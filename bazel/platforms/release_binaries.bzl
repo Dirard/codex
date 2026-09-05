@@ -13,33 +13,18 @@ _PLATFORM_TRIPLES = {
 
 PLATFORMS = _PLATFORM_TRIPLES.keys()
 
-PLATFORM_TARGETS = {
-    "linux_arm64_musl": "aarch64-unknown-linux-musl",
-    "linux_amd64_musl": "x86_64-unknown-linux-musl",
-    "macos_amd64": "x86_64-apple-darwin",
-    "macos_arm64": "aarch64-apple-darwin",
-    "windows_amd64": "x86_64-pc-windows-msvc",
-    "windows_arm64": "aarch64-pc-windows-msvc",
-}
-
-def multiplatform_binaries(
-        name,
-        target = None,
-        filegroup_name = "release_binaries",
-        platforms = PLATFORMS):
+def multiplatform_binaries(name, platforms = PLATFORMS):
     """Build a binary for a subset of the declared release platforms."""
-    binary_target = target or name
     for platform in platforms:
         platform_data(
             name = name + "_" + platform,
             platform = "@rules_rs//rs/platforms:" + _PLATFORM_TRIPLES[platform],
-            target = binary_target,
+            target = name,
             tags = ["manual"],
         )
 
-    if filegroup_name:
-        native.filegroup(
-            name = filegroup_name,
-            srcs = [name + "_" + platform for platform in platforms],
-            tags = ["manual"],
-        )
+    native.filegroup(
+        name = "release_binaries",
+        srcs = [name + "_" + platform for platform in platforms],
+        tags = ["manual"],
+    )
