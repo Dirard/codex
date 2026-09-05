@@ -307,6 +307,17 @@ func TestRawStableModeRejectsPresenceBasedExperimentalFieldBeforeWrite(t *testin
 	if len(transport.sentFrames()) != before {
 		t.Fatal("presence-based experimental field reached transport")
 	}
+
+	_, err = client.Raw().ThreadMetadataUpdate(context.Background(), protocol.ThreadMetadataUpdateParams{
+		ThreadID:        "thread-1",
+		DaybreakEnabled: protocol.Some(true),
+	})
+	if !errors.As(err, &configErr) {
+		t.Fatalf("daybreak err = %T, want *ConfigError", err)
+	}
+	if len(transport.sentFrames()) != before {
+		t.Fatal("daybreak experimental field reached transport")
+	}
 }
 
 func TestRawInitializeIsNotExposedButTypesExist(t *testing.T) {

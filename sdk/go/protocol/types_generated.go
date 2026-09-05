@@ -11441,6 +11441,7 @@ func (v *BrowserUseOriginPolicyConfig) UnmarshalJSON(data []byte) error {
 type BrowserUseRequirements struct {
 	AllowGlobalPersistentApproval Optional[bool]                              `json:"allowGlobalPersistentApproval,omitempty"`
 	AllowHistoryAccess            Optional[bool]                              `json:"allowHistoryAccess,omitempty"`
+	AllowWebmcp                   Optional[bool]                              `json:"allowWebmcp,omitempty"`
 	DefaultOriginPolicy           Optional[BrowserUseOriginPolicy]            `json:"defaultOriginPolicy,omitempty"`
 	DisableAutoReview             Optional[bool]                              `json:"disableAutoReview,omitempty"`
 	Origins                       Optional[map[string]BrowserUseOriginPolicy] `json:"origins,omitempty"`
@@ -11453,6 +11454,9 @@ func (v BrowserUseRequirements) MarshalJSON() ([]byte, error) {
 	}
 	if v.AllowHistoryAccess.IsSet() {
 		out["allowHistoryAccess"] = v.AllowHistoryAccess
+	}
+	if v.AllowWebmcp.IsSet() {
+		out["allowWebmcp"] = v.AllowWebmcp
 	}
 	if v.DefaultOriginPolicy.IsSet() {
 		out["defaultOriginPolicy"] = v.DefaultOriginPolicy
@@ -11485,6 +11489,12 @@ func (v *BrowserUseRequirements) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawAllowHistoryAccess, &v.AllowHistoryAccess); err != nil {
 			return fmt.Errorf("field allowHistoryAccess: %w", err)
+		}
+	}
+	rawAllowWebmcp, ok := raw["allowWebmcp"]
+	if ok {
+		if err := json.Unmarshal(rawAllowWebmcp, &v.AllowWebmcp); err != nil {
+			return fmt.Errorf("field allowWebmcp: %w", err)
 		}
 	}
 	rawDefaultOriginPolicy, ok := raw["defaultOriginPolicy"]
@@ -19888,8 +19898,8 @@ type GuardianApprovalReviewAction struct {
 	Command       OptionalNonNull[string]                   `json:"command,omitempty"`
 	ConnectorID   Optional[string]                          `json:"connectorId,omitempty"`
 	ConnectorName Optional[string]                          `json:"connectorName,omitempty"`
-	Cwd           OptionalNonNull[AbsolutePathBuf]          `json:"cwd,omitempty"`
-	Files         OptionalNonNull[[]AbsolutePathBuf]        `json:"files,omitempty"`
+	Cwd           OptionalNonNull[LegacyAppPathString]      `json:"cwd,omitempty"`
+	Files         OptionalNonNull[[]LegacyAppPathString]    `json:"files,omitempty"`
 	Host          OptionalNonNull[string]                   `json:"host,omitempty"`
 	Permissions   OptionalNonNull[RequestPermissionProfile] `json:"permissions,omitempty"`
 	Port          OptionalNonNull[uint16]                   `json:"port,omitempty"`
@@ -35881,6 +35891,7 @@ type Thread struct {
 	CliVersion           string                             `json:"cliVersion,omitempty"`
 	CreatedAt            int64                              `json:"createdAt,omitempty"`
 	Cwd                  AbsolutePathBuf                    `json:"cwd,omitempty"`
+	DaybreakEnabled      Optional[bool]                     `json:"daybreakEnabled,omitempty"`
 	Environments         Optional[[]ThreadEnvironment]      `json:"environments,omitempty"`
 	Ephemeral            bool                               `json:"ephemeral,omitempty"`
 	Extra                Optional[ThreadExtra]              `json:"extra,omitempty"`
@@ -35922,6 +35933,9 @@ func (v Thread) MarshalJSON() ([]byte, error) {
 	out["cliVersion"] = v.CliVersion
 	out["createdAt"] = v.CreatedAt
 	out["cwd"] = v.Cwd
+	if v.DaybreakEnabled.IsSet() {
+		out["daybreakEnabled"] = v.DaybreakEnabled
+	}
 	if v.Environments.IsSet() {
 		out["environments"] = v.Environments
 	}
@@ -36038,6 +36052,12 @@ func (v *Thread) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawCwd, &v.Cwd); err != nil {
 		return fmt.Errorf("field cwd: %w", err)
+	}
+	rawDaybreakEnabled, ok := raw["daybreakEnabled"]
+	if ok {
+		if err := json.Unmarshal(rawDaybreakEnabled, &v.DaybreakEnabled); err != nil {
+			return fmt.Errorf("field daybreakEnabled: %w", err)
+		}
 	}
 	rawEnvironments, ok := raw["environments"]
 	if ok {
@@ -39747,13 +39767,17 @@ func (v *ThreadMetadataGitInfoUpdateParams) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadMetadataUpdateParams struct {
-	GitInfo   Optional[ThreadMetadataGitInfoUpdateParams] `json:"gitInfo,omitempty"`
-	ProjectID Optional[string]                            `json:"projectId,omitempty"`
-	ThreadID  string                                      `json:"threadId,omitempty"`
+	DaybreakEnabled Optional[bool]                              `json:"daybreakEnabled,omitempty"`
+	GitInfo         Optional[ThreadMetadataGitInfoUpdateParams] `json:"gitInfo,omitempty"`
+	ProjectID       Optional[string]                            `json:"projectId,omitempty"`
+	ThreadID        string                                      `json:"threadId,omitempty"`
 }
 
 func (v ThreadMetadataUpdateParams) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
+	if v.DaybreakEnabled.IsSet() {
+		out["daybreakEnabled"] = v.DaybreakEnabled
+	}
 	if v.GitInfo.IsSet() {
 		out["gitInfo"] = v.GitInfo
 	}
@@ -39772,6 +39796,12 @@ func (v *ThreadMetadataUpdateParams) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
+	}
+	rawDaybreakEnabled, ok := raw["daybreakEnabled"]
+	if ok {
+		if err := json.Unmarshal(rawDaybreakEnabled, &v.DaybreakEnabled); err != nil {
+			return fmt.Errorf("field daybreakEnabled: %w", err)
+		}
 	}
 	rawGitInfo, ok := raw["gitInfo"]
 	if ok {
