@@ -1097,6 +1097,13 @@
           ],
           "description": "Working directory captured for the thread."
         },
+        "daybreakEnabled": {
+          "description": "Saved Daybreak choice, independent of turn execution. Null if unset.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "environments": {
           "default": null,
           "description": "Current environments for a loaded thread, in priority order, primary first. `null` means the thread is not loaded or the server does not expose its selection. An empty list means no environments are selected. This does not report connection status.",
