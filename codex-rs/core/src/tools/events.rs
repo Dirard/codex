@@ -382,15 +382,6 @@ impl ToolEmitter {
         out: Result<ExecToolCallOutput, ToolError>,
         applied_patch_delta: Option<&AppliedPatchDelta>,
     ) -> Result<String, FunctionCallError> {
-        self.finish_inner(ctx, out, applied_patch_delta).await
-    }
-
-    async fn finish_inner(
-        &self,
-        ctx: ToolEventCtx<'_>,
-        out: Result<ExecToolCallOutput, ToolError>,
-        applied_patch_delta: Option<&AppliedPatchDelta>,
-    ) -> Result<String, FunctionCallError> {
         let (event, result) = match out {
             Ok(output) => {
                 let content = self.format_exec_output_for_model(&output, ctx);
