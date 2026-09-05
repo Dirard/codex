@@ -421,6 +421,42 @@ fn inspect_params_requests_export_field_level_experimental_metadata() {
 }
 
 #[test]
+fn approval_policy_experimental_metadata_targets_only_granular() {
+    let manifest = crate::go_manifest::go_sdk_manifest();
+
+    for method in ["thread/start", "thread/resume", "thread/fork", "turn/start"] {
+        let entry = client_request(&manifest.stable.client_requests, method);
+        let field = entry
+            .experimental_fields
+            .iter()
+            .find(|field| field.reason == "askForApproval.granular")
+            .unwrap();
+        assert_eq!(field.field_path, "approval_policy.granular");
+        assert!(field.inspect_params);
+        assert_eq!(field.discriminator, None);
+    }
+
+    for (method, containing_type) in [
+        ("thread/start", "ThreadStartResponse"),
+        ("thread/resume", "ThreadResumeResponse"),
+        ("thread/fork", "ThreadForkResponse"),
+    ] {
+        let entry = client_request(&manifest.experimental.client_requests, method);
+        let field = entry
+            .experimental_fields
+            .iter()
+            .find(|field| {
+                field.containing_type == containing_type
+                    && field.reason == "askForApproval.granular"
+            })
+            .unwrap();
+        assert_eq!(field.field_path, "approval_policy.granular");
+        assert!(!field.inspect_params);
+        assert_eq!(field.discriminator, None);
+    }
+}
+
+#[test]
 fn additional_context_entries_are_marked_as_bounded_model_context() {
     let manifest = crate::go_manifest::go_sdk_manifest();
 
@@ -1072,7 +1108,12 @@ fn field_level_experimental_inventory_covers_current_client_and_server_payloads(
                 "ThreadStartParams",
                 true,
             ),
-            ("approval_policy", "nested", "ThreadStartParams", true),
+            (
+                "approval_policy.granular",
+                "askForApproval.granular",
+                "ThreadStartParams",
+                true,
+            ),
             (
                 "permissions",
                 "thread/start.permissions",
@@ -1127,7 +1168,12 @@ fn field_level_experimental_inventory_covers_current_client_and_server_payloads(
                 "ThreadStartResponse",
                 false,
             ),
-            ("approval_policy", "nested", "ThreadStartResponse", false),
+            (
+                "approval_policy.granular",
+                "askForApproval.granular",
+                "ThreadStartResponse",
+                false,
+            ),
             (
                 "active_permission_profile",
                 "thread/start.activePermissionProfile",
@@ -1159,7 +1205,12 @@ fn field_level_experimental_inventory_covers_current_client_and_server_payloads(
                 "ThreadResumeParams",
                 true,
             ),
-            ("approval_policy", "nested", "ThreadResumeParams", true),
+            (
+                "approval_policy.granular",
+                "askForApproval.granular",
+                "ThreadResumeParams",
+                true,
+            ),
             (
                 "permissions",
                 "thread/resume.permissions",
@@ -1184,7 +1235,12 @@ fn field_level_experimental_inventory_covers_current_client_and_server_payloads(
                 "ThreadResumeResponse",
                 false,
             ),
-            ("approval_policy", "nested", "ThreadResumeResponse", false),
+            (
+                "approval_policy.granular",
+                "askForApproval.granular",
+                "ThreadResumeResponse",
+                false,
+            ),
             (
                 "active_permission_profile",
                 "thread/resume.activePermissionProfile",
@@ -1216,7 +1272,12 @@ fn field_level_experimental_inventory_covers_current_client_and_server_payloads(
                 "ThreadForkParams",
                 true,
             ),
-            ("approval_policy", "nested", "ThreadForkParams", true),
+            (
+                "approval_policy.granular",
+                "askForApproval.granular",
+                "ThreadForkParams",
+                true,
+            ),
             (
                 "permissions",
                 "thread/fork.permissions",
@@ -1235,7 +1296,12 @@ fn field_level_experimental_inventory_covers_current_client_and_server_payloads(
                 "ThreadForkResponse",
                 false,
             ),
-            ("approval_policy", "nested", "ThreadForkResponse", false),
+            (
+                "approval_policy.granular",
+                "askForApproval.granular",
+                "ThreadForkResponse",
+                false,
+            ),
             (
                 "active_permission_profile",
                 "thread/fork.activePermissionProfile",
@@ -1258,8 +1324,8 @@ fn field_level_experimental_inventory_covers_current_client_and_server_payloads(
         ),
         &[
             (
-                "approval_policy",
-                "nested",
+                "approval_policy.granular",
+                "askForApproval.granular",
                 "ThreadSettingsUpdateParams",
                 true,
             ),
@@ -1350,7 +1416,12 @@ fn field_level_experimental_inventory_covers_current_client_and_server_payloads(
                 "TurnStartParams",
                 true,
             ),
-            ("approval_policy", "nested", "TurnStartParams", true),
+            (
+                "approval_policy.granular",
+                "askForApproval.granular",
+                "TurnStartParams",
+                true,
+            ),
             (
                 "permissions",
                 "turn/start.permissions",
@@ -1404,7 +1475,12 @@ fn field_level_experimental_inventory_covers_current_client_and_server_payloads(
         client_request(&manifest.experimental.client_requests, "config/read"),
         &[
             ("config", "nested", "ConfigReadResponse", false),
-            ("config.approval_policy", "nested", "Config", false),
+            (
+                "config.approval_policy.granular",
+                "askForApproval.granular",
+                "Config",
+                false,
+            ),
             (
                 "config.approvals_reviewer",
                 "config/read.approvalsReviewer",
