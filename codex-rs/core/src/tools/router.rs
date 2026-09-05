@@ -28,6 +28,8 @@ use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
@@ -111,6 +113,7 @@ impl ToolRouter {
             model_info,
             registry,
             hosted_specs,
+            &HashMap::new(),
             tool_search_handler_cache,
         )
         .expect("test tool registry should not contain duplicate tools")
