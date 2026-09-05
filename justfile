@@ -36,6 +36,11 @@ file-search *args:
 code-mode-host *args:
     cargo run --bin codex-code-mode-host -- {args}
 
+# Assemble a local Codex package.
+[no-cd]
+assemble-codex-package *args:
+    {{ python }} {{ justfile_directory() }}/scripts/build_codex_package.py {args}
+
 # Build the CLI and run the app-server test client
 app-server-test-client *args:
     cargo build -p codex-cli
@@ -171,9 +176,10 @@ mcp-server-run *args:
 # Regenerate the json schema for config.toml from the current config types.
 write-config-schema:
     cargo run -p codex-config-schema --bin codex-write-config-schema
+
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema *args:
-    python3 app-server-protocol/scripts/write_schema_fixtures.py {args}
+    {{ python }} app-server-protocol/scripts/write_schema_fixtures.py {args}
 
 [no-cd]
 write-hooks-schema:
