@@ -125,7 +125,16 @@ func TestGenerateWritesProtocol(t *testing.T) {
 		"type JSONRPCMessage struct",
 		"NewJSONRPCRequestMessage",
 		"func (v JSONRPCMessage) JSONRPCRequest()",
+		"type ForcedChatgptWorkspaceIDs = json.RawMessage",
+		"type FunctionCallOutputBody = json.RawMessage",
+		"type ReasoningSummary = json.RawMessage",
+		"type V2RequestID = json.RawMessage",
+		"type ResourceContent = json.RawMessage",
+		"type ThreadListCwdFilter = json.RawMessage",
 		"type NullableGetAccountRateLimitsParams = Optional[GetAccountRateLimitsParams]",
+		"type NullableGetAccountTokenUsageParams = Optional[GetAccountTokenUsageParams]",
+		"type NullableRemoteControlDisableParams = Optional[RemoteControlDisableParams]",
+		"type NullableRemoteControlEnableParams = Optional[RemoteControlEnableParams]",
 	} {
 		if !strings.Contains(types, required) {
 			t.Fatalf("types_generated.go missing %q\n%s", required, generatedExcerpt(types, "type AppScreenshot struct"))
@@ -159,6 +168,7 @@ func TestGenerateWritesProtocol(t *testing.T) {
 		"func (c RawClient) TurnSettingsUpdate(",
 		"func (c RawClient) AccountRateLimitsRead(ctx context.Context)",
 		"func (c RawClient) AccountRateLimitsReadWithParams(ctx context.Context, params NullableGetAccountRateLimitsParams)",
+		"if params.IsSet() {\n\t\tcallParams = params\n\t}",
 	} {
 		if !strings.Contains(rawClient, required) {
 			t.Fatalf("raw client missing %q", required)
