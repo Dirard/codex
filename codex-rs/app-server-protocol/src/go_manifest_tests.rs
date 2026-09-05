@@ -1303,6 +1303,27 @@ fn field_level_experimental_inventory_covers_current_client_and_server_payloads(
     );
 
     assert_experimental_fields_exact(
+        client_request(
+            &manifest.experimental.client_requests,
+            "thread/metadata/update",
+        ),
+        &[
+            (
+                "project_id",
+                "thread/metadata/update.projectId",
+                "ThreadMetadataUpdateParams",
+                true,
+            ),
+            (
+                "daybreak_enabled",
+                "thread/metadata/update.daybreakEnabled",
+                "ThreadMetadataUpdateParams",
+                true,
+            ),
+        ],
+    );
+
+    assert_experimental_fields_exact(
         client_request(&manifest.experimental.client_requests, "turn/start"),
         &[
             (
