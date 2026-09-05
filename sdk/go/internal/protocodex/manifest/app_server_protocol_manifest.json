@@ -91,9 +91,9 @@
           {
             "containingType": "ThreadStartParams",
             "discriminator": null,
-            "fieldPath": "approval_policy",
+            "fieldPath": "approval_policy.granular",
             "inspectParams": true,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "ThreadStartParams",
@@ -161,9 +161,9 @@
           {
             "containingType": "ThreadStartResponse",
             "discriminator": null,
-            "fieldPath": "approval_policy",
+            "fieldPath": "approval_policy.granular",
             "inspectParams": false,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "ThreadStartResponse",
@@ -224,9 +224,9 @@
           {
             "containingType": "ThreadResumeParams",
             "discriminator": null,
-            "fieldPath": "approval_policy",
+            "fieldPath": "approval_policy.granular",
             "inspectParams": true,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "ThreadResumeParams",
@@ -259,9 +259,9 @@
           {
             "containingType": "ThreadResumeResponse",
             "discriminator": null,
-            "fieldPath": "approval_policy",
+            "fieldPath": "approval_policy.granular",
             "inspectParams": false,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "ThreadResumeResponse",
@@ -385,9 +385,9 @@
           {
             "containingType": "ThreadForkParams",
             "discriminator": null,
-            "fieldPath": "approval_policy",
+            "fieldPath": "approval_policy.granular",
             "inspectParams": true,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "ThreadForkParams",
@@ -413,9 +413,9 @@
           {
             "containingType": "ThreadForkResponse",
             "discriminator": null,
-            "fieldPath": "approval_policy",
+            "fieldPath": "approval_policy.granular",
             "inspectParams": false,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "ThreadForkResponse",
@@ -1155,9 +1155,9 @@
           {
             "containingType": "ThreadSettingsUpdateParams",
             "discriminator": null,
-            "fieldPath": "approval_policy",
+            "fieldPath": "approval_policy.granular",
             "inspectParams": true,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "ThreadSettingsUpdateParams",
@@ -2979,9 +2979,9 @@
           {
             "containingType": "TurnStartParams",
             "discriminator": null,
-            "fieldPath": "approval_policy",
+            "fieldPath": "approval_policy.granular",
             "inspectParams": true,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "TurnStartParams",
@@ -4809,9 +4809,9 @@
           {
             "containingType": "Config",
             "discriminator": null,
-            "fieldPath": "config.approval_policy",
+            "fieldPath": "config.approval_policy.granular",
             "inspectParams": false,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "Config",
@@ -5326,8 +5326,8 @@
       }
     ],
     "digests": {
-      "manifestDigest": "a9c77286a17411a41bf8085bc13116a9726d6256fd611067751625b0c0a04451",
-      "protocolDigest": "735dce1e140705df2c63694a64367245bdfa31538096f84fd64af9f2cafd2b60",
+      "manifestDigest": "49a90bf1534690929a96d5ae157f1abeb88e4431d525829dafef0c93e2f84cf7",
+      "protocolDigest": "7f77188b154b3b7934c14a92a02c413d2de7d884a84ca6472e1094ff696d213c",
       "schemaDigest": "12d87425ac95fec00cb68f7976abbab6575e1278a85be0bf3294916964aaf95b"
     },
     "protocolMode": "experimental",
@@ -27009,9 +27009,9 @@
           {
             "containingType": "ThreadStartParams",
             "discriminator": null,
-            "fieldPath": "approval_policy",
+            "fieldPath": "approval_policy.granular",
             "inspectParams": true,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "ThreadStartParams",
@@ -27079,9 +27079,9 @@
           {
             "containingType": "ThreadStartResponse",
             "discriminator": null,
-            "fieldPath": "approval_policy",
+            "fieldPath": "approval_policy.granular",
             "inspectParams": false,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "ThreadStartResponse",
@@ -27142,9 +27142,9 @@
           {
             "containingType": "ThreadResumeParams",
             "discriminator": null,
-            "fieldPath": "approval_policy",
+            "fieldPath": "approval_policy.granular",
             "inspectParams": true,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "ThreadResumeParams",
@@ -27177,9 +27177,9 @@
           {
             "containingType": "ThreadResumeResponse",
             "discriminator": null,
-            "fieldPath": "approval_policy",
+            "fieldPath": "approval_policy.granular",
             "inspectParams": false,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "ThreadResumeResponse",
@@ -27303,9 +27303,9 @@
           {
             "containingType": "ThreadForkParams",
             "discriminator": null,
-            "fieldPath": "approval_policy",
+            "fieldPath": "approval_policy.granular",
             "inspectParams": true,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "ThreadForkParams",
@@ -27331,9 +27331,9 @@
           {
             "containingType": "ThreadForkResponse",
             "discriminator": null,
-            "fieldPath": "approval_policy",
+            "fieldPath": "approval_policy.granular",
             "inspectParams": false,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "ThreadForkResponse",
@@ -29057,9 +29057,9 @@
           {
             "containingType": "TurnStartParams",
             "discriminator": null,
-            "fieldPath": "approval_policy",
+            "fieldPath": "approval_policy.granular",
             "inspectParams": true,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "TurnStartParams",
@@ -29978,9 +29978,9 @@
           {
             "containingType": "Config",
             "discriminator": null,
-            "fieldPath": "config.approval_policy",
+            "fieldPath": "config.approval_policy.granular",
             "inspectParams": false,
-            "reason": "nested"
+            "reason": "askForApproval.granular"
           },
           {
             "containingType": "Config",
@@ -30381,8 +30381,8 @@
       }
     ],
     "digests": {
-      "manifestDigest": "ced4632f3bf6f4cecaefb86418429c30ff1fa725ec3af3082193c862d66e49f8",
-      "protocolDigest": "4d3aa96bbda6c33d7be673bc79fd6488bcadcf08767f20fccbbad70726434f52",
+      "manifestDigest": "039535f3630619d57ac3119f31d5c80f4b8a4a3b48afef787c13237aa42bfecf",
+      "protocolDigest": "4f37909d3c4d8fb6208cc8ef933cd354e92d018a8fa62564d77a6b27da497a23",
       "schemaDigest": "797ad66a788cd881611d4b70c6ad6cea50d67c4aa9f5f523871bccd4750eff95"
     },
     "protocolMode": "stable",
