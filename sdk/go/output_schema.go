@@ -16,13 +16,10 @@ type OutputSchema struct {
 	raw json.RawMessage
 }
 
-func JSONSchema(name string, schema JSONSchemaSpec) (OutputSchema, error) {
-	payload := map[string]any{
-		"name":   name,
-		"schema": schema,
-		"strict": true,
-	}
-	data, err := json.Marshal(payload)
+// JSONSchema encodes schema for turn/start.outputSchema. The name argument is
+// retained for source compatibility; app-server chooses the format name and strictness.
+func JSONSchema(_ string, schema JSONSchemaSpec) (OutputSchema, error) {
+	data, err := json.Marshal(schema)
 	if err != nil {
 		return OutputSchema{}, err
 	}
@@ -30,10 +27,12 @@ func JSONSchema(name string, schema JSONSchemaSpec) (OutputSchema, error) {
 }
 
 func ObjectSchema(properties map[string]JSONSchemaSpec, required ...string) JSONSchemaSpec {
+	additionalProperties := false
 	return JSONSchemaSpec{
-		Type:       "object",
-		Properties: cloneJSONSchemaProperties(properties),
-		Required:   append([]string(nil), required...),
+		Type:                 "object",
+		Properties:           cloneJSONSchemaProperties(properties),
+		Required:             append([]string(nil), required...),
+		AdditionalProperties: &additionalProperties,
 	}
 }
 
