@@ -118,7 +118,7 @@ async fn forward_events_filters_private_events_before_blocked_send_is_cancelled(
 
     let mut ops = Vec::new();
     while let Ok(sub) = rx_sub.try_recv() {
-        ops.push(sub.op);
+        ops.push(sub.submission.op);
     }
     assert!(
         ops.iter().any(|op| matches!(op, Op::Interrupt)),
@@ -145,6 +145,7 @@ async fn forward_ops_preserves_submission_trace_context() {
     let cancel = CancellationToken::new();
     let forward = tokio::spawn(forward_ops(Arc::clone(&io), rx_ops, cancel));
 
+    let budget = crate::agent::control::TurnSpawnBudget::new(/*limit*/ 1);
     let submission = Submission {
         id: "sub-1".to_string(),
         op: Op::Interrupt,
@@ -156,6 +157,7 @@ async fn forward_ops_preserves_submission_trace_context() {
         }),
         parent_turn_id: Some("parent-turn".to_string()),
         root_turn_id: Some("root-turn".to_string()),
+        turn_spawn_budget: Some(budget.clone()),
         residency_guard: None,
     };
     tx_ops.send(submission).await.unwrap();
@@ -165,6 +167,18 @@ async fn forward_ops_preserves_submission_trace_context() {
         .await
         .expect("forward_ops hung")
         .expect("forwarded submission missing");
+    let registry = Arc::new(crate::agent::control::AgentRegistry::default());
+    let _reservation = registry
+        .reserve_spawn_slot(/*max_threads*/ None, Some(&budget))
+        .expect("reserve budget");
+    assert!(
+        registry
+            .reserve_spawn_slot(
+                /*max_threads*/ None,
+                forwarded.turn_spawn_budget.as_ref()
+            )
+            .is_err()
+    );
     assert_eq!("sub-1", forwarded.id);
     assert!(matches!(forwarded.op, Op::Interrupt));
     assert_eq!(
@@ -396,6 +410,7 @@ async fn run_codex_thread_interactive_inherits_parent_dynamic_tools() {
         parent_ctx.environments.clone(),
         CancellationToken::new(),
         SubAgentSource::Review,
+        codex_extension_api::SessionIsolation::Inherit,
         /*initial_history*/ None,
         crate::session::GitEnrichmentPolicy::Fresh,
         codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,

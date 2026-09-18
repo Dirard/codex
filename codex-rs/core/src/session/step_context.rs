@@ -48,6 +48,11 @@ pub(crate) struct StepContext {
 }
 
 impl StepContext {
+    pub(crate) fn output_truncation(&self) -> codex_utils_output_truncation::OutputTruncation {
+        self.turn
+            .output_truncation_for_model(&self.settings.model_info)
+    }
+
     /// Persist the summary captured for this request, even after a live settings update.
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         let mut item = self.turn.to_turn_context_item();

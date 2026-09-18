@@ -66,6 +66,7 @@ use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
 use codex_utils_output_truncation::truncate_function_output_items_with_config;
 use codex_utils_output_truncation::truncate_text_with_config;
+use codex_utils_output_truncation::with_serialization_allowance;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -398,21 +399,13 @@ impl ContextManager {
         }
     }
 
-    /// `items` is ordered from oldest to newest. Returns the processed items
-    /// that were added to model-visible history.
-    pub(crate) fn record_items<I>(
-        &mut self,
-        items: I,
-        truncation: impl Into<OutputTruncation>,
-    ) -> Vec<ResponseItem>
+    /// `items` is ordered from oldest to newest.
+    pub(crate) fn record_items<I>(&mut self, items: I, truncation: impl Into<OutputTruncation>)
     where
         I: IntoIterator,
         I::Item: Deref<Target = ResponseItem>,
     {
         self.record_items_with_metadata(items.into_iter().map(|item| (item, None)), truncation)
-            .into_iter()
-            .map(|envelope| envelope.item)
-            .collect()
     }
 
     /// Records output while preserving its history-only metadata.
@@ -420,58 +413,31 @@ impl ContextManager {
         &mut self,
         items: &[ResponseItemEnvelope],
         truncation: impl Into<OutputTruncation>,
-    ) -> Vec<ResponseItemEnvelope> {
+    ) {
         self.record_items_with_metadata(
             items
                 .iter()
                 .map(|envelope| (&envelope.item, envelope.metadata.as_ref())),
             truncation,
-        )
-    }
-
-    /// Appends rollout items that were already truncated before persistence.
-    pub(crate) fn record_replayed_annotated_items(&mut self, items: &[ResponseItemEnvelope]) {
-        for envelope in items {
-            if !is_api_message(&envelope.item, envelope.metadata.as_ref()) {
-                continue;
-            }
-            if let Some(review_history) = &mut self.review_history
-                && !matches!(
-                    &envelope.item,
-                    ResponseItem::Message { role, content, .. }
-                        if role == "user" && is_contextual_user_message_content(content)
-                )
-            {
-                review_history.record(&envelope.item);
-            }
-            Arc::make_mut(&mut self.items).push(envelope.clone());
-            if crate::context::is_user_authorization_message(&envelope.item) {
-                self.user_message_revision = self.user_message_revision.saturating_add(1);
-            }
-        }
+        );
     }
 
     fn record_items_with_metadata<'a, I, T>(
         &mut self,
         items: I,
         truncation: impl Into<OutputTruncation>,
-    ) -> Vec<ResponseItemEnvelope>
-    where
+    ) where
         I: IntoIterator<Item = (T, Option<&'a CodexHarnessMetadata>)>,
         T: Deref<Target = ResponseItem>,
     {
         let truncation = truncation.into();
-        let mut processed_items = Vec::new();
         for (item, metadata) in items {
             let item = item.deref();
             if !is_api_message(item, metadata) {
                 continue;
             }
 
-            let item_truncation = metadata
-                .and_then(|metadata| metadata.history_truncation_token_limit)
-                .map(TruncationPolicy::Tokens)
-                .map_or(truncation, |policy| truncation.with_policy(policy));
+            let item_truncation = truncation_from_metadata(metadata, truncation);
             let processed = ResponseItemEnvelope {
                 item: Self::process_item(item, item_truncation),
                 metadata: metadata.cloned(),
@@ -489,63 +455,13 @@ impl ContextManager {
                 self.user_message_revision = self.user_message_revision.saturating_add(1);
             }
 
-            Arc::make_mut(&mut self.items).push(processed.clone());
-            processed_items.push(processed);
-            if crate::context::is_user_authorization_message(item) {
-                if !self.retain_user_messages {
-                    Arc::make_mut(&mut self.retained_context).mark_user_messages_incomplete();
-                } else if !metadata.is_some_and(|metadata| metadata.inherited_user_message)
-                    && let ResponseItem::Message {
-                        content,
-                        internal_chat_message_metadata_passthrough,
-                        ..
-                    } = item
-                {
-                    let mut complete = internal_chat_message_metadata_passthrough
-                        .as_ref()
-                        .and_then(|metadata| metadata.content_item_kinds.as_ref())
-                        .is_some_and(|kinds| {
-                            kinds.len() == content.len()
-                                && kinds.iter().all(|kind| kind.0.starts_with("user."))
-                        });
-                    let text = content
-                        .iter()
-                        .filter_map(|content| match content {
-                            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                                Some(text.as_str())
-                            }
-                            _ => {
-                                complete = false;
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    // Keep the same bounded text that child reviewers receive before
-                    // compaction, instead of letting storage discard a large source.
-                    // Local instruction sections still omit incomplete originals whole.
-                    let (text, truncated) =
-                        guardian_truncate_text(&text, GUARDIAN_MAX_ROOT_MESSAGE_TOKENS);
-                    complete &= !truncated;
-                    Arc::make_mut(&mut self.retained_context).record_user_message(
-                        codex_history::RetainedUserMessage {
-                            turn_id: item.turn_id().unwrap_or_default().to_owned(),
-                            message_id: item.id().map(|id| id.as_str().to_owned()),
-                            text,
-                            complete,
-                        },
-                        metadata.and_then(|metadata| metadata.user_input_order),
-                    );
-                }
-                self.user_message_revision = self.user_message_revision.saturating_add(1);
-            }
+            Arc::make_mut(&mut self.items).push(processed);
             self.record_user_authorization(
                 item,
                 metadata,
                 user_authorization::UserMessageSource::Original,
             );
         }
-        processed_items
     }
 
     /// Returns the history prepared for sending to the model. This applies a proper
@@ -981,6 +897,36 @@ impl ContextManager {
         }
         cut_idx
     }
+}
+
+fn truncation_from_metadata(
+    metadata: Option<&CodexHarnessMetadata>,
+    fallback: OutputTruncation,
+) -> OutputTruncation {
+    let Some(metadata) = metadata else {
+        return fallback.with_policy(with_serialization_allowance(fallback.policy));
+    };
+
+    let policy = metadata
+        .history_truncation_policy
+        .or_else(|| {
+            metadata
+                .history_truncation_token_limit
+                .map(TruncationPolicy::Tokens)
+        })
+        .unwrap_or_else(|| with_serialization_allowance(fallback.policy));
+    if metadata.history_truncation_policy.is_some()
+        || metadata.history_truncation_max_lines.is_some()
+        || metadata.history_truncation_mcp_max_lines.is_some()
+    {
+        return OutputTruncation::new_with_mcp_max_lines(
+            policy,
+            metadata.history_truncation_max_lines,
+            metadata.history_truncation_mcp_max_lines,
+        );
+    }
+
+    fallback.with_policy(policy)
 }
 
 pub(crate) fn estimate_history_token_count(

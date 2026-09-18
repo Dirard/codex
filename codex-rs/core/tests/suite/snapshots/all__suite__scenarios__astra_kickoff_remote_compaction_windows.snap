@@ -24,13 +24,13 @@ Settings:
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=fd994b11525da73c
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=10e037e1d92c15f5
+          - function/check_agent_status
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
           - function/send_message
           - function/spawn_agent
-          - function/wait_agent
 01:message/developer:
     You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collabo...them until their intended goal is completely handled. [hash=efa50f074efa5803]
 
@@ -55,12 +55,17 @@ Settings:
         A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
         ### Skill roots
         - `r0` = `<SKILLS_ROOT>`
-        - `r1` = `<PLUGINS_CACHE>/test`
+        - `r1` = `<SKILLS_ROOT>`
+        - `r2` = `<PLUGINS_CACHE>/test`
         ### Available skills
-        - calendar:agenda: Plan a team agenda (file: r1/calendar/local/skills/agenda/SKILL.md)
+        - calendar:agenda: Plan a team agenda (file: r2/calendar/local/skills/agenda/SKILL.md)
+        - code-logic-workflow-documentation: Use when: extracting an existing code path into a workflow-bearing ...(file: r1/code-logic-workflow-documentation/SKILL.md) [hash=e5adf281eca1ca29]
+        - connected-code-mapping: Use when: mapping a non-local code change from one anchor through connected ba...documents. (file: r1/connected-code-mapping/SKILL.md) [hash=149b2945ab5109b2]
         - final-check: Review a final brief (file: r0/final-check/SKILL.md)
-        - notes:summarize: Summarize team notes (file: r1/notes/local/skills/summarize/SKILL.md)
+        - layered-workflow-planning: Use when: planning or refining a workflow-bearing solution slice, use-case ...ection. (file: r1/layered-workflow-planning/SKILL.md) [hash=6d995a70be9c4158]
+        - notes:summarize: Summarize team notes (file: r2/notes/local/skills/summarize/SKILL.md)
         - outline: Draft a project outline (file: r0/outline/SKILL.md)
+        - spec-first-planning-loop: Use for non-trivial coding tasks that should be planned through repository t... change. (file: r1/spec-first-planning-loop/SKILL.md) [hash=96f4d28b7e4f8f86]
         </skills_instructions>
     [02] <permissions instructions>
         Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
@@ -107,11 +112,11 @@ Settings:
 
     You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task an...message to a running agent without triggering a turn. [hash=7d40ff8b58977202]
     `send_message` calls may be read by a human, so ensure they are legible. Always put proper spaces between words and/or numbers.
-    <OMITTED 17 LINES; ~246 TOKENS; hash=780031e2df907944>
+    <OMITTED 17 LINES; ~248 TOKENS; hash=f6f3fd4e8c721f1e>
     - All agents use the same current working directory.
     - As a result, edits made by one agent are immediately visible to all other agents.
 
-    When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
+    When calling `check_agent_status`, prefer longer waits (minutes) to avoid busy polling.
 
     There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
 
@@ -198,13 +203,13 @@ Settings: same as window 1
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=fd994b11525da73c
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=10e037e1d92c15f5
+          - function/check_agent_status
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
           - function/send_message
           - function/spawn_agent
-          - function/wait_agent
 01:message/developer:
     You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collabo...them until their intended goal is completely handled. [hash=efa50f074efa5803]
 
@@ -234,12 +239,17 @@ Settings: same as window 1
         A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
         ### Skill roots
         - `r0` = `<SKILLS_ROOT>`
-        - `r1` = `<PLUGINS_CACHE>/test`
+        - `r1` = `<SKILLS_ROOT>`
+        - `r2` = `<PLUGINS_CACHE>/test`
         ### Available skills
-        - calendar:agenda: Plan a team agenda (file: r1/calendar/local/skills/agenda/SKILL.md)
+        - calendar:agenda: Plan a team agenda (file: r2/calendar/local/skills/agenda/SKILL.md)
+        - code-logic-workflow-documentation: Use when: extracting an existing code path into a workflow-bearing ...(file: r1/code-logic-workflow-documentation/SKILL.md) [hash=e5adf281eca1ca29]
+        - connected-code-mapping: Use when: mapping a non-local code change from one anchor through connected ba...documents. (file: r1/connected-code-mapping/SKILL.md) [hash=149b2945ab5109b2]
         - final-check: Review a final brief (file: r0/final-check/SKILL.md)
-        - notes:summarize: Summarize team notes (file: r1/notes/local/skills/summarize/SKILL.md)
+        - layered-workflow-planning: Use when: planning or refining a workflow-bearing solution slice, use-case ...ection. (file: r1/layered-workflow-planning/SKILL.md) [hash=6d995a70be9c4158]
+        - notes:summarize: Summarize team notes (file: r2/notes/local/skills/summarize/SKILL.md)
         - outline: Draft a project outline (file: r0/outline/SKILL.md)
+        - spec-first-planning-loop: Use for non-trivial coding tasks that should be planned through repository t... change. (file: r1/spec-first-planning-loop/SKILL.md) [hash=96f4d28b7e4f8f86]
         </skills_instructions>
     [02] <permissions instructions>
         Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
@@ -286,11 +296,11 @@ Settings: same as window 1
 
     You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task an...message to a running agent without triggering a turn. [hash=7d40ff8b58977202]
     `send_message` calls may be read by a human, so ensure they are legible. Always put proper spaces between words and/or numbers.
-    <OMITTED 17 LINES; ~246 TOKENS; hash=780031e2df907944>
+    <OMITTED 17 LINES; ~248 TOKENS; hash=f6f3fd4e8c721f1e>
     - All agents use the same current working directory.
     - As a result, edits made by one agent are immediately visible to all other agents.
 
-    When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
+    When calling `check_agent_status`, prefer longer waits (minutes) to avoid busy polling.
 
     There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
 

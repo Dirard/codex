@@ -120,7 +120,9 @@ fn truncate_function_output_items_with_config_uses_line_limit() {
             text: "line1\nline2\nline3".to_string(),
         },
         FunctionCallOutputContentItem::InputImage {
-            image_url: "img:mid".to_string(),
+            image: ImageReference::Inline {
+                image_url: "img:mid".to_string(),
+            },
             detail: Some(DEFAULT_IMAGE_DETAIL),
         },
         FunctionCallOutputContentItem::InputText {
@@ -136,7 +138,9 @@ fn truncate_function_output_items_with_config_uses_line_limit() {
                 text: "line1\n... 3 lines truncated ...".to_string(),
             },
             FunctionCallOutputContentItem::InputImage {
-                image_url: "img:mid".to_string(),
+                image: ImageReference::Inline {
+                    image_url: "img:mid".to_string(),
+                },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             FunctionCallOutputContentItem::InputText {

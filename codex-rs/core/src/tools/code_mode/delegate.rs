@@ -14,6 +14,7 @@ use codex_history::ResponseItemEnvelope;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_utils_output_truncation::OutputTruncation;
 use codex_utils_output_truncation::with_serialization_allowance;
 use serde_json::Value as JsonValue;
 use tokio::sync::oneshot;
@@ -143,7 +144,7 @@ impl CodeModeDispatchBroker {
                         call_id,
                         cell_id,
                         text,
-                        output_token_limit,
+                        output_truncation,
                         cancellation_token,
                         response_tx,
                     } => {
@@ -154,8 +155,7 @@ impl CodeModeDispatchBroker {
                         )
                         .await
                         {
-                            host.notify(call_id, cell_id, text, output_token_limit)
-                                .await
+                            host.notify(call_id, cell_id, text, output_truncation).await
                         } else {
                             remove_dispatch_gate(&dispatch_gates, &cell_id);
                             Err("code mode notification cancelled".to_string())
@@ -371,20 +371,15 @@ impl CodeModeSessionDelegate for CodeModeCellDelegate {
                 return Err("code mode notification cancelled".to_string());
             }
             let (response_tx, response_rx) = oneshot::channel();
+            let output_truncation = self.step_context.output_truncation();
             self.broker
                 .dispatch_tx
                 .send(DispatchMessage::Notify {
                     call_id,
                     cell_id,
                     text,
-                    output_token_limit: with_serialization_allowance(
-                        self.step_context
-                            .settings
-                            .model_info
-                            .truncation_policy
-                            .into(),
-                    )
-                    .token_budget(),
+                    output_truncation: output_truncation
+                        .with_policy(with_serialization_allowance(output_truncation.policy)),
                     cancellation_token: cancellation_token.clone(),
                     response_tx,
                 })
@@ -418,7 +413,7 @@ enum DispatchMessage {
         call_id: String,
         cell_id: CellId,
         text: String,
-        output_token_limit: usize,
+        output_truncation: OutputTruncation,
         cancellation_token: CancellationToken,
         response_tx: oneshot::Sender<Result<(), String>>,
     },
@@ -466,7 +461,7 @@ impl CoreTurnHost {
         call_id: String,
         cell_id: CellId,
         text: String,
-        output_token_limit: usize,
+        output_truncation: OutputTruncation,
     ) -> Result<(), String> {
         if text.trim().is_empty() {
             return Ok(());
@@ -481,7 +476,10 @@ impl CoreTurnHost {
                     internal_chat_message_metadata_passthrough: None,
                 },
                 metadata: Some(CodexHarnessMetadata {
-                    history_truncation_token_limit: Some(output_token_limit),
+                    history_truncation_token_limit: Some(output_truncation.policy.token_budget()),
+                    history_truncation_policy: Some(output_truncation.policy),
+                    history_truncation_max_lines: output_truncation.max_lines,
+                    history_truncation_mcp_max_lines: output_truncation.mcp_max_lines,
                     ..Default::default()
                 }),
             }])

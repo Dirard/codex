@@ -95,7 +95,7 @@ impl Handler {
             .await;
         let agent_control = session.services.agent_control.clone();
         let result = agent_control
-            .send_input(
+            .send_input_with_spawn_budget(
                 receiver_thread_id,
                 input_items,
                 crate::TurnStartOptions {
@@ -105,6 +105,7 @@ impl Handler {
                     cyber_access_program: turn.cyber_access_program,
                     ..Default::default()
                 },
+                Some(step_context.turn_spawn_budget.clone()),
             )
             .await
             .map_err(|err| collab_agent_error(receiver_thread_id, err));

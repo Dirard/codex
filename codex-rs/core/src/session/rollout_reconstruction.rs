@@ -356,9 +356,8 @@ impl Session {
                 None,
             );
         }
-        // New rollouts persist already processed response items. Replay keeps
-        // using the model policy as a deterministic fallback for older raw
-        // rollout items rather than depending on today's config.
+        // New rollouts persist raw items with their originating truncation metadata.
+        // Older raw rollout items use the resumed model as a deterministic fallback.
         let replay_output_truncation = codex_utils_output_truncation::OutputTruncation::new(
             turn_context.model_info().truncation_policy.into(),
             /*max_lines*/ None,
@@ -373,20 +372,10 @@ impl Session {
                     history.record_retained_context(event);
                 }
                 RolloutItem::ResponseItem(response_item) => {
-                    if response_item
-                        .metadata
-                        .as_ref()
-                        .and_then(|metadata| metadata.fallback_token_limit_override)
-                        .is_some()
-                    {
-                        history
-                            .record_replayed_annotated_items(std::slice::from_ref(response_item));
-                    } else {
-                        history.record_annotated_items(
-                            std::slice::from_ref(response_item),
-                            replay_output_truncation,
-                        );
-                    }
+                    history.record_annotated_items(
+                        std::slice::from_ref(response_item),
+                        replay_output_truncation,
+                    );
                 }
                 RolloutItem::InterAgentCommunication(communication) => {
                     let response_item = communication.to_model_input_item();

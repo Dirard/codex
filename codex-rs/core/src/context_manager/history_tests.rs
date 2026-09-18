@@ -1925,7 +1925,7 @@ fn record_items_respects_custom_token_limit() {
 }
 
 #[test]
-fn record_items_returns_processed_items_for_rollout_persistence() {
+fn record_items_applies_configured_line_limit() {
     let mut history = ContextManager::new();
     let policy =
         OutputTruncation::new(TruncationPolicy::Bytes(100_000), /*max_lines*/ Some(3));
@@ -1941,11 +1941,9 @@ fn record_items_returns_processed_items_for_rollout_persistence() {
         internal_chat_message_metadata_passthrough: None,
     };
 
-    let processed_items = history.record_items([&item], policy);
+    history.record_items([&item], policy);
 
-    let raw_items = history.raw_items().cloned().collect::<Vec<_>>();
-    assert_eq!(processed_items, raw_items);
-    let stored = match &processed_items[0] {
+    let stored = match &history.items[0].item {
         ResponseItem::FunctionCallOutput { output, .. } => output,
         other => panic!("unexpected history item: {other:?}"),
     };
@@ -1976,9 +1974,9 @@ fn dynamic_tool_output_uses_general_line_limit_not_mcp_limit() {
         internal_chat_message_metadata_passthrough: None,
     };
 
-    let processed_items = history.record_items([&item], truncation);
+    history.record_items([&item], truncation);
 
-    let stored = match &processed_items[0] {
+    let stored = match &history.items[0].item {
         ResponseItem::FunctionCallOutput { output, .. } => output,
         other => panic!("unexpected history item: {other:?}"),
     };

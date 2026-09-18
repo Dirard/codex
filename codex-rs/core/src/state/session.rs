@@ -162,11 +162,7 @@ impl SessionState {
     }
 
     // History helpers
-    pub(crate) fn record_items<I>(
-        &mut self,
-        items: I,
-        truncation: impl Into<OutputTruncation>,
-    ) -> Vec<ResponseItem>
+    pub(crate) fn record_items<I>(&mut self, items: I, truncation: impl Into<OutputTruncation>)
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,

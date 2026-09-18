@@ -388,7 +388,10 @@ impl ToolEmitter {
         output: &ExecToolCallOutput,
         ctx: ToolEventCtx<'_>,
     ) -> String {
-        super::format_exec_output_for_model(output, ctx.turn.output_truncation())
+        super::format_exec_output_for_model(
+            output,
+            ctx.turn.output_truncation_for_model(ctx.model_info),
+        )
     }
 
     pub async fn finish(
@@ -534,7 +537,10 @@ async fn emit_exec_stage(
                 aggregated_output: output.aggregated_output.text.clone(),
                 exit_code: output.exit_code,
                 duration: output.duration,
-                formatted_output: format_exec_output_str(&output, ctx.turn.output_truncation()),
+                formatted_output: format_exec_output_str(
+                    &output,
+                    ctx.turn.output_truncation_for_model(ctx.model_info),
+                ),
                 status: if output.exit_code == 0 {
                     ExecCommandStatus::Completed
                 } else {

@@ -4,6 +4,7 @@
 use crate::session::session::Session;
 use crate::tools::context::ToolInvocation;
 use crate::tools::registry::CoreToolRuntime;
+use codex_features::MultiAgentMessageDelivery;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -12,7 +13,6 @@ use codex_tools::ToolExposure;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
-use codex_features::MultiAgentMessageDelivery;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 

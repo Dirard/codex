@@ -4,11 +4,10 @@ use chrono::Utc;
 use codex_core::SleepFuture;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadConfigSnapshot;
-use codex_core::TurnInputRequest;
-use codex_core::TurnStartOptions;
 use codex_core::TimeFuture;
 use codex_core::TimeProvider;
 use codex_core::TurnInputRequest;
+use codex_core::TurnStartOptions;
 use codex_core::config::AgentRoleConfig;
 use codex_core::config::CurrentTimeReminderConfig;
 use codex_features::Feature;
@@ -1371,7 +1370,8 @@ async fn grandchild_full_fork_preserves_context_baseline(
         .respond_with(sse_response(sse(vec![ev_completed(
             "baseline-parent-finished",
         )])))
-        .with_priority(10)        .mount(&server)
+        .with_priority(10)
+        .mount(&server)
         .await;
     let test = test_codex()
         .with_history_mode(history_mode)

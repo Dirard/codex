@@ -1,21 +1,34 @@
 //! Delayed notifications retain their producing model's budget in history and rollouts.
 
 use super::*;
+use codex_utils_output_truncation::OutputTruncation;
+use codex_utils_output_truncation::truncate_text_with_config;
 use pretty_assertions::assert_eq;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn yielded_notifications_keep_originating_budgets_after_model_switch() -> Result<()> {
+async fn yielded_notifications_keep_originating_budgets_after_model_switch(
+    configured_byte_budget: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let test = step_settings_test()
-        .with_config(|config| {
-            config.features.enable(Feature::CodeMode).unwrap();
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("enable Code Mode");
+            config.output_truncation.max_lines = Some(3);
+            config.output_truncation.max_bytes = configured_byte_budget.then_some(64);
             for model in &mut config.model_catalog.as_mut().expect("models").models {
                 model.tool_mode = Some(ToolMode::CodeModeOnly);
                 model.use_responses_lite = false;
                 model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
-                model.truncation_policy =
-                    TruncationPolicyConfig::tokens(if model.slug == MODEL_B { 400 } else { 100 });
+                model.truncation_policy = TruncationPolicyConfig::tokens(
+                    if configured_byte_budget || model.slug == MODEL_B {
+                        1000
+                    } else {
+                        100
+                    },
+                );
             }
         })
         .build_with_auto_env(&server)
@@ -129,9 +142,9 @@ async fn yielded_notifications_keep_originating_budgets_after_model_switch() -> 
     let mut expected = Vec::new();
     let mut expected_saved = Vec::new();
     for raw in &raw_notifications {
-        let (text, budget) = match raw["call_id"].as_str().expect("call id") {
-            "call-a" => (&a_text, 120),
-            "call-b" => (&b_text, 480),
+        let (text, model_budget) = match raw["call_id"].as_str().expect("call id") {
+            "call-a" => (&a_text, if configured_byte_budget { 1000 } else { 100 }),
+            "call-b" => (&b_text, 1000),
             other => panic!("unexpected notification call: {other}"),
         };
         assert_eq!(raw["name"], "exec");
@@ -140,9 +153,18 @@ async fn yielded_notifications_keep_originating_budgets_after_model_switch() -> 
             "raw events retain full notification text"
         );
         let mut bounded = raw.clone();
-        bounded["output"] = json!(truncate_text(text, TruncationPolicy::Tokens(budget)));
+        let truncation = if configured_byte_budget {
+            OutputTruncation::new_with_mcp_max_lines(TruncationPolicy::Bytes(77), Some(3), None)
+        } else {
+            OutputTruncation::new_with_mcp_max_lines(
+                TruncationPolicy::Tokens((model_budget as f64 * 1.2).ceil() as usize),
+                Some(3),
+                None,
+            )
+        };
+        bounded["output"] = json!(truncate_text_with_config(text, truncation));
         expected.push(bounded);
-        expected_saved.push((raw.clone(), Some(budget)));
+        expected_saved.push((raw.clone(), Some(truncation.policy.token_budget())));
     }
     let live = requests[2]
         .inputs_of_type("custom_tool_call_output")
@@ -152,7 +174,7 @@ async fn yielded_notifications_keep_originating_budgets_after_model_switch() -> 
     assert_eq!(live, expected);
     assert_eq!(
         live.iter()
-            .map(|item| item["call_id"].as_str().unwrap())
+            .map(|item| item["call_id"].as_str().expect("notification call id"))
             .collect::<std::collections::BTreeSet<_>>(),
         std::collections::BTreeSet::from(["call-a", "call-b"])
     );
@@ -169,6 +191,21 @@ async fn yielded_notifications_keep_originating_budgets_after_model_switch() -> 
             };
             let item = serde_json::to_value(&envelope.item).expect("saved item");
             is_notification(&item).then(|| {
+                let metadata = envelope.metadata.as_ref().expect("notification metadata");
+                let budget = metadata
+                    .history_truncation_token_limit
+                    .expect("saved notification budget");
+                assert_eq!(metadata.history_truncation_token_limit, Some(budget));
+                assert_eq!(
+                    metadata.history_truncation_policy,
+                    Some(if configured_byte_budget {
+                        TruncationPolicy::Bytes(77)
+                    } else {
+                        TruncationPolicy::Tokens(budget)
+                    })
+                );
+                assert_eq!(metadata.history_truncation_max_lines, Some(3));
+                assert_eq!(metadata.history_truncation_mcp_max_lines, None);
                 (
                     item,
                     envelope
@@ -181,7 +218,53 @@ async fn yielded_notifications_keep_originating_budgets_after_model_switch() -> 
         .collect::<Vec<_>>();
     assert_eq!(saved, expected_saved);
 
+    let mut replay_config = test.config.clone();
+    replay_config.model = Some(MODEL_A.to_string());
+    let replayed = test
+        .thread_manager
+        .resume_thread_from_rollout(
+            replay_config,
+            rollout_path,
+            codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("dummy")),
+            /*parent_trace*/ None,
+            ClientMcpExtensions::default(),
+        )
+        .await?
+        .thread;
+    let replay = mount_sse_once(&server, sse_completed("resp-replay")).await;
+    replayed
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "review saved notifications".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&replayed, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(replay.single_request().body_json()["model"], MODEL_A);
+    assert_eq!(
+        replay
+            .single_request()
+            .inputs_of_type("custom_tool_call_output")
+            .into_iter()
+            .filter(is_notification)
+            .collect::<Vec<_>>(),
+        expected
+    );
+    replayed.shutdown_and_wait().await?;
+
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn yielded_notifications_keep_originating_token_budgets_after_model_switch() -> Result<()> {
+    yielded_notifications_keep_originating_budgets_after_model_switch(false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn yielded_notifications_keep_originating_byte_budgets_after_model_switch() -> Result<()> {
+    yielded_notifications_keep_originating_budgets_after_model_switch(true).await
 }
 
 fn is_notification(item: &Value) -> bool {

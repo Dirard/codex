@@ -1931,7 +1931,8 @@ async fn remote_mid_turn_compact_v2_sends_turn_state_over_http() -> Result<()> {
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
                 let _ = config.features.enable(Feature::RemoteCompactionV2);
-                config.model_auto_compact_token_limit = Some(100_000);            }),
+                config.model_auto_compact_token_limit = Some(100_000);
+            }),
     )
     .await?;
     let codex = harness.test().codex.clone();
@@ -2059,7 +2060,8 @@ async fn remote_mid_turn_compact_v2_sends_turn_state_over_websocket() -> Result<
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             let _ = config.features.enable(Feature::RemoteCompactionV2);
-            config.model_auto_compact_token_limit = Some(100_000);        });
+            config.model_auto_compact_token_limit = Some(100_000);
+        });
     let test = builder.build_with_websocket_server(&server).await?;
 
     // Phase 1: startup prewarm stays empty, then WebSocket sampling mints state and schedules

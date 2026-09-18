@@ -466,7 +466,11 @@ mod tests {
             /*trigger_turn*/ false,
         );
         input_queue
-            .enqueue_mailbox_communication(mail_one, Default::default())
+            .enqueue_mailbox_communication(
+                mail_one,
+                Default::default(),
+                /*turn_spawn_budget*/ None,
+            )
             .await;
         let mail_two = make_mail(
             AgentPath::root(),
@@ -475,7 +479,11 @@ mod tests {
             /*trigger_turn*/ false,
         );
         input_queue
-            .enqueue_mailbox_communication(mail_two, Default::default())
+            .enqueue_mailbox_communication(
+                mail_two,
+                Default::default(),
+                /*turn_spawn_budget*/ None,
+            )
             .await;
 
         activity_rx.changed().await.expect("mailbox update");
@@ -563,10 +571,18 @@ mod tests {
         );
 
         input_queue
-            .enqueue_mailbox_communication(mail_one.clone(), Default::default())
+            .enqueue_mailbox_communication(
+                mail_one.clone(),
+                Default::default(),
+                /*turn_spawn_budget*/ None,
+            )
             .await;
         input_queue
-            .enqueue_mailbox_communication(mail_two.clone(), Default::default())
+            .enqueue_mailbox_communication(
+                mail_two.clone(),
+                Default::default(),
+                /*turn_spawn_budget*/ None,
+            )
             .await;
 
         assert_eq!(
@@ -614,10 +630,11 @@ mod tests {
                             root_turn_id: root_turn_id.map(str::to_string),
                             ..Default::default()
                         },
+                        /*turn_spawn_budget*/ None,
                     )
                     .await;
             }
-            let (_, start_options) = input_queue.drain_mailbox_input_items().await;
+            let (_, start_options, _) = input_queue.drain_mailbox_input_items().await;
             assert_eq!(
                 start_options.parent_turn_id.as_deref(),
                 expected_parent_turn_id
@@ -644,10 +661,11 @@ mod tests {
                             cyber_access_program: program,
                             ..Default::default()
                         },
+                        /*turn_spawn_budget*/ None,
                     )
                     .await;
             }
-            let (_, start_options) = input_queue.drain_mailbox_input_items().await;
+            let (_, start_options, _) = input_queue.drain_mailbox_input_items().await;
             assert_eq!(start_options.cyber_access_program, latest);
         }
     }
@@ -663,7 +681,11 @@ mod tests {
             /*trigger_turn*/ false,
         );
         input_queue
-            .enqueue_mailbox_communication(queued_mail, Default::default())
+            .enqueue_mailbox_communication(
+                queued_mail,
+                Default::default(),
+                /*turn_spawn_budget*/ None,
+            )
             .await;
         assert!(!input_queue.has_trigger_turn_mailbox_items().await);
 
@@ -674,7 +696,11 @@ mod tests {
             /*trigger_turn*/ true,
         );
         input_queue
-            .enqueue_mailbox_communication(trigger_mail, Default::default())
+            .enqueue_mailbox_communication(
+                trigger_mail,
+                Default::default(),
+                /*turn_spawn_budget*/ None,
+            )
             .await;
         assert!(input_queue.has_trigger_turn_mailbox_items().await);
     }
