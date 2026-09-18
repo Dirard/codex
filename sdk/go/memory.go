@@ -6,6 +6,13 @@ import (
 	"github.com/openai/codex/sdk/go/protocol"
 )
 
+func (c *MemoryClient) Status(ctx context.Context, params protocol.MemoryStatusParams) (protocol.MemoryStatusResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.MemoryStatusResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().MemoryStatus(ctx, params)
+}
+
 func (c *MemoryClient) Reset(ctx context.Context) (protocol.MemoryResetResponse, error) {
 	if c == nil || c.client == nil {
 		return nil, &ClosedError{}
