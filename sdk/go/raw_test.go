@@ -369,6 +369,16 @@ func TestRawStableModeRejectsPresenceBasedExperimentalFieldBeforeWrite(t *testin
 		t.Fatal("presence-based experimental field reached transport")
 	}
 
+	_, err = client.Raw().ThreadStart(context.Background(), protocol.ThreadStartParams{
+		DaybreakEnabled: protocol.Some(false),
+	})
+	if !errors.As(err, &configErr) {
+		t.Fatalf("thread start daybreak err = %T, want *ConfigError", err)
+	}
+	if len(transport.sentFrames()) != before {
+		t.Fatal("thread start daybreak experimental field reached transport")
+	}
+
 	_, err = client.Raw().ThreadMetadataUpdate(context.Background(), protocol.ThreadMetadataUpdateParams{
 		ThreadID:        "thread-1",
 		DaybreakEnabled: protocol.Some(true),

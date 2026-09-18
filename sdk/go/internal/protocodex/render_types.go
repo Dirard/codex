@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -705,6 +706,7 @@ type renderedField struct {
 	CustomDeserialize string
 	Minimum           string
 	Maximum           string
+	NestedAnyOfTags   []string
 }
 
 type renderedTaggedUnion struct {
@@ -713,9 +715,16 @@ type renderedTaggedUnion struct {
 }
 
 type renderedTaggedUnionVariant struct {
-	Tag      string
+	Tag               string
+	Required          []string
+	Nullable          map[string]bool
+	AnyOfAlternatives []renderedTaggedUnionAlternative
+}
+
+type renderedTaggedUnionAlternative struct {
 	Required []string
 	Nullable map[string]bool
+	Fields   []string
 }
 
 type renderedUntaggedUnion struct {
@@ -756,6 +765,15 @@ func renderStruct(name, key string, schema Schema, names map[string]string, serd
 			}
 		}
 		usedFieldNames[fieldName] = true
+		var nestedAnyOfTags []string
+		for _, variant := range taggedUnion.Variants {
+			for _, alternative := range variant.AnyOfAlternatives {
+				if slices.Contains(alternative.Fields, propertyName) {
+					nestedAnyOfTags = append(nestedAnyOfTags, variant.Tag)
+					break
+				}
+			}
+		}
 		field := renderedField{
 			FieldName:       fieldName,
 			WireName:        propertyName,
@@ -763,6 +781,7 @@ func renderStruct(name, key string, schema Schema, names map[string]string, serd
 			Required:        required[propertyName],
 			RequiredNonNull: (required[propertyName] || fieldType == "json.RawMessage") && !strings.HasPrefix(fieldType, "Optional[") && !allowsNull,
 			VariantAliases:  serdeShape.VariantAliases,
+			NestedAnyOfTags: nestedAnyOfTags,
 		}
 		if fieldType != "json.RawMessage" {
 			field.Minimum, field.Maximum = integerBoundsForSchema(property, names, bundle)
@@ -912,6 +931,16 @@ func renderStructUnmarshal(name string, fields []renderedField, taggedUnion rend
 			continue
 		}
 		valueName := "raw" + field.FieldName
+		nestedAnyOfCondition := ""
+		if len(field.NestedAnyOfTags) > 0 {
+			conditions := make([]string, 0, len(field.NestedAnyOfTags))
+			for _, tag := range field.NestedAnyOfTags {
+				tagJSON, _ := json.Marshal(tag)
+				conditions = append(conditions, fmt.Sprintf("bytes.Equal(bytes.TrimSpace(raw[%q]), []byte(%q))", taggedUnion.Discriminator, string(tagJSON)))
+			}
+			nestedAnyOfCondition = strings.Join(conditions, " || ")
+			b.WriteString(fmt.Sprintf("\tif %s { var zero %s; v.%s = zero }\n", nestedAnyOfCondition, field.Type, field.FieldName))
+		}
 		b.WriteString(fmt.Sprintf("\t%s, ok := raw[%q]\n", valueName, field.WireName))
 		for _, alias := range field.Aliases {
 			b.WriteString(fmt.Sprintf("\tif !ok { %s, ok = raw[%q] }\n", valueName, alias))
@@ -944,8 +973,21 @@ func renderStructUnmarshal(name string, fields []renderedField, taggedUnion rend
 			}
 			continue
 		}
-		b.WriteString(fmt.Sprintf("\tif err := json.Unmarshal(%s, &v.%s); err != nil { return fmt.Errorf(\"field %s: %%w\", err) }\n", valueName, field.FieldName, field.WireName))
-		b.WriteString(renderIntegerBoundsValidation(field))
+		if nestedAnyOfCondition != "" {
+			b.WriteString(fmt.Sprintf("\tif %s {\n", nestedAnyOfCondition))
+			b.WriteString(fmt.Sprintf("\t\tvar decoded %s\n", field.Type))
+			b.WriteString(fmt.Sprintf("\t\tif err := json.Unmarshal(%s, &decoded); err == nil {\n", valueName))
+			b.WriteString(fmt.Sprintf("\t\t\tv.%s = decoded\n", field.FieldName))
+			b.WriteString(renderIntegerBoundsValidation(field))
+			b.WriteString("\t\t}\n")
+			b.WriteString("\t} else {\n")
+			b.WriteString(fmt.Sprintf("\t\tif err := json.Unmarshal(%s, &v.%s); err != nil { return fmt.Errorf(\"field %s: %%w\", err) }\n", valueName, field.FieldName, field.WireName))
+			b.WriteString(renderIntegerBoundsValidation(field))
+			b.WriteString("\t}\n")
+		} else {
+			b.WriteString(fmt.Sprintf("\tif err := json.Unmarshal(%s, &v.%s); err != nil { return fmt.Errorf(\"field %s: %%w\", err) }\n", valueName, field.FieldName, field.WireName))
+			b.WriteString(renderIntegerBoundsValidation(field))
+		}
 		if !field.Required {
 			b.WriteString("\t}\n")
 		}
@@ -967,7 +1009,7 @@ func renderStructUnmarshal(name string, fields []renderedField, taggedUnion rend
 			b.WriteString(fmt.Sprintf("\tif len(v.%s) == 0 { if err := json.Unmarshal([]byte(%q), &v.%s); err != nil { return fmt.Errorf(\"field %s: %%w\", err) } }\n", field.FieldName, field.DefaultJSON, field.FieldName, field.WireName))
 		}
 	}
-	b.WriteString(renderTaggedUnionValidation(taggedUnion))
+	b.WriteString(renderTaggedUnionValidation(taggedUnion, fields))
 	b.WriteString(renderUntaggedUnionValidation(untaggedUnion))
 	b.WriteString("\treturn nil\n}\n")
 	return b.String()
@@ -1139,15 +1181,19 @@ func renderDynamicToolSpecsUnmarshal(field renderedField, valueName string) stri
 	return b.String()
 }
 
-func renderTaggedUnionValidation(union renderedTaggedUnion) string {
+func renderTaggedUnionValidation(union renderedTaggedUnion, fields []renderedField) string {
 	if union.Discriminator == "" {
 		return ""
+	}
+	fieldsByWireName := map[string]renderedField{}
+	for _, field := range fields {
+		fieldsByWireName[field.WireName] = field
 	}
 	var b strings.Builder
 	fieldName := goFieldName(union.Discriminator)
 	b.WriteString("\tv.RawJSON = nil\n")
 	b.WriteString(fmt.Sprintf("\tswitch v.%s {\n", fieldName))
-	for _, variant := range union.Variants {
+	for variantIndex, variant := range union.Variants {
 		b.WriteString(fmt.Sprintf("\tcase %q:\n", variant.Tag))
 		for _, required := range variant.Required {
 			if required == union.Discriminator {
@@ -1159,6 +1205,30 @@ func renderTaggedUnionValidation(union renderedTaggedUnion) string {
 			} else {
 				b.WriteString(fmt.Sprintf("\t\tif rawValue, ok := raw[%q]; !ok { return DecodeError{Field: %q, Reason: %q} } else if bytes.Equal(rawValue, []byte(\"null\")) { return DecodeError{Field: %q, Reason: \"cannot be null\"} }\n", required, required, reason, required))
 			}
+		}
+		if len(variant.AnyOfAlternatives) > 0 {
+			matchName := fmt.Sprintf("taggedAnyOfVariant%dMatches", variantIndex)
+			b.WriteString(fmt.Sprintf("\t\t%s := false\n", matchName))
+			for alternativeIndex, alternative := range variant.AnyOfAlternatives {
+				alternativeName := fmt.Sprintf("taggedAnyOfVariant%dAlternative%dMatches", variantIndex, alternativeIndex)
+				b.WriteString(fmt.Sprintf("\t\t%s := true\n", alternativeName))
+				for _, required := range sortedStrings(alternative.Required) {
+					field, ok := fieldsByWireName[required]
+					if !ok {
+						continue
+					}
+					switch {
+					case strings.HasPrefix(field.Type, "Optional[") || strings.HasPrefix(field.Type, "OptionalNonNull["):
+						b.WriteString(fmt.Sprintf("\t\tif !v.%s.IsSet() { %s = false }\n", field.FieldName, alternativeName))
+					case alternative.Nullable[required]:
+						b.WriteString(fmt.Sprintf("\t\tif _, ok := raw[%q]; !ok { %s = false }\n", required, alternativeName))
+					default:
+						b.WriteString(fmt.Sprintf("\t\tif rawValue, ok := raw[%q]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte(\"null\")) { %s = false }\n", required, alternativeName))
+					}
+				}
+				b.WriteString(fmt.Sprintf("\t\tif %s { %s = true }\n", alternativeName, matchName))
+			}
+			b.WriteString(fmt.Sprintf("\t\tif !%s { return DecodeError{Field: \"\", Reason: %q} }\n", matchName, fmt.Sprintf("does not match any anyOf variant for %s %s", union.Discriminator, variant.Tag)))
 		}
 	}
 	b.WriteString("\tdefault:\n")
@@ -1178,7 +1248,7 @@ func renderTaggedUnionMarshalValidation(union renderedTaggedUnion, fields []rend
 	var b strings.Builder
 	discriminatorField := goFieldName(union.Discriminator)
 	b.WriteString(fmt.Sprintf("\tswitch v.%s {\n", discriminatorField))
-	for _, variant := range union.Variants {
+	for variantIndex, variant := range union.Variants {
 		b.WriteString(fmt.Sprintf("\tcase %q:\n", variant.Tag))
 		for _, required := range variant.Required {
 			if required == union.Discriminator {
@@ -1189,6 +1259,19 @@ func renderTaggedUnionMarshalValidation(union renderedTaggedUnion, fields []rend
 				continue
 			}
 			b.WriteString(renderMarshalRequiredFieldCheck(field, union.Discriminator, variant.Tag, variant.Nullable[required]))
+		}
+		if len(variant.AnyOfAlternatives) > 0 {
+			matchName := fmt.Sprintf("taggedAnyOfVariant%dMatches", variantIndex)
+			b.WriteString(fmt.Sprintf("\t\t%s := false\n", matchName))
+			for alternativeIndex, alternative := range variant.AnyOfAlternatives {
+				alternativeName := fmt.Sprintf("taggedAnyOfVariant%dAlternative%dMatches", variantIndex, alternativeIndex)
+				b.WriteString(fmt.Sprintf("\t\t%s := true\n", alternativeName))
+				for _, required := range sortedStrings(alternative.Required) {
+					b.WriteString(fmt.Sprintf("\t\tif rawValue, ok := out[%q]; !ok { %s = false } else if rawJSON, err := json.Marshal(rawValue); err != nil || bytes.Equal(bytes.TrimSpace(rawJSON), []byte(\"null\")) { %s = false }\n", required, alternativeName, alternativeName))
+				}
+				b.WriteString(fmt.Sprintf("\t\tif %s { %s = true }\n", alternativeName, matchName))
+			}
+			b.WriteString(fmt.Sprintf("\t\tif !%s { return nil, DecodeError{Field: \"\", Reason: %q} }\n", matchName, fmt.Sprintf("does not match any anyOf variant for %s %s", union.Discriminator, variant.Tag)))
 		}
 	}
 	b.WriteString("\tdefault:\n")
@@ -1362,8 +1445,11 @@ func collectStructProperties(schema Schema) (map[string][]Schema, map[string]boo
 			required[taggedUnion.Discriminator] = true
 		}
 		for _, variant := range schema.OneOf {
-			for name, property := range variant.Properties {
-				properties[name] = append(properties[name], property)
+			objects := append([]Schema{variant}, variant.AnyOf...)
+			for _, object := range objects {
+				for name, property := range object.Properties {
+					properties[name] = append(properties[name], property)
+				}
 			}
 		}
 	}
@@ -1613,7 +1699,10 @@ func namespaceTypeName(key string) string {
 }
 
 func goFieldName(name string) string {
-	return goInitialisms(GoTypeName(name))
+	if strings.HasPrefix(name, "v2") && len(name) > 2 {
+		return "V2" + goInitialisms(GoTypeName(name[2:]))
+	}
+	return strings.ReplaceAll(goInitialisms(GoTypeName(name)), "IDentity", "Identity")
 }
 
 func goInitialisms(name string) string {
@@ -1695,14 +1784,17 @@ type unionFieldNullability struct {
 func unionFieldNullabilityByName(schema Schema) map[string]unionFieldNullability {
 	nullabilityByField := map[string]unionFieldNullability{}
 	for _, variant := range schema.OneOf {
-		for name, property := range variant.Properties {
-			nullability := nullabilityByField[name]
-			if schemaAllowsJSONNull(property) {
-				nullability.allowsNull = true
-			} else {
-				nullability.disallowsNull = true
+		objects := append([]Schema{variant}, variant.AnyOf...)
+		for _, object := range objects {
+			for name, property := range object.Properties {
+				nullability := nullabilityByField[name]
+				if schemaAllowsJSONNull(property) {
+					nullability.allowsNull = true
+				} else {
+					nullability.disallowsNull = true
+				}
+				nullabilityByField[name] = nullability
 			}
-			nullabilityByField[name] = nullability
 		}
 	}
 	return nullabilityByField
@@ -1733,15 +1825,36 @@ func taggedObjectUnion(schema Schema) (renderedTaggedUnion, bool) {
 			}
 			seenTags[values[0]] = true
 			nullable := map[string]bool{}
-			for name, property := range variant.Properties {
-				if schemaAllowsJSONNull(property) {
-					nullable[name] = true
+			objects := append([]Schema{variant}, variant.AnyOf...)
+			for _, object := range objects {
+				for name, property := range object.Properties {
+					if schemaAllowsJSONNull(property) {
+						nullable[name] = true
+					}
 				}
 			}
+			alternatives := make([]renderedTaggedUnionAlternative, 0, len(variant.AnyOf))
+			for _, alternative := range variant.AnyOf {
+				alternativeNullable := map[string]bool{}
+				alternativeFields := make([]string, 0, len(alternative.Properties))
+				for name, property := range alternative.Properties {
+					alternativeFields = append(alternativeFields, name)
+					if schemaAllowsJSONNull(property) {
+						alternativeNullable[name] = true
+					}
+				}
+				sort.Strings(alternativeFields)
+				alternatives = append(alternatives, renderedTaggedUnionAlternative{
+					Required: append([]string(nil), alternative.Required...),
+					Nullable: alternativeNullable,
+					Fields:   alternativeFields,
+				})
+			}
 			variants = append(variants, renderedTaggedUnionVariant{
-				Tag:      values[0],
-				Required: append([]string(nil), variant.Required...),
-				Nullable: nullable,
+				Tag:               values[0],
+				Required:          append([]string(nil), variant.Required...),
+				Nullable:          nullable,
+				AnyOfAlternatives: alternatives,
 			})
 		}
 		if ok {

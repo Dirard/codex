@@ -106,6 +106,7 @@ fn reviewed_manifest_required_fields(rust_type: &str) -> Vec<SerdeFieldEntry> {
             vec![default_skip_false_field("include_home", "includeHome")]
         }
         "FeedbackUploadParams" => vec![default_skip_false_field("include_logs", "includeLogs")],
+        "FeedbackUploadResponse" => vec![default_null_field("prompt_hash", "promptHash")],
         "FsCopyParams" => vec![default_skip_false_field("recursive", "recursive")],
         "GetAccountParams" => vec![default_skip_false_field("refresh_token", "refreshToken")],
         "GetAccountRateLimitsParams" => vec![
@@ -174,6 +175,7 @@ fn reviewed_manifest_required_fields(rust_type: &str) -> Vec<SerdeFieldEntry> {
             default_empty_vec_field("additional_speed_tiers", "additionalSpeedTiers"),
             default_empty_vec_field("service_tiers", "serviceTiers"),
             default_null_field("default_service_tier", "defaultServiceTier"),
+            default_null_field("available_access_programs", "availableAccessPrograms"),
         ],
         "PermissionsRequestApprovalParams" => {
             vec![default_null_field("environment_id", "environmentId")]
@@ -260,12 +262,15 @@ fn reviewed_manifest_required_fields(rust_type: &str) -> Vec<SerdeFieldEntry> {
             SerdePresence::OptionalNonNull,
             "\"user\"",
         )],
-        "ThreadSettings" => vec![default_field(
-            "multi_agent_mode",
-            "multiAgentMode",
-            SerdePresence::OptionalNonNull,
-            "\"auto\"",
-        )],
+        "ThreadSettings" => vec![
+            default_empty_vec_field("disabled_plugin_ids", "disabledPluginIds"),
+            default_field(
+                "multi_agent_mode",
+                "multiAgentMode",
+                SerdePresence::OptionalNonNull,
+                "\"auto\"",
+            ),
+        ],
         "ToolRequestUserInputParams" => {
             vec![default_null_field("auto_resolution_ms", "autoResolutionMs")]
         }
@@ -389,6 +394,7 @@ pub(crate) fn schema_reachable_serde_attribute_required_types() -> &'static [&'s
         "ConfigWarningNotification",
         "ExternalAgentConfigDetectParams",
         "FeedbackUploadParams",
+        "FeedbackUploadResponse",
         "FsCopyParams",
         "GetAccountParams",
         "GetAccountRateLimitsParams",
@@ -623,6 +629,12 @@ pub(super) fn thread_response_serde_fields() -> Vec<SerdeFieldEntry> {
         default_field(
             "instruction_sources",
             "instructionSources",
+            SerdePresence::Required,
+            "[]",
+        ),
+        default_field(
+            "disabled_plugin_ids",
+            "disabledPluginIds",
             SerdePresence::Required,
             "[]",
         ),

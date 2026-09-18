@@ -176,6 +176,7 @@ fn request_param_experimental_fields(method: &'static str) -> Vec<ExperimentalFi
                     "selected_capability_roots",
                     "thread/start.selectedCapabilityRoots",
                 ),
+                ("daybreak_enabled", "thread/start.daybreakEnabled"),
                 (
                     "mock_experimental_field",
                     "thread/start.mockExperimentalField",
@@ -335,6 +336,10 @@ fn request_response_experimental_fields(method: &'static str) -> Vec<Experimenta
                 ("multi_agent_mode", "thread/fork.multiAgentMode"),
             ],
         ),
+        "account/read" => experimental_response_fields(
+            "GetAccountResponse",
+            &[("workspace_routing", "account/read.workspaceRouting")],
+        ),
         "config/read" => {
             let mut fields =
                 experimental_response_fields("ConfigReadResponse", &[("config", "nested")]);
@@ -388,6 +393,16 @@ pub(crate) fn server_request_experimental_fields(
                 ),
             ],
         ),
+        "mcpServer/elicitation/request" => vec![ExperimentalFieldMarker {
+            field_path: "mode",
+            reason: "mcpServer/elicitation/request.userVerification",
+            inspect_params: true,
+            containing_type: "McpServerElicitationRequestParams",
+            discriminator: Some(ExperimentalVariantDiscriminator {
+                field_path: "mode",
+                wire_value: "openai/userVerification",
+            }),
+        }],
         _ => Vec::new(),
     }
 }

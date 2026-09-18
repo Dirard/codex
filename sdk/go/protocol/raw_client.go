@@ -16,6 +16,36 @@ func (c RawClient) ServerDiagnostics(ctx context.Context, params ServerDiagnosti
 	return result, err
 }
 
+func (c RawClient) UserVerificationStatus(ctx context.Context, params UserVerificationStatusParams) (UserVerificationStatusResponse, error) {
+	var result UserVerificationStatusResponse
+	err := c.sender.Call(ctx, "userVerification/status", params, &result, MethodMetadataByMethod["userVerification/status"])
+	return result, err
+}
+
+func (c RawClient) UserVerificationEnroll(ctx context.Context, params UserVerificationEnrollParams) (UserVerificationEnrollResponse, error) {
+	var result UserVerificationEnrollResponse
+	err := c.sender.Call(ctx, "userVerification/enroll", params, &result, MethodMetadataByMethod["userVerification/enroll"])
+	return result, err
+}
+
+func (c RawClient) UserVerificationDelete(ctx context.Context, params UserVerificationDeleteParams) (UserVerificationDeleteResponse, error) {
+	var result UserVerificationDeleteResponse
+	err := c.sender.Call(ctx, "userVerification/delete", params, &result, MethodMetadataByMethod["userVerification/delete"])
+	return result, err
+}
+
+func (c RawClient) UserVerificationVerify(ctx context.Context, params UserVerificationVerifyParams) (UserVerificationVerifyResponse, error) {
+	var result UserVerificationVerifyResponse
+	err := c.sender.Call(ctx, "userVerification/verify", params, &result, MethodMetadataByMethod["userVerification/verify"])
+	return result, err
+}
+
+func (c RawClient) UserVerificationCancel(ctx context.Context, params UserVerificationCancelParams) (UserVerificationCancelResponse, error) {
+	var result UserVerificationCancelResponse
+	err := c.sender.Call(ctx, "userVerification/cancel", params, &result, MethodMetadataByMethod["userVerification/cancel"])
+	return result, err
+}
+
 func (c RawClient) ThreadStart(ctx context.Context, params ThreadStartParams) (ThreadStartResponse, error) {
 	var result ThreadStartResponse
 	err := c.sender.Call(ctx, "thread/start", params, &result, MethodMetadataByMethod["thread/start"])
@@ -130,6 +160,24 @@ func (c RawClient) ThreadMetadataUpdate(ctx context.Context, params ThreadMetada
 	return result, err
 }
 
+func (c RawClient) ThreadAttachmentAdd(ctx context.Context, params ThreadAttachmentAddParams) (ThreadAttachmentAddResponse, error) {
+	var result ThreadAttachmentAddResponse
+	err := c.sender.Call(ctx, "thread/attachment/add", params, &result, MethodMetadataByMethod["thread/attachment/add"])
+	return result, err
+}
+
+func (c RawClient) ThreadAttachmentList(ctx context.Context, params ThreadAttachmentListParams) (ThreadAttachmentListResponse, error) {
+	var result ThreadAttachmentListResponse
+	err := c.sender.Call(ctx, "thread/attachment/list", params, &result, MethodMetadataByMethod["thread/attachment/list"])
+	return result, err
+}
+
+func (c RawClient) ThreadAttachmentRemove(ctx context.Context, params ThreadAttachmentRemoveParams) (ThreadAttachmentRemoveResponse, error) {
+	var result ThreadAttachmentRemoveResponse
+	err := c.sender.Call(ctx, "thread/attachment/remove", params, &result, MethodMetadataByMethod["thread/attachment/remove"])
+	return result, err
+}
+
 func (c RawClient) ThreadSectionMove(ctx context.Context, params ThreadSectionMoveParams) (ThreadSectionMoveResponse, error) {
 	var result ThreadSectionMoveResponse
 	err := c.sender.Call(ctx, "thread/section/move", params, &result, MethodMetadataByMethod["thread/section/move"])
@@ -148,9 +196,21 @@ func (c RawClient) ThreadMemoryModeSet(ctx context.Context, params ThreadMemoryM
 	return result, err
 }
 
+func (c RawClient) MemoryStatus(ctx context.Context, params MemoryStatusParams) (MemoryStatusResponse, error) {
+	var result MemoryStatusResponse
+	err := c.sender.Call(ctx, "memory/status", params, &result, MethodMetadataByMethod["memory/status"])
+	return result, err
+}
+
 func (c RawClient) MemoryReset(ctx context.Context) (MemoryResetResponse, error) {
 	var result MemoryResetResponse
 	err := c.sender.Call(ctx, "memory/reset", nil, &result, MethodMetadataByMethod["memory/reset"])
+	return result, err
+}
+
+func (c RawClient) RolloutCompress(ctx context.Context) (RolloutCompressResponse, error) {
+	var result RolloutCompressResponse
+	err := c.sender.Call(ctx, "rollout/compress", nil, &result, MethodMetadataByMethod["rollout/compress"])
 	return result, err
 }
 
@@ -193,12 +253,6 @@ func (c RawClient) ThreadBackgroundTerminalsList(ctx context.Context, params Thr
 func (c RawClient) ThreadBackgroundTerminalsTerminate(ctx context.Context, params ThreadBackgroundTerminalsTerminateParams) (ThreadBackgroundTerminalsTerminateResponse, error) {
 	var result ThreadBackgroundTerminalsTerminateResponse
 	err := c.sender.Call(ctx, "thread/backgroundTerminals/terminate", params, &result, MethodMetadataByMethod["thread/backgroundTerminals/terminate"])
-	return result, err
-}
-
-func (c RawClient) ThreadRollback(ctx context.Context, params ThreadRollbackParams) (ThreadRollbackResponse, error) {
-	var result ThreadRollbackResponse
-	err := c.sender.Call(ctx, "thread/rollback", params, &result, MethodMetadataByMethod["thread/rollback"])
 	return result, err
 }
 

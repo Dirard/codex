@@ -16,6 +16,7 @@ func TestInputHelpersMapToGeneratedUserInput(t *testing.T) {
 	input := Inputs(
 		Text("hello"),
 		DataURL("data:image/png;base64,aW1hZ2U="),
+		ImageFileID("file-1"),
 		Skill("skill-name", "/tmp/skill"),
 		Mention("file-name", "/tmp/file"),
 	)
@@ -26,6 +27,7 @@ func TestInputHelpersMapToGeneratedUserInput(t *testing.T) {
 	want := []protocol.UserInput{
 		{TypeValue: "text", Text: protocol.SomeNonNull("hello")},
 		{TypeValue: "image", URL: protocol.SomeNonNull("data:image/png;base64,aW1hZ2U=")},
+		{TypeValue: "image", FileID: protocol.SomeNonNull("file-1")},
 		{TypeValue: "skill", Name: protocol.SomeNonNull("skill-name"), Path: protocol.SomeNonNull("/tmp/skill")},
 		{TypeValue: "mention", Name: protocol.SomeNonNull("file-name"), Path: protocol.SomeNonNull("/tmp/file")},
 	}

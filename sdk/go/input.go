@@ -20,11 +20,12 @@ type Input struct {
 }
 
 type inputItem struct {
-	kind string
-	text string
-	url  string
-	name string
-	path string
+	kind   string
+	text   string
+	url    string
+	fileID string
+	name   string
+	path   string
 }
 
 type LocalInputSizeError struct {
@@ -47,6 +48,10 @@ func ImageURL(url string) Input {
 
 func DataURL(url string) Input {
 	return ImageURL(url)
+}
+
+func ImageFileID(fileID string) Input {
+	return Input{items: []inputItem{{kind: "imageFile", fileID: fileID}}}
 }
 
 func LocalImage(path string) Input {
@@ -80,6 +85,8 @@ func (i Input) wire(limits ClientLimits) ([]protocol.UserInput, error) {
 				return nil, err
 			}
 			out = append(out, protocol.UserInput{TypeValue: "image", URL: protocol.SomeNonNull(item.url)})
+		case "imageFile":
+			out = append(out, protocol.UserInput{TypeValue: "image", FileID: protocol.SomeNonNull(item.fileID)})
 		case "localImage":
 			path, err := filepath.Abs(item.path)
 			if err != nil {

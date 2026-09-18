@@ -477,7 +477,7 @@ fn additional_context_entries_are_marked_as_bounded_model_context() {
 fn no_params_requests_keep_clean_option_unit_metadata() {
     let manifest = crate::go_manifest::go_sdk_manifest();
 
-    for method in ["memory/reset", "account/logout"] {
+    for method in ["memory/reset", "rollout/compress", "account/logout"] {
         let entry = client_request(&manifest.experimental.client_requests, method);
         assert_eq!(entry.params_type.as_deref(), Some("Option<()>"));
         assert_eq!(entry.params_schema_ref, None);
@@ -1151,6 +1151,12 @@ fn field_level_experimental_inventory_covers_current_client_and_server_payloads(
                 true,
             ),
             (
+                "daybreak_enabled",
+                "thread/start.daybreakEnabled",
+                "ThreadStartParams",
+                true,
+            ),
+            (
                 "mock_experimental_field",
                 "thread/start.mockExperimentalField",
                 "ThreadStartParams",
@@ -1472,6 +1478,16 @@ fn field_level_experimental_inventory_covers_current_client_and_server_payloads(
     );
 
     assert_experimental_fields_exact(
+        client_request(&manifest.experimental.client_requests, "account/read"),
+        &[(
+            "workspace_routing",
+            "account/read.workspaceRouting",
+            "GetAccountResponse",
+            false,
+        )],
+    );
+
+    assert_experimental_fields_exact(
         client_request(&manifest.experimental.client_requests, "config/read"),
         &[
             ("config", "nested", "ConfigReadResponse", false),
@@ -1564,6 +1580,27 @@ fn field_level_experimental_inventory_covers_current_client_and_server_payloads(
                 true,
             ),
         ],
+    );
+
+    let elicitation = server_request(
+        &manifest.experimental.server_requests,
+        "mcpServer/elicitation/request",
+    );
+    assert_experimental_fields_exact(
+        elicitation,
+        &[(
+            "mode",
+            "mcpServer/elicitation/request.userVerification",
+            "McpServerElicitationRequestParams",
+            true,
+        )],
+    );
+    assert_eq!(
+        elicitation.experimental_fields[0].discriminator,
+        Some(crate::go_manifest::ExperimentalVariantDiscriminator {
+            field_path: "mode",
+            wire_value: "openai/userVerification",
+        })
     );
 }
 
@@ -2236,6 +2273,10 @@ fn expected_server_notification_routes() -> Vec<(&'static str, ExpectedRouting)>
         ("skills/changed", ExpectedRouting::Global),
         (
             "thread/name/updated",
+            ExpectedRouting::Routed(&["threadId"]),
+        ),
+        (
+            "thread/attachment/updated",
             ExpectedRouting::Routed(&["threadId"]),
         ),
         (
