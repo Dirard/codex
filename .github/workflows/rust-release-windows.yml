@@ -500,12 +500,12 @@ jobs:
           $target = "${{ matrix.target }}"
           $package = Join-Path $env:RUNNER_TEMP "verify-voice-archive-$target"
           New-Item -ItemType Directory -Path $package | Out-Null
-          tar -xzf "dist/$target/codex-package-$target.tar.gz" -C "$package"
+          tar -xzf "dist/$target/codex-package-$target.tar.gz" -C $package
           if ($LASTEXITCODE -ne 0) { throw "Cannot extract the final Windows package" }
           $voice = Join-Path $package 'codex-resources/voice'
           $helper = Join-Path $voice 'bin/codex-voice-host.exe'
           if (-not (Test-Path $helper) -or -not (Test-Path (Join-Path $voice 'bin/gstreamer-1.0-0.dll'))) {
-            throw "Signed Windows voice files are missing from the canonical package"
+            throw 'Signed Windows voice files are missing from the canonical package'
           }
           $signature = Get-AuthenticodeSignature $helper
           if ($signature.Status -ne 'Valid') { throw "Packaged helper signature: $($signature.Status)" }
@@ -607,7 +607,8 @@ jobs:
               bundle_dir="$(mktemp -d)"
               tar -xzf "$dest/codex-package-${target}.tar.gz" -C "$bundle_dir"
               python "${GITHUB_WORKSPACE}/scripts/build_winget_package.py" "$(cygpath -w "$bundle_dir")"
-              (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)              rm -rf "$bundle_dir"
+              (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)
+              rm -rf "$bundle_dir"
             else
               (cd "$dest" && 7z a "${base}.zip" "$base")
             fi
