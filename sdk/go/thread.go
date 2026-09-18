@@ -11,6 +11,7 @@ type ThreadStartOptions struct {
 	Model                      string
 	ModelProvider              string
 	ProjectID                  string
+	DaybreakEnabled            *bool
 	AllowProviderModelFallback *bool
 	ServiceTier                string
 	CWD                        string
@@ -103,6 +104,7 @@ type TurnOptions struct {
 	OutputSchema               OutputSchema
 	CollaborationMode          protocol.CollaborationMode
 	MultiAgentMode             protocol.MultiAgentMode
+	DisabledPluginIDs          []string
 }
 
 type SteerOptions struct {
@@ -226,6 +228,27 @@ func (c *ThreadsClient) UpdateMetadata(ctx context.Context, params protocol.Thre
 	return c.client.Raw().ThreadMetadataUpdate(ctx, params)
 }
 
+func (c *ThreadsClient) AddAttachment(ctx context.Context, params protocol.ThreadAttachmentAddParams) (protocol.ThreadAttachmentAddResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.ThreadAttachmentAddResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().ThreadAttachmentAdd(ctx, params)
+}
+
+func (c *ThreadsClient) ListAttachments(ctx context.Context, params protocol.ThreadAttachmentListParams) (protocol.ThreadAttachmentListResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.ThreadAttachmentListResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().ThreadAttachmentList(ctx, params)
+}
+
+func (c *ThreadsClient) RemoveAttachment(ctx context.Context, params protocol.ThreadAttachmentRemoveParams) (protocol.ThreadAttachmentRemoveResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.ThreadAttachmentRemoveResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().ThreadAttachmentRemove(ctx, params)
+}
+
 func (c *ThreadsClient) Unarchive(ctx context.Context, params protocol.ThreadUnarchiveParams) (protocol.ThreadUnarchiveResponse, error) {
 	if c == nil || c.client == nil {
 		return protocol.ThreadUnarchiveResponse{}, &ClosedError{}
@@ -254,11 +277,11 @@ func (c *ThreadsClient) ApproveGuardianDeniedAction(ctx context.Context, params 
 	return c.client.Raw().ThreadApproveGuardianDeniedAction(ctx, params)
 }
 
-func (c *ThreadsClient) Rollback(ctx context.Context, params protocol.ThreadRollbackParams) (protocol.ThreadRollbackResponse, error) {
+func (c *ThreadsClient) Revert(ctx context.Context, params protocol.ThreadRevertParams) (protocol.ThreadRevertResponse, error) {
 	if c == nil || c.client == nil {
-		return protocol.ThreadRollbackResponse{}, &ClosedError{}
+		return protocol.ThreadRevertResponse{}, &ClosedError{}
 	}
-	return c.client.Raw().ThreadRollback(ctx, params)
+	return c.client.Raw().ThreadRevert(ctx, params)
 }
 
 func (c *ThreadsClient) List(ctx context.Context, params protocol.ThreadListParams) (protocol.ThreadListResponse, error) {
@@ -473,6 +496,9 @@ func threadStartParams(opts ThreadStartOptions) protocol.ThreadStartParams {
 	}
 	if opts.ProjectID != "" {
 		params.ProjectID = protocol.Some(opts.ProjectID)
+	}
+	if opts.DaybreakEnabled != nil {
+		params.DaybreakEnabled = protocol.Some(*opts.DaybreakEnabled)
 	}
 	if opts.AllowProviderModelFallback != nil {
 		params.AllowProviderModelFallback = protocol.SomeNonNull(*opts.AllowProviderModelFallback)
@@ -736,6 +762,9 @@ func applyTurnOptions(params *protocol.TurnStartParams, opts TurnOptions) {
 	}
 	if opts.MultiAgentMode.IsSet() {
 		params.MultiAgentMode = protocol.Some(opts.MultiAgentMode)
+	}
+	if opts.DisabledPluginIDs != nil {
+		params.DisabledPluginIDs = protocol.Some(opts.DisabledPluginIDs)
 	}
 }
 

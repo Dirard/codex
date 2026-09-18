@@ -6175,8 +6175,8 @@ class TurnStartedThreadTimelineEntry(BaseModel):
         populate_by_name=True,
     )
     position: Annotated[int, Field(ge=0)]
-    started_at: int | None = None
-    turn_id: str
+    started_at: Annotated[int | None, Field(alias="startedAt")] = None
+    turn_id: Annotated[str, Field(alias="turnId")]
     type: Annotated[Literal["turnStarted"], Field(title="TurnStartedThreadTimelineEntryType")]
 
 
@@ -11541,13 +11541,13 @@ class TurnCompletedThreadTimelineEntry(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    completed_at: int | None = None
-    duration_ms: int | None = None
+    completed_at: Annotated[int | None, Field(alias="completedAt")] = None
+    duration_ms: Annotated[int | None, Field(alias="durationMs")] = None
     error: TurnError | None = None
     position: Annotated[int, Field(ge=0)]
-    started_at: int | None = None
+    started_at: Annotated[int | None, Field(alias="startedAt")] = None
     status: TurnStatus
-    turn_id: str
+    turn_id: Annotated[str, Field(alias="turnId")]
     type: Annotated[Literal["turnCompleted"], Field(title="TurnCompletedThreadTimelineEntryType")]
 
 
