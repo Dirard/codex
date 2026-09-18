@@ -410,9 +410,8 @@ impl Session {
                 None,
             );
         }
-        // New rollouts persist already processed response items. Replay keeps
-        // using the model policy as a deterministic fallback for older raw
-        // rollout items rather than depending on today's config.
+        // New rollouts persist raw items with their originating truncation metadata.
+        // Older raw rollout items use the resumed model as a deterministic fallback.
         let replay_output_truncation = codex_utils_output_truncation::OutputTruncation::new(
             turn_context.model_info().truncation_policy.into(),
             /*max_lines*/ None,

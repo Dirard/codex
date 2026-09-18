@@ -2831,14 +2831,23 @@ async fn annotated_history_uses_explicit_model_without_a_step(
             .metadata
             .get_or_insert_default()
             .history_truncation_token_limit = Some(expected_budget);
+        let policy = if byte_policy {
+            codex_utils_output_truncation::TruncationPolicy::Bytes(122)
+        } else {
+            codex_utils_output_truncation::TruncationPolicy::Tokens(expected_budget)
+        };
+        envelope
+            .metadata
+            .as_mut()
+            .unwrap()
+            .history_truncation_policy = Some(policy);
         let (ResponseItem::FunctionCallOutput { output, .. }
         | ResponseItem::CustomToolCallOutput { output, .. }) = &mut envelope.item
         else {
             unreachable!("fixture is a tool output");
         };
         output.body = FunctionCallOutputBody::Text(codex_utils_output_truncation::truncate_text(
-            &text,
-            codex_utils_output_truncation::TruncationPolicy::Tokens(expected_budget),
+            &text, policy,
         ));
     }
     assert_eq!(session.clone_history().await.annotated_items(), &expected);
@@ -7881,6 +7890,7 @@ async fn submit_with_trace_captures_current_span_trace_context() {
             /*parent_turn_id*/ None,
             /*root_turn_id*/ None,
             /*residency_guard*/ None,
+            /*turn_spawn_budget*/ None,
         )
         .await
         .expect("submit should succeed");
@@ -7953,6 +7963,7 @@ fn submission_dispatch_span_prefers_submission_trace_context() {
             op: Op::Interrupt,
             parent_turn_id: None,
             root_turn_id: None,
+            turn_spawn_budget: None,
             residency_guard: None,
             trace: Some(submission_trace),
         })
@@ -7982,6 +7993,7 @@ fn submission_dispatch_span_uses_debug_for_realtime_audio() {
         }),
         parent_turn_id: None,
         root_turn_id: None,
+        turn_spawn_budget: None,
         residency_guard: None,
         trace: None,
     });
@@ -8340,6 +8352,7 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
         op: Op::Interrupt,
         parent_turn_id: None,
         root_turn_id: None,
+        turn_spawn_budget: None,
         residency_guard: None,
         trace: Some(submission_trace.clone()),
     });
@@ -11045,8 +11058,10 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
         world_state: Arc::clone(&world_a),
         step_context: Arc::clone(&step_a),
     };
-    let (initial_a, _) =
-        crate::compact::build_compaction_initial_context(&session, &retained).await;
+    let (initial_a, _) = crate::compact::build_compaction_initial_context(
+        &session, &retained, /*auto_compact_window_ids*/ None,
+    )
+    .await;
 
     let mut selected_b = step_a.settings.selected().clone();
     selected_b.collaboration_mode.settings.model = "model-b".to_string();
@@ -11075,8 +11090,10 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
         .build_initial_context_with_world_state(&step_b, &world_b)
         .await;
     let turn_contributions_b = session.build_turn_context_contribution_items(&step_b).await;
-    let (restored_a, restored_world) =
-        crate::compact::build_compaction_initial_context(&session, &retained).await;
+    let (restored_a, restored_world) = crate::compact::build_compaction_initial_context(
+        &session, &retained, /*auto_compact_window_ids*/ None,
+    )
+    .await;
 
     assert_eq!(restored_a, initial_a);
     assert!(Arc::ptr_eq(restored_world.as_ref().unwrap(), &world_a));
@@ -12070,6 +12087,7 @@ async fn submit_steer_only(
             expected_turn_id: expected_turn_id.to_string(),
         },
         "test-submission".to_string(),
+        /*turn_spawn_budget*/ None,
     )
     .await
     .expect("steer-only submission should be valid")
@@ -12316,6 +12334,7 @@ async fn thread_idle_lifecycle_waits_for_trigger_turn_mailbox_work() {
                 /*trigger_turn*/ true,
             ),
             Default::default(),
+            /*turn_spawn_budget*/ None,
         )
         .await;
 
@@ -12394,7 +12413,11 @@ async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
         .defer_mailbox_delivery_to_next_turn(&sess.active_turn, &tc.sub_id)
         .await;
     sess.input_queue
-        .enqueue_mailbox_communication(communication.clone(), Default::default())
+        .enqueue_mailbox_communication(
+            communication.clone(),
+            Default::default(),
+            /*turn_spawn_budget*/ None,
+        )
         .await;
 
     assert!(
@@ -12443,6 +12466,7 @@ async fn trigger_turn_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
                 /*trigger_turn*/ true,
             ),
             Default::default(),
+            /*turn_spawn_budget*/ None,
         )
         .await;
 
@@ -12481,6 +12505,7 @@ async fn interrupted_turn_does_not_restart_trigger_turn_mailbox_mail() {
                 /*trigger_turn*/ true,
             ),
             Default::default(),
+            /*turn_spawn_budget*/ None,
         )
         .await;
 
@@ -12527,6 +12552,7 @@ async fn active_turn_keeps_first_root_when_mail_coalesces(inherited_root: Option
                     root_turn_id: Some(root_turn_id.to_string()),
                     ..Default::default()
                 },
+                /*turn_spawn_budget*/ None,
             )
             .await;
         if index == 0 {
@@ -12584,7 +12610,11 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
         .defer_mailbox_delivery_to_next_turn(&sess.active_turn, &tc.sub_id)
         .await;
     sess.input_queue
-        .enqueue_mailbox_communication(communication.clone(), Default::default())
+        .enqueue_mailbox_communication(
+            communication.clone(),
+            Default::default(),
+            /*turn_spawn_budget*/ None,
+        )
         .await;
     let submission = submit_steer_only(
         &sess,
@@ -12640,7 +12670,11 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
         .defer_mailbox_delivery_to_next_turn(&sess.active_turn, &tc.sub_id)
         .await;
     sess.input_queue
-        .enqueue_mailbox_communication(communication.clone(), Default::default())
+        .enqueue_mailbox_communication(
+            communication.clone(),
+            Default::default(),
+            /*turn_spawn_budget*/ None,
+        )
         .await;
     let submission = submit_steer_only(
         &sess,
@@ -12700,7 +12734,11 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         .defer_mailbox_delivery_to_next_turn(&sess.active_turn, &tc.sub_id)
         .await;
     sess.input_queue
-        .enqueue_mailbox_communication(communication.clone(), Default::default())
+        .enqueue_mailbox_communication(
+            communication.clone(),
+            Default::default(),
+            /*turn_spawn_budget*/ None,
+        )
         .await;
 
     let item = ResponseItem::FunctionCall {
