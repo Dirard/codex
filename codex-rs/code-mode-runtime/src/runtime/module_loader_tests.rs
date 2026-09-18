@@ -24,6 +24,7 @@ fn discarded_tool_response_is_collectible_before_cell_ends() {
     scope.set_slot(RuntimeState {
         event_tx,
         pending_tool_calls: HashMap::new(),
+        settled_tool_outcomes_since_sink: 0,
         pending_timeouts: HashMap::new(),
         stored_values: HashMap::new(),
         stored_value_writes: HashMap::new(),

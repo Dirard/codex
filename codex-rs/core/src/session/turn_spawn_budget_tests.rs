@@ -74,6 +74,7 @@ async fn new_root_input_gets_independent_turn_spawn_budget() -> anyhow::Result<(
         root_user_input(),
         TurnInputMode::StartOrSteer,
         "new-root-input".to_string(),
+        /*turn_spawn_budget*/ None,
     )
     .await?;
     let new_step = capture_step(&session, session.new_default_turn().await).await?;
@@ -93,6 +94,7 @@ async fn late_descendant_uses_original_budget_during_root_rollover() -> anyhow::
         root_user_input(),
         TurnInputMode::StartOrSteer,
         "root-rollover".to_string(),
+        /*turn_spawn_budget*/ None,
     )
     .await?;
     let new_root_step = capture_step(&session, session.new_default_turn().await).await?;

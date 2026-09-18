@@ -21,7 +21,6 @@ Scenario: Astra uses the catalog question schema to ask who a launch update is f
           - function/list_agents
           - function/send_message
           - function/spawn_agent
-          - function/wait_agent
 01:message/developer:
     <MODEL_INSTRUCTIONS>
 02:message/developer[2]:

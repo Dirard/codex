@@ -73,6 +73,7 @@ use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
 use codex_utils_output_truncation::truncate_function_output_items_with_config;
 use codex_utils_output_truncation::truncate_text_with_config;
+use codex_utils_output_truncation::with_serialization_allowance;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -503,13 +504,8 @@ impl ContextManager {
         }
     }
 
-    /// `items` is ordered from oldest to newest. Returns the processed items
-    /// that were added to model-visible history.
-    pub(crate) fn record_items<I>(
-        &mut self,
-        items: I,
-        truncation: impl Into<OutputTruncation>,
-    ) -> Vec<ResponseItem>
+    /// `items` is ordered from oldest to newest.
+    pub(crate) fn record_items<I>(&mut self, items: I, truncation: impl Into<OutputTruncation>)
     where
         I: IntoIterator,
         I::Item: Deref<Target = ResponseItem>,
@@ -1091,6 +1087,36 @@ impl ContextManager {
         }
         cut_idx
     }
+}
+
+fn truncation_from_metadata(
+    metadata: Option<&CodexHarnessMetadata>,
+    fallback: OutputTruncation,
+) -> OutputTruncation {
+    let Some(metadata) = metadata else {
+        return fallback.with_policy(with_serialization_allowance(fallback.policy));
+    };
+
+    let policy = metadata
+        .history_truncation_policy
+        .or_else(|| {
+            metadata
+                .history_truncation_token_limit
+                .map(TruncationPolicy::Tokens)
+        })
+        .unwrap_or_else(|| with_serialization_allowance(fallback.policy));
+    if metadata.history_truncation_policy.is_some()
+        || metadata.history_truncation_max_lines.is_some()
+        || metadata.history_truncation_mcp_max_lines.is_some()
+    {
+        return OutputTruncation::new_with_mcp_max_lines(
+            policy,
+            metadata.history_truncation_max_lines,
+            metadata.history_truncation_mcp_max_lines,
+        );
+    }
+
+    fallback.with_policy(policy)
 }
 
 pub(crate) fn estimate_history_token_count(

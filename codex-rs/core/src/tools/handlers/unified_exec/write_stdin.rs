@@ -94,6 +94,7 @@ impl WriteStdinHandler {
                 "unified exec is unavailable in this session",
             )?;
         }
+        let truncation = step_context.output_truncation();
         let context =
             UnifiedExecContext::new(session.clone(), step_context, cancellation_token, call_id);
         let response = session
@@ -106,7 +107,7 @@ impl WriteStdinHandler {
                     input: &args.chars,
                     yield_time_ms: args.yield_time_ms,
                     max_output_tokens: args.max_output_tokens,
-                    truncation: turn.output_truncation(),
+                    truncation,
                     interaction_event: Some(WriteStdinInteractionEvent {
                         session: &session,
                         turn: &turn,
