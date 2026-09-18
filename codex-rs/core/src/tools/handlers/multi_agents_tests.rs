@@ -47,8 +47,8 @@ use codex_otel::MetricsConfig;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErrorDetails;
@@ -2206,7 +2206,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
     )
     .expect("completed status should render");
 
-    let (mailbox_items, start_options) = root
+    let (mailbox_items, start_options, _) = root
         .thread
         .session
         .input_queue
@@ -3337,6 +3337,7 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
             )
             .into(),
             Default::default(),
+            /*turn_spawn_budget*/ None,
         )
         .await;
 
@@ -3637,6 +3638,7 @@ async fn multi_agent_v2_wait_agent_timeout_includes_bounded_status_snapshot() {
             id: "running-turn".to_string(),
             msg: EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "running-turn".to_string(),
+                root_turn_id: Some("running-turn".to_string()),
                 trace_id: None,
                 started_at: None,
                 model_context_window: None,
@@ -4002,6 +4004,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
             )
             .into(),
             Default::default(),
+            /*turn_spawn_budget*/ None,
         )
         .await;
 
@@ -4079,6 +4082,7 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
             )
             .into(),
             Default::default(),
+            /*turn_spawn_budget*/ None,
         )
         .await;
 
@@ -4182,6 +4186,7 @@ async fn multi_agent_v2_wait_agent_wakes_on_any_mailbox_notification() {
             )
             .into(),
             Default::default(),
+            /*turn_spawn_budget*/ None,
         )
         .await;
 
@@ -4274,6 +4279,7 @@ async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
             )
             .into(),
             Default::default(),
+            /*turn_spawn_budget*/ None,
         )
         .await;
 

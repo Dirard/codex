@@ -717,7 +717,10 @@ fn post_tool_use_feedback_output_preserves_mcp_result_metadata(tool_error: bool)
             result_metadata_capture_allowed: true,
             wall_time: std::time::Duration::ZERO,
             original_image_detail_supported: false,
-            truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(64),
+            truncation: codex_utils_output_truncation::OutputTruncation::new(
+                codex_utils_output_truncation::TruncationPolicy::Bytes(64),
+                /*max_lines*/ None,
+            ),
         }),
         model_visible: FunctionToolOutput::from_text(
             "unrelated hook feedback".to_string(),

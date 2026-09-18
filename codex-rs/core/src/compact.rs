@@ -296,7 +296,7 @@ async fn run_compact_task_inner_impl(
     let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());
     history.record_items(
         &[initial_input_for_turn.into()],
-        turn_context.output_truncation(),
+        step_context.output_truncation(),
     );
     let mut fallback_instructions = sess.get_prompt_base_instructions().await;
     if let Some(text) = history

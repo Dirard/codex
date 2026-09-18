@@ -279,6 +279,7 @@ pub(crate) async fn run_codex_thread_one_shot(
                 ..Default::default()
             }),
             TurnInputMode::StartIfIdle,
+            /*turn_spawn_budget*/ None,
         )
         .await?;
     match submission {
@@ -416,7 +417,7 @@ async fn forward_event_or_shutdown(
 /// Forward ops from a caller to a sub-agent, respecting cancellation.
 async fn forward_ops(
     io: Arc<SessionIo>,
-    rx_ops: Receiver<Submission>,
+    rx_ops: Receiver<crate::session::Submission>,
     cancel_token_ops: CancellationToken,
 ) {
     loop {

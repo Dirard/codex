@@ -512,6 +512,7 @@ fn settings_submission(
             trace: None,
             parent_turn_id: None,
             root_turn_id: None,
+            turn_spawn_budget: None,
             residency_guard: None,
             message_delivery: None,
         },
@@ -595,7 +596,7 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
         },
     );
     submissions
-        .send(submission)
+        .send(submission.into())
         .await
         .expect("submit model update");
     lookup.wait_until_blocked().await;
@@ -634,7 +635,10 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
         ),
     ] {
         let (submission, reply) = settings_submission(id, &turn.sub_id, update);
-        submissions.send(submission).await.expect("queue update");
+        submissions
+            .send(submission.into())
+            .await
+            .expect("queue update");
         replies.push(reply);
     }
     lookup.release();

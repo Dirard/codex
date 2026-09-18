@@ -14,8 +14,6 @@ Scenario: True mid-turn continuation compaction after tool output: compact reque
     <ENVIRONMENT_CONTEXT>
 03:message/user:
     function call limit push
-
-## Window 2 (after request 1: settings changed (parallel_tool_calls, tools))
 -- request 2 (compaction) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
