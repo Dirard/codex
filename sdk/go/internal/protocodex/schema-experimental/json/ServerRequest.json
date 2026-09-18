@@ -1421,6 +1421,33 @@
     "McpServerElicitationRequestParams": {
       "oneOf": [
         {
+          "description": "A device-authenticated approval; accepted responses contain the proof in `content`.",
+          "properties": {
+            "challenge": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "openai/userVerification"
+              ],
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "challenge",
+            "description",
+            "mode",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "_meta": true,
             "message": {
