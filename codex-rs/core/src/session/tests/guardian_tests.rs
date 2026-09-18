@@ -1122,9 +1122,12 @@ async fn compaction_initial_context_preserves_separate_guardian_developer_messag
         step_context,
     };
 
-    let (refreshed, _) =
-        crate::compact::build_compaction_initial_context(&session, &initial_context_injection)
-            .await;
+    let (refreshed, _) = crate::compact::build_compaction_initial_context(
+        &session,
+        &initial_context_injection,
+        /*auto_compact_window_ids*/ None,
+    )
+    .await;
 
     let developer_messages = refreshed
         .iter()

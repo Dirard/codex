@@ -371,7 +371,7 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
     let mut outputs = Vec::new();
     for (arguments, future) in pending.into_iter().rev() {
         let envelope = future.await.expect("plan result");
-        let item = &envelope.item;
+        let item = &envelope.response.item;
         let ResponseItem::FunctionCallOutput {
             call_id: output_call_id,
             output,
@@ -392,7 +392,7 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
                 "name": "update_plan", "arguments": arguments,
             }])
         );
-        outputs.push(envelope.item);
+        outputs.push(envelope.response.item);
     }
     let original = outputs.clone();
     session
@@ -429,7 +429,7 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
         .remove(0)
         .await
         .expect("plan result after capture disabled");
-    assert!(result.item.executed_tool_call_metadata().is_none());
+    assert!(result.response.item.executed_tool_call_metadata().is_none());
     session
         .services
         .executed_tool_calls
@@ -451,7 +451,7 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
         .expect("call prepared before disable")
         .await
         .expect("plan result after capture re-enabled");
-    assert!(result.item.executed_tool_call_metadata().is_none());
+    assert!(result.response.item.executed_tool_call_metadata().is_none());
 }
 
 #[tokio::test]
