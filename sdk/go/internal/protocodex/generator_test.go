@@ -65,6 +65,42 @@ func TestRenderTaggedObjectUnionRequiresOnlyTheDiscriminatorGlobally(t *testing.
 	}
 }
 
+func TestRenderTaggedObjectUnionIncludesNestedAnyOfFields(t *testing.T) {
+	schema := Schema{OneOf: []Schema{
+		{
+			Type:     "object",
+			Required: []string{"type"},
+			Properties: map[string]Schema{
+				"type": {Type: "string", Enum: []json.RawMessage{json.RawMessage(`"image"`)}},
+			},
+			AnyOf: []Schema{
+				{Type: "object", Required: []string{"url"}, Properties: map[string]Schema{"url": {Type: "string"}}},
+				{Type: "object", Required: []string{"fileId"}, Properties: map[string]Schema{"fileId": {Type: "string"}}},
+			},
+		},
+	}}
+	rendered := renderDefinitionType("UserInput", "UserInput", schema, map[string]string{}, nil, nil, nil)
+	for _, required := range []string{
+		"URL OptionalNonNull[string]",
+		"FileID OptionalNonNull[string]",
+		"taggedAnyOfVariant0Matches",
+		"does not match any anyOf variant for type image",
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("nested anyOf rendering missing %q\n%s", required, rendered)
+		}
+	}
+}
+
+func TestGoFieldNameKeepsWordsStartingWithIdAndV2(t *testing.T) {
+	if got := goFieldName("identityKey"); got != "IdentityKey" {
+		t.Fatalf("identityKey = %q, want IdentityKey", got)
+	}
+	if got := goFieldName("v2ConsolidatedThreads"); got != "V2ConsolidatedThreads" {
+		t.Fatalf("v2ConsolidatedThreads = %q, want V2ConsolidatedThreads", got)
+	}
+}
+
 func TestRenderTaggedObjectUnionDisambiguatesCollidingFieldNames(t *testing.T) {
 	schema := Schema{OneOf: []Schema{
 		{
@@ -117,7 +153,9 @@ func TestGenerateWritesProtocol(t *testing.T) {
 		"type AppScreenshot struct",
 		"type ActiveProtocolMode string",
 		"type ThreadTimelineListParams struct",
+		"type ThreadAttachment struct",
 		"type TurnSettingsUpdateParams struct",
+		"type UserVerificationRPCError struct",
 		"FileID",
 		"Optional[string]",
 		"UserPrompt",
@@ -164,8 +202,12 @@ func TestGenerateWritesProtocol(t *testing.T) {
 	rawClient := readGeneratedFile(t, out, "raw_client.go")
 	for _, required := range []string{
 		"func (c RawClient) ThreadStart(",
+		"func (c RawClient) ThreadAttachmentAdd(",
 		"func (c RawClient) ThreadTimelineList(",
 		"func (c RawClient) TurnSettingsUpdate(",
+		"func (c RawClient) UserVerificationVerify(",
+		"func (c RawClient) MemoryStatus(",
+		"func (c RawClient) RolloutCompress(ctx context.Context)",
 		"func (c RawClient) AccountRateLimitsRead(ctx context.Context)",
 		"func (c RawClient) AccountRateLimitsReadWithParams(ctx context.Context, params NullableGetAccountRateLimitsParams)",
 		"if params.IsSet() {\n\t\tcallParams = params\n\t}",

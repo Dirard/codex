@@ -120,6 +120,74 @@ func TestGeneratedTaggedUnionPreservesUnknownDiscriminator(t *testing.T) {
 	}
 }
 
+func TestGeneratedImageInputSupportsURLAndFileIDAlternatives(t *testing.T) {
+	tests := []struct {
+		name      string
+		json      string
+		roundtrip string
+		initial   string
+	}{
+		{name: "url", json: `{"type":"image","url":"data:image/png;base64,AA=="}`},
+		{name: "file id", json: `{"type":"image","fileId":"file-1"}`},
+		{name: "both accepted", json: `{"type":"image","url":"data:image/png;base64,AA==","fileId":"file-1"}`},
+		{name: "file id ignores invalid url", json: `{"type":"image","url":1,"fileId":"file-1"}`, roundtrip: `{"type":"image","fileId":"file-1"}`},
+		{name: "url ignores invalid file id", json: `{"type":"image","url":"data:image/png;base64,AA==","fileId":{}}`, roundtrip: `{"type":"image","url":"data:image/png;base64,AA=="}`},
+		{name: "file id clears stale invalid url", initial: `{"type":"image","url":"old"}`, json: `{"type":"image","url":1,"fileId":"file-1"}`, roundtrip: `{"type":"image","fileId":"file-1"}`},
+		{name: "file id clears stale absent url", initial: `{"type":"image","url":"old"}`, json: `{"type":"image","fileId":"file-1"}`},
+		{name: "url clears stale file id", initial: `{"type":"image","fileId":"old"}`, json: `{"type":"image","url":"data:image/png;base64,AA==","fileId":{}}`, roundtrip: `{"type":"image","url":"data:image/png;base64,AA=="}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var input UserInput
+			if tt.initial != "" {
+				if err := json.Unmarshal([]byte(tt.initial), &input); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := json.Unmarshal([]byte(tt.json), &input); err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantJSON := tt.roundtrip
+			if wantJSON == "" {
+				wantJSON = tt.json
+			}
+			var got, want map[string]any
+			if err := json.Unmarshal(encoded, &got); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal([]byte(wantJSON), &want); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("roundtrip = %s, want %s", encoded, wantJSON)
+			}
+		})
+	}
+
+	for _, invalid := range []string{
+		`{"type":"image"}`,
+		`{"type":"image","url":1}`,
+		`{"type":"image","fileId":{}}`,
+		`{"type":"image","url":1,"fileId":{}}`,
+	} {
+		for _, input := range []UserInput{{}, {URL: SomeNonNull("old"), FileID: SomeNonNull("old")}} {
+			var decodeErr DecodeError
+			if err := json.Unmarshal([]byte(invalid), &input); !errors.As(err, &decodeErr) {
+				t.Errorf("input = %s: err = %v, want DecodeError", invalid, err)
+			}
+		}
+	}
+
+	var input UserInput
+	if err := json.Unmarshal([]byte(`{"type":"audio","url":1}`), &input); err == nil {
+		t.Fatal("audio input accepted a non-string URL")
+	}
+}
+
 func TestGeneratedTaggedUnionRequiresVariantFields(t *testing.T) {
 	var tool DynamicToolSpec
 	err := json.Unmarshal([]byte(`{"type":"function"}`), &tool)

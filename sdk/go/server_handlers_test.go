@@ -47,6 +47,44 @@ func TestUnknownServerRequestHandlerReceivesRawParams(t *testing.T) {
 	}
 }
 
+func TestMcpElicitationHandlerReceivesUserVerificationRequest(t *testing.T) {
+	proof, err := json.Marshal(protocol.UserVerificationProof{
+		CredentialID: "credential-1",
+		Signature:    "signature-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers := ServerHandlers{
+		MCPElicitation: MCPElicitationMcpServerElicitationRequestFunc(func(_ context.Context, params protocol.McpServerElicitationRequestParams) (protocol.McpServerElicitationRequestResponse, error) {
+			mode, modeSet := params.Mode.Value()
+			title, titleSet := params.Title.Value()
+			description, descriptionSet := params.Description.Value()
+			challenge, challengeSet := params.Challenge.Value()
+			if !modeSet || mode != "openai/userVerification" || !titleSet || title != "Approve" || !descriptionSet || description != "Confirm action" || !challengeSet || challenge != "challenge-1" {
+				t.Fatalf("params = %#v", params)
+			}
+			return protocol.McpServerElicitationRequestResponse{
+				Action:  protocol.McpServerElicitationActionAccept,
+				Content: proof,
+			}, nil
+		}),
+	}
+
+	result, err := handlers.DispatchServerRequest(
+		context.Background(),
+		"mcpServer/elicitation/request",
+		json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","serverName":"server-1","mode":"openai/userVerification","title":"Approve","description":"Confirm action","challenge":"challenge-1"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, ok := result.(protocol.McpServerElicitationRequestResponse)
+	if !ok || response.Action != protocol.McpServerElicitationActionAccept || string(response.Content) != string(proof) {
+		t.Fatalf("response = %#v", result)
+	}
+}
+
 func TestSDKServerHandlerRegisteredSuccess(t *testing.T) {
 	transport := newScriptedInitializedTransport(t, nil)
 	client, err := NewClient(context.Background(), ClientConfig{
