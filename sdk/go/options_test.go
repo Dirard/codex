@@ -15,6 +15,7 @@ func TestThreadAndTurnOptionCoverageAgainstGeneratedParams(t *testing.T) {
 		"BaseInstructions":           "ThreadStartOptions.BaseInstructions",
 		"Config":                     "ThreadStartOptions.Config",
 		"Cwd":                        "ThreadStartOptions.CWD",
+		"DaybreakEnabled":            "ThreadStartOptions.DaybreakEnabled",
 		"DeveloperInstructions":      "ThreadStartOptions.DeveloperInstructions",
 		"DynamicTools":               "ThreadStartOptions.DynamicTools",
 		"Environments":               "ThreadStartOptions.Environments",
@@ -45,6 +46,7 @@ func TestThreadAndTurnOptionCoverageAgainstGeneratedParams(t *testing.T) {
 		"CollaborationMode":          "TurnOptions.CollaborationMode",
 		"Cwd":                        "TurnOptions.CWD",
 		"CyberAccessProgram":         "TurnOptions.CyberAccessProgram",
+		"DisabledPluginIDs":          "TurnOptions.DisabledPluginIDs",
 		"Effort":                     "TurnOptions.Effort",
 		"Environments":               "TurnOptions.Environments",
 		"Model":                      "TurnOptions.Model",
@@ -74,6 +76,25 @@ func TestThreadAndTurnOptionCoverageAgainstGeneratedParams(t *testing.T) {
 		"Input":          "SDK-owned required argument from TurnHandle.Steer input",
 		"ThreadID":       "SDK-owned from TurnHandle thread identity",
 	})
+}
+
+func TestThreadAndTurnOptionsPreserveOptionalEmptyValues(t *testing.T) {
+	daybreakEnabled := false
+	threadParams := threadStartParams(ThreadStartOptions{DaybreakEnabled: &daybreakEnabled})
+	daybreak, ok := threadParams.DaybreakEnabled.Value()
+	if !ok || daybreak {
+		t.Fatalf("daybreakEnabled = %v, %v; want explicit false", daybreak, ok)
+	}
+
+	if turnStartParams("thread-1", nil, TurnOptions{}).DisabledPluginIDs.IsSet() {
+		t.Fatal("nil disabled plugin IDs must remain omitted")
+	}
+	disabledPluginIDs := []string{}
+	turnParams := turnStartParams("thread-1", nil, TurnOptions{DisabledPluginIDs: disabledPluginIDs})
+	disabled, ok := turnParams.DisabledPluginIDs.Value()
+	if !ok || disabled == nil || len(disabled) != 0 {
+		t.Fatalf("disabledPluginIds = %#v, %v; want explicit empty list", disabled, ok)
+	}
 }
 
 func TestDeferredThreadNamespaceOptionCoverageIsDocumented(t *testing.T) {

@@ -93,6 +93,31 @@ func TestThreadsResourceWrappersSendMatrixMethods(t *testing.T) {
 			},
 		},
 		{
+			name: "add attachment", method: "thread/attachment/add", threadID: "thread-1",
+			call: func() error {
+				_, err := client.Threads.AddAttachment(ctx, protocol.ThreadAttachmentAddParams{
+					ThreadID: "thread-1", AttachmentType: "test", IdentityKey: "attachment-1", Payload: json.RawMessage(`{}`),
+				})
+				return err
+			},
+		},
+		{
+			name: "list attachments", method: "thread/attachment/list", threadID: "thread-1",
+			call: func() error {
+				_, err := client.Threads.ListAttachments(ctx, protocol.ThreadAttachmentListParams{ThreadID: "thread-1"})
+				return err
+			},
+		},
+		{
+			name: "remove attachment", method: "thread/attachment/remove", threadID: "thread-1",
+			call: func() error {
+				_, err := client.Threads.RemoveAttachment(ctx, protocol.ThreadAttachmentRemoveParams{
+					ThreadID: "thread-1", AttachmentType: "test", IdentityKey: "attachment-1",
+				})
+				return err
+			},
+		},
+		{
 			name: "unarchive", method: "thread/unarchive", threadID: "thread-1",
 			call: func() error {
 				_, err := client.Threads.Unarchive(ctx, protocol.ThreadUnarchiveParams{ThreadID: "thread-1"})
@@ -121,9 +146,9 @@ func TestThreadsResourceWrappersSendMatrixMethods(t *testing.T) {
 			},
 		},
 		{
-			name: "rollback", method: "thread/rollback", threadID: "thread-1",
+			name: "revert", method: "thread/revert", threadID: "thread-1",
 			call: func() error {
-				_, err := client.Threads.Rollback(ctx, protocol.ThreadRollbackParams{ThreadID: "thread-1"})
+				_, err := client.Threads.Revert(ctx, protocol.ThreadRevertParams{ThreadID: "thread-1", BeforeTurnID: "turn-1"})
 				return err
 			},
 		},
