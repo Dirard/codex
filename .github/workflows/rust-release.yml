@@ -9,6 +9,7 @@ on:
   workflow_dispatch:
 
 env:
+  CODEX_REPO_ROOT: ${{ github.workspace }}
   CODEX_ZSH_RELEASE_TAG: codex-zsh-v0.1.0
   CODEX_ZSH_MANIFEST_SHA256: c534eab89dcea7e3d8a5e5b3f49c025c7c64cd4e4d9814ee24871de58a9359a1
 
@@ -978,7 +979,6 @@ jobs:
             --bundle "$BUNDLE" \
             --entrypoint-dir "target/${TARGET}/release" \
             --archive-dir "dist/${TARGET}" \
-            --require-materialized-helper-sources \
             --rg-bin "signed-resources/${TARGET}/rg" \
             --zsh-bin "signed-resources/${TARGET}/zsh" \
             ${voice_args[@]+"${voice_args[@]}"}
@@ -1524,6 +1524,7 @@ jobs:
           name: npm-packages
           path: dist/npm/*.tgz
           if-no-files-found: error
+
   release:
     needs:
       - tag-check
@@ -1611,11 +1612,7 @@ jobs:
           manifest="dist/codex-package_SHA256SUMS"
           tmp_manifest="$(mktemp)"
           find dist -type f \
-            \( -name 'codex-package-*.tar.gz' \
-              -o -name 'codex-package-*.tar.zst' \
-              -o -name 'codex-app-server-package-*.tar.gz' \
-              -o -name 'codex-app-server-package-*.tar.zst' \
-              -o -name 'codex-provisioned-package-*.tar.gz' \) \
+            \( -name 'codex-package-*.tar.gz' -o -name 'codex-app-server-package-*.tar.gz' -o -name 'codex-provisioned-package-*.tar.gz' \) \
             -print |
             sort |
             while IFS= read -r archive; do
