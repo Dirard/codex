@@ -772,7 +772,9 @@ fn finalize_exec_result(
     raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr>,
     sandbox_type: SandboxType,
     duration: Duration,
-) -> Result<ExecToolCallOutput> {    match raw_output_result {
+    capture_policy: ExecCapturePolicy,
+) -> Result<ExecToolCallOutput> {
+    match raw_output_result {
         Ok(raw_output) => {
             let RawExecToolCallOutput {
                 exit_status,
@@ -819,11 +821,14 @@ fn finalize_exec_result(
             }
 
             if is_likely_sandbox_denied(sandbox_type, &exec_output) {
-                record_filesystem_sandbox_violation(sandbox_type, &exec_output);
+                if capture_policy != ExecCapturePolicy::SensitiveFullBuffer {
+                    record_filesystem_sandbox_violation(sandbox_type, &exec_output);
+                }
                 return Err(CodexErr::Sandbox(SandboxErr::Denied {
                     output: Box::new(exec_output),
                     network_policy_decision: None,
-                }));            }
+                }));
+            }
 
             Ok(exec_output)
         }
@@ -1092,18 +1097,89 @@ async fn consume_output(
     let mut stdout_handle = stdout_handle;
     let mut stderr_handle = stderr_handle;
 
-    let stdout = await_output(
-        &mut stdout_handle,
-        capture_policy.io_drain_timeout(),
-        &drain_cancellation,
-    )
-    .await?;
-    let stderr = await_output(
-        &mut stderr_handle,
-        capture_policy.io_drain_timeout(),
-        &drain_cancellation,
-    )
-    .await?;
+    let (stdout, stderr) = if matches!(
+        capture_policy,
+        ExecCapturePolicy::FullBufferWithExpiration | ExecCapturePolicy::SensitiveFullBuffer
+    ) {
+        let mut stdout_done = false;
+        let mut stderr_done = false;
+        let drain = async {
+            let stdout = (&mut stdout_handle).await;
+            stdout_done = true;
+            let stdout = stdout.map_err(io::Error::other)??;
+            let stderr = (&mut stderr_handle).await;
+            stderr_done = true;
+            let stderr = stderr.map_err(io::Error::other)??;
+            Ok::<_, io::Error>((stdout, stderr))
+        };
+        // The leader can exit while descendants still hold its pipes. Keep the original
+        // expiration active until draining finishes, without polling a completed future again.
+        let drained = tokio::select! {
+            biased;
+            outcome = &mut expiration_wait, if !expiration_resolved => {
+                match outcome {
+                    Some(ExecExpirationOutcome::TimedOut) => {
+                        exit_status = synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE);
+                        timed_out = true;
+                    }
+                    Some(ExecExpirationOutcome::Cancelled) => {
+                        exit_status = synthetic_exit_status_for_code(/*code*/ 1);
+                    }
+                    None => unreachable!("full-buffer capture always uses expiration"),
+                }
+                None
+            }
+            result = tokio::time::timeout(capture_policy.io_drain_timeout(), drain) => {
+                Some(result.unwrap_or_else(|_| Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "capture output pipes did not close before the drain deadline",
+                ))))
+            }
+        };
+        match drained {
+            Some(Ok(output)) => output,
+            failure => {
+                let cleanup = process_group_id
+                    .map_or(Ok(()), codex_utils_pty::process_group::kill_process_group);
+                stdout_handle.abort();
+                stderr_handle.abort();
+                if !stdout_done {
+                    let _ = stdout_handle.await;
+                }
+                if !stderr_done {
+                    let _ = stderr_handle.await;
+                }
+                cleanup?;
+                if let Some(Err(err)) = failure {
+                    return Err(err.into());
+                }
+                (
+                    StreamOutput {
+                        text: Vec::new(),
+                        truncated_after_lines: None,
+                    },
+                    StreamOutput {
+                        text: Vec::new(),
+                        truncated_after_lines: None,
+                    },
+                )
+            }
+        }
+    } else {
+        let stdout = await_output(
+            &mut stdout_handle,
+            capture_policy.io_drain_timeout(),
+            &drain_cancellation,
+        )
+        .await?;
+        let stderr = await_output(
+            &mut stderr_handle,
+            capture_policy.io_drain_timeout(),
+            &drain_cancellation,
+        )
+        .await?;
+        (stdout, stderr)
+    };
     let aggregated_output = aggregate_output(&stdout, &stderr, retained_bytes_cap);
     Ok(RawExecToolCallOutput {
         exit_status,
@@ -1196,145 +1272,6 @@ async fn read_output<R: AsyncRead + Unpin + Send + 'static>(
     Ok(StreamOutput {
         text: buf,
         truncated_after_lines: None,
-    })
-}
-
-#[cfg(unix)]
-fn synthetic_exit_status(code: i32) -> ExitStatus {
-    use std::os::unix::process::ExitStatusExt;
-    std::process::ExitStatus::from_raw(code)
-}
-
-#[cfg(unix)]
-fn synthetic_exit_status_for_code(code: i32) -> ExitStatus {
-    use std::os::unix::process::ExitStatusExt;
-    std::process::ExitStatus::from_raw(code << 8)
-}
-
-#[cfg(windows)]
-fn synthetic_exit_status(code: i32) -> ExitStatus {
-    use std::os::windows::process::ExitStatusExt;
-    // On Windows the raw status is a u32. Use a direct cast to avoid
-    // panicking on negative i32 values produced by prior narrowing casts.
-    std::process::ExitStatus::from_raw(code as u32)
-}
-
-#[cfg(windows)]
-fn synthetic_exit_status_for_code(code: i32) -> ExitStatus {
-    synthetic_exit_status(code)
-}
-
-#[cfg(test)]
-#[path = "exec_tests.rs"]
-mod tests;
-
-    Ok(RawExecToolCallOutput {
-        exit_status,
-        stdout,
-        stderr,
-        aggregated_output,
-        timed_out,
-    })
-}
-
-async fn await_output(
-    handle: &mut tokio::task::JoinHandle<io::Result<CapturedStreamOutput>>,
-    timeout: Duration,
-    cancellation: &CancellationToken,
-) -> io::Result<CapturedStreamOutput> {
-    match tokio::time::timeout(timeout, &mut *handle).await {
-        Ok(joined) => joined.map_err(io::Error::other)?,
-        Err(_) => {
-            cancellation.cancel();
-            (&mut *handle).await.map_err(io::Error::other)?
-        }
-    }
-}
-
-async fn read_output<R: AsyncRead + Unpin + Send + 'static>(
-    mut reader: R,
-    stream: Option<StdoutStream>,
-    is_stderr: bool,
-    max_bytes: Option<usize>,
-    cancellation: CancellationToken,
-) -> io::Result<CapturedStreamOutput> {
-    let mut buf = Vec::with_capacity(
-        max_bytes.map_or(AGGREGATE_BUFFER_INITIAL_CAPACITY, |max_bytes| {
-            AGGREGATE_BUFFER_INITIAL_CAPACITY.min(max_bytes)
-        }),
-    );
-    let mut tmp = [0u8; READ_CHUNK_SIZE];
-    let mut emitted_deltas: usize = 0;
-    let mut observed_bytes = 0usize;
-
-    loop {
-        let n = tokio::select! {
-            _ = cancellation.cancelled() => {
-                return Ok(CapturedStreamOutput {
-                    retained: StreamOutput {
-                        text: buf,
-                        truncated_after_lines: None,
-                    },
-                    observed_bytes,
-                    capture_incomplete: true,
-                });
-            }
-            read = reader.read(&mut tmp) => read?,
-        };
-        if n == 0 {
-            break;
-        }
-        observed_bytes = observed_bytes.saturating_add(n);
-
-        if let Some(max_bytes) = max_bytes {
-            append_capped(&mut buf, &tmp[..n], max_bytes);
-        } else {
-            buf.extend_from_slice(&tmp[..n]);
-        }
-
-        if let Some(stream) = &stream
-            && emitted_deltas < MAX_EXEC_OUTPUT_DELTAS_PER_CALL
-        {
-            let chunk = tmp[..n].to_vec();
-            let msg = EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
-                call_id: stream.call_id.clone(),
-                stream: if is_stderr {
-                    ExecOutputStream::Stderr
-                } else {
-                    ExecOutputStream::Stdout
-                },
-                chunk,
-            });
-            let event = Event {
-                id: stream.sub_id.clone(),
-                msg,
-            };
-            tokio::select! {
-                _ = cancellation.cancelled() => {
-                    return Ok(CapturedStreamOutput {
-                        retained: StreamOutput {
-                            text: buf,
-                            truncated_after_lines: None,
-                        },
-                        observed_bytes,
-                        capture_incomplete: true,
-                    });
-                }
-                _ = stream.tx_event.send(event) => {}
-            }
-            emitted_deltas += 1;
-        }
-
-        // Continue reading to EOF to avoid back-pressure
-    }
-
-    Ok(CapturedStreamOutput {
-        retained: StreamOutput {
-            text: buf,
-            truncated_after_lines: None,
-        },
-        observed_bytes,
-        capture_incomplete: false,
     })
 }
 

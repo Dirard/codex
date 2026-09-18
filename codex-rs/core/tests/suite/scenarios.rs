@@ -714,7 +714,7 @@ async fn astra_refreshes_plugin_tools_and_skills_in_an_existing_thread() -> Resu
     let home = Arc::new(TempDir::new()?);
     let config = "[features]\nplugins = true\n\n[skills.bundled]\nenabled = false\n";
     fs::write(home.path().join("config.toml"), config)?;
-    let lookup = r#"text(ALL_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));"#;
+    let lookup = r#"text(EXEC_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));"#;
     let mock = mount_sse_sequence(
         &server,
         vec![

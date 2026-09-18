@@ -1241,7 +1241,7 @@ async fn code_mode_finished_discovery_has_empty_tool_inventory(
     let (_test, follow_up) = run_code_mode_turn_with_config(
         &server,
         "Discover tools without calling any",
-        r#"text(ALL_TOOLS.filter(({ name }) => name === "test_sync_tool").map(({ name }) => name));"#,
+        r#"text(EXEC_TOOLS.filter(({ name }) => name === "test_sync_tool").map(({ name }) => name));"#,
         move |config| {
             if !metadata_enabled {
                 config.features.disable(Feature::ExecutedToolCallMetadata).unwrap();
@@ -1837,7 +1837,7 @@ async fn code_mode_mcp_metadata_keeps_originating_window_after_compaction() -> R
         "call-exec",
         "exec",
         &format!(
-            r#"const tool = ALL_TOOLS.find(({{ name }}) => name.endsWith("{RESULT_METADATA_TOOL}"));
+            r#"const tool = EXEC_TOOLS.find(({{ name }}) => name.endsWith("{RESULT_METADATA_TOOL}"));
 const pending = tools[tool.name]({{}});
 yield_control();
 await pending;
@@ -2066,7 +2066,7 @@ async fn result_metadata_follows_call_binding(
         (test, follow_up)
     } else {
         let code = format!(
-            "const tool = ALL_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
+            "const tool = EXEC_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
              const result = await tools[tool.name]({arguments}); \
              text(JSON.stringify({{ isError: Boolean(result.isError), hasMeta: Object.hasOwn(result, \"_meta\") }}));"
         );
@@ -2169,7 +2169,7 @@ async fn code_mode_result_metadata_follows_runtime_recording_enablement() -> Res
     let test = builder.build_with_auto_env(&server).await?;
     let arguments = serde_json::json!({ "search": "launch plan" });
     let code = format!(
-        "const tool = ALL_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
+        "const tool = EXEC_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
          const result = await tools[tool.name]({arguments}); \
          text(JSON.stringify({{ isError: Boolean(result.isError), hasMeta: Object.hasOwn(result, \"_meta\") }}));"
     );
@@ -2288,7 +2288,7 @@ async fn code_mode_result_metadata_keeps_prepared_call_binding_across_runtime_re
         "content_types": "messages",
     });
     let code = format!(
-        "const tool = ALL_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
+        "const tool = EXEC_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
          const pending = tools[tool.name]({arguments}); yield_control(); await pending; \
          await tools[tool.name]({arguments}); text(\"done\");"
     );
@@ -2919,7 +2919,7 @@ async fn code_mode_does_not_expose_update_plan_by_default() -> Result<()> {
         r#"
 text(JSON.stringify({
   callable: typeof tools.update_plan === "function",
-  listed: ALL_TOOLS.some(({ name }) => name === "update_plan"),
+  listed: EXEC_TOOLS.some(({ name }) => name === "update_plan"),
 }));
 "#,
     )

@@ -411,13 +411,29 @@ use codex_utils_stream_parser::ProposedPlanSegment;
 /// completion future observes that shutdown.
 #[derive(Clone)]
 pub(crate) struct SessionIo {
-    pub(crate) tx_sub: Sender<Submission>,
+    pub(crate) tx_sub: Sender<SessionSubmission>,
     pub(crate) rx_event: Receiver<Event>,
     // Last known status of the agent.
     pub(crate) agent_status: watch::Receiver<AgentStatus>,
     // Shared future for the background submission loop completion so multiple
     // callers can wait for shutdown.
     pub(crate) session_loop_termination: SessionLoopTermination,
+}
+
+/// Runtime-only submission metadata; shared budgets never cross the protocol boundary.
+#[derive(Debug)]
+pub(crate) struct SessionSubmission {
+    pub(crate) submission: Submission,
+    pub(crate) turn_spawn_budget: Option<TurnSpawnBudget>,
+}
+
+impl From<Submission> for SessionSubmission {
+    fn from(submission: Submission) -> Self {
+        Self {
+            submission,
+            turn_spawn_budget: None,
+        }
+    }
 }
 
 pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
@@ -962,6 +978,7 @@ impl SessionIo {
     pub(crate) async fn submit(&self, op: Op) -> CodexResult<String> {
         self.submit_with_trace(
             op, /*trace*/ None, /*parent_turn_id*/ None, /*root_turn_id*/ None,
+            /*turn_spawn_budget*/ None,
         )
         .await
     }
@@ -972,6 +989,7 @@ impl SessionIo {
         trace: Option<W3cTraceContext>,
         parent_turn_id: Option<String>,
         root_turn_id: Option<String>,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
     ) -> CodexResult<String> {
         let id = new_submission_id();
         let sub = Submission {
@@ -981,17 +999,30 @@ impl SessionIo {
             parent_turn_id,
             root_turn_id,
         };
-        self.submit_with_id(sub).await?;
+        self.submit_with_id_and_spawn_budget(sub, turn_spawn_budget)
+            .await?;
         Ok(id)
     }
 
     /// Use sparingly: prefer `submit()` so submission IDs are generated consistently.
-    pub(crate) async fn submit_with_id(&self, mut sub: Submission) -> CodexResult<()> {
+    pub(crate) async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
+        self.submit_with_id_and_spawn_budget(sub, /*turn_spawn_budget*/ None)
+            .await
+    }
+
+    pub(crate) async fn submit_with_id_and_spawn_budget(
+        &self,
+        mut sub: Submission,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
+    ) -> CodexResult<()> {
         if sub.trace.is_none() {
             sub.trace = current_span_w3c_trace_context();
         }
         self.tx_sub
-            .send(sub)
+            .send(SessionSubmission {
+                submission: sub,
+                turn_spawn_budget,
+            })
             .await
             .map_err(|_| CodexErr::InternalAgentDied)?;
         Ok(())
@@ -1005,21 +1036,25 @@ impl SessionIo {
         &self,
         mut request: TurnInputRequest,
         mode: TurnInputMode,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
     ) -> CodexResult<TurnInputSubmission> {
         let id = new_submission_id();
         let (reply_tx, reply_rx) = oneshot::channel();
         let trace = request.trace.take();
-        self.submit_with_id(Submission {
-            id,
-            op: Op::TurnInput {
-                request: Box::new(request),
-                mode,
-                reply: reply_tx,
+        self.submit_with_id_and_spawn_budget(
+            Submission {
+                id,
+                op: Op::TurnInput {
+                    request: Box::new(request),
+                    mode,
+                    reply: reply_tx,
+                },
+                trace,
+                parent_turn_id: None,
+                root_turn_id: None,
             },
-            trace,
-            parent_turn_id: None,
-            root_turn_id: None,
-        })
+            turn_spawn_budget,
+        )
         .await?;
         reply_rx.await.unwrap_or(Err(CodexErr::InternalAgentDied))
     }
@@ -2339,6 +2374,7 @@ impl Session {
                 id.clone(),
                 communication,
                 TurnStartOptions::default(),
+                /*turn_spawn_budget*/ None,
             )
             .await;
             id
@@ -3670,34 +3706,52 @@ impl Session {
         mut items: Vec<ResponseItemEnvelope>,
         image_preparations: Vec<ImagePreparationMetadata>,
     ) {
-        // Save the originating history budget for replay.
-        // Preserve any existing tool-specific override.
-        let policy: codex_utils_output_truncation::TruncationPolicy =
-            model_info.truncation_policy.into();
+        let originating_truncation = turn_context.output_truncation_for_model(model_info);
         for envelope in &mut items {
             if matches!(
                 envelope.item,
                 ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. }
             ) {
-                envelope
-                    .metadata
-                    .get_or_insert_default()
+                let metadata = envelope.metadata.get_or_insert_default();
+                if let Some(policy) = metadata.history_truncation_policy {
+                    metadata
+                        .history_truncation_token_limit
+                        .get_or_insert_with(|| policy.token_budget());
+                    continue;
+                }
+                // Preserve a tool-specific token override, then save the complete policy so
+                // replay does not depend on the model or config selected after this output.
+                let truncation = if let Some(policy) = metadata
                     .history_truncation_token_limit
-                    .get_or_insert_with(|| with_serialization_allowance(policy).token_budget());
+                    .map(codex_utils_output_truncation::TruncationPolicy::Tokens)
+                {
+                    originating_truncation.with_policy(policy)
+                } else {
+                    originating_truncation
+                        .with_policy(with_serialization_allowance(originating_truncation.policy))
+                };
+                metadata
+                    .history_truncation_token_limit
+                    .get_or_insert_with(|| {
+                        with_serialization_allowance(originating_truncation.policy).token_budget()
+                    });
+                metadata.history_truncation_policy = Some(truncation.policy);
+                metadata.history_truncation_max_lines = truncation.max_lines;
+                metadata.history_truncation_mcp_max_lines = truncation.mcp_max_lines;
             }
         }
         let response_items = items
             .iter()
             .map(|envelope| envelope.item.clone())
             .collect::<Vec<_>>();
-        let processed_items = {
+        {
             let mut state = self.state.lock().await;
             state
                 .current_time_reminder
                 .note_recorded_items(&response_items);
             state
                 .history
-                .record_annotated_items(&items, turn_context.output_truncation())
+                .record_annotated_items(&items, originating_truncation)
         };
         for image in image_preparations {
             self.services
@@ -3707,10 +3761,8 @@ impl Session {
                     metadata: image,
                 });
         }
-        let rollout_items: Vec<RolloutItem> = processed_items
-            .into_iter()
-            .map(RolloutItem::ResponseItem)
-            .collect();
+        let rollout_items: Vec<RolloutItem> =
+            items.into_iter().map(RolloutItem::ResponseItem).collect();
         self.persist_rollout_items(&rollout_items).await;
         if turn_context.config.memories.disable_on_external_context
             && let Some(item) = response_items
@@ -3950,21 +4002,6 @@ impl Session {
         )
         .or_cancel(cancellation_token)
         .await??;
-        // Publish inventory after planning rather than during finalization, so constructing
-        // additional candidate plans cannot overwrite turn-wide metadata.
-        if turn_context
-            .config
-            .tool_registry
-            .turn_metadata_includes_tool_info
-            && turn_context.model_info().use_responses_lite
-        {
-            turn_context.turn_metadata_state.set_tool_namespaces_info(
-                tool_router
-                    .tool_namespaces_info()
-                    .cloned()
-                    .unwrap_or_default(),
-            );
-        }
         let turn_spawn_budget = self
             .current_turn_spawn_budget(turn_context.config.max_spawned_threads_per_turn)
             .await;
@@ -4002,7 +4039,7 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             state.current_time_reminder.note_recorded_items(items);
-            let _ = state.record_items(items.iter(), turn_context.output_truncation());
+            state.record_items(items.iter(), turn_context.output_truncation());
         }
         self.persist_rollout_items(&[
             RolloutItem::InterAgentCommunicationMetadata {

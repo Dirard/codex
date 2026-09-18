@@ -227,7 +227,9 @@ async fn yielded_cells_retain_their_own_delegate_until_closed() {
         WaitOutcome::LiveCell(RuntimeResponse::Result {
             code_mode_host_duration: None,
             cell_id: cell_id("1"),
-            content_items: Vec::new(),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "Code mode completed with 2 settled nested tool outcomes not passed to an output helper after the last successful sink.\nPass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`.".to_string(),
+            }],
             error_text: None
         })
     );

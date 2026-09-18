@@ -13,7 +13,6 @@ use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ErrorEvent;
-use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
@@ -100,7 +99,7 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
         )
         .await;
     let ((outcome, _), submitted_text) = tokio::join!(manager.review(prepared), async {
-        let submission = rx_sub.recv().await.unwrap();
+        let submission = rx_sub.recv().await.unwrap().submission;
         let id = submission.id;
         let Op::TurnInput { request, reply, .. } = submission.op else {
             panic!("expected reviewer prompt");
@@ -137,7 +136,7 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
 async fn test_review_session() -> (
     GuardianReviewSession,
     async_channel::Sender<Event>,
-    async_channel::Receiver<Submission>,
+    async_channel::Receiver<crate::session::SessionSubmission>,
 ) {
     let (session, _turn, _rx) = crate::session::tests::make_session_and_context_with_rx().await;
     let (tx_sub, rx_sub) = async_channel::bounded(4);
@@ -712,7 +711,7 @@ async fn run_review_on_reused_session_waits_for_submitted_turn() {
         )
         .await
     });
-    let submission = rx_sub.recv().await.expect("guardian submission");
+    let submission = rx_sub.recv().await.expect("guardian submission").submission;
     let id = submission.id;
     let Op::TurnInput { reply, .. } = submission.op else {
         panic!("expected turn-input submission");
@@ -776,7 +775,7 @@ async fn run_review_removes_trunk_when_event_stream_is_broken() {
     let manager_for_review = Arc::clone(&manager);
     let review =
         tokio::spawn(async move { run_guardian_review_session(manager_for_review, params).await });
-    let submission = rx_sub.recv().await.expect("guardian submission");
+    let submission = rx_sub.recv().await.expect("guardian submission").submission;
     let id = submission.id;
     let Op::TurnInput { reply, .. } = submission.op else {
         panic!("expected turn-input submission");
@@ -934,7 +933,11 @@ async fn wait_for_guardian_review_timeout_drains_expected_turn_after_stale_termi
         .expect("queue prior turn completion");
     let tx_interrupt_event = tx_event.clone();
     let interrupt_response = tokio::spawn(async move {
-        let submission = rx_sub.recv().await.expect("interrupt submission");
+        let submission = rx_sub
+            .recv()
+            .await
+            .expect("interrupt submission")
+            .submission;
         assert!(matches!(submission.op, Op::Interrupt));
         tx_interrupt_event
             .send(turn_aborted_event("current-turn"))
@@ -973,7 +976,11 @@ async fn wait_for_guardian_review_cancel_drains_expected_turn_after_stale_termin
         .expect("queue prior turn completion");
     let tx_interrupt_event = tx_event.clone();
     let interrupt_response = tokio::spawn(async move {
-        let submission = rx_sub.recv().await.expect("interrupt submission");
+        let submission = rx_sub
+            .recv()
+            .await
+            .expect("interrupt submission")
+            .submission;
         assert!(matches!(submission.op, Op::Interrupt));
         tx_interrupt_event
             .send(turn_aborted_event("current-turn"))

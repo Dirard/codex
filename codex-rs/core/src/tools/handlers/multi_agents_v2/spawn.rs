@@ -165,10 +165,16 @@ async fn handle_spawn_agent(
         .session_source
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
-    let communication = agent_message_from_tool(message, &source).into_communication(
+    let communication = agent_message_from_tool(
+        message,
+        &source,
+        turn.config.multi_agent_v2.message_delivery,
+    )
+    .into_communication(
         author,
         new_agent_path.clone(),
-        MessageDeliveryMode::TriggerTurn,    );
+        MessageDeliveryMode::TriggerTurn,
+    );
     let context = AgentCommunicationContext::new(AgentCommunicationKind::Spawn, session.thread_id);
     let multi_agent_v2_usage_hints =
         if is_full_history_fork && turn.multi_agent_version == MultiAgentVersion::V2 {

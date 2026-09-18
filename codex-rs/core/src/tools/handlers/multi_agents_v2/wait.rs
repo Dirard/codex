@@ -3,6 +3,7 @@ use crate::agent::status::is_final;
 use crate::session::InputQueueActivity;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
+use codex_protocol::AgentPath;
 use codex_tools::ToolSpec;
 use std::collections::HashMap;
 use std::time::Duration;

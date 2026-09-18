@@ -22,12 +22,12 @@ use crate::thread_manager::thread_store_from_config;
 use crate::tools::handlers::multi_agents_common::thread_spawn_source;
 use assert_matches::assert_matches;
 use codex_extension_api::ExtensionDataInit;
+use codex_extension_api::ExtensionFuture;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::Instructions;
 use codex_extension_api::LoadInstructionsFuture;
 use codex_extension_api::LoadedUserInstructions;
 use codex_extension_api::ThreadInstructionsProvider;
-use codex_extension_api::ExtensionFuture;
-use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::empty_extension_registry;
@@ -97,6 +97,9 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 use wiremock::MockServer;
+
+#[path = "control/turn_spawn_budget_tests.rs"]
+mod turn_spawn_budget_tests;
 
 async fn test_config_with_cli_overrides(
     mut cli_overrides: Vec<(String, TomlValue)>,
@@ -3928,7 +3931,7 @@ async fn multi_agent_v2_terminal_status_is_published_after_parent_mailbox() {
         &expected_status,
     )
     .expect("completed status should render");
-    let (mailbox_items, start_options) = worker_thread
+    let (mailbox_items, start_options, _) = worker_thread
         .session
         .input_queue
         .drain_mailbox_input_items()
@@ -3988,6 +3991,7 @@ async fn multi_agent_v2_terminal_error_is_published_after_parent_mailbox() {
             tester_turn.as_ref(),
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: tester_turn.sub_id.clone(),
+                root_turn_id: Some(tester_turn.sub_id.clone()),
                 trace_id: None,
                 started_at: None,
                 model_context_window: None,
@@ -4067,7 +4071,7 @@ async fn multi_agent_v2_terminal_error_is_published_after_parent_mailbox() {
         &expected_status,
     )
     .expect("errored status should render");
-    let (mailbox_items, start_options) = worker_thread
+    let (mailbox_items, start_options, _) = worker_thread
         .session
         .input_queue
         .drain_mailbox_input_items()
@@ -4147,6 +4151,7 @@ async fn followup_to_non_v2_child_notifies_parent_on_second_completion() {
             first_turn.as_ref(),
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: first_turn.sub_id.clone(),
+                root_turn_id: Some(first_turn.sub_id.clone()),
                 trace_id: None,
                 started_at: None,
                 model_context_window: None,

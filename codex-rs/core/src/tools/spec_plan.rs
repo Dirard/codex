@@ -63,7 +63,6 @@ use crate::tools::tool_namespaces_info::collect_tool_namespaces_info;
 use codex_connectors::apps_config_from_layer_stack;
 use codex_extension_api::ExtensionData;
 use codex_features::Feature;
-use codex_features::MultiAgentMessageDelivery;
 use codex_features::SleepToolMode;
 use codex_login::AuthManager;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -1326,7 +1325,8 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     ),
                     tool_namespace,
                     // Spawn composes the selected description with runtime model and usage guidance.
-                    /*description_override*/ None,
+                    /*description_override*/
+                    None,
                     message_delivery,
                 ),
                 exposure,

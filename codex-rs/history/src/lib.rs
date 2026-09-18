@@ -25,6 +25,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageRecord;
+use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::WorldStateItem;
 use codex_protocol::realtime::RealtimeItem;
@@ -61,6 +62,18 @@ pub struct CodexHarnessMetadata {
         skip_serializing_if = "Option::is_none"
     )]
     pub history_truncation_token_limit: Option<usize>,
+
+    /// The complete originating policy for replay when byte limits are configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_truncation_policy: Option<TruncationPolicy>,
+
+    /// Originating general output line limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_truncation_max_lines: Option<usize>,
+
+    /// Originating tighter MCP output line limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_truncation_mcp_max_lines: Option<usize>,
 
     /// Whether a response configuration update was created by the Codex harness itself.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

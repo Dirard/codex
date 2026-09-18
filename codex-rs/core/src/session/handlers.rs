@@ -80,10 +80,11 @@ pub async fn inter_agent_communication(
     sub_id: String,
     communication: InterAgentCommunication,
     start_options: codex_protocol::turn_input::TurnStartOptions,
+    turn_spawn_budget: Option<crate::agent::control::TurnSpawnBudget>,
 ) {
     let trigger_turn = communication.trigger_turn;
     sess.input_queue
-        .enqueue_mailbox_communication(communication, start_options)
+        .enqueue_mailbox_communication(communication, start_options, turn_spawn_budget)
         .await;
     crate::agent_communication::emit_agent_communication_receive(&sub_id);
     if trigger_turn || sess.has_outstanding_durable_sleep() {
@@ -411,11 +412,15 @@ pub async fn review(
 pub(super) async fn submission_loop(
     sess: Arc<Session>,
     config: Arc<Config>,
-    rx_sub: Receiver<Submission>,
+    rx_sub: Receiver<super::SessionSubmission>,
 ) {
     // To break out of this loop, send Op::Shutdown.
     let mut shutdown_received = false;
-    while let Ok(sub) = rx_sub.recv().await {
+    while let Ok(super::SessionSubmission {
+        submission: sub,
+        turn_spawn_budget,
+    }) = rx_sub.recv().await
+    {
         if matches!(sub.op, Op::ResolveElicitation { .. }) {
             debug!(submission_id = %sub.id, operation = sub.op.kind(), "Submission");
         } else {
@@ -473,7 +478,14 @@ pub(super) async fn submission_loop(
                     mode,
                     reply,
                 } => {
-                    let result = turn_input::handle(&sess, *request, mode, sub.id.clone()).await;
+                    let result = turn_input::handle(
+                        &sess,
+                        *request,
+                        mode,
+                        sub.id.clone(),
+                        turn_spawn_budget,
+                    )
+                    .await;
                     let _ = reply.send(result);
                     false
                 }
@@ -522,8 +534,14 @@ pub(super) async fn submission_loop(
                     communication,
                     start_options,
                 } => {
-                    inter_agent_communication(&sess, sub.id.clone(), communication, start_options)
-                        .await;
+                    inter_agent_communication(
+                        &sess,
+                        sub.id.clone(),
+                        communication,
+                        start_options,
+                        turn_spawn_budget,
+                    )
+                    .await;
                     false
                 }
                 Op::ExecApproval {

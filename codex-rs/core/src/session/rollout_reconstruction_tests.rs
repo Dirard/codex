@@ -71,7 +71,9 @@ async fn sender_context_follows_its_delivery_through_checkpoint_and_rollback() {
                 }),
             },
         ];
-        live.record_annotated_items(&input, turn_context.model_info().truncation_policy.into());
+        let policy: codex_utils_output_truncation::TruncationPolicy =
+            turn_context.model_info().truncation_policy.into();
+        live.record_annotated_items(&input, policy);
         items.extend(input.into_iter().map(RolloutItem::ResponseItem));
         snapshots.push(snapshot);
     }

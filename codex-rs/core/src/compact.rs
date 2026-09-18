@@ -113,11 +113,8 @@ pub(crate) async fn build_compaction_initial_context(
                     .await
                 }
                 None => {
-                    sess.build_initial_context_with_world_state(
-                        step_context,
-                        world_state.as_ref(),
-                    )
-                    .await
+                    sess.build_initial_context_with_world_state(step_context, world_state.as_ref())
+                        .await
                 }
             };
             (
@@ -273,7 +270,7 @@ async fn run_compact_task_inner_impl(
     let mut history = sess.clone_history().await;
     history.record_items(
         &[initial_input_for_turn.into()],
-        turn_context.output_truncation(),
+        step_context.output_truncation(),
     );
 
     let max_retries = turn_context.provider.info().stream_max_retries();

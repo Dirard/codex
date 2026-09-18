@@ -1693,6 +1693,24 @@ impl ThreadManagerState {
         parent_turn_id: Option<String>,
         root_turn_id: Option<String>,
     ) -> CodexResult<String> {
+        self.send_op_with_spawn_budget(
+            thread_id,
+            op,
+            parent_turn_id,
+            root_turn_id,
+            /*turn_spawn_budget*/ None,
+        )
+        .await
+    }
+
+    pub(crate) async fn send_op_with_spawn_budget(
+        &self,
+        thread_id: ThreadId,
+        op: Op,
+        parent_turn_id: Option<String>,
+        root_turn_id: Option<String>,
+        turn_spawn_budget: Option<crate::agent::control::TurnSpawnBudget>,
+    ) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
         if let Some(ops_log) = &self.ops_log
             && let Ok(mut log) = ops_log.lock()
@@ -1702,7 +1720,13 @@ impl ThreadManagerState {
         }
         thread
             .io
-            .submit_with_trace(op, /*trace*/ None, parent_turn_id, root_turn_id)
+            .submit_with_trace(
+                op,
+                /*trace*/ None,
+                parent_turn_id,
+                root_turn_id,
+                turn_spawn_budget,
+            )
             .await
     }
 

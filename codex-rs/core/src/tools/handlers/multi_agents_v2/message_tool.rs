@@ -45,7 +45,6 @@ pub(super) async fn handle_message_string_tool(
     let message = message_content(message)?;
     let ToolInvocation {
         session,
-        step_context,
         turn,
         step_context,
         call_id,
@@ -61,7 +60,11 @@ pub(super) async fn handle_message_string_tool(
             session.thread_id,
             &turn,
             receiver_thread_id,
-            agent_message_from_tool(message, &source),
+            agent_message_from_tool(
+                message,
+                &source,
+                turn.config.multi_agent_v2.message_delivery,
+            ),
             mode,
             step_context.turn_spawn_budget.clone(),
         )
@@ -71,7 +74,8 @@ pub(super) async fn handle_message_string_tool(
                 FunctionCallError::RespondToModel(message)
             }
             MessageDeliveryError::Agent(err) => collab_agent_error(receiver_thread_id, err),
-        })?;    emit_sub_agent_activity(
+        })?;
+    emit_sub_agent_activity(
         &session,
         &turn,
         SubAgentActivityItem {

@@ -1771,7 +1771,10 @@ async fn codex_apps_auth_elicitation_returns_subagent_handoff_and_diagnostics() 
         result_metadata_capture_allowed: true,
         wall_time: std::time::Duration::ZERO,
         original_image_detail_supported: false,
-        truncation_policy: TruncationPolicy::Tokens(256),
+        truncation: codex_utils_output_truncation::OutputTruncation::new(
+            TruncationPolicy::Tokens(256),
+            /*max_lines*/ None,
+        ),
     };
     let payload = ToolPayload::Function {
         arguments: "{}".to_string(),

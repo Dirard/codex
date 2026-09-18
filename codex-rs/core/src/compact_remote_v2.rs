@@ -986,6 +986,13 @@ mod tests {
             .collect()
     }
 
+    fn truncate_without_metadata(items: Vec<ResponseItem>, max_tokens: usize) -> Vec<ResponseItem> {
+        raw(truncate_retained_messages_for_remote_compaction(
+            items.into_iter().map(ResponseItemEnvelope::new).collect(),
+            max_tokens,
+        ))
+    }
+
     fn response_stream(events: Vec<CodexResult<ResponseEvent>>) -> ResponseStream {
         let (tx_event, rx_event) = mpsc::channel(events.len().max(1));
         for event in events {
@@ -1302,7 +1309,7 @@ mod tests {
         let truncated = truncate_without_metadata(retained, /*max_tokens*/ 2);
 
         assert_eq!(truncated, vec![image_only_message, newest]);
-}
+    }
 
     #[test]
     fn retained_history_truncates_text_only_message_to_full_item_budget() {

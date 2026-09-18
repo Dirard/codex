@@ -227,7 +227,7 @@ impl McpHandler {
         };
 
         // Capture presentation policy from the same config snapshot used for execution.
-        let configured_truncation = turn.output_truncation();
+        let configured_truncation = step_context.output_truncation();
         let truncation = prepared_mcp_call
             .as_ref()
             .and_then(codex_mcp::PreparedMcpCall::output_token_limit)
@@ -259,7 +259,9 @@ impl McpHandler {
             tool_input: result.tool_input,
             result_metadata_capture_allowed,
             wall_time: started.elapsed(),
-            original_image_detail_supported: can_request_original_image_detail(turn.model_info()),
+            original_image_detail_supported: can_request_original_image_detail(
+                &step_context.settings.model_info,
+            ),
             truncation,
         }))
     }

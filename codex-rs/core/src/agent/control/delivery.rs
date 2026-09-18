@@ -108,10 +108,10 @@ impl AgentControl {
             resume_config,
             target,
             /*parent*/ None,
-            turn_spawn_budget,
+            turn_spawn_budget.clone(),
         )
-            .await
-            .map_err(MessageDeliveryError::Agent)?;
+        .await
+        .map_err(MessageDeliveryError::Agent)?;
         let author = turn
             .session_source
             .get_agent_path()
@@ -124,7 +124,7 @@ impl AgentControl {
         let context = AgentCommunicationContext::new(kind, caller);
         let parent_turn_id =
             matches!(mode, MessageDeliveryMode::TriggerTurn).then(|| turn.sub_id.clone());
-        self.send_inter_agent_communication(
+        self.send_inter_agent_communication_with_spawn_budget(
             target,
             communication,
             context,
@@ -135,6 +135,7 @@ impl AgentControl {
                 cyber_access_program: turn.cyber_access_program,
                 ..Default::default()
             },
+            Some(turn_spawn_budget),
         )
         .await
         .map_err(MessageDeliveryError::Agent)?;

@@ -70,6 +70,34 @@ fn rejects_alias_when_tmp_is_itself_a_bind_mount() {
     );
 }
 
+#[test_case("0:2", "/run/netns/example", Ok(()); "unrelated namespace bind")]
+#[test_case("0:2", "/tmp/codex-daemon-1000/netns", Err(io::ErrorKind::PermissionDenied); "nested namespace bind")]
+#[test_case("0:2", "run/netns/example", Err(io::ErrorKind::Other); "relative destination")]
+#[test_case("0:1", "/run/netns/example", Err(io::ErrorKind::Other); "non-path root on protected device")]
+fn namespace_mounts_preserve_socket_isolation(
+    namespace_device: &str,
+    destination: &str,
+    expected: Result<(), io::ErrorKind>,
+) {
+    let mounts = format!(
+        "1 0 0:1 / / rw - ext4 disk rw\n\
+         2 1 {namespace_device} net:[123] {destination} rw - nsfs nsfs rw\n"
+    );
+    for mount_id in [Some("1"), None] {
+        assert_eq!(
+            check_mounts(
+                Path::new("/tmp/codex-daemon-1000"),
+                "0:1",
+                mount_id,
+                mounts.as_bytes(),
+            )
+            .map_err(|error| error.kind()),
+            expected,
+            "mount_id: {mount_id:?}",
+        );
+    }
+}
+
 #[test]
 fn accepts_private_tmp_filesystem_and_resolves_stacked_mounts() {
     let mounts = "1 0 0:1 / / rw - ext4 disk rw\n2 1 0:2 / /tmp rw - tmpfs tmpfs rw\n";

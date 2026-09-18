@@ -62,7 +62,14 @@ fn check_mounts(
         let [id, parent, mount_device, root, destination] = fields.as_slice() else {
             return Err(invalid());
         };
-        let root = mount_path(root)?;
+        // Only same-device roots participate in alias resolution. Other filesystems
+        // can use opaque roots (for example, nsfs uses `net:[inode]`). Their mount
+        // destinations still participate in all nested/covering-mount checks.
+        let root = if *mount_device == device.as_bytes() {
+            mount_path(root)?
+        } else {
+            PathBuf::new()
+        };
         let destination = mount_path(destination)?;
         mounts.push((*id, *parent, *mount_device, root, destination));
     }
