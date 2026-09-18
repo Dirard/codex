@@ -1008,7 +1008,6 @@ jobs:
             --bundle "$BUNDLE" \
             --entrypoint-dir "target/${TARGET}/release" \
             --archive-dir "dist/${TARGET}" \
-            --require-materialized-helper-sources \
             --rg-bin "signed-resources/${TARGET}/rg" \
             ${voice_args[@]+"${voice_args[@]}"}
 
@@ -1577,6 +1576,7 @@ jobs:
           name: npm-packages
           path: dist/npm/*.tgz
           if-no-files-found: error
+
   release:
     # Each job checks its channel under this lock; out-of-order builds cannot
     # roll back GitHub, npm, R2, or the canary branch.
@@ -1670,11 +1670,7 @@ jobs:
           manifest="dist/codex-package_SHA256SUMS"
           tmp_manifest="$(mktemp)"
           find dist -type f \
-            \( -name 'codex-package-*.tar.gz' \
-              -o -name 'codex-package-*.tar.zst' \
-              -o -name 'codex-app-server-package-*.tar.gz' \
-              -o -name 'codex-app-server-package-*.tar.zst' \
-              -o -name 'codex-provisioned-package-*.tar.gz' \) \
+            \( -name 'codex-package-*.tar.gz' -o -name 'codex-app-server-package-*.tar.gz' -o -name 'codex-provisioned-package-*.tar.gz' \) \
             -print |
             sort |
             while IFS= read -r archive; do
