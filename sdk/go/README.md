@@ -98,10 +98,13 @@ Threads are started through `Threads.Start`, then turns are started with `Thread
 <!-- codex-go-sdk-docs:thread/goal/get -->
 <!-- codex-go-sdk-docs:thread/goal/clear -->
 <!-- codex-go-sdk-docs:thread/metadata/update -->
+<!-- codex-go-sdk-docs:thread/attachment/add -->
+<!-- codex-go-sdk-docs:thread/attachment/list -->
+<!-- codex-go-sdk-docs:thread/attachment/remove -->
 <!-- codex-go-sdk-docs:thread/compact/start -->
 <!-- codex-go-sdk-docs:thread/shellCommand -->
 <!-- codex-go-sdk-docs:thread/approveGuardianDeniedAction -->
-<!-- codex-go-sdk-docs:thread/rollback -->
+<!-- codex-go-sdk-docs:thread/revert -->
 <!-- codex-go-sdk-docs:thread/increment_elicitation -->
 <!-- codex-go-sdk-docs:thread/decrement_elicitation -->
 <!-- codex-go-sdk-docs:thread/settings/update -->
@@ -123,10 +126,13 @@ _, _ = client.Threads.SetGoal(ctx, protocol.ThreadGoalSetParams{})
 _, _ = client.Threads.GetGoal(ctx, protocol.ThreadGoalGetParams{})
 _, _ = client.Threads.ClearGoal(ctx, protocol.ThreadGoalClearParams{})
 _, _ = client.Threads.UpdateMetadata(ctx, protocol.ThreadMetadataUpdateParams{})
+_, _ = client.Threads.AddAttachment(ctx, protocol.ThreadAttachmentAddParams{})
+_, _ = client.Threads.ListAttachments(ctx, protocol.ThreadAttachmentListParams{})
+_, _ = client.Threads.RemoveAttachment(ctx, protocol.ThreadAttachmentRemoveParams{})
 _, _ = client.Threads.StartCompaction(ctx, protocol.ThreadCompactStartParams{})
 _, _ = client.Threads.ShellCommand(ctx, protocol.ThreadShellCommandParams{})
 _, _ = client.Threads.ApproveGuardianDeniedAction(ctx, protocol.ThreadApproveGuardianDeniedActionParams{})
-_, _ = client.Threads.Rollback(ctx, protocol.ThreadRollbackParams{})
+_, _ = client.Threads.Revert(ctx, protocol.ThreadRevertParams{})
 _, _ = thread.IncrementElicitation(ctx)
 _, _ = client.Threads.IncrementElicitation(ctx, thread.ID())
 _, _ = thread.DecrementElicitation(ctx)
@@ -145,7 +151,7 @@ _, _ = client.Threads.ListLoaded(ctx, protocol.ThreadLoadedListParams{})
 
 ## Runs, Streaming, And Output Schema
 
-`examples/run` shows sync-style `Run`, images through `DataURL` or `LocalImage`, and structured output through `TurnOptions.OutputSchema`. This is the per-turn SDK surface; the README does not promise a separate general response-format API beyond the app-server protocol fields implemented and tested by the SDK.
+`examples/run` shows sync-style `Run`, images through `DataURL`, `ImageFileID`, or `LocalImage`, and structured output through `TurnOptions.OutputSchema`. This is the per-turn SDK surface; the README does not promise a separate general response-format API beyond the app-server protocol fields implemented and tested by the SDK.
 
 `examples/streaming` shows `Thread.Turn`, streamed notifications, `Steer`, `Interrupt`, and live turn-settings updates.
 

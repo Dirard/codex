@@ -4,7 +4,26 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/openai/codex/sdk/go/protocol"
 )
+
+func TestMemoryStatusWrapper(t *testing.T) {
+	transport := newScriptedInitializedTransport(t, nil)
+	client, err := NewClient(context.Background(), ClientConfig{Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	failMethod(transport, "memory/status")
+
+	_, err = client.Memory.Status(context.Background(), protocol.MemoryStatusParams{})
+	var rpcErr *RPCError
+	if !errors.As(err, &rpcErr) {
+		t.Fatalf("err = %T(%v), want *RPCError", err, err)
+	}
+	assertMethod(t, transport.lastFrame(t), "memory/status")
+}
 
 func TestMemoryResetWrapper(t *testing.T) {
 	transport := newScriptedInitializedTransport(t, nil)
@@ -35,8 +54,16 @@ func TestMemoryResetStableModeRejectsExperimentalMethodBeforeWrite(t *testing.T)
 	t.Cleanup(func() { _ = client.Close() })
 
 	before := len(transport.sentFrames())
-	_, err = client.Memory.Reset(context.Background())
+	_, err = client.Memory.Status(context.Background(), protocol.MemoryStatusParams{})
 	var configErr *ConfigError
+	if !errors.As(err, &configErr) {
+		t.Fatalf("status err = %T(%v), want *ConfigError", err, err)
+	}
+	if len(transport.sentFrames()) != before {
+		t.Fatal("experimental memory status reached transport in stable mode")
+	}
+
+	_, err = client.Memory.Reset(context.Background())
 	if !errors.As(err, &configErr) {
 		t.Fatalf("err = %T(%v), want *ConfigError", err, err)
 	}
