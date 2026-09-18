@@ -10,6 +10,7 @@ use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_sandboxing::SandboxType;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -20,6 +21,7 @@ fn terminal_permissions(profile: &PermissionProfile) -> TerminalPermissions {
         policy: TerminalPolicy {
             sandbox: FileSystemSandboxContext::from_permission_profile(
                 effective_permission_profile(profile, /*additional_permissions*/ None),
+                PathUri::from_host_native_path(std::env::temp_dir()).expect("local temporary cwd"),
             ),
             environment_network: None,
             controller_network: None,
@@ -163,7 +165,10 @@ async fn internal_grants_require_review_without_exposing_paths() -> anyhow::Resu
     environment.config_mut().permission_profile =
         PermissionProfileSnapshot::legacy(PermissionProfile::read_only());
     let grants = serde_json::from_value(json!({
-        "file_system": {"write": [turn.config.cwd.join("private-metrics")]}
+        "file_system": {
+            "read": [turn.config.cwd.join("private-snapshot")],
+            "write": [turn.config.cwd.join("private-metrics")]
+        }
     }))?;
     let permissions = TerminalPermissions::for_launch(
         &environment,
@@ -189,11 +194,41 @@ async fn internal_grants_require_review_without_exposing_paths() -> anyhow::Resu
     Ok(())
 }
 
-#[test_case::test_case(TerminalSandboxSource::Native, SandboxPermissions::RequireEscalated; "native_disabled_sandbox_needs_review_when_enabled")]
-#[test_case::test_case(TerminalSandboxSource::Executor, SandboxPermissions::UseDefault; "executor_keeps_its_restricted_token_default")]
+#[tokio::test]
+async fn readable_snapshot_does_not_require_stdin_approval() -> anyhow::Result<()> {
+    let (_session, turn) = make_session_and_context().await;
+    let mut environment = turn.environments.primary().expect("environment").clone();
+    environment.config_mut().permission_profile =
+        PermissionProfileSnapshot::legacy(PermissionProfile::read_only());
+    let snapshot = turn.config.cwd.join("shell-snapshot.sh");
+    let grant = crate::shell_snapshot::snapshot_read_permissions(
+        &snapshot,
+        &environment.permission_profile_with_workspace_roots(),
+        environment.cwd(),
+    );
+    assert_eq!(grant, None);
+    let permissions = TerminalPermissions::for_launch(
+        &environment,
+        &turn,
+        TerminalSandboxSource::Native,
+        SandboxPermissions::UseDefault,
+        /*additional_permissions*/ None,
+        grant.as_ref(),
+    );
+    assert_eq!(
+        permissions.review_requirement(&permissions.policy, environment.permission_profile()),
+        Ok(SandboxPermissions::UseDefault)
+    );
+    Ok(())
+}
+
+#[test_case::test_case(TerminalSandboxSource::Native, SandboxType::None, SandboxPermissions::RequireEscalated; "native_disabled_sandbox_needs_review_when_enabled")]
+#[test_case::test_case(TerminalSandboxSource::Executor, SandboxType::None, SandboxPermissions::UseDefault; "executor_keeps_its_restricted_token_default")]
+#[test_case::test_case(TerminalSandboxSource::Native, SandboxType::WindowsMxc, SandboxPermissions::UseDefault; "native_mxc_ignores_legacy_level_changes")]
 #[tokio::test]
 async fn enabling_windows_sandbox_respects_the_launch_backend(
     source: TerminalSandboxSource,
+    sandbox_type: SandboxType,
     expected: SandboxPermissions,
 ) -> anyhow::Result<()> {
     let (_session, turn) = make_session_and_context().await;
@@ -201,7 +236,16 @@ async fn enabling_windows_sandbox_respects_the_launch_backend(
     environment.selection.cwd = PathUri::parse("file:///C:/workspace")?;
     environment.config_mut().permission_profile =
         PermissionProfileSnapshot::legacy(PermissionProfile::read_only());
+    environment.config_mut().windows_sandbox_type = sandbox_type;
     environment.config_mut().windows_sandbox_level = WindowsSandboxLevel::Disabled;
+    assert_eq!(
+        environment.windows_sandbox_selection_for_turn_metadata(),
+        if sandbox_type == SandboxType::WindowsMxc {
+            codex_file_system::WindowsSandboxSelection::Mxc
+        } else {
+            codex_file_system::WindowsSandboxSelection::Disabled
+        }
+    );
     let permissions = TerminalPermissions::for_launch(
         &environment,
         &turn,

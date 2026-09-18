@@ -114,6 +114,18 @@ pub(super) async fn spawn_review_thread(
         step_settings.telemetry(&parent_turn_context.session_telemetry);
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
+    #[allow(deprecated)]
+    let windows_sandbox_selection = parent_turn_context
+        .environments
+        .primary()
+        .map(TurnEnvironment::windows_sandbox_selection_for_turn_metadata)
+        .unwrap_or_else(|| {
+            crate::tools::sandboxing::configured_windows_sandbox_selection(
+                parent_turn_context.config.permissions.windows_sandbox_type,
+                parent_turn_context.windows_sandbox_level,
+                &codex_utils_path_uri::PathUri::from_abs_path(&parent_turn_context.cwd),
+            )
+        });
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
         sess.session_id().to_string(),
         sess.thread_id().to_string(),
@@ -125,7 +137,7 @@ pub(super) async fn spawn_review_thread(
         #[allow(deprecated)]
         parent_turn_context.cwd.clone(),
         &parent_turn_context.permission_profile(),
-        parent_turn_context.windows_sandbox_level,
+        windows_sandbox_selection,
         parent_turn_context.network.is_some(),
         auto_review_enabled,
         &model_info,
@@ -137,7 +149,6 @@ pub(super) async fn spawn_review_thread(
     extension_data.insert(parent_turn_context.skills_snapshot().as_ref().clone());
 
     let review_turn_context = TurnContext {
-        guardian_ticket: None,
         sub_id: review_turn_id.clone(),
         trace_id: current_span_trace_id(),
         realtime_active: parent_turn_context.realtime_active,
@@ -148,6 +159,8 @@ pub(super) async fn spawn_review_thread(
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
         initial_settings: Arc::clone(&step_settings),
+        disabled_plugin_ids: parent_turn_context.disabled_plugin_ids.clone(),
+        active_host_plugin_identities: None,
         current_settings: ArcSwap::from(step_settings),
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
