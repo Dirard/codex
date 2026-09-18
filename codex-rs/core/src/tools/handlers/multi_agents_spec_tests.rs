@@ -173,8 +173,8 @@ fn spawn_agent_catalog_description_preserves_generated_context() {
 
 #[test]
 fn spawn_agent_tool_v2_guides_self_contained_tasks_away_from_full_history() {
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) =
-        create_spawn_agent_tool_v2(SpawnAgentToolOptions {
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = create_spawn_agent_tool_v2(
+        SpawnAgentToolOptions {
             available_models: Vec::new(),
             agent_type_description: "role help".to_string(),
             expose_agent_type: true,
@@ -182,8 +182,9 @@ fn spawn_agent_tool_v2_guides_self_contained_tasks_away_from_full_history() {
             expose_spawn_agent_model_overrides: true,
             multi_agent_version: MultiAgentVersion::V2,
             usage_hint_text: None,
-        })
-    else {
+        },
+        /*description_override*/ None,
+    ) else {
         panic!("spawn_agent should be a function tool");
     };
     let fork_description = parameters

@@ -601,11 +601,11 @@ impl LocalAgentControl {
                     initial_history,
                     agent_control: control.clone(),
                     session_source,
-            parent_thread_id,
-            environment_selections,
-            inherited_environments,
-            inherited_instructions,
-            inherited_exec_policy,
+                    parent_thread_id,
+                    environment_selections,
+                    inherited_environments,
+                    inherited_instructions,
+                    inherited_exec_policy,
                     client_mcp_extensions,
                     turn_spawn_budget: Some(turn_spawn_budget),
                 })
@@ -840,6 +840,7 @@ impl LocalAgentControl {
                     communication,
                     context,
                     start_options,
+                    /*turn_spawn_budget*/ None,
                 )
                 .await?;
             }

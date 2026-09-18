@@ -2252,6 +2252,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
             parent_thread_id,
             environment_selections: None,
             inherited_environments: None,
+            inherited_instructions: None,
             inherited_exec_policy: None,
             client_mcp_extensions: None,
             turn_spawn_budget: None,

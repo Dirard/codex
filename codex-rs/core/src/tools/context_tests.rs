@@ -149,6 +149,7 @@ fn mcp_tool_output_applies_line_limits_once_when_recorded() {
                 meta: None,
             },
             tool_input: json!({}),
+            result_metadata_capture_allowed: false,
             wall_time: std::time::Duration::from_millis(1250),
             original_image_detail_supported: false,
             truncation,
@@ -219,6 +220,7 @@ fn mcp_tool_output_applies_mcp_line_limit_to_mixed_content() {
             meta: None,
         },
         tool_input: json!({}),
+        result_metadata_capture_allowed: false,
         wall_time: std::time::Duration::from_millis(1250),
         original_image_detail_supported: false,
         truncation,
@@ -229,7 +231,9 @@ fn mcp_tool_output_applies_mcp_line_limit_to_mixed_content() {
             text: "Wall time: 1.2500 seconds\n... 6 lines truncated ...".to_string(),
         },
         FunctionCallOutputContentItem::InputImage {
-            image_url: "data:image/png;base64,AAA".to_string(),
+            image: ImageReference::Inline {
+                image_url: "data:image/png;base64,AAA".to_string(),
+            },
             detail: Some(DEFAULT_IMAGE_DETAIL),
         },
         FunctionCallOutputContentItem::InputText {

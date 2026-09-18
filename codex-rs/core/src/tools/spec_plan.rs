@@ -63,7 +63,6 @@ use crate::tools::tool_namespaces_info::collect_tool_namespaces_info;
 use codex_connectors::apps_config_from_layer_stack;
 use codex_extension_api::ExtensionData;
 use codex_features::Feature;
-use codex_features::MultiAgentMessageDelivery;
 use codex_features::SleepToolMode;
 use codex_login::AuthManager;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;

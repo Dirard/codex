@@ -16,21 +16,21 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=9e8e744a3a55a2dd):
-        - namespace/functions; hash=e7db0a45c4ec3157
+00:additional_tools/developer (3; hash=cb38db846d33817b):
+        - namespace/functions; hash=fdbc7738b4ce2efd
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=91f6de0e2773854f
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=10e037e1d92c15f5
+          - function/check_agent_status
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
           - function/send_message
           - function/spawn_agent
-          - function/wait_agent
 01:message/developer:
     You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collabo...them until their intended goal is completely handled. [hash=efa50f074efa5803]
 
@@ -49,12 +49,23 @@ Settings:
     - Relevance: Determine what a plugin can help with from explicit user mention or from the plugin-associa..., MCP tools, and apps exposed elsewhere in this turn. [hash=620459a4e7b590f0]
     - Missing/blocked: If the user requests a plugin that does not have relevant callable capabilities for t..., say so briefly and continue with the best fallback. [hash=746b0469a8f6cb3e]
 
-02:message/developer[2]:
-    [01] <permissions instructions>
+02:message/developer[3]:
+    [01] <skills_instructions>
+        ## Skills
+        A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
+        ### Skill roots
+        - `r0` = `<SKILLS_ROOT>`
+        ### Available skills
+        - code-logic-workflow-documentation: Use when: extracting an existing code path into a workflow-bearing ...(file: r0/code-logic-workflow-documentation/SKILL.md) [hash=3a43289545d92550]
+        - connected-code-mapping: Use when: mapping a non-local code change from one anchor through connected ba...documents. (file: r0/connected-code-mapping/SKILL.md) [hash=74a42c5827927769]
+        - layered-workflow-planning: Use when: planning or refining a workflow-bearing solution slice, use-case ...ection. (file: r0/layered-workflow-planning/SKILL.md) [hash=5c3100d7397060f5]
+        - spec-first-planning-loop: Use for non-trivial coding tasks that should be planned through repository t... change. (file: r0/spec-first-planning-loop/SKILL.md) [hash=ce2e263dfa6de1b5]
+        </skills_instructions>
+    [02] <permissions instructions>
         Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
         Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
         </permissions instructions>
-    [02] <collaboration_mode># Collaboration Mode: Default
+    [03] <collaboration_mode># Collaboration Mode: Default
 
         You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
 
@@ -82,11 +93,11 @@ Settings:
 
     You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task an...message to a running agent without triggering a turn. [hash=7d40ff8b58977202]
     `send_message` calls may be read by a human, so ensure they are legible. Always put proper spaces between words and/or numbers.
-    <OMITTED 17 LINES; ~246 TOKENS; hash=780031e2df907944>
+    <OMITTED 17 LINES; ~248 TOKENS; hash=f6f3fd4e8c721f1e>
     - All agents use the same current working directory.
     - As a result, edits made by one agent are immediately visible to all other agents.
 
-    When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
+    When calling `check_agent_status`, prefer longer waits (minutes) to avoid busy polling.
 
     There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
 
@@ -104,7 +115,7 @@ Settings:
 06:message/user:
     Check whether the Notes plugin echo tool is available.
 -- request 2 (turn) --
-07:custom_tool_call/exec:text(ALL_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
+07:custom_tool_call/exec:text(EXEC_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
 08:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
@@ -113,21 +124,21 @@ Settings:
 ## Window 2 (after request 2: input diverged at item 00)
 Settings: same as window 1
 -- request 3 (turn) --
-00:additional_tools/developer (3; hash=d9bfc9d2033f8c93):
-        - namespace/functions; hash=8c17932a39355f2d
+00:additional_tools/developer (3; hash=8b796ae5883c0783):
+        - namespace/functions; hash=9eb5a4f0b67f39d9
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=91f6de0e2773854f
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=10e037e1d92c15f5
+          - function/check_agent_status
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
           - function/send_message
           - function/spawn_agent
-          - function/wait_agent
 01:message/developer:
     You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collabo...them until their intended goal is completely handled. [hash=efa50f074efa5803]
 
@@ -146,12 +157,23 @@ Settings: same as window 1
     - Relevance: Determine what a plugin can help with from explicit user mention or from the plugin-associa..., MCP tools, and apps exposed elsewhere in this turn. [hash=620459a4e7b590f0]
     - Missing/blocked: If the user requests a plugin that does not have relevant callable capabilities for t..., say so briefly and continue with the best fallback. [hash=746b0469a8f6cb3e]
 
-02:message/developer[2]:
-    [01] <permissions instructions>
+02:message/developer[3]:
+    [01] <skills_instructions>
+        ## Skills
+        A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
+        ### Skill roots
+        - `r0` = `<SKILLS_ROOT>`
+        ### Available skills
+        - code-logic-workflow-documentation: Use when: extracting an existing code path into a workflow-bearing ...(file: r0/code-logic-workflow-documentation/SKILL.md) [hash=3a43289545d92550]
+        - connected-code-mapping: Use when: mapping a non-local code change from one anchor through connected ba...documents. (file: r0/connected-code-mapping/SKILL.md) [hash=74a42c5827927769]
+        - layered-workflow-planning: Use when: planning or refining a workflow-bearing solution slice, use-case ...ection. (file: r0/layered-workflow-planning/SKILL.md) [hash=5c3100d7397060f5]
+        - spec-first-planning-loop: Use for non-trivial coding tasks that should be planned through repository t... change. (file: r0/spec-first-planning-loop/SKILL.md) [hash=ce2e263dfa6de1b5]
+        </skills_instructions>
+    [02] <permissions instructions>
         Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
         Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
         </permissions instructions>
-    [02] <collaboration_mode># Collaboration Mode: Default
+    [03] <collaboration_mode># Collaboration Mode: Default
 
         You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
 
@@ -179,11 +201,11 @@ Settings: same as window 1
 
     You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task an...message to a running agent without triggering a turn. [hash=7d40ff8b58977202]
     `send_message` calls may be read by a human, so ensure they are legible. Always put proper spaces between words and/or numbers.
-    <OMITTED 17 LINES; ~246 TOKENS; hash=780031e2df907944>
+    <OMITTED 17 LINES; ~248 TOKENS; hash=f6f3fd4e8c721f1e>
     - All agents use the same current working directory.
     - As a result, edits made by one agent are immediately visible to all other agents.
 
-    When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
+    When calling `check_agent_status`, prefer longer waits (minutes) to avoid busy polling.
 
     There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
 
@@ -200,7 +222,7 @@ Settings: same as window 1
     </environment_context>
 06:message/user:
     Check whether the Notes plugin echo tool is available.
-07:custom_tool_call/exec:text(ALL_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
+07:custom_tool_call/exec:text(EXEC_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
 08:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
@@ -212,9 +234,14 @@ Settings: same as window 1
     ## Skills
     A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
     ### Skill roots
-    - `r0` = `<PLUGINS_CACHE>/test`
+    - `r0` = `<SKILLS_ROOT>`
+    - `r1` = `<PLUGINS_CACHE>/test`
     ### Available skills
-    - notes:summarize: Summarize team notes (file: r0/notes/local/skills/summarize/SKILL.md)
+    - code-logic-workflow-documentation: Use when: extracting an existing code path into a workflow-bearing ...(file: r0/code-logic-workflow-documentation/SKILL.md) [hash=3a43289545d92550]
+    - connected-code-mapping: Use when: mapping a non-local code change from one anchor through connected ba...documents. (file: r0/connected-code-mapping/SKILL.md) [hash=74a42c5827927769]
+    - layered-workflow-planning: Use when: planning or refining a workflow-bearing solution slice, use-case ...ection. (file: r0/layered-workflow-planning/SKILL.md) [hash=5c3100d7397060f5]
+    - notes:summarize: Summarize team notes (file: r1/notes/local/skills/summarize/SKILL.md)
+    - spec-first-planning-loop: Use for non-trivial coding tasks that should be planned through repository t... change. (file: r0/spec-first-planning-loop/SKILL.md) [hash=ce2e263dfa6de1b5]
     </skills_instructions>
 11:message/user:
     I installed Notes. Use $notes:summarize and the Notes tool to check that Mira owns the kickoff.
@@ -236,7 +263,7 @@ Settings: same as window 1
     - MCP servers from this plugin available in this session: `notes`.
     Use these plugin-associated capabilities to help solve the task.
 -- request 4 (turn) --
-14:custom_tool_call/exec:text(ALL_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
+14:custom_tool_call/exec:text(EXEC_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
 15:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:

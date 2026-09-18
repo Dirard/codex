@@ -207,9 +207,12 @@ pub(super) async fn handle(
     request: TurnInputRequest,
     mode: TurnInputMode,
     submission_id: String,
+    turn_spawn_budget: Option<crate::agent::control::TurnSpawnBudget>,
 ) -> CodexResult<TurnInputSubmission> {
     match mode {
-        TurnInputMode::StartOrSteer => start_or_steer(session, request, submission_id).await,
+        TurnInputMode::StartOrSteer => {
+            start_or_steer(session, request, submission_id, turn_spawn_budget).await
+        }
         TurnInputMode::StartIfIdle => {
             let kind = match &request.input {
                 SubmittedTurnInput::UserInput { content, .. } if !content.is_empty() => {
@@ -277,6 +280,7 @@ async fn start_or_steer(
     session: &Arc<Session>,
     request: TurnInputRequest,
     submission_id: String,
+    turn_spawn_budget: Option<crate::agent::control::TurnSpawnBudget>,
 ) -> CodexResult<TurnInputSubmission> {
     let TurnInputRequest {
         mut input,
@@ -347,6 +351,8 @@ async fn start_or_steer(
                 session
                     .start_turn_spawn_budget(turn_context.config.max_spawned_threads_per_turn)
                     .await;
+            } else if let Some(budget) = turn_spawn_budget {
+                session.set_turn_spawn_budget(budget).await;
             }
             if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
                 turn_context
@@ -585,6 +591,7 @@ impl Session {
             }),
             TurnInputMode::StartOrSteer,
             submission_id.clone(),
+            /*turn_spawn_budget*/ None,
         )
         .await;
         match submission {

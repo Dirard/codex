@@ -617,9 +617,12 @@ impl TurnContext {
         self.model_info().usable_context_window()
     }
 
-    pub(crate) fn output_truncation(&self) -> codex_utils_output_truncation::OutputTruncation {
+    pub(crate) fn output_truncation_for_model(
+        &self,
+        model_info: &codex_protocol::openai_models::ModelInfo,
+    ) -> codex_utils_output_truncation::OutputTruncation {
         let policy = effective_output_truncation_policy(
-            self.model_info().truncation_policy.into(),
+            model_info.truncation_policy.into(),
             self.config.output_truncation.max_bytes,
         );
         codex_utils_output_truncation::OutputTruncation::new_with_mcp_max_lines(
@@ -627,6 +630,12 @@ impl TurnContext {
             self.config.output_truncation.max_lines,
             self.config.output_truncation.mcp_max_lines,
         )
+    }
+
+    /// Legacy callers without a step still follow the turn's current model.
+    pub(crate) fn output_truncation(&self) -> codex_utils_output_truncation::OutputTruncation {
+        let model_info = self.capture_current_model_info();
+        self.output_truncation_for_model(&model_info)
     }
 
     pub(crate) fn apps_enabled(&self) -> bool {

@@ -43,6 +43,49 @@ fn sandbox_detection_identifies_keyword_in_stderr() {
     assert!(is_likely_sandbox_denied(SandboxType::LinuxSeccomp, &output));
 }
 
+#[cfg(unix)]
+#[test_case(ExecCapturePolicy::ShellTool, true; "ordinary_output_is_diagnosed")]
+#[test_case(ExecCapturePolicy::SensitiveFullBuffer, false; "sensitive_output_is_not_logged")]
+fn sandbox_diagnostics_respect_capture_policy(capture_policy: ExecCapturePolicy, logged: bool) {
+    let buffer: &'static std::sync::Mutex<Vec<u8>> =
+        Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(tracing_test::internal::MockWriter::new(buffer))
+        .finish();
+    let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+    let output = b"/tmp/codex-startup-diagnostic-marker: Permission denied".to_vec();
+    let result = finalize_exec_result(
+        Ok(RawExecToolCallOutput {
+            exit_status: synthetic_exit_status_for_code(/*code*/ 1),
+            stdout: StreamOutput {
+                text: Vec::new(),
+                truncated_after_lines: None,
+            },
+            stderr: StreamOutput {
+                text: output.clone(),
+                truncated_after_lines: None,
+            },
+            aggregated_output: StreamOutput {
+                text: output,
+                truncated_after_lines: None,
+            },
+            timed_out: false,
+        }),
+        SandboxType::LinuxSeccomp,
+        Duration::ZERO,
+        capture_policy,
+    );
+    assert!(matches!(
+        result.expect_err("sandbox denial").details(),
+        codex_protocol::error::CodexErrorDetails::Sandbox(SandboxErr::Denied { .. })
+    ));
+    let logs = String::from_utf8(buffer.lock().expect("diagnostic log lock").clone())
+        .expect("diagnostic logs are UTF-8");
+    assert_eq!(logs.contains("codex-startup-diagnostic-marker"), logged);
+}
+
 #[test]
 fn sandbox_detection_respects_quick_reject_exit_codes() {
     let output = make_exec_output(/*exit_code*/ 127, "", "command not found", "");
