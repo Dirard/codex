@@ -540,8 +540,7 @@ impl CodexThread {
         // cancellation, persistence, or writer shutdown halfway through a handoff.
         let (reply, result) = oneshot::channel();
         self.io
-            .tx_sub
-            .send(Submission {
+            .submit_with_id(Submission {
                 id: new_submission_id(),
                 op: Op::SuspendTurnAndShutdown { reply },
                 turn_extension_init: None,

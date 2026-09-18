@@ -3541,20 +3541,38 @@ impl Session {
         mut items: Vec<ResponseItemEnvelope>,
         image_preparations: Vec<ImagePreparationMetadata>,
     ) {
-        // Save the originating history budget for replay.
-        // Preserve any existing tool-specific override.
-        let policy: codex_utils_output_truncation::TruncationPolicy =
-            model_info.truncation_policy.into();
+        let originating_truncation = turn_context.output_truncation_for_model(model_info);
         for envelope in &mut items {
             if matches!(
                 envelope.item,
                 ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. }
             ) {
-                envelope
-                    .metadata
-                    .get_or_insert_default()
+                let metadata = envelope.metadata.get_or_insert_default();
+                if let Some(policy) = metadata.history_truncation_policy {
+                    metadata
+                        .history_truncation_token_limit
+                        .get_or_insert_with(|| policy.token_budget());
+                    continue;
+                }
+                // Preserve a tool-specific token override, then save the complete policy so
+                // replay does not depend on the model or config selected after this output.
+                let truncation = if let Some(policy) = metadata
                     .history_truncation_token_limit
-                    .get_or_insert_with(|| with_serialization_allowance(policy).token_budget());
+                    .map(codex_utils_output_truncation::TruncationPolicy::Tokens)
+                {
+                    originating_truncation.with_policy(policy)
+                } else {
+                    originating_truncation
+                        .with_policy(with_serialization_allowance(originating_truncation.policy))
+                };
+                metadata
+                    .history_truncation_token_limit
+                    .get_or_insert_with(|| {
+                        with_serialization_allowance(originating_truncation.policy).token_budget()
+                    });
+                metadata.history_truncation_policy = Some(truncation.policy);
+                metadata.history_truncation_max_lines = truncation.max_lines;
+                metadata.history_truncation_mcp_max_lines = truncation.mcp_max_lines;
             }
         }
         // Last-N-turn forks retain a suffix starting at a user turn boundary. Repeat the
@@ -3627,7 +3645,7 @@ impl Session {
             }
             state
                 .history
-                .record_annotated_items(&mut items, turn_context.output_truncation());
+                .record_annotated_items(&mut items, originating_truncation);
         }
         for image in image_preparations {
             self.services

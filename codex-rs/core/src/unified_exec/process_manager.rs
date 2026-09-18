@@ -828,7 +828,7 @@ impl UnifiedExecProcessManager {
             chunk_id,
             wall_time,
             raw_output: collected,
-            truncation: context.step_context.turn.output_truncation(),
+            truncation: context.step_context.output_truncation(),
             max_output_tokens: request.max_output_tokens,
             process_id: response_process_id,
             exit_code,
@@ -1549,8 +1549,7 @@ impl UnifiedExecProcessManager {
                         UnifiedExecError::sandbox_denied(message, output)
                     }
                     _ => UnifiedExecError::create_process(format!("{err:?}")),
-                },
-                other => UnifiedExecError::create_process(format!("{other:?}")),
+                }
             });
         let outcome = match &result {
             Ok(_) => "completed",
