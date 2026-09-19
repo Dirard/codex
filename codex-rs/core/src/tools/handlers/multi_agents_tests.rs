@@ -1,10 +1,10 @@
 use super::*;
+use crate::SpawnAgentOptions;
 use crate::StartThreadOptions;
 use crate::ThreadManager;
 use crate::agent::child_config::apply_spawn_agent_service_tier;
 use crate::agent::child_config::build_agent_resume_config;
 use crate::agent::child_config::build_agent_spawn_config;
-use crate::agent::control::SpawnAgentOptions;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::config::AgentRoleConfig;

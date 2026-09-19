@@ -244,10 +244,15 @@ async fn active_descendant_snapshot(
         .map_err(collab_spawn_error)?;
     let mut snapshot = ActiveAgentSnapshot::default();
     for agent in agents {
-        if agent.agent_name == current_agent_name {
+        if agent
+            .metadata
+            .agent_path
+            .as_deref()
+            .is_some_and(|path| *path == *current_agent_path.as_str())
+        {
             continue;
         }
-        match &agent.agent_status {
+        match &agent.status {
             AgentStatus::PendingInit => snapshot.pending_init += 1,
             AgentStatus::Running => snapshot.running += 1,
             AgentStatus::Interrupted => snapshot.interrupted += 1,
