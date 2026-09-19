@@ -31,9 +31,11 @@ async fn guardian_checkpoint_preserves_live_context_without_storage(mode: Guardi
     {
         let mut state = session.state.lock().await;
         state.history = ContextManager::with_guardian_context_mode(mode, &SessionSource::default());
+        let truncation_policy: codex_utils_output_truncation::TruncationPolicy =
+            turn.model_info().truncation_policy.into();
         state
             .history
-            .record_items([&instruction], turn.model_info().truncation_policy.into());
+            .record_items([&instruction], truncation_policy);
         // The model window no longer contains the old restriction. Legacy review must
         // preserve it in its retained transcript when this checkpoint is forked.
         if mode == GuardianContextMode::Legacy {
@@ -53,9 +55,7 @@ async fn guardian_checkpoint_preserves_live_context_without_storage(mode: Guardi
             "internal_chat_message_metadata_passthrough": {"content_item_kinds": ["unknown"]}
         }))
         .unwrap();
-        state
-            .history
-            .record_items([&followup], turn.model_info().truncation_policy.into());
+        state.history.record_items([&followup], truncation_policy);
         state.history.set_reference_context_item(Some(context));
         state.history.set_world_state_baseline(world_state.clone());
         state.history.update_token_info(

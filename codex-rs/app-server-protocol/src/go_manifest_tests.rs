@@ -874,6 +874,35 @@ fn config_layer_disabled_reason_skip_none_is_manifest_required() {
 }
 
 #[test]
+fn plugin_detail_onboarding_skill_default_null_is_manifest_required() {
+    let manifest = crate::go_manifest::go_sdk_manifest();
+    let shape = serde_shape(&manifest.experimental.serde_shapes, "PluginDetail");
+    assert_eq!(
+        shape.metadata_status,
+        crate::go_manifest::SerdeMetadataStatus::ManifestRequired
+    );
+    assert_eq!(
+        shape.fields,
+        vec![crate::go_manifest::SerdeFieldEntry {
+            rust_field: "onboarding_skill",
+            wire_name: "onboardingSkill",
+            aliases: Vec::new(),
+            shape: crate::go_manifest::SerdeFieldShape {
+                presence: crate::go_manifest::SerdePresence::OptionalNullable,
+                default: Some(crate::go_manifest::SerdeDefault {
+                    provider: crate::go_manifest::SerdeDefaultProvider::SerdeDefault,
+                    wire_value_json: "null",
+                }),
+                skip_serializing_if: None,
+                flattened: false,
+                custom_serialize: None,
+                custom_deserialize: None,
+            },
+        }]
+    );
+}
+
+#[test]
 fn command_exec_params_default_skip_false_fields_are_complete() {
     let manifest = crate::go_manifest::go_sdk_manifest();
     let shape = serde_shape(&manifest.experimental.serde_shapes, "CommandExecParams");
@@ -2067,6 +2096,7 @@ fn is_known_manifest_required_type(rust_type: &str) -> bool {
             | "ConfigRequirementsReadResponse"
             | "ConfigValueWriteParams"
             | "ConfigBatchWriteParams"
+            | "PluginDetail"
             | "ProcessSpawnParams"
             | "RemoteControlPairingStartParams"
             | "RemoteControlPairingStartResponse"

@@ -65,7 +65,10 @@ pub(crate) async fn handle_response_stream_error(
         ResponsesStreamRequest::RemoteCompactionV2 => RetryOperation::RemoteCompactionV2,
     };
     let (retries, max_retries) = if matches!(err.details(), CodexErrorDetails::ServerOverloaded) {
-        (&mut retry_state.server_overloaded_retries, max_retries.max(3))
+        (
+            &mut retry_state.server_overloaded_retries,
+            max_retries.max(3),
+        )
     } else {
         (&mut retry_state.retries, max_retries)
     };

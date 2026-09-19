@@ -1595,6 +1595,7 @@ async fn cold_resume_with_thread_instructions_preserves_lazy_v2_child_inheritanc
                 target_thread_id,
                 AgentMessage::Plaintext("hello after resume".to_string()),
                 MessageDeliveryMode::QueueOnly,
+                TurnSpawnBudget::new(usize::MAX),
             )
             .await
             .expect("message should reload the grandchild");
@@ -1711,6 +1712,7 @@ async fn v2_sibling_reload_preserves_shared_instructions_after_root_unloads(shar
             target_id,
             AgentMessage::Plaintext("wake the sibling".to_string()),
             MessageDeliveryMode::QueueOnly,
+            TurnSpawnBudget::new(usize::MAX),
         )
         .await
         .expect("reload target from its sibling");

@@ -1,4 +1,6 @@
 use crate::agent::types::AgentMetadata;
+use crate::agent::types::TurnSpawnBudget;
+use crate::agent::types::TurnSpawnReservation;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
@@ -46,75 +48,6 @@ impl RegisteredAgent {
         Self {
             path,
             evicted_environments: None,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct TurnSpawnBudget {
-    inner: Arc<TurnSpawnBudgetInner>,
-}
-
-#[derive(Debug)]
-struct TurnSpawnBudgetInner {
-    limit: usize,
-    reserved_or_committed: AtomicUsize,
-}
-
-struct TurnSpawnReservation {
-    budget: TurnSpawnBudget,
-    active: bool,
-}
-
-impl TurnSpawnBudget {
-    pub(crate) fn new(limit: usize) -> Self {
-        Self {
-            inner: Arc::new(TurnSpawnBudgetInner {
-                limit,
-                reserved_or_committed: AtomicUsize::new(0),
-            }),
-        }
-    }
-
-    fn reserve(&self) -> Result<TurnSpawnReservation> {
-        let mut current = self.inner.reserved_or_committed.load(Ordering::Acquire);
-        loop {
-            if current >= self.inner.limit {
-                return Err(CodexErr::new(CodexErrorDetails::AgentLimitReached {
-                    max_threads: self.inner.limit,
-                }));
-            }
-            match self.inner.reserved_or_committed.compare_exchange_weak(
-                current,
-                current + 1,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => {
-                    return Ok(TurnSpawnReservation {
-                        budget: self.clone(),
-                        active: true,
-                    });
-                }
-                Err(updated) => current = updated,
-            }
-        }
-    }
-}
-
-impl TurnSpawnReservation {
-    fn commit(mut self) {
-        self.active = false;
-    }
-}
-
-impl Drop for TurnSpawnReservation {
-    fn drop(&mut self) {
-        if self.active {
-            self.budget
-                .inner
-                .reserved_or_committed
-                .fetch_sub(1, Ordering::AcqRel);
         }
     }
 }
