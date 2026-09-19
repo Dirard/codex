@@ -594,7 +594,7 @@ async fn write_stdin_does_not_expose_default_pre_tool_use_payload() {
 
 #[test_case::test_case(TruncationPolicy::Tokens(1), 2; "token budget")]
 #[test_case::test_case(TruncationPolicy::Bytes(401), 121; "scale bytes before converting to tokens")]
-fn post_tool_use_feedback_output_preserves_fallback_token_limit_override(
+fn post_tool_use_feedback_output_preserves_history_truncation_override(
     truncation_policy: TruncationPolicy,
     expected_token_limit: usize,
 ) {
@@ -615,7 +615,11 @@ fn post_tool_use_feedback_output_preserves_fallback_token_limit_override(
                 result_metadata_capture_allowed: false,
                 wall_time: Duration::ZERO,
                 original_image_detail_supported: false,
-                truncation: OutputTruncation::from(truncation_policy),
+                truncation: OutputTruncation::new_with_mcp_max_lines(
+                    truncation_policy,
+                    /*max_lines*/ Some(150),
+                    /*mcp_max_lines*/ Some(5000),
+                ),
             }),
             model_visible: crate::tools::context::FunctionToolOutput::from_text(
                 "hook feedback".to_string(),
@@ -634,6 +638,9 @@ fn post_tool_use_feedback_output_preserves_fallback_token_limit_override(
             }),
             metadata: Some(CodexHarnessMetadata {
                 history_truncation_token_limit: Some(expected_token_limit),
+                history_truncation_policy: Some(truncation_policy * 1.2),
+                history_truncation_max_lines: Some(5000),
+                history_truncation_mcp_max_lines: Some(5000),
                 ..Default::default()
             }),
         }

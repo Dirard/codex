@@ -40,6 +40,7 @@ fn completed_timing_preserves_content_and_distinguishes_zero_from_unavailable() 
             "Script failed".to_string(),
             Duration::from_millis(/*millis*/ 750),
             host_duration,
+            OutputTruncation::from(codex_utils_output_truncation::TruncationPolicy::Bytes(4096)),
         );
         output.set_handler_duration_ms(/*handler_duration_ms*/ 1_250);
         let mut expected_content = vec![FunctionCallOutputContentItem::InputText {

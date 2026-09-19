@@ -17,6 +17,7 @@ async fn yielded_notifications_keep_originating_budgets_after_model_switch(
                 .enable(Feature::CodeMode)
                 .expect("enable Code Mode");
             config.output_truncation.max_lines = Some(3);
+            config.output_truncation.mcp_max_lines = Some(5000);
             config.output_truncation.max_bytes = configured_byte_budget.then_some(64);
             for model in &mut config.model_catalog.as_mut().expect("models").models {
                 model.tool_mode = Some(ToolMode::CodeModeOnly);
@@ -154,12 +155,11 @@ async fn yielded_notifications_keep_originating_budgets_after_model_switch(
         );
         let mut bounded = raw.clone();
         let truncation = if configured_byte_budget {
-            OutputTruncation::new_with_mcp_max_lines(TruncationPolicy::Bytes(77), Some(3), None)
+            OutputTruncation::new(TruncationPolicy::Bytes(77), /*max_lines*/ Some(5000))
         } else {
-            OutputTruncation::new_with_mcp_max_lines(
+            OutputTruncation::new(
                 TruncationPolicy::Tokens((model_budget as f64 * 1.2).ceil() as usize),
-                Some(3),
-                None,
+                /*max_lines*/ Some(5000),
             )
         };
         bounded["output"] = json!(truncate_text_with_config(text, truncation));
@@ -204,8 +204,7 @@ async fn yielded_notifications_keep_originating_budgets_after_model_switch(
                         TruncationPolicy::Tokens(budget)
                     })
                 );
-                assert_eq!(metadata.history_truncation_max_lines, Some(3));
-                assert_eq!(metadata.history_truncation_mcp_max_lines, None);
+                assert_eq!(metadata.history_truncation_max_lines, Some(5000));
                 (
                     item,
                     envelope

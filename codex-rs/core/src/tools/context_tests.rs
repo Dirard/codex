@@ -1,5 +1,6 @@
 use super::*;
 use crate::context_manager::ContextManager;
+use crate::tools::registry::AnyToolResult;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
@@ -10,6 +11,32 @@ use serde_json::json;
 
 fn truncation(policy: TruncationPolicy) -> OutputTruncation {
     OutputTruncation::new(policy, /*max_lines*/ None)
+}
+
+fn recorded_mcp_output(output: McpToolOutput) -> FunctionCallOutputPayload {
+    let truncation = output.truncation;
+    let response = AnyToolResult {
+        call_id: "mcp-call".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+        result: Box::new(output),
+        post_tool_use_payload: None,
+    }
+    .into_response();
+    let mut history = ContextManager::new();
+    history.record_annotated_items(std::slice::from_ref(&response), truncation);
+    let mut replay = ContextManager::new();
+    replay.record_annotated_items(
+        &[response],
+        OutputTruncation::new(TruncationPolicy::Bytes(1), /*max_lines*/ Some(0)),
+    );
+    assert_eq!(replay.into_raw_items(), history.clone().into_raw_items());
+    let items = history.into_raw_items();
+    let [ResponseItem::FunctionCallOutput { output, .. }] = items.as_slice() else {
+        panic!("expected one FunctionCallOutput");
+    };
+    output.clone()
 }
 
 #[test]
@@ -139,7 +166,7 @@ fn mcp_tool_output_response_item_includes_wall_time() {
 fn mcp_line_limits_preserve_encrypted_content_without_structured_content() {
     for mcp_max_lines in [0, 10] {
         let encrypted_content = "gAAAA-test-encrypted-content";
-        let payload = McpToolOutput {
+        let payload = recorded_mcp_output(McpToolOutput {
             result: CallToolResult {
                 content: vec![json!({
                     "type": "text",
@@ -159,8 +186,7 @@ fn mcp_line_limits_preserve_encrypted_content_without_structured_content() {
                 /*max_lines*/ Some(100),
                 Some(mcp_max_lines),
             ),
-        }
-        .response_payload();
+        });
 
         let encrypted_items = payload
             .content_items()
@@ -181,7 +207,7 @@ fn mcp_line_limits_preserve_encrypted_content_without_structured_content() {
 #[test]
 fn mcp_tool_output_applies_line_limits_once_when_recorded() {
     let recorded_text = |truncation| {
-        let response = McpToolOutput {
+        let output = recorded_mcp_output(McpToolOutput {
             result: CallToolResult {
                 content: vec![serde_json::json!({
                     "type": "text",
@@ -196,20 +222,7 @@ fn mcp_tool_output_applies_line_limits_once_when_recorded() {
             wall_time: std::time::Duration::from_millis(1250),
             original_image_detail_supported: false,
             truncation,
-        }
-        .to_response_item(
-            "mcp-call-lines",
-            &ToolPayload::Function {
-                arguments: "{}".to_string(),
-            },
-        );
-        let item = ResponseItem::from(response);
-        let mut history = ContextManager::new();
-        history.record_items([&item], truncation);
-        let items = history.raw_items().cloned().collect::<Vec<_>>();
-        let [ResponseItem::FunctionCallOutput { output, .. }] = items.as_slice() else {
-            panic!("expected one FunctionCallOutput");
-        };
+        });
         output
             .body
             .to_text()
@@ -231,6 +244,22 @@ fn mcp_tool_output_applies_line_limits_once_when_recorded() {
             /*mcp_max_lines*/ Some(2),
         )),
         "Wall time: 1.2500 seconds\n... 4 lines truncated ...\nline4",
+    );
+    assert_eq!(
+        recorded_text(OutputTruncation::new_with_mcp_max_lines(
+            TruncationPolicy::Bytes(100_000),
+            /*max_lines*/ Some(2),
+            /*mcp_max_lines*/ Some(10),
+        )),
+        "Wall time: 1.2500 seconds\nOutput:\nline1\nline2\nline3\nline4",
+    );
+    assert_eq!(
+        recorded_text(OutputTruncation::new_with_mcp_max_lines(
+            TruncationPolicy::Bytes(100_000),
+            /*max_lines*/ Some(4),
+            /*mcp_max_lines*/ Some(0),
+        )),
+        "... 6 lines truncated ...",
     );
 }
 
@@ -283,24 +312,7 @@ fn mcp_tool_output_applies_mcp_line_limit_to_mixed_content() {
             text: "last".to_string(),
         },
     ];
-    let response = output.to_response_item(
-        "mcp-call-mixed-lines",
-        &ToolPayload::Function {
-            arguments: "{}".to_string(),
-        },
-    );
-    let ResponseInputItem::FunctionCallOutput { output, .. } = &response else {
-        panic!("expected FunctionCallOutput");
-    };
-    assert_eq!(output.content_items(), Some(expected_items.as_slice()));
-
-    let item = ResponseItem::from(response);
-    let mut history = ContextManager::new();
-    history.record_items([&item], truncation);
-    let items = history.raw_items().cloned().collect::<Vec<_>>();
-    let [ResponseItem::FunctionCallOutput { output, .. }] = items.as_slice() else {
-        panic!("expected one FunctionCallOutput");
-    };
+    let output = recorded_mcp_output(output);
     assert_eq!(output.content_items(), Some(expected_items.as_slice()));
 }
 
