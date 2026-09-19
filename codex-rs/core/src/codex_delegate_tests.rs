@@ -407,7 +407,7 @@ async fn run_codex_thread_interactive_inherits_parent_dynamic_tools() {
         Arc::clone(&parent_session.services.models_manager),
         Arc::clone(&parent_session),
         Arc::clone(&parent_ctx),
-        parent_ctx.environments.clone(),
+        parent_ctx.initial_environments.clone(),
         CancellationToken::new(),
         SubAgentSource::Review,
         codex_extension_api::SessionIsolation::Inherit,

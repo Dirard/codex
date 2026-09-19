@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::control::AgentMetadata;
+use crate::AgentMetadata;
 use crate::agent::control::AgentRegistry;
 use codex_protocol::error::CodexErrorDetails;
 use pretty_assertions::assert_eq;

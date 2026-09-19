@@ -4,7 +4,6 @@
 //! Delivery remains best effort, with tracing recorded only after the parent accepts it.
 
 use super::LocalAgentControl;
-use crate::TurnStartOptions;
 use crate::agent::api::AgentTurnOutcome;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
@@ -105,12 +104,7 @@ impl LocalAgentControl {
         let context =
             AgentCommunicationContext::new(AgentCommunicationKind::Result, outcome.thread_id);
         if let Err(err) = self
-            .send_inter_agent_communication(
-                parent_thread_id,
-                communication,
-                context,
-                TurnStartOptions::default(),
-            )
+            .enqueue_inter_agent_communication(parent_thread_id, communication, context)
             .await
         {
             debug!("failed to notify parent thread {parent_thread_id}: {err}");

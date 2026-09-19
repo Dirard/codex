@@ -14650,7 +14650,6 @@ type ConfigRequirements struct {
 	Models                               Optional[ModelsRequirements]             `json:"models,omitempty"`
 	Network                              Optional[NetworkRequirements]            `json:"network,omitempty"`
 	SqliteHome                           Optional[string]                         `json:"sqliteHome,omitempty"`
-	WindowsSandboxPrivateDesktop         Optional[bool]                           `json:"windowsSandboxPrivateDesktop,omitempty"`
 }
 
 func (v ConfigRequirements) MarshalJSON() ([]byte, error) {
@@ -14753,9 +14752,6 @@ func (v ConfigRequirements) MarshalJSON() ([]byte, error) {
 	}
 	if v.SqliteHome.IsSet() {
 		out["sqliteHome"] = v.SqliteHome
-	}
-	if v.WindowsSandboxPrivateDesktop.IsSet() {
-		out["windowsSandboxPrivateDesktop"] = v.WindowsSandboxPrivateDesktop
 	}
 	return json.Marshal(out)
 }
@@ -14965,12 +14961,6 @@ func (v *ConfigRequirements) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawSqliteHome, &v.SqliteHome); err != nil {
 			return fmt.Errorf("field sqliteHome: %w", err)
-		}
-	}
-	rawWindowsSandboxPrivateDesktop, ok := raw["windowsSandboxPrivateDesktop"]
-	if ok {
-		if err := json.Unmarshal(rawWindowsSandboxPrivateDesktop, &v.WindowsSandboxPrivateDesktop); err != nil {
-			return fmt.Errorf("field windowsSandboxPrivateDesktop: %w", err)
 		}
 	}
 	return nil
@@ -27287,6 +27277,7 @@ type PluginDetail struct {
 	MarketplaceName string                           `json:"marketplaceName,omitempty"`
 	MarketplacePath Optional[AbsolutePathBuf]        `json:"marketplacePath,omitempty"`
 	McpServers      []string                         `json:"mcpServers,omitempty"`
+	OnboardingSkill Optional[SkillSummary]           `json:"onboardingSkill,omitempty"`
 	ScheduledTasks  Optional[[]ScheduledTaskSummary] `json:"scheduledTasks,omitempty"`
 	ShareURL        Optional[string]                 `json:"shareUrl,omitempty"`
 	Skills          []SkillSummary                   `json:"skills,omitempty"`
@@ -27306,6 +27297,9 @@ func (v PluginDetail) MarshalJSON() ([]byte, error) {
 		out["marketplacePath"] = v.MarketplacePath
 	}
 	out["mcpServers"] = v.McpServers
+	if v.OnboardingSkill.IsSet() {
+		out["onboardingSkill"] = v.OnboardingSkill
+	}
 	if v.ScheduledTasks.IsSet() {
 		out["scheduledTasks"] = v.ScheduledTasks
 	}
@@ -27387,6 +27381,16 @@ func (v *PluginDetail) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawMcpServers, &v.McpServers); err != nil {
 		return fmt.Errorf("field mcpServers: %w", err)
+	}
+	rawOnboardingSkill, ok := raw["onboardingSkill"]
+	if !ok {
+		rawOnboardingSkill = []byte("null")
+		ok = true
+	}
+	if ok {
+		if err := json.Unmarshal(rawOnboardingSkill, &v.OnboardingSkill); err != nil {
+			return fmt.Errorf("field onboardingSkill: %w", err)
+		}
 	}
 	rawScheduledTasks, ok := raw["scheduledTasks"]
 	if ok {

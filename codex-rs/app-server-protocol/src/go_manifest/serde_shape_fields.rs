@@ -194,6 +194,7 @@ fn reviewed_manifest_required_fields(rust_type: &str) -> Vec<SerdeFieldEntry> {
             default_empty_vec_field("marketplace_load_errors", "marketplaceLoadErrors"),
             default_empty_vec_field("featured_plugin_ids", "featuredPluginIds"),
         ],
+        "PluginDetail" => vec![default_null_field("onboarding_skill", "onboardingSkill")],
         "PluginShareContext" => vec![default_null_field("remote_version", "remoteVersion")],
         "PluginSummary" => vec![
             default_null_field("local_version", "localVersion"),
@@ -412,6 +413,7 @@ pub(crate) fn schema_reachable_serde_attribute_required_types() -> &'static [&'s
         "PermissionsRequestApprovalParams",
         "PermissionsRequestApprovalResponse",
         "PluginAvailability",
+        "PluginDetail",
         "PluginInstalledResponse",
         "PluginListResponse",
         "PluginShareContext",

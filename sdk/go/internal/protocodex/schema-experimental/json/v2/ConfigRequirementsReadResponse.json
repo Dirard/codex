@@ -638,12 +638,6 @@
             "string",
             "null"
           ]
-        },
-        "windowsSandboxPrivateDesktop": {
-          "type": [
-            "boolean",
-            "null"
-          ]
         }
       },
       "type": "object"
