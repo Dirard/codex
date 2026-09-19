@@ -4,7 +4,6 @@
 //! Delivery remains best effort; metrics distinguish queue acceptance from delivery failure.
 
 use super::LocalAgentControl;
-use crate::TurnStartOptions;
 use crate::agent::api::AgentTurnOutcome;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
@@ -119,12 +118,7 @@ impl LocalAgentControl {
         let context =
             AgentCommunicationContext::new(AgentCommunicationKind::Result, outcome.thread_id);
         let delivery = self
-            .send_inter_agent_communication(
-                parent_thread_id,
-                communication,
-                context,
-                TurnStartOptions::default(),
-            )
+            .enqueue_inter_agent_communication(parent_thread_id, communication, context)
             .await;
         if let Some(metrics) = codex_otel::global() {
             let _ = metrics.counter(

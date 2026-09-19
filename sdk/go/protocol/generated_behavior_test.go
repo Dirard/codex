@@ -557,6 +557,94 @@ func TestGeneratedStructAppliesSerdeDefaultsOnMissingFields(t *testing.T) {
 	}
 }
 
+func TestPluginDetailOnboardingSkillPreservesDefaultNullAndValue(t *testing.T) {
+	base := map[string]any{
+		"appTemplates":    []any{},
+		"apps":            []any{},
+		"hooks":           []any{},
+		"marketplaceName": "marketplace",
+		"mcpServers":      []any{},
+		"skills":          []any{},
+		"summary": map[string]any{
+			"authPolicy":    "ON_USE",
+			"enabled":       true,
+			"id":            "plugin-1",
+			"installPolicy": "AVAILABLE",
+			"installed":     true,
+			"name":          "Plugin One",
+			"source":        map[string]any{"type": "remote"},
+		},
+	}
+	wantSkill := SkillSummary{Name: "setup", Description: "Run setup", Enabled: true}
+	tests := []struct {
+		name    string
+		present bool
+		value   any
+		want    Optional[SkillSummary]
+	}{
+		{name: "missing defaults to null", want: Null[SkillSummary]()},
+		{name: "explicit null", present: true, want: Null[SkillSummary]()},
+		{
+			name:    "object",
+			present: true,
+			value: map[string]any{
+				"description": "Run setup",
+				"enabled":     true,
+				"name":        "setup",
+			},
+			want: Some(wantSkill),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := make(map[string]any, len(base)+1)
+			for key, value := range base {
+				payload[key] = value
+			}
+			if tt.present {
+				payload["onboardingSkill"] = tt.value
+			}
+			data, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var detail PluginDetail
+			if err := json.Unmarshal(data, &detail); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(detail.OnboardingSkill, tt.want) {
+				t.Fatalf("OnboardingSkill = %#v, want %#v", detail.OnboardingSkill, tt.want)
+			}
+
+			encoded, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var roundtrip map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &roundtrip); err != nil {
+				t.Fatal(err)
+			}
+			raw, ok := roundtrip["onboardingSkill"]
+			if !ok {
+				t.Fatalf("encoded = %s, missing onboardingSkill", encoded)
+			}
+			if tt.want.IsNull() {
+				if string(raw) != "null" {
+					t.Fatalf("onboardingSkill = %s, want null", raw)
+				}
+				return
+			}
+			var skill SkillSummary
+			if err := json.Unmarshal(raw, &skill); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(skill, wantSkill) {
+				t.Fatalf("onboardingSkill = %#v, want %#v", skill, wantSkill)
+			}
+		})
+	}
+}
+
 func TestGeneratedStructPreservesFlattenedAdditionalFields(t *testing.T) {
 	var config AnalyticsConfig
 	if err := json.Unmarshal([]byte(`{"enabled":true,"customFlag":"kept","nested":{"value":1}}`), &config); err != nil {

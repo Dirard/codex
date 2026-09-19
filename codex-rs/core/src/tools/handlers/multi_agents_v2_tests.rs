@@ -1,5 +1,5 @@
 use super::agent_message_from_tool;
-use crate::agent::control::MessageDeliveryMode;
+use crate::MessageDeliveryMode;
 use crate::tools::context::ToolCallSource;
 use codex_features::MultiAgentMessageDelivery;
 use codex_protocol::AgentPath;
