@@ -261,14 +261,14 @@ impl CodeModeService {
 }
 
 fn handle_runtime_response(
-    model_info: &codex_protocol::openai_models::ModelInfo,
+    step_context: &StepContext,
     response: RuntimeResponse,
     max_output_tokens: Option<usize>,
     wall_time: Duration,
     experimental_show_cell_overhead: bool,
 ) -> CodeModeToolOutput {
     let script_status = format_script_status(&response);
-    let supports_original = can_request_original_image_detail(model_info);
+    let supports_original = can_request_original_image_detail(&step_context.settings.model_info);
     let host_duration = response
         .code_mode_host_duration()
         .filter(|_| experimental_show_cell_overhead);
@@ -296,6 +296,7 @@ fn handle_runtime_response(
         script_status,
         wall_time,
         host_duration,
+        step_context.output_truncation(),
     )
 }
 
