@@ -195,6 +195,11 @@ impl McpToolOutput {
         };
         let mut payload = self.result.as_function_call_output_payload();
         if mcp_truncation.max_lines.is_some()
+            && !payload.content_items().is_some_and(|items| {
+                items.iter().any(|item| {
+                    matches!(item, FunctionCallOutputContentItem::EncryptedContent { .. })
+                })
+            })
             && let Some(text_content) = mcp_text_content_for_line_limit(&self.result)
         {
             payload = FunctionCallOutputPayload {
