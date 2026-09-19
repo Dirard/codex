@@ -179,7 +179,7 @@ impl CodeModeWaitHandler {
                     .code_mode_host_duration()
                     .unwrap_or_else(|| started_at.elapsed());
                 Ok(boxed_tool_output(handle_runtime_response(
-                    &step_context.settings.model_info,
+                    &step_context,
                     wait_response.into(),
                     args.max_tokens,
                     wall_time,

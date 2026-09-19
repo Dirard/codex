@@ -5159,6 +5159,82 @@ Total\ output\ lines:\ 1\n
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_and_wait_use_mcp_line_limit_in_model_input() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let exec_lines = (1..=225)
+        .map(|line| format!("exec instruction {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let wait_lines = (1..=225)
+        .map(|line| format!("wait instruction {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let code = format!(
+        r#"text({});
+text("exec tail");
+yield_control();
+text({});
+text("wait tail");
+"#,
+        serde_json::to_string(&exec_lines)?,
+        serde_json::to_string(&wait_lines)?,
+    );
+    let (test, first_completion) = run_code_mode_turn_with_config(
+        &server,
+        "return all lines before and after yielding",
+        &code,
+        |config| {
+            config.output_truncation.max_lines = Some(150);
+            config.output_truncation.mcp_max_lines = Some(5000);
+        },
+    )
+    .await?;
+
+    let first_request = first_completion.single_request();
+    let first_items = custom_tool_output_items(&first_request, "call-1");
+    assert_eq!(text_item(&first_items, /*index*/ 1), exec_lines);
+    assert_eq!(text_item(&first_items, /*index*/ 2), "exec tail");
+    let cell_id = extract_running_cell_id(text_item(&first_items, /*index*/ 0));
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-3"),
+            responses::ev_function_call(
+                "call-2",
+                "wait",
+                &serde_json::json!({
+                    "cell_id": cell_id,
+                    "yield_time_ms": 1_000,
+                })
+                .to_string(),
+            ),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+    let second_completion = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-2", "done"),
+            ev_completed("resp-4"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("wait for the remaining lines").await?;
+
+    let second_request = second_completion.single_request();
+    let second_items = function_tool_output_items(&second_request, "call-2");
+    assert_eq!(text_item(&second_items, /*index*/ 1), wait_lines);
+    assert_eq!(text_item(&second_items, /*index*/ 2), "wait tail");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_resume_after_set_timeout() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

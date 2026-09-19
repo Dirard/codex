@@ -203,9 +203,12 @@ impl AnyToolResult {
         ResponseItemEnvelope {
             item: result.to_response_item(&call_id, &payload).into(),
             metadata: result
-                .fallback_token_limit_override()
-                .map(|limit| CodexHarnessMetadata {
-                    history_truncation_token_limit: Some(limit),
+                .history_truncation_override()
+                .map(|truncation| CodexHarnessMetadata {
+                    history_truncation_token_limit: Some(truncation.policy.token_budget()),
+                    history_truncation_policy: Some(truncation.policy),
+                    history_truncation_max_lines: truncation.max_lines,
+                    history_truncation_mcp_max_lines: truncation.mcp_max_lines,
                     ..Default::default()
                 }),
         }
@@ -237,8 +240,10 @@ impl ToolOutput for PostToolUseFeedbackOutput {
         self.original.set_handler_duration_ms(handler_duration_ms);
     }
 
-    fn fallback_token_limit_override(&self) -> Option<usize> {
-        self.original.fallback_token_limit_override()
+    fn history_truncation_override(
+        &self,
+    ) -> Option<codex_utils_output_truncation::OutputTruncation> {
+        self.original.history_truncation_override()
     }
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {

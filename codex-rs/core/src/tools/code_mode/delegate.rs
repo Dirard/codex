@@ -371,7 +371,7 @@ impl CodeModeSessionDelegate for CodeModeCellDelegate {
                 return Err("code mode notification cancelled".to_string());
             }
             let (response_tx, response_rx) = oneshot::channel();
-            let output_truncation = self.step_context.output_truncation();
+            let output_truncation = self.step_context.output_truncation().for_mcp_output();
             self.broker
                 .dispatch_tx
                 .send(DispatchMessage::Notify {

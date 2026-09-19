@@ -4,6 +4,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseInputItem;
+use codex_utils_output_truncation::OutputTruncation;
 use serde_json::Value as JsonValue;
 
 use crate::ToolPayload;
@@ -28,9 +29,9 @@ pub trait ToolOutput: Send {
         false
     }
 
-    /// Overrides history's fallback token limit after tool-specific truncation.
-    /// Include any serialization allowance; history uses this limit unchanged.
-    fn fallback_token_limit_override(&self) -> Option<usize> {
+    /// Overrides history's output policy, including any serialization allowance.
+    /// History applies and persists this policy without substituting general line limits.
+    fn history_truncation_override(&self) -> Option<OutputTruncation> {
         None
     }
 
@@ -87,8 +88,8 @@ where
         (**self).contains_external_context()
     }
 
-    fn fallback_token_limit_override(&self) -> Option<usize> {
-        (**self).fallback_token_limit_override()
+    fn history_truncation_override(&self) -> Option<OutputTruncation> {
+        (**self).history_truncation_override()
     }
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {

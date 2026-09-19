@@ -21,6 +21,7 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::formatted_truncate_text_with_config;
 use codex_utils_output_truncation::truncate_text_with_config;
+use codex_utils_output_truncation::with_serialization_allowance;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::num::NonZeroUsize;
@@ -139,8 +140,12 @@ impl ToolOutput for McpToolOutput {
         self.result.success()
     }
 
-    fn fallback_token_limit_override(&self) -> Option<usize> {
-        Some((self.truncation.policy * 1.2).token_budget())
+    fn history_truncation_override(&self) -> Option<OutputTruncation> {
+        Some(
+            self.truncation
+                .for_mcp_output()
+                .with_policy(with_serialization_allowance(self.truncation.policy)),
+        )
     }
 
     fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
@@ -172,19 +177,8 @@ impl ToolOutput for McpToolOutput {
 
 impl McpToolOutput {
     fn response_payload(&self) -> FunctionCallOutputPayload {
-        let max_lines = match (self.truncation.max_lines, self.truncation.mcp_max_lines) {
-            (Some(max_lines), Some(mcp_max_lines)) if mcp_max_lines < max_lines => {
-                Some(mcp_max_lines)
-            }
-            (None, Some(mcp_max_lines)) => Some(mcp_max_lines),
-            _ => None,
-        };
-        let mcp_truncation = OutputTruncation {
-            max_lines,
-            ..self.truncation
-        };
         let mut payload = self.result.as_function_call_output_payload();
-        if mcp_truncation.max_lines.is_some()
+        if self.truncation.mcp_max_lines.is_some()
             && !payload.content_items().is_some_and(|items| {
                 items.iter().any(|item| {
                     matches!(item, FunctionCallOutputContentItem::EncryptedContent { .. })
@@ -218,15 +212,15 @@ impl McpToolOutput {
             }
         }
 
-        // This is the context-injection form, so keep it aligned with the
-        // function-call output truncation that conversation history already
-        // applies. Code-mode consumers still get the raw `CallToolResult`.
-        //
-        // The text is serialized again inside the Responses payload, so allow
-        // a small buffer for JSON escaping and wrapper overhead.
+        // Keep the existing byte/token bound for raw events and traces. Only history
+        // applies line limits: repeating those here would truncate the omission marker.
+        // Code-mode consumers still get the raw `CallToolResult`.
         truncate_function_output_payload(
             &payload,
-            mcp_truncation.with_policy(mcp_truncation.policy * 1.2),
+            OutputTruncation::new(
+                with_serialization_allowance(self.truncation.policy),
+                /*max_lines*/ None,
+            ),
         )
     }
 }
