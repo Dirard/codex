@@ -168,7 +168,7 @@ pub struct OutputTruncationToml {
     pub max_bytes: Option<usize>,
     /// Maximum lines retained in formatted output.
     pub max_lines: Option<usize>,
-    /// Maximum lines retained in MCP tool output.
+    /// Overrides max_lines for MCP tool output and entire emitted Code Mode cells.
     pub mcp_max_lines: Option<usize>,
 }
 
