@@ -352,7 +352,7 @@ async fn run_compact_task_inner_impl(
                 return Err(e);
             }
             Err(e) => {
-                if let Err(e) = handle_response_stream_error(
+                handle_response_stream_error(
                     &mut retry_state,
                     max_retries,
                     e,
@@ -361,10 +361,7 @@ async fn run_compact_task_inner_impl(
                     turn_context.as_ref(),
                     ResponsesStreamRequest::LocalCompaction,
                 )
-                .await
-                {
-                    return Err(e);
-                }
+                .await?
             }
         }
     };
