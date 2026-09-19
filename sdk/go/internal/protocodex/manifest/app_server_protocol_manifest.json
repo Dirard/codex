@@ -5565,9 +5565,9 @@
       }
     ],
     "digests": {
-      "manifestDigest": "78de54ad26edb18731dddfae34ab1f0a733e1879764e8de3ab5ebec59999c6cc",
-      "protocolDigest": "3d864fb80ec13836e4d5bae3db214d30c5cd967e41ed24a7a463fae2f16234d8",
-      "schemaDigest": "0a974118533260f073ad8c13ad91aaf9a01dc8353c1c1db2d4400069282ca0f7"
+      "manifestDigest": "a354cf429d47d8b7dbb7d5c86e4759a0849a8fd5aef5fb46fe54a75fa8f9d875",
+      "protocolDigest": "722a07dabcd0f22adc9c38c23be59fbb86d65b207e13cc3c0776cfc92660b504",
+      "schemaDigest": "4442d965ba8dcdc1c55c8cfbba93a5d7e08b25a9190679bf7ca3cbf39a93fe71"
     },
     "protocolMode": "experimental",
     "routingLifecycle": [
@@ -15354,24 +15354,29 @@
         ]
       },
       {
-        "fields": [],
+        "fields": [
+          {
+            "aliases": [],
+            "rustField": "onboarding_skill",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "null"
+              },
+              "flattened": false,
+              "presence": "optionalNullable",
+              "skipSerializingIf": null
+            },
+            "wireName": "onboardingSkill"
+          }
+        ],
         "manualPayloadConversion": null,
-        "metadataStatus": "schemaSufficient",
+        "metadataStatus": "manifestRequired",
         "rustType": "PluginDetail",
         "schemaRef": "#/definitions/v2/PluginDetail",
-        "schemaSufficientProof": {
-          "checkedAdditionalProperties": true,
-          "checkedEnumValues": true,
-          "checkedNullableFields": true,
-          "checkedRequiredFields": true,
-          "checkedUnionTags": true,
-          "noCustomSerde": true,
-          "noFlatten": true,
-          "noSerdeAliases": true,
-          "noSerdeDefaults": true,
-          "noSkipSerializingIf": true,
-          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
-        },
+        "schemaSufficientProof": null,
         "variantAliases": []
       },
       {
@@ -31426,9 +31431,9 @@
       }
     ],
     "digests": {
-      "manifestDigest": "3cf494f9aa22e7ea2fa8ccbec3073fb2ab1f5ff9cc733dc15e35054e07f4af8b",
-      "protocolDigest": "2f667684dcfff1442701161a7c7288d8c5fe42963d90250ac1b391817508f7c8",
-      "schemaDigest": "3463d89e120a7db09db0dcb64d20e4f18e0bf3c4a49b3eb7979c82614b9afcf2"
+      "manifestDigest": "6cc31c68124513ea6eb099aecb6a688b4688baabf152ee6b9347fb5ba3215b83",
+      "protocolDigest": "289ada04934fc6563d66828eb1720d0a23a9a01d30ee5069f24df62eb8710807",
+      "schemaDigest": "5c714637cbdc499bacc251c9ee0b3e28bbbd28359c7373d5309a8943d451ce76"
     },
     "protocolMode": "stable",
     "routingLifecycle": [
@@ -39735,24 +39740,29 @@
         ]
       },
       {
-        "fields": [],
+        "fields": [
+          {
+            "aliases": [],
+            "rustField": "onboarding_skill",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "null"
+              },
+              "flattened": false,
+              "presence": "optionalNullable",
+              "skipSerializingIf": null
+            },
+            "wireName": "onboardingSkill"
+          }
+        ],
         "manualPayloadConversion": null,
-        "metadataStatus": "schemaSufficient",
+        "metadataStatus": "manifestRequired",
         "rustType": "PluginDetail",
         "schemaRef": "#/definitions/v2/PluginDetail",
-        "schemaSufficientProof": {
-          "checkedAdditionalProperties": true,
-          "checkedEnumValues": true,
-          "checkedNullableFields": true,
-          "checkedRequiredFields": true,
-          "checkedUnionTags": true,
-          "noCustomSerde": true,
-          "noFlatten": true,
-          "noSerdeAliases": true,
-          "noSerdeDefaults": true,
-          "noSkipSerializingIf": true,
-          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
-        },
+        "schemaSufficientProof": null,
         "variantAliases": []
       },
       {
