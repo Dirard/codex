@@ -155,7 +155,7 @@ impl CodeModeExecuteHandler {
             .code_mode_host_duration()
             .unwrap_or_else(|| started_at.elapsed());
         Ok(handle_runtime_response(
-            &step_context.settings.model_info,
+            &step_context,
             response,
             args.max_output_tokens,
             wall_time,

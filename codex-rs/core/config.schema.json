@@ -3376,7 +3376,7 @@
           "type": "integer"
         },
         "mcp_max_lines": {
-          "description": "Maximum lines retained in MCP tool output.",
+          "description": "Overrides max_lines for MCP tool output and entire emitted Code Mode cells.",
           "format": "uint",
           "minimum": 0.0,
           "type": "integer"

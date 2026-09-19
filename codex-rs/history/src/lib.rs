@@ -78,11 +78,11 @@ pub struct CodexHarnessMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_truncation_policy: Option<TruncationPolicy>,
 
-    /// Originating general output line limit.
+    /// Effective originating output line limit, including any tool-specific override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_truncation_max_lines: Option<usize>,
 
-    /// Originating tighter MCP output line limit.
+    /// Originating configured MCP and Code Mode output line override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_truncation_mcp_max_lines: Option<usize>,
 

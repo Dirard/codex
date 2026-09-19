@@ -48,6 +48,14 @@ impl OutputTruncation {
     pub fn with_policy(self, policy: TruncationPolicy) -> Self {
         Self { policy, ..self }
     }
+
+    /// MCP responses and emitted Code Mode cells use the MCP line override, if configured.
+    pub fn for_mcp_output(self) -> Self {
+        Self {
+            max_lines: self.mcp_max_lines.or(self.max_lines),
+            ..self
+        }
+    }
 }
 
 impl From<TruncationPolicy> for OutputTruncation {

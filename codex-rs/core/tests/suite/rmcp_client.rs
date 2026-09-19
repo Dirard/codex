@@ -710,6 +710,84 @@ async fn text_only_mcp_content_uses_content_items() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_line_limit_overrides_general_limit_in_model_input() -> anyhow::Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let instructions = (1..=225)
+        .map(|line| format!("instruction {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call_with_namespace(
+                "mcp-lines",
+                "mcp__rmcp",
+                "image_scenario",
+                &json!({"scenario": "text_only", "caption": instructions}).to_string(),
+            ),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let final_mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "done"),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let command = remote_aware_stdio_server_bin()?;
+    let fixture = test_codex()
+        .with_model_info_override("gpt-5.4", |model| model.supports_search_tool = false)
+        .with_config(move |config| {
+            config.output_truncation.max_lines = Some(150);
+            config.output_truncation.mcp_max_lines = Some(5000);
+            insert_mcp_server(
+                config,
+                "rmcp",
+                stdio_transport(command, /*env*/ None, Vec::new()),
+                TestMcpServerOptions {
+                    environment_id: remote_aware_environment_id(),
+                    ..Default::default()
+                },
+            );
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    wait_for_mcp_server(&fixture.codex, "rmcp").await?;
+    fixture
+        .codex
+        .start_or_steer_turn(read_only_user_turn(
+            &fixture,
+            "read the complete instructions",
+        ))
+        .await?;
+    wait_for_event(&fixture.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let output = final_mock
+        .single_request()
+        .function_call_output("mcp-lines");
+    let body: codex_protocol::models::FunctionCallOutputBody =
+        serde_json::from_value(output["output"].clone())?;
+    let text = body.to_text().expect("MCP text output");
+    assert_eq!(split_wall_time_wrapped_output(&text), instructions,);
+    server.verify().await;
+    Ok(())
+}
+
 #[test_case(false; "configured servers")]
 #[test_case(true; "plugin servers")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
