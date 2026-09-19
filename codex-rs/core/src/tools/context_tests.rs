@@ -136,6 +136,49 @@ fn mcp_tool_output_response_item_includes_wall_time() {
 }
 
 #[test]
+fn mcp_line_limits_preserve_encrypted_content_without_structured_content() {
+    for mcp_max_lines in [0, 10] {
+        let encrypted_content = "gAAAA-test-encrypted-content";
+        let payload = McpToolOutput {
+            result: CallToolResult {
+                content: vec![json!({
+                    "type": "text",
+                    "text": encrypted_content,
+                    "_meta": { "codex/encryptedContent": true },
+                })],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            },
+            tool_input: json!({}),
+            result_metadata_capture_allowed: false,
+            wall_time: std::time::Duration::from_millis(1250),
+            original_image_detail_supported: false,
+            truncation: OutputTruncation::new_with_mcp_max_lines(
+                TruncationPolicy::Bytes(100_000),
+                /*max_lines*/ Some(100),
+                Some(mcp_max_lines),
+            ),
+        }
+        .response_payload();
+
+        let encrypted_items = payload
+            .content_items()
+            .expect("encrypted MCP output must retain typed content")
+            .iter()
+            .filter(|item| matches!(item, FunctionCallOutputContentItem::EncryptedContent { .. }))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            encrypted_items,
+            vec![FunctionCallOutputContentItem::EncryptedContent {
+                encrypted_content: encrypted_content.to_string(),
+            }],
+        );
+    }
+}
+
+#[test]
 fn mcp_tool_output_applies_line_limits_once_when_recorded() {
     let recorded_text = |truncation| {
         let response = McpToolOutput {
