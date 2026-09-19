@@ -258,6 +258,8 @@ mod luna_reserve_usage_tests;
 mod mcp_startup;
 #[path = "tests/misalignment_policy_tests.rs"]
 mod misalignment_policy;
+#[path = "tests/model_display_name_tests.rs"]
+mod model_display_name_tests;
 #[path = "tests/permission_shortcuts_tests.rs"]
 mod permission_shortcuts_tests;
 mod permissions;
@@ -295,3 +297,6 @@ pub(super) use helpers::*;
 
 #[path = "tests/questions_tests.rs"]
 mod questions_tests;
+
+#[path = "tests/question_notifications_tests.rs"]
+mod question_notifications_tests;
