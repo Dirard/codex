@@ -30,6 +30,9 @@ pub(crate) fn notification_routing_strategy(method: &'static str) -> Notificatio
         }
         "skills/changed" => global_notification("skills cache invalidation"),
         "account/updated" => global_notification("account cache invalidation"),
+        "account/gatewayOAuth/changed" => {
+            global_notification("gateway OAuth readiness and login progress")
+        }
         "account/rateLimits/updated" => {
             global_notification("account rate-limit cache invalidation")
         }
