@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/openai/codex/sdk/go/internal/jsonrpc"
 	"github.com/openai/codex/sdk/go/protocol"
@@ -115,6 +116,175 @@ func (c *AccountsClient) SendAddCreditsNudgeEmail(ctx context.Context, params pr
 		return protocol.SendAddCreditsNudgeEmailResponse{}, &ClosedError{}
 	}
 	return c.client.Raw().AccountSendAddCreditsNudgeEmail(ctx, params)
+}
+
+func (c *AccountsClient) GatewayOAuthRead(ctx context.Context) (protocol.GatewayOAuthReadResponse, error) {
+	if c == nil || c.client == nil {
+		return protocol.GatewayOAuthReadResponse{}, &ClosedError{}
+	}
+	return c.client.Raw().AccountGatewayOAuthRead(ctx)
+}
+
+func (c *AccountsClient) StartGatewayOAuthLogin(ctx context.Context) (*GatewayOAuthHandle, error) {
+	if c == nil || c.client == nil {
+		return nil, &ClosedError{}
+	}
+	if err := c.client.ensureHighLevelWorkflowEnabled("gateway OAuth login", "account/gatewayOAuth/login"); err != nil {
+		return nil, err
+	}
+	if !c.client.gatewayOAuth {
+		return nil, &ConfigError{Reason: "gateway OAuth login requires ClientConfig.ExplicitGatewayOAuth"}
+	}
+	readiness, err := c.GatewayOAuthRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !readiness.Required {
+		return nil, &UnsupportedError{Reason: "current provider does not use gateway OAuth"}
+	}
+
+	// Gateway cancellation is connection-scoped, so managed logins must not overlap.
+	c.client.gatewayLoginMu.Lock()
+	if c.client.gatewayLogin != nil {
+		c.client.gatewayLoginMu.Unlock()
+		return nil, &UnsupportedError{Reason: "a gateway OAuth login is already in progress on this client"}
+	}
+	stream := c.client.router.subscribeGlobal()
+	loginCtx, cancelLogin := context.WithCancel(context.Background())
+	handle := &GatewayOAuthHandle{
+		client:      c.client,
+		providerID:  readiness.ProviderID,
+		stream:      stream,
+		done:        make(chan struct{}),
+		cancelLogin: cancelLogin,
+	}
+	c.client.gatewayLogin = handle
+	c.client.gatewayLoginMu.Unlock()
+	go func() {
+		_, handle.loginErr = c.client.Raw().AccountGatewayOAuthLogin(loginCtx)
+		close(handle.done)
+		handle.cleanup()
+	}()
+
+	for {
+		notification, ok := stream.Next(ctx)
+		if !ok {
+			if err := stream.Err(); err != nil {
+				return nil, handle.abort(err)
+			}
+			// RPC completion closes the stream even when no status event was emitted.
+			if _, err := handle.Wait(ctx); err != nil {
+				return nil, err
+			}
+			return handle, nil
+		}
+		payload, ok := notification.Payload.(protocol.GatewayOAuthChangedNotification)
+		if !ok || payload.ProviderID != readiness.ProviderID || payload.Status != protocol.GatewayOAuthStatusStarted {
+			continue
+		}
+		authURL, ok := payload.AuthURL.Value()
+		if !ok || authURL == "" {
+			continue
+		}
+		handle.authURL = authURL
+		// Only the initiating connection gets the URL; status alone is global.
+		stream.Close()
+		return handle, nil
+	}
+}
+
+type GatewayOAuthHandle struct {
+	client      *Client
+	providerID  string
+	authURL     string
+	stream      *NotificationStream
+	done        chan struct{}
+	loginErr    error
+	cancelLogin context.CancelFunc
+}
+
+type GatewayOAuthResult struct {
+	ProviderID string
+	Status     protocol.GatewayOAuthStatus
+	Error      string
+}
+
+func (h *GatewayOAuthHandle) ProviderID() string {
+	if h == nil {
+		return ""
+	}
+	return h.providerID
+}
+
+func (h *GatewayOAuthHandle) AuthURL() string {
+	if h == nil {
+		return ""
+	}
+	return h.authURL
+}
+
+func (h *GatewayOAuthHandle) Wait(ctx context.Context) (*GatewayOAuthResult, error) {
+	if h == nil || h.client == nil || h.stream == nil {
+		return nil, &ClosedError{}
+	}
+	if err := h.client.ensureHighLevelEnabled("gateway OAuth wait"); err != nil {
+		return nil, err
+	}
+	// The login RPC, not the globally broadcast status, acknowledges credential persistence.
+	select {
+	case <-h.done:
+		h.cleanup()
+		if h.loginErr != nil {
+			return nil, h.loginErr
+		}
+		return &GatewayOAuthResult{ProviderID: h.providerID, Status: protocol.GatewayOAuthStatusSucceeded}, nil
+	case <-ctx.Done():
+		return nil, h.abort(ctx.Err())
+	}
+}
+
+func (h *GatewayOAuthHandle) Cancel(ctx context.Context) error {
+	if h == nil || h.client == nil {
+		return &ClosedError{}
+	}
+	if err := h.client.ensureHighLevelEnabled("gateway OAuth cancel"); err != nil {
+		return err
+	}
+	h.client.gatewayLoginMu.Lock()
+	defer h.client.gatewayLoginMu.Unlock()
+	if h.client.gatewayLogin != h {
+		return nil
+	}
+	select {
+	case <-h.done:
+	default:
+		_, err := h.client.Raw().AccountGatewayOAuthCancel(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	h.client.gatewayLogin = nil
+	h.cancelLogin()
+	h.stream.Close()
+	return nil
+}
+
+func (h *GatewayOAuthHandle) abort(cause error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := h.Cancel(ctx)
+	h.cleanup()
+	return errors.Join(cause, err)
+}
+
+func (h *GatewayOAuthHandle) cleanup() {
+	h.client.gatewayLoginMu.Lock()
+	if h.client.gatewayLogin == h {
+		h.client.gatewayLogin = nil
+	}
+	h.client.gatewayLoginMu.Unlock()
+	h.cancelLogin()
+	h.stream.Close()
 }
 
 func (c *AccountsClient) startLogin(ctx context.Context, params protocol.LoginAccountParams) (*LoginHandle, error) {

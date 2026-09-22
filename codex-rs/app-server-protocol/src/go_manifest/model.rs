@@ -367,12 +367,12 @@ pub struct InitializeDigestSnapshot {
 
 pub fn initialize_digest_snapshot() -> InitializeDigestSnapshot {
     InitializeDigestSnapshot {
-        stable_protocol_digest: "289ada04934fc6563d66828eb1720d0a23a9a01d30ee5069f24df62eb8710807",
-        experimental_protocol_digest: "722a07dabcd0f22adc9c38c23be59fbb86d65b207e13cc3c0776cfc92660b504",
-        stable_schema_digest: "5c714637cbdc499bacc251c9ee0b3e28bbbd28359c7373d5309a8943d451ce76",
-        experimental_schema_digest: "4442d965ba8dcdc1c55c8cfbba93a5d7e08b25a9190679bf7ca3cbf39a93fe71",
-        stable_manifest_digest: "6cc31c68124513ea6eb099aecb6a688b4688baabf152ee6b9347fb5ba3215b83",
-        experimental_manifest_digest: "a354cf429d47d8b7dbb7d5c86e4759a0849a8fd5aef5fb46fe54a75fa8f9d875",
+        stable_protocol_digest: "852ba1a88f4a304e89168f28031ca7ca44361e74a86e9b608ce4cd0fe644ff17",
+        experimental_protocol_digest: "a07f73a75cde20973fcb01438dd476f5fab6f7626ea33d587d1e1d3571ba879a",
+        stable_schema_digest: "53bc0aeac75d1f22b7bbe558234612517d12584396dde564b47af4471d98a028",
+        experimental_schema_digest: "1ab0e3ebe1663a819d7c5dcd9e57405a8cc131c3631cc157077c18ca61d0bd43",
+        stable_manifest_digest: "868b1056425d3d8ddaac9aff1406990f56f73367958030b43079a6f2c6b016f1",
+        experimental_manifest_digest: "4990c217a61a2489864aa1a129058f6b68538a598228de680c4dcdea1a58dbd3",
     }
 }
 
