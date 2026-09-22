@@ -1,8 +1,9 @@
 use crate::TurnInputRequest;
 use crate::TurnInputSubmission;
 use crate::TurnStartOptions;
-use crate::agent::api::StatusSubscription;
 use crate::agent::AgentStatus;
+use crate::agent::api::StatusSubscription;
+#[cfg(test)]
 pub(crate) use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
