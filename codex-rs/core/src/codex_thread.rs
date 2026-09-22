@@ -425,7 +425,7 @@ impl CodexThread {
             TurnInputMode::StartOrSteer,
             /*turn_spawn_budget*/ None,
         )
-            .await
+        .await
     }
 
     /// Starts a regular turn only when the thread is idle.

@@ -1,3 +1,5 @@
+Total output lines: 153
+
 Total output lines: 163
 
 ---
@@ -73,9 +75,7 @@ Settings:
         Never use the `request_user_input` tool for permission requests or permission-related escalations.
         </collaboration_mode>
 03:message/developer:
-    <multi_agent_role>You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
-
-... 13 lines truncated ...
+... 3 lines truncated ...
 
     Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d... so, set `fork_turns` to `"none"`.</multi_agent_role> [hash=d5928243dc643bcc]
 04:message/developer:
