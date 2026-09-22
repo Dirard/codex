@@ -985,8 +985,7 @@ impl SessionIo {
     ) -> CodexResult<String> {
         self.submit_with_trace(
             op, /*trace*/ None, /*parent_turn_id*/ None, /*root_turn_id*/ None,
-            /*residency_guard*/ None,
-            /*turn_spawn_budget*/ None,
+            /*residency_guard*/ None, /*turn_spawn_budget*/ None,
         )
         .await
     }
