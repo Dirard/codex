@@ -1814,6 +1814,10 @@
           "default": false,
           "description": "Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
           "type": "boolean"
+        },
+        "explicitGatewayOauth": {
+          "description": "Use explicit gateway OAuth login instead of automatic browser authorization. Applies to this app-server's gateway runtime; later connections cannot undo it.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2204,6 +2208,17 @@
         },
         "uri": {
           "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpResourceReadTarget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Explicit hosted app/account. Omit to retain legacy resource discovery."
         }
       },
       "required": [
@@ -7703,6 +7718,25 @@
         "mode"
       ],
       "type": "object"
+    },
+    "McpResourceReadTarget": {
+      "properties": {
+        "connectorId": {
+          "type": "string"
+        },
+        "linkId": {
+          "description": "Null explicitly requests no-auth access, subject to the app's resource policy.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "connectorId",
+        "linkId"
+      ],
+      "type": "object"
     }
   },
   "description": "Request from the client to the server.",
@@ -11675,6 +11709,75 @@
         "params"
       ],
       "title": "FuzzyFileSearch/sessionStopRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/gatewayOAuth/read"
+          ],
+          "title": "Account/gatewayOAuth/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Account/gatewayOAuth/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/gatewayOAuth/login"
+          ],
+          "title": "Account/gatewayOAuth/loginRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Account/gatewayOAuth/loginRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/gatewayOAuth/cancel"
+          ],
+          "title": "Account/gatewayOAuth/cancelRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Account/gatewayOAuth/cancelRequest",
       "type": "object"
     }
   ],
