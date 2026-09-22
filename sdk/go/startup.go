@@ -55,6 +55,7 @@ type rawOnlyHighLevelWorkflow struct {
 var rawOnlyHighLevelWorkflows = []rawOnlyHighLevelWorkflow{
 	{name: "account/browser-login", startMethod: "account/login/start"},
 	{name: "account/device-code-login", startMethod: "account/login/start"},
+	{name: "account/gatewayOAuth/login", startMethod: "account/gatewayOAuth/login"},
 	{name: "command/exec", startMethod: "command/exec"},
 	{name: "fs/watch", startMethod: "fs/watch"},
 	{name: "fuzzyFileSearch/sessionStart", startMethod: "fuzzyFileSearch/sessionStart"},
@@ -378,6 +379,9 @@ func (c *Client) initialize(ctx context.Context, cfg ClientConfig, source runtim
 	}
 	if cfg.Handlers.MCPElicitation != nil {
 		capabilities.McpServerOpenaiFormElicitation = protocol.SomeNonNull(true)
+	}
+	if cfg.ExplicitGatewayOAuth {
+		capabilities.ExplicitGatewayOauth = protocol.SomeNonNull(true)
 	}
 	params := protocol.InitializeParams{
 		ClientInfo: protocol.ClientInfo{

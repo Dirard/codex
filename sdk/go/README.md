@@ -76,6 +76,9 @@ Use `Accounts` for ChatGPT/device-code/API-key login, account reads, usage, rate
 
 <!-- codex-go-sdk-resource:Accounts -->
 <!-- codex-go-sdk-docs:account/rateLimitResetCredit/consume -->
+<!-- codex-go-sdk-docs:account/gatewayOAuth/read -->
+<!-- codex-go-sdk-docs:account/gatewayOAuth/login -->
+<!-- codex-go-sdk-docs:account/gatewayOAuth/cancel -->
 <!-- codex-go-sdk-docs:account/workspaceMessages/read -->
 <!-- codex-go-sdk-docs:account/sendAddCreditsNudgeEmail -->
 
@@ -84,6 +87,9 @@ _, _ = client.Accounts.ConsumeRateLimitResetCredit(ctx, protocol.ConsumeAccountR
 _, _ = client.Accounts.ReadWorkspaceMessages(ctx)
 _, _ = client.Accounts.SendAddCreditsNudgeEmail(ctx, protocol.SendAddCreditsNudgeEmailParams{CreditType: protocol.AddCreditsNudgeCreditTypeCredits})
 ```
+
+For a gateway sign-in UI, set `ClientConfig.ExplicitGatewayOAuth`, probe `GatewayOAuthRead` on every connection, and use `StartGatewayOAuthLogin` to receive the authorization URL without enabling automatic browser login. Do not fall back automatically when the probe fails.
+Only one managed gateway login may be active per client. `Wait` follows the login RPC result, including errors without a notification; cancellation of `StartGatewayOAuthLogin` or `Wait` sends the connection-scoped cancel RPC. A login that completes immediately can return a handle with an empty authorization URL.
 
 See `examples/login_account` for login and account-read flows.
 

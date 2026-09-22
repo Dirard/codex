@@ -3708,6 +3708,66 @@
         "experimentalFields": [],
         "inspectParams": false,
         "manualPayloadConversion": null,
+        "method": "account/gatewayOAuth/read",
+        "paramsSchemaRef": null,
+        "paramsType": "Option<()>",
+        "requestSerializationScopes": [],
+        "responseSchemaRef": "#/definitions/GatewayOAuthReadResponse",
+        "responseType": "GatewayOAuthReadResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "GatewayOAuthRead"
+      },
+      {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
+        "experimental": null,
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": null,
+        "method": "account/gatewayOAuth/login",
+        "paramsSchemaRef": null,
+        "paramsType": "Option<()>",
+        "requestSerializationScopes": [],
+        "responseSchemaRef": "#/definitions/GatewayOAuthLoginResponse",
+        "responseType": "GatewayOAuthLoginResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "GatewayOAuthLogin"
+      },
+      {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
+        "experimental": null,
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": null,
+        "method": "account/gatewayOAuth/cancel",
+        "paramsSchemaRef": null,
+        "paramsType": "Option<()>",
+        "requestSerializationScopes": [],
+        "responseSchemaRef": "#/definitions/GatewayOAuthCancelResponse",
+        "responseType": "GatewayOAuthCancelResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "GatewayOAuthCancel"
+      },
+      {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
+        "experimental": null,
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": null,
         "method": "modelProvider/capabilities/read",
         "paramsSchemaRef": "#/definitions/ModelProviderCapabilitiesReadParams",
         "paramsType": "ModelProviderCapabilitiesReadParams",
@@ -5565,9 +5625,9 @@
       }
     ],
     "digests": {
-      "manifestDigest": "a354cf429d47d8b7dbb7d5c86e4759a0849a8fd5aef5fb46fe54a75fa8f9d875",
-      "protocolDigest": "722a07dabcd0f22adc9c38c23be59fbb86d65b207e13cc3c0776cfc92660b504",
-      "schemaDigest": "4442d965ba8dcdc1c55c8cfbba93a5d7e08b25a9190679bf7ca3cbf39a93fe71"
+      "manifestDigest": "4990c217a61a2489864aa1a129058f6b68538a598228de680c4dcdea1a58dbd3",
+      "protocolDigest": "a07f73a75cde20973fcb01438dd476f5fab6f7626ea33d587d1e1d3571ba879a",
+      "schemaDigest": "1ab0e3ebe1663a819d7c5dcd9e57405a8cc131c3631cc157077c18ca61d0bd43"
     },
     "protocolMode": "experimental",
     "routingLifecycle": [
@@ -5635,6 +5695,24 @@
         },
         "startMethod": "account/login/start",
         "wireIdentitySource": "loginId"
+      },
+      {
+        "cleanupTriggers": [
+          {
+            "kind": "explicitMethodResponse",
+            "method": "account/gatewayOAuth/cancel"
+          }
+        ],
+        "notificationOptOutDependencies": [
+          "account/gatewayOAuth/changed"
+        ],
+        "resourceDomain": "gatewayOAuth",
+        "startCompletion": {
+          "kind": "jsonRpcResponse",
+          "method": "account/gatewayOAuth/login"
+        },
+        "startMethod": "account/gatewayOAuth/login",
+        "wireIdentitySource": "providerId"
       },
       {
         "cleanupTriggers": [
@@ -11167,6 +11245,111 @@
         "variantAliases": []
       },
       {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "GatewayOAuthCancelResponse",
+        "schemaRef": "#/definitions/v2/GatewayOAuthCancelResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "GatewayOAuthChangedNotification",
+        "schemaRef": "#/definitions/v2/GatewayOAuthChangedNotification",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "GatewayOAuthLoginResponse",
+        "schemaRef": "#/definitions/v2/GatewayOAuthLoginResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "GatewayOAuthReadResponse",
+        "schemaRef": "#/definitions/v2/GatewayOAuthReadResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "GatewayOAuthStatus",
+        "schemaRef": "#/definitions/v2/GatewayOAuthStatus",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
         "fields": [
           {
             "aliases": [],
@@ -11986,6 +12169,22 @@
       },
       {
         "fields": [
+          {
+            "aliases": [],
+            "rustField": "explicit_gateway_oauth",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "false"
+              },
+              "flattened": false,
+              "presence": "optionalNonNull",
+              "skipSerializingIf": "std::ops::Not::not"
+            },
+            "wireName": "explicitGatewayOAuth"
+          },
           {
             "aliases": [],
             "rustField": "experimental_api",
@@ -13208,6 +13407,16 @@
           "noSkipSerializingIf": true,
           "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
         },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "manifestRequired",
+        "reviewNote": "reviewed manifest-required type with no field-level serde metadata",
+        "rustType": "McpResourceReadTarget",
+        "schemaRef": "#/definitions/v2/McpResourceReadTarget",
+        "schemaSufficientProof": null,
         "variantAliases": []
       },
       {
@@ -15401,11 +15610,180 @@
         "variantAliases": []
       },
       {
+        "fields": [
+          {
+            "aliases": [],
+            "rustField": "quick_action",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "null"
+              },
+              "flattened": false,
+              "presence": "optionalNullable",
+              "skipSerializingIf": null
+            },
+            "wireName": "quickAction"
+          },
+          {
+            "aliases": [],
+            "rustField": "search_terms",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "[]"
+              },
+              "flattened": false,
+              "presence": "optionalNonNull",
+              "skipSerializingIf": null
+            },
+            "wireName": "searchTerms"
+          }
+        ],
+        "manualPayloadConversion": null,
+        "metadataStatus": "manifestRequired",
+        "rustType": "PluginEntrypoint",
+        "schemaRef": "#/definitions/v2/PluginEntrypoint",
+        "schemaSufficientProof": null,
+        "variantAliases": []
+      },
+      {
+        "fields": [
+          {
+            "aliases": [],
+            "rustField": "entrypoints",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "null"
+              },
+              "flattened": false,
+              "presence": "optionalNullable",
+              "skipSerializingIf": null
+            },
+            "wireName": "entrypoints"
+          },
+          {
+            "aliases": [],
+            "rustField": "settings_entrypoints",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "[]"
+              },
+              "flattened": false,
+              "presence": "optionalNonNull",
+              "skipSerializingIf": null
+            },
+            "wireName": "settingsEntrypoints"
+          },
+          {
+            "aliases": [],
+            "rustField": "settings",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "[]"
+              },
+              "flattened": false,
+              "presence": "optionalNonNull",
+              "skipSerializingIf": null
+            },
+            "wireName": "settings"
+          },
+          {
+            "aliases": [],
+            "rustField": "thread_entrypoints",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "[]"
+              },
+              "flattened": false,
+              "presence": "optionalNonNull",
+              "skipSerializingIf": null
+            },
+            "wireName": "threadEntrypoints"
+          },
+          {
+            "aliases": [],
+            "rustField": "file_handlers",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "[]"
+              },
+              "flattened": false,
+              "presence": "optionalNonNull",
+              "skipSerializingIf": null
+            },
+            "wireName": "fileHandlers"
+          },
+          {
+            "aliases": [],
+            "rustField": "search_mention_providers",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "[]"
+              },
+              "flattened": false,
+              "presence": "optionalNonNull",
+              "skipSerializingIf": null
+            },
+            "wireName": "searchMentionProviders"
+          }
+        ],
+        "manualPayloadConversion": null,
+        "metadataStatus": "manifestRequired",
+        "rustType": "PluginExtensions",
+        "schemaRef": "#/definitions/v2/PluginExtensions",
+        "schemaSufficientProof": null,
+        "variantAliases": []
+      },
+      {
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
         "rustType": "PluginHookSummary",
         "schemaRef": "#/definitions/v2/PluginHookSummary",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "PluginIcon",
+        "schemaRef": "#/definitions/v2/PluginIcon",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -15682,6 +16060,48 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "PluginQuickAction",
+        "schemaRef": "#/definitions/v2/PluginQuickAction",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "PluginQuickActionTarget",
+        "schemaRef": "#/definitions/v2/PluginQuickActionTarget",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "PluginReadParams",
         "schemaRef": "#/definitions/v2/PluginReadParams",
         "schemaSufficientProof": {
@@ -15808,6 +16228,48 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "PluginSearchProvider",
+        "schemaRef": "#/definitions/v2/PluginSearchProvider",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "PluginSearchProviderCall",
+        "schemaRef": "#/definitions/v2/PluginSearchProviderCall",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "PluginSearchResponse",
         "schemaRef": "#/definitions/v2/PluginSearchResponse",
         "schemaSufficientProof": {
@@ -15852,6 +16314,27 @@
         "metadataStatus": "schemaSufficient",
         "rustType": "PluginSearchScope",
         "schemaRef": "#/definitions/v2/PluginSearchScope",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "PluginSettings",
+        "schemaRef": "#/definitions/v2/PluginSettings",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -16336,6 +16819,22 @@
       },
       {
         "fields": [
+          {
+            "aliases": [],
+            "rustField": "extensions",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "null"
+              },
+              "flattened": false,
+              "presence": "optionalNullable",
+              "skipSerializingIf": null
+            },
+            "wireName": "extensions"
+          },
           {
             "aliases": [],
             "rustField": "local_version",
@@ -26444,6 +26943,24 @@
         "experimental": null,
         "experimentalFields": [],
         "manualPayloadConversion": null,
+        "method": "account/gatewayOAuth/changed",
+        "payloadSchemaRef": "#/definitions/GatewayOAuthChangedNotification",
+        "payloadType": "GatewayOAuthChangedNotification",
+        "routingStrategy": {
+          "kind": "globalOnly",
+          "reason": "gateway OAuth readiness and login progress"
+        },
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "GatewayOAuthChanged"
+      },
+      {
+        "direction": "serverNotification",
+        "exception": null,
+        "experimental": null,
+        "experimentalFields": [],
+        "manualPayloadConversion": null,
         "method": "account/rateLimits/updated",
         "payloadSchemaRef": "#/definitions/AccountRateLimitsUpdatedNotification",
         "payloadType": "AccountRateLimitsUpdatedNotification",
@@ -30308,6 +30825,66 @@
         "experimentalFields": [],
         "inspectParams": false,
         "manualPayloadConversion": null,
+        "method": "account/gatewayOAuth/read",
+        "paramsSchemaRef": null,
+        "paramsType": "Option<()>",
+        "requestSerializationScopes": [],
+        "responseSchemaRef": "#/definitions/GatewayOAuthReadResponse",
+        "responseType": "GatewayOAuthReadResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "GatewayOAuthRead"
+      },
+      {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
+        "experimental": null,
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": null,
+        "method": "account/gatewayOAuth/login",
+        "paramsSchemaRef": null,
+        "paramsType": "Option<()>",
+        "requestSerializationScopes": [],
+        "responseSchemaRef": "#/definitions/GatewayOAuthLoginResponse",
+        "responseType": "GatewayOAuthLoginResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "GatewayOAuthLogin"
+      },
+      {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
+        "experimental": null,
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": null,
+        "method": "account/gatewayOAuth/cancel",
+        "paramsSchemaRef": null,
+        "paramsType": "Option<()>",
+        "requestSerializationScopes": [],
+        "responseSchemaRef": "#/definitions/GatewayOAuthCancelResponse",
+        "responseType": "GatewayOAuthCancelResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "GatewayOAuthCancel"
+      },
+      {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
+        "experimental": null,
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": null,
         "method": "modelProvider/capabilities/read",
         "paramsSchemaRef": "#/definitions/ModelProviderCapabilitiesReadParams",
         "paramsType": "ModelProviderCapabilitiesReadParams",
@@ -31431,9 +32008,9 @@
       }
     ],
     "digests": {
-      "manifestDigest": "6cc31c68124513ea6eb099aecb6a688b4688baabf152ee6b9347fb5ba3215b83",
-      "protocolDigest": "289ada04934fc6563d66828eb1720d0a23a9a01d30ee5069f24df62eb8710807",
-      "schemaDigest": "5c714637cbdc499bacc251c9ee0b3e28bbbd28359c7373d5309a8943d451ce76"
+      "manifestDigest": "868b1056425d3d8ddaac9aff1406990f56f73367958030b43079a6f2c6b016f1",
+      "protocolDigest": "852ba1a88f4a304e89168f28031ca7ca44361e74a86e9b608ce4cd0fe644ff17",
+      "schemaDigest": "53bc0aeac75d1f22b7bbe558234612517d12584396dde564b47af4471d98a028"
     },
     "protocolMode": "stable",
     "routingLifecycle": [
@@ -31501,6 +32078,24 @@
         },
         "startMethod": "account/login/start",
         "wireIdentitySource": "loginId"
+      },
+      {
+        "cleanupTriggers": [
+          {
+            "kind": "explicitMethodResponse",
+            "method": "account/gatewayOAuth/cancel"
+          }
+        ],
+        "notificationOptOutDependencies": [
+          "account/gatewayOAuth/changed"
+        ],
+        "resourceDomain": "gatewayOAuth",
+        "startCompletion": {
+          "kind": "jsonRpcResponse",
+          "method": "account/gatewayOAuth/login"
+        },
+        "startMethod": "account/gatewayOAuth/login",
+        "wireIdentitySource": "providerId"
       },
       {
         "cleanupTriggers": [
@@ -35952,6 +36547,111 @@
         "variantAliases": []
       },
       {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "GatewayOAuthCancelResponse",
+        "schemaRef": "#/definitions/v2/GatewayOAuthCancelResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "GatewayOAuthChangedNotification",
+        "schemaRef": "#/definitions/v2/GatewayOAuthChangedNotification",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "GatewayOAuthLoginResponse",
+        "schemaRef": "#/definitions/v2/GatewayOAuthLoginResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "GatewayOAuthReadResponse",
+        "schemaRef": "#/definitions/v2/GatewayOAuthReadResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "GatewayOAuthStatus",
+        "schemaRef": "#/definitions/v2/GatewayOAuthStatus",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
         "fields": [
           {
             "aliases": [],
@@ -36771,6 +37471,22 @@
       },
       {
         "fields": [
+          {
+            "aliases": [],
+            "rustField": "explicit_gateway_oauth",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "false"
+              },
+              "flattened": false,
+              "presence": "optionalNonNull",
+              "skipSerializingIf": "std::ops::Not::not"
+            },
+            "wireName": "explicitGatewayOAuth"
+          },
           {
             "aliases": [],
             "rustField": "experimental_api",
@@ -37972,6 +38688,16 @@
           "noSkipSerializingIf": true,
           "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
         },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "manifestRequired",
+        "reviewNote": "reviewed manifest-required type with no field-level serde metadata",
+        "rustType": "McpResourceReadTarget",
+        "schemaRef": "#/definitions/v2/McpResourceReadTarget",
+        "schemaSufficientProof": null,
         "variantAliases": []
       },
       {
@@ -39787,11 +40513,180 @@
         "variantAliases": []
       },
       {
+        "fields": [
+          {
+            "aliases": [],
+            "rustField": "quick_action",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "null"
+              },
+              "flattened": false,
+              "presence": "optionalNullable",
+              "skipSerializingIf": null
+            },
+            "wireName": "quickAction"
+          },
+          {
+            "aliases": [],
+            "rustField": "search_terms",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "[]"
+              },
+              "flattened": false,
+              "presence": "optionalNonNull",
+              "skipSerializingIf": null
+            },
+            "wireName": "searchTerms"
+          }
+        ],
+        "manualPayloadConversion": null,
+        "metadataStatus": "manifestRequired",
+        "rustType": "PluginEntrypoint",
+        "schemaRef": "#/definitions/v2/PluginEntrypoint",
+        "schemaSufficientProof": null,
+        "variantAliases": []
+      },
+      {
+        "fields": [
+          {
+            "aliases": [],
+            "rustField": "entrypoints",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "null"
+              },
+              "flattened": false,
+              "presence": "optionalNullable",
+              "skipSerializingIf": null
+            },
+            "wireName": "entrypoints"
+          },
+          {
+            "aliases": [],
+            "rustField": "settings_entrypoints",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "[]"
+              },
+              "flattened": false,
+              "presence": "optionalNonNull",
+              "skipSerializingIf": null
+            },
+            "wireName": "settingsEntrypoints"
+          },
+          {
+            "aliases": [],
+            "rustField": "settings",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "[]"
+              },
+              "flattened": false,
+              "presence": "optionalNonNull",
+              "skipSerializingIf": null
+            },
+            "wireName": "settings"
+          },
+          {
+            "aliases": [],
+            "rustField": "thread_entrypoints",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "[]"
+              },
+              "flattened": false,
+              "presence": "optionalNonNull",
+              "skipSerializingIf": null
+            },
+            "wireName": "threadEntrypoints"
+          },
+          {
+            "aliases": [],
+            "rustField": "file_handlers",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "[]"
+              },
+              "flattened": false,
+              "presence": "optionalNonNull",
+              "skipSerializingIf": null
+            },
+            "wireName": "fileHandlers"
+          },
+          {
+            "aliases": [],
+            "rustField": "search_mention_providers",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "[]"
+              },
+              "flattened": false,
+              "presence": "optionalNonNull",
+              "skipSerializingIf": null
+            },
+            "wireName": "searchMentionProviders"
+          }
+        ],
+        "manualPayloadConversion": null,
+        "metadataStatus": "manifestRequired",
+        "rustType": "PluginExtensions",
+        "schemaRef": "#/definitions/v2/PluginExtensions",
+        "schemaSufficientProof": null,
+        "variantAliases": []
+      },
+      {
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
         "rustType": "PluginHookSummary",
         "schemaRef": "#/definitions/v2/PluginHookSummary",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "PluginIcon",
+        "schemaRef": "#/definitions/v2/PluginIcon",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -40068,6 +40963,48 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "PluginQuickAction",
+        "schemaRef": "#/definitions/v2/PluginQuickAction",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "PluginQuickActionTarget",
+        "schemaRef": "#/definitions/v2/PluginQuickActionTarget",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "PluginReadParams",
         "schemaRef": "#/definitions/v2/PluginReadParams",
         "schemaSufficientProof": {
@@ -40154,6 +41091,69 @@
         "metadataStatus": "schemaSufficient",
         "rustType": "PluginReconcileResponse",
         "schemaRef": "#/definitions/v2/PluginReconcileResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "PluginSearchProvider",
+        "schemaRef": "#/definitions/v2/PluginSearchProvider",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "PluginSearchProviderCall",
+        "schemaRef": "#/definitions/v2/PluginSearchProviderCall",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "PluginSettings",
+        "schemaRef": "#/definitions/v2/PluginSettings",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -40638,6 +41638,22 @@
       },
       {
         "fields": [
+          {
+            "aliases": [],
+            "rustField": "extensions",
+            "shape": {
+              "customDeserialize": null,
+              "customSerialize": null,
+              "default": {
+                "provider": "serdeDefault",
+                "wireValueJson": "null"
+              },
+              "flattened": false,
+              "presence": "optionalNullable",
+              "skipSerializingIf": null
+            },
+            "wireName": "extensions"
+          },
           {
             "aliases": [],
             "rustField": "local_version",
@@ -47057,6 +48073,24 @@
         "sdkVisibility": "public",
         "serdeShapeRequirement": "schemaSufficient",
         "variant": "AccountUpdated"
+      },
+      {
+        "direction": "serverNotification",
+        "exception": null,
+        "experimental": null,
+        "experimentalFields": [],
+        "manualPayloadConversion": null,
+        "method": "account/gatewayOAuth/changed",
+        "payloadSchemaRef": "#/definitions/GatewayOAuthChangedNotification",
+        "payloadType": "GatewayOAuthChangedNotification",
+        "routingStrategy": {
+          "kind": "globalOnly",
+          "reason": "gateway OAuth readiness and login progress"
+        },
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "GatewayOAuthChanged"
       },
       {
         "direction": "serverNotification",

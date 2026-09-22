@@ -20,6 +20,9 @@ type Client struct {
 	limits             ClientLimits
 	disabledStart      map[string]string
 	rawOnly            bool
+	gatewayOAuth       bool
+	gatewayLoginMu     sync.Mutex
+	gatewayLogin       *GatewayOAuthHandle
 	terminalMu         sync.Mutex
 	terminalErr        error
 
@@ -75,6 +78,7 @@ func newClient(ctx context.Context, cfg ClientConfig) (*Client, error) {
 		limits:             normalized.Limits,
 		disabledStart:      disabledImplementedHighLevelStartMethods(normalized.NotificationOptOuts),
 		rawOnly:            normalized.Mode == ClientModeRawOnly,
+		gatewayOAuth:       normalized.ExplicitGatewayOAuth,
 	}
 	client.router = newNotificationRouter(normalized.Limits)
 	client.initResourceClients()

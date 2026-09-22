@@ -54,6 +54,46 @@ func TestInitializeAdvertisesMcpElicitationCapabilityOnlyWithHandler(t *testing.
 	assertInitializeMcpElicitationCapability(t, withHandler.sentFrames()[0], true)
 }
 
+func TestInitializeExplicitGatewayOAuthIsOptIn(t *testing.T) {
+	defaultTransport := newScriptedInitializedTransport(t, nil)
+	defaultClient, err := NewClient(context.Background(), ClientConfig{Transport: defaultTransport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = defaultClient.Close() })
+
+	explicitTransport := newScriptedInitializedTransport(t, nil)
+	explicitClient, err := NewClient(context.Background(), ClientConfig{
+		Transport:            explicitTransport,
+		ExplicitGatewayOAuth: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = explicitClient.Close() })
+
+	for _, tt := range []struct {
+		frame json.RawMessage
+		want  string
+	}{
+		{frame: defaultTransport.sentFrames()[0]},
+		{frame: explicitTransport.sentFrames()[0], want: "true"},
+	} {
+		var envelope struct {
+			Params struct {
+				Capabilities map[string]json.RawMessage `json:"capabilities"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal(tt.frame, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := envelope.Params.Capabilities["explicitGatewayOauth"]
+		if ok != (tt.want != "") || (ok && string(got) != tt.want) {
+			t.Fatalf("explicitGatewayOauth = %s, %v; want %q present", got, ok, tt.want)
+		}
+	}
+}
+
 func TestStrictRejectsLegacyInitializeBeforeInitialized(t *testing.T) {
 	transport := newScriptedInitializedTransport(t, legacyInitializePayload())
 	_, err := NewClient(context.Background(), ClientConfig{Transport: transport})

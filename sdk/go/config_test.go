@@ -190,9 +190,9 @@ func TestReservedRuntimeEnvTracksRustAuthAndDebugHooks(t *testing.T) {
 		{
 			path: "codex-rs/login/src/auth/manager.rs",
 			exact: map[string]struct{}{
-				"CODEX_REFRESH_TOKEN_URL_OVERRIDE":   {},
-				"CODEX_REVOKE_TOKEN_URL_OVERRIDE":    {},
-				"CODEX_APP_SERVER_LOGIN_CLIENT_ID":   {},
+				"CODEX_REFRESH_TOKEN_URL_OVERRIDE": {},
+				"CODEX_REVOKE_TOKEN_URL_OVERRIDE":  {},
+				"CODEX_APP_SERVER_LOGIN_CLIENT_ID": {},
 			},
 		},
 		{
@@ -355,6 +355,7 @@ func TestNotificationOptOutValidation(t *testing.T) {
 	wantDisabled := []string{
 		"account/browser-login disabled in raw-only mode",
 		"account/device-code-login disabled in raw-only mode",
+		"account/gatewayOAuth/login disabled in raw-only mode",
 		"command/exec disabled in raw-only mode",
 		"fs/watch disabled in raw-only mode",
 		"fuzzyFileSearch/sessionStart disabled in raw-only mode",
@@ -420,6 +421,11 @@ func TestNotificationOptOutsDisableHighLevelWorkflows(t *testing.T) {
 		optOut   string
 		workflow string
 	}{
+		{
+			name:     "gateway OAuth",
+			optOut:   "account/gatewayOAuth/changed",
+			workflow: "account/gatewayOAuth/login requires account/gatewayOAuth/changed",
+		},
 		{
 			name:     "command",
 			optOut:   "command/exec/outputDelta",

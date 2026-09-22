@@ -49,6 +49,18 @@ pub(super) fn go_sdk_routing_lifecycle_entries() -> Vec<RoutingLifecycleEntry> {
             notification_opt_out_dependencies: vec!["account/login/completed"],
         },
         RoutingLifecycleEntry {
+            resource_domain: "gatewayOAuth",
+            wire_identity_source: "providerId",
+            start_method: "account/gatewayOAuth/login",
+            start_completion: WireCompletion::JsonRpcResponse {
+                method: "account/gatewayOAuth/login",
+            },
+            cleanup_triggers: vec![CleanupTrigger::ExplicitMethodResponse {
+                method: "account/gatewayOAuth/cancel",
+            }],
+            notification_opt_out_dependencies: vec!["account/gatewayOAuth/changed"],
+        },
+        RoutingLifecycleEntry {
             resource_domain: "review",
             wire_identity_source: "reviewThreadId + turn.id",
             start_method: "review/start",
