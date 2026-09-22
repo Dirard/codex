@@ -706,6 +706,7 @@ type renderedField struct {
 	CustomDeserialize string
 	Minimum           string
 	Maximum           string
+	VariantTags       []string
 	NestedAnyOfTags   []string
 }
 
@@ -718,6 +719,7 @@ type renderedTaggedUnionVariant struct {
 	Tag               string
 	Required          []string
 	Nullable          map[string]bool
+	Fields            []string
 	AnyOfAlternatives []renderedTaggedUnionAlternative
 }
 
@@ -766,7 +768,11 @@ func renderStruct(name, key string, schema Schema, names map[string]string, serd
 		}
 		usedFieldNames[fieldName] = true
 		var nestedAnyOfTags []string
+		var variantTags []string
 		for _, variant := range taggedUnion.Variants {
+			if slices.Contains(variant.Fields, propertyName) {
+				variantTags = append(variantTags, variant.Tag)
+			}
 			for _, alternative := range variant.AnyOfAlternatives {
 				if slices.Contains(alternative.Fields, propertyName) {
 					nestedAnyOfTags = append(nestedAnyOfTags, variant.Tag)
@@ -781,6 +787,7 @@ func renderStruct(name, key string, schema Schema, names map[string]string, serd
 			Required:        required[propertyName],
 			RequiredNonNull: (required[propertyName] || fieldType == "json.RawMessage") && !strings.HasPrefix(fieldType, "Optional[") && !allowsNull,
 			VariantAliases:  serdeShape.VariantAliases,
+			VariantTags:     variantTags,
 			NestedAnyOfTags: nestedAnyOfTags,
 		}
 		if fieldType != "json.RawMessage" {
@@ -932,6 +939,7 @@ func renderStructUnmarshal(name string, fields []renderedField, taggedUnion rend
 		}
 		valueName := "raw" + field.FieldName
 		nestedAnyOfCondition := ""
+		variantCondition := ""
 		if len(field.NestedAnyOfTags) > 0 {
 			conditions := make([]string, 0, len(field.NestedAnyOfTags))
 			for _, tag := range field.NestedAnyOfTags {
@@ -941,12 +949,24 @@ func renderStructUnmarshal(name string, fields []renderedField, taggedUnion rend
 			nestedAnyOfCondition = strings.Join(conditions, " || ")
 			b.WriteString(fmt.Sprintf("\tif %s { var zero %s; v.%s = zero }\n", nestedAnyOfCondition, field.Type, field.FieldName))
 		}
+		if len(field.VariantTags) > 0 {
+			conditions := make([]string, 0, len(field.VariantTags))
+			for _, tag := range field.VariantTags {
+				tagJSON, _ := json.Marshal(tag)
+				conditions = append(conditions, fmt.Sprintf("bytes.Equal(bytes.TrimSpace(raw[%q]), []byte(%q))", taggedUnion.Discriminator, string(tagJSON)))
+			}
+			variantCondition = strings.Join(conditions, " || ")
+		}
 		b.WriteString(fmt.Sprintf("\t%s, ok := raw[%q]\n", valueName, field.WireName))
 		for _, alias := range field.Aliases {
 			b.WriteString(fmt.Sprintf("\tif !ok { %s, ok = raw[%q] }\n", valueName, alias))
 		}
 		if field.DefaultJSON != "" {
-			b.WriteString(fmt.Sprintf("\tif !ok { %s = []byte(%q); ok = true }\n", valueName, field.DefaultJSON))
+			if variantCondition == "" {
+				b.WriteString(fmt.Sprintf("\tif !ok { %s = []byte(%q); ok = true }\n", valueName, field.DefaultJSON))
+			} else {
+				b.WriteString(fmt.Sprintf("\tif !ok && (%s) { %s = []byte(%q); ok = true }\n", variantCondition, valueName, field.DefaultJSON))
+			}
 		}
 		if field.Required {
 			b.WriteString(fmt.Sprintf("\tif !ok { return DecodeError{Field: %q, Reason: \"missing required field\"} }\n", field.WireName))
@@ -1825,14 +1845,17 @@ func taggedObjectUnion(schema Schema) (renderedTaggedUnion, bool) {
 			}
 			seenTags[values[0]] = true
 			nullable := map[string]bool{}
+			variantFields := make([]string, 0, len(variant.Properties))
 			objects := append([]Schema{variant}, variant.AnyOf...)
 			for _, object := range objects {
 				for name, property := range object.Properties {
+					variantFields = append(variantFields, name)
 					if schemaAllowsJSONNull(property) {
 						nullable[name] = true
 					}
 				}
 			}
+			sort.Strings(variantFields)
 			alternatives := make([]renderedTaggedUnionAlternative, 0, len(variant.AnyOf))
 			for _, alternative := range variant.AnyOf {
 				alternativeNullable := map[string]bool{}
@@ -1854,6 +1877,7 @@ func taggedObjectUnion(schema Schema) (renderedTaggedUnion, bool) {
 				Tag:               values[0],
 				Required:          append([]string(nil), variant.Required...),
 				Nullable:          nullable,
+				Fields:            variantFields,
 				AnyOfAlternatives: alternatives,
 			})
 		}

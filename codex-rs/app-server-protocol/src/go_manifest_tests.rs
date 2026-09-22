@@ -2451,6 +2451,7 @@ fn expected_server_notification_routes() -> Vec<(&'static str, ExpectedRouting)>
             ExpectedRouting::Routed(&["subscriptionId"]),
         ),
         ("account/updated", ExpectedRouting::Global),
+        ("account/gatewayOAuth/changed", ExpectedRouting::Global),
         ("account/rateLimits/updated", ExpectedRouting::Global),
         ("app/list/updated", ExpectedRouting::Global),
         (

@@ -1,11 +1,11 @@
 package protocol
 
-const StableProtocolDigest = "289ada04934fc6563d66828eb1720d0a23a9a01d30ee5069f24df62eb8710807"
-const StableSchemaDigest = "5c714637cbdc499bacc251c9ee0b3e28bbbd28359c7373d5309a8943d451ce76"
-const StableManifestDigest = "6cc31c68124513ea6eb099aecb6a688b4688baabf152ee6b9347fb5ba3215b83"
-const ExperimentalProtocolDigest = "722a07dabcd0f22adc9c38c23be59fbb86d65b207e13cc3c0776cfc92660b504"
-const ExperimentalSchemaDigest = "4442d965ba8dcdc1c55c8cfbba93a5d7e08b25a9190679bf7ca3cbf39a93fe71"
-const ExperimentalManifestDigest = "a354cf429d47d8b7dbb7d5c86e4759a0849a8fd5aef5fb46fe54a75fa8f9d875"
+const StableProtocolDigest = "852ba1a88f4a304e89168f28031ca7ca44361e74a86e9b608ce4cd0fe644ff17"
+const StableSchemaDigest = "53bc0aeac75d1f22b7bbe558234612517d12584396dde564b47af4471d98a028"
+const StableManifestDigest = "868b1056425d3d8ddaac9aff1406990f56f73367958030b43079a6f2c6b016f1"
+const ExperimentalProtocolDigest = "a07f73a75cde20973fcb01438dd476f5fab6f7626ea33d587d1e1d3571ba879a"
+const ExperimentalSchemaDigest = "1ab0e3ebe1663a819d7c5dcd9e57405a8cc131c3631cc157077c18ca61d0bd43"
+const ExperimentalManifestDigest = "4990c217a61a2489864aa1a129058f6b68538a598228de680c4dcdea1a58dbd3"
 
 const MaxAdditionalContextEntries = 8
 const MaxAdditionalContextKeyBytes = 128
@@ -150,6 +150,9 @@ var MethodMetadataByMethod = map[string]MethodMetadata{
 	"thread/realtime/listVoices":               {Method: "thread/realtime/listVoices", Visibility: "public", ParamsType: "ThreadRealtimeListVoicesParams", ResponseType: "ThreadRealtimeListVoicesResponse", ParamsSchemaRef: "#/definitions/ThreadRealtimeListVoicesParams", ResponseSchemaRef: "#/definitions/ThreadRealtimeListVoicesResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: true, Retry: "neverRetryAfterWrite"},
 	"review/start":                             {Method: "review/start", Visibility: "public", ParamsType: "ReviewStartParams", ResponseType: "ReviewStartResponse", ParamsSchemaRef: "#/definitions/ReviewStartParams", ResponseSchemaRef: "#/definitions/ReviewStartResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"model/list":                               {Method: "model/list", Visibility: "public", ParamsType: "ModelListParams", ResponseType: "ModelListResponse", ParamsSchemaRef: "#/definitions/ModelListParams", ResponseSchemaRef: "#/definitions/ModelListResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
+	"account/gatewayOAuth/read":                {Method: "account/gatewayOAuth/read", Visibility: "public", ParamsType: "Option<()>", ResponseType: "GatewayOAuthReadResponse", ParamsSchemaRef: "", ResponseSchemaRef: "#/definitions/GatewayOAuthReadResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
+	"account/gatewayOAuth/login":               {Method: "account/gatewayOAuth/login", Visibility: "public", ParamsType: "Option<()>", ResponseType: "GatewayOAuthLoginResponse", ParamsSchemaRef: "", ResponseSchemaRef: "#/definitions/GatewayOAuthLoginResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
+	"account/gatewayOAuth/cancel":              {Method: "account/gatewayOAuth/cancel", Visibility: "public", ParamsType: "Option<()>", ResponseType: "GatewayOAuthCancelResponse", ParamsSchemaRef: "", ResponseSchemaRef: "#/definitions/GatewayOAuthCancelResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"modelProvider/capabilities/read":          {Method: "modelProvider/capabilities/read", Visibility: "public", ParamsType: "ModelProviderCapabilitiesReadParams", ResponseType: "ModelProviderCapabilitiesReadResponse", ParamsSchemaRef: "#/definitions/ModelProviderCapabilitiesReadParams", ResponseSchemaRef: "#/definitions/ModelProviderCapabilitiesReadResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"experimentalFeature/list":                 {Method: "experimentalFeature/list", Visibility: "public", ParamsType: "ExperimentalFeatureListParams", ResponseType: "ExperimentalFeatureListResponse", ParamsSchemaRef: "#/definitions/ExperimentalFeatureListParams", ResponseSchemaRef: "#/definitions/ExperimentalFeatureListResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"permissionProfile/list":                   {Method: "permissionProfile/list", Visibility: "public", ParamsType: "PermissionProfileListParams", ResponseType: "PermissionProfileListResponse", ParamsSchemaRef: "#/definitions/PermissionProfileListParams", ResponseSchemaRef: "#/definitions/PermissionProfileListResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
