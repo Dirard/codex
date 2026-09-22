@@ -31,8 +31,11 @@ fn recorded_mcp_output(output: McpToolOutput) -> FunctionCallOutputPayload {
         &[response],
         OutputTruncation::new(TruncationPolicy::Bytes(1), /*max_lines*/ Some(0)),
     );
-    assert_eq!(replay.into_raw_items(), history.clone().into_raw_items());
-    let items = history.into_raw_items();
+    assert_eq!(
+        replay.raw_items().collect::<Vec<_>>(),
+        history.raw_items().collect::<Vec<_>>()
+    );
+    let items = history.raw_items().cloned().collect::<Vec<_>>();
     let [ResponseItem::FunctionCallOutput { output, .. }] = items.as_slice() else {
         panic!("expected one FunctionCallOutput");
     };

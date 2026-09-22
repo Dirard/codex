@@ -288,6 +288,25 @@ impl LocalAgentControl {
         Ok(spawned_agent.thread_id)
     }
 
+    #[cfg(test)]
+    pub(crate) async fn spawn_agent_with_communication(
+        &self,
+        config: Config,
+        communication: InterAgentCommunication,
+        context: AgentCommunicationContext,
+        session_source: Option<SessionSource>,
+        options: SpawnAgentOptions,
+    ) -> CodexResult<LiveAgent> {
+        let (spawned_agent, _) = Box::pin(self.spawn_agent_internal(
+            config,
+            SpawnInitialInput::InterAgentCommunication(communication, context),
+            session_source,
+            options,
+        ))
+        .await?;
+        Ok(spawned_agent)
+    }
+
     fn validate_loaded_v2_child(
         &self,
         thread: &CodexThread,
@@ -613,7 +632,10 @@ impl LocalAgentControl {
                         control
                             .validate_loaded_v2_child(&reloaded_thread.thread, parent_thread_id)?;
                     }
-                    control.runtime.registry.clear_evicted_environments(thread_id);
+                    control
+                        .runtime
+                        .registry
+                        .clear_evicted_environments(thread_id);
                     residency_slot.commit(reloaded_thread.thread_id);
                     state.notify_thread_created(reloaded_thread.thread_id);
                     Ok(())
@@ -623,7 +645,10 @@ impl LocalAgentControl {
                         control
                             .validate_loaded_v2_child(&reloaded_thread.thread, parent_thread_id)?;
                     }
-                    control.runtime.registry.clear_evicted_environments(thread_id);
+                    control
+                        .runtime
+                        .registry
+                        .clear_evicted_environments(thread_id);
                     drop(residency_slot);
                     control.touch_loaded_v2_residency(&state, thread_id).await;
                     Ok(())
@@ -633,7 +658,10 @@ impl LocalAgentControl {
                         if let Some(parent_thread_id) = owner_thread_id {
                             control.validate_loaded_v2_child(&thread, parent_thread_id)?;
                         }
-                        control.runtime.registry.clear_evicted_environments(thread_id);
+                        control
+                            .runtime
+                            .registry
+                            .clear_evicted_environments(thread_id);
                         drop(residency_slot);
                         control.touch_loaded_v2_residency(&state, thread_id).await;
                         return Ok(());
