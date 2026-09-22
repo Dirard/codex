@@ -25,6 +25,7 @@ use crate::tasks::interrupted_turn_history_marker;
 use crate::thread_startup_metadata::ThreadStartupMetadata;
 use codex_agent_graph_store::AgentGraphStore;
 use codex_agent_graph_store::LocalAgentGraphStore;
+use codex_agent_message_board_extension::LocalAgentMessageBoard;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
@@ -394,7 +395,8 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
 /// `Arc` reference that can be downgraded to by `LocalAgentControl` while preventing every single
 /// function to require an `Arc<&Self>`.
 pub(crate) struct ThreadManagerState {
-    threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
+    // Eviction updates this registry and residency together, locking the registry first.
+    pub(crate) threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
     shared_thread_instructions: shared_instructions::SharedThreadInstructionsProviders,
     thread_created_tx: broadcast::Sender<ThreadId>,
     thread_id_generator: ThreadIdGenerator,
@@ -449,10 +451,23 @@ pub fn thread_store_from_config(
                 .features
                 .enabled(Feature::BackgroundPaginatedRolloutMigration);
             let has_state_db = state_db.is_some();
-            let store = Arc::new(LocalThreadStore::new(
-                LocalThreadStoreConfig::from_config(config),
-                state_db,
-            ));
+            let sqlite = config.sqlite_config().clone();
+            let store = Arc::new(
+                LocalThreadStore::new(LocalThreadStoreConfig::from_config(config), state_db)
+                    .with_thread_data_cleanup(move |thread_ids| {
+                        let sqlite = sqlite.clone();
+                        Box::pin(async move {
+                            let boards = thread_ids.into_iter().map(Into::into).collect::<Vec<_>>();
+                            LocalAgentMessageBoard::delete_boards(&sqlite, &boards)
+                                .await
+                                .map_err(|err| ThreadStoreError::Internal {
+                                    message: format!(
+                                        "failed to delete agent message boards: {err}"
+                                    ),
+                                })
+                        })
+                    }),
+            );
             if has_state_db && background_migration_enabled {
                 let startup_store = Arc::clone(&store);
                 let codex_home = config.codex_home.to_path_buf();
@@ -1076,7 +1091,11 @@ impl ThreadManager {
         options.internal_parent = Some(InternalSessionParent {
             thread_id: parent_thread_id,
             auth_manager: Arc::clone(&parent.session.services.auth_manager),
-            agent_control: parent.session.services.agent_control.clone(),
+            agent_control: parent
+                .session
+                .services
+                .local_agent_runtime
+                .control(parent.session.session_id()),
             originator: parent.config_snapshot().await.originator,
             inherited_instructions,
         });
@@ -1219,7 +1238,11 @@ impl ThreadManager {
             ))
         })?;
         let config = parent.session.get_config().await.as_ref().clone();
-        let agent_control = parent.session.services.agent_control.clone();
+        let agent_control = parent
+            .session
+            .services
+            .local_agent_runtime
+            .control(parent.session.session_id());
         agent_control
             .ensure_v2_agent_loaded(config, child_thread_id, Some(parent))
             .await
@@ -1676,6 +1699,16 @@ impl ThreadManagerState {
         root_turn_id: Option<String>,
     ) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
+        let residency_guard = if matches!(op, Op::InterAgentCommunication { .. }) {
+            thread
+                .session
+                .services
+                .local_agent_runtime
+                .pin_v2_residency(self, &thread)
+                .await?
+        } else {
+            None
+        };
         if let Some(ops_log) = &self.ops_log
             && let Ok(mut log) = ops_log.lock()
             && let Some(captured_op) = capture_test_op(&op)
@@ -1684,7 +1717,13 @@ impl ThreadManagerState {
         }
         thread
             .io
-            .submit_with_trace(op, /*trace*/ None, parent_turn_id, root_turn_id)
+            .submit_with_trace(
+                op,
+                /*trace*/ None,
+                parent_turn_id,
+                root_turn_id,
+                residency_guard,
+            )
             .await
     }
 
@@ -1970,6 +2009,7 @@ impl ThreadManagerState {
         };
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.auth_manager), agent_control);
+        request.fork_persistence = ForkPersistence::CopiedDeferred;
         request.parent_thread_id = parent_thread_id;
         request.forked_from_thread_id = forked_from_thread_id;
         request.inherited_environments = inherited_environments;
