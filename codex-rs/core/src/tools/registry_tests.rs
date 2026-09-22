@@ -846,14 +846,14 @@ async fn code_mode_rejects_direct_model_only_tools_before_dispatch() {
 
     assert!(
         registry
-            .dispatch_any_with_terminal_outcome(
+            .dispatch_any_with_state(
                 test_invocation(
                     Arc::clone(&session),
                     Arc::clone(&turn),
                     "direct-call",
                     tool_name.clone(),
                 ),
-                /*terminal_outcome_reached*/ None,
+                /*call_state*/ None,
             )
             .await
             .is_ok()
@@ -865,7 +865,7 @@ async fn code_mode_rejects_direct_model_only_tools_before_dispatch() {
         runtime_tool_call_id: "tool-1".to_string(),
     };
     let error = match registry
-        .dispatch_any_with_terminal_outcome(invocation, /*terminal_outcome_reached*/ None)
+        .dispatch_any_with_state(invocation, /*call_state*/ None)
         .await
     {
         Ok(_) => panic!("direct-model-only tool should be rejected in code mode"),

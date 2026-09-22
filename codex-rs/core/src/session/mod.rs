@@ -960,8 +960,7 @@ impl SessionIo {
     pub(crate) async fn submit(&self, op: Op) -> CodexResult<String> {
         self.submit_with_trace(
             op, /*trace*/ None, /*parent_turn_id*/ None, /*root_turn_id*/ None,
-            /*residency_guard*/ None,
-            /*turn_spawn_budget*/ None,
+            /*residency_guard*/ None, /*turn_spawn_budget*/ None,
         )
         .await
     }
@@ -3691,10 +3690,9 @@ impl Session {
                     }
                 }
             }
-            state.history.record_annotated_items(
-                &items,
-                originating_truncation,
-            );
+            state
+                .history
+                .record_annotated_items(&items, originating_truncation);
         }
         for image in image_preparations {
             self.services

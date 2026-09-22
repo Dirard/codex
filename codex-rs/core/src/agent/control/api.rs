@@ -114,7 +114,7 @@ impl AgentControl for LocalAgentControl {
                             /*parent*/ None,
                             turn_spawn_budget.clone(),
                         )
-                            .await?;
+                        .await?;
                     }
                     let submission_id = self
                         .send_input_with_spawn_budget(
@@ -144,17 +144,16 @@ impl AgentControl for LocalAgentControl {
                             "target agent is missing an agent_path".to_string(),
                         )
                     })?;
-                    let turn_spawn_budget =
-                        (mode == MessageDeliveryMode::TriggerTurn)
-                            .then_some(turn_spawn_budget)
-                            .flatten();
+                    let turn_spawn_budget = (mode == MessageDeliveryMode::TriggerTurn)
+                        .then_some(turn_spawn_budget)
+                        .flatten();
                     self.ensure_v2_agent_loaded(
                         resume_config,
                         target,
                         /*parent*/ None,
                         turn_spawn_budget.clone(),
                     )
-                        .await?;
+                    .await?;
                     let communication = message.into_communication(author, receiver_path, mode);
                     let kind = match mode {
                         MessageDeliveryMode::QueueOnly => {

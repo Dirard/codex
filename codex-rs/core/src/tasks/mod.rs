@@ -633,7 +633,6 @@ impl Session {
         // Let interrupted tasks observe cancellation before dropping pending approvals, or an
         // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
         self.input_queue.clear_pending(&active_turn).await;
-
     }
 
     pub async fn on_task_finished(

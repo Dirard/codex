@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
+assertion_line: 430
 expression: "context_snapshot::format_request_history_snapshot(\"Astra plans a kickoff with local and plugin skills, remotely compacts, and checks an image brief.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Astra plans a kickoff with local and plugin skills, remotely compacts, and checks an image brief.
@@ -16,15 +17,15 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=32be5470c6e39932):
-        - namespace/functions; hash=e7db0a45c4ec3157
+00:additional_tools/developer (3; hash=84fd4f2895dd50a4):
+        - namespace/functions; hash=fdbc7738b4ce2efd
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=10e037e1d92c15f5
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2412c787038a74ee
           - function/check_agent_status
           - function/followup_task
           - function/interrupt_agent
@@ -195,15 +196,15 @@ Settings:
 ## Window 2 (after request 3: input diverged at item 02)
 Settings: same as window 1
 -- request 4 (turn) --
-00:additional_tools/developer (3; hash=32be5470c6e39932):
-        - namespace/functions; hash=e7db0a45c4ec3157
+00:additional_tools/developer (3; hash=84fd4f2895dd50a4):
+        - namespace/functions; hash=fdbc7738b4ce2efd
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=10e037e1d92c15f5
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2412c787038a74ee
           - function/check_agent_status
           - function/followup_task
           - function/interrupt_agent

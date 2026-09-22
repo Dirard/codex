@@ -106,6 +106,8 @@ use core_test_support::responses;
 use core_test_support::responses::strip_response_item_ids;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
+use futures::StreamExt;
+use futures::stream;
 use pretty_assertions::assert_eq;
 use std::sync::RwLock;
 use tempfile::TempDir;
@@ -123,9 +125,10 @@ impl LocalAgentControl {
         &self,
         config: Config,
         initial_input: Vec<UserInput>,
-        source: SessionSource,
+        source: impl Into<Option<SessionSource>>,
         options: SpawnAgentOptions,
     ) -> CodexResult<LiveAgent> {
+        let source = source.into().expect("child fixture has a source");
         let caller = source
             .parent_thread_id()
             .expect("child fixture has a parent");
@@ -1380,7 +1383,7 @@ async fn cancelled_cold_resume_finishes_residency_accounting() {
                     config,
                     spawned_agent.thread_id,
                     /*parent*/ None,
-                    TurnSpawnBudget::new(/*limit*/ 1),
+                    Some(TurnSpawnBudget::new(/*limit*/ 1)),
                 )
                 .await
         }
@@ -4808,6 +4811,33 @@ async fn followup_completion_watcher_observes_coalesced_completion_when_started_
     let (status_tx, status_rx) = tokio::sync::watch::channel(AgentStatus::Completed(Some(
         "previous completion".to_string(),
     )));
+    let mut status_rx = status_rx;
+    let config = Box::new(parent_thread.config_snapshot().await);
+    let initial = LiveAgent {
+        thread_id: child_thread_id,
+        metadata: AgentMetadata::default(),
+        status: status_rx.borrow_and_update().clone(),
+    };
+    let changes_config = config.clone();
+    let status_updates: StatusSubscription = stream::once(async move {
+        Ok(AgentInfo::Loaded {
+            agent: initial,
+            config,
+        })
+    })
+    .chain(stream::unfold(status_rx, move |mut status_rx| {
+        let config = changes_config.clone();
+        async move {
+            status_rx.changed().await.ok()?;
+            let agent = LiveAgent {
+                thread_id: child_thread_id,
+                metadata: AgentMetadata::default(),
+                status: status_rx.borrow_and_update().clone(),
+            };
+            Some((Ok(AgentInfo::Loaded { agent, config }), status_rx))
+        }
+    }))
+    .boxed();
 
     harness
         .control
@@ -4822,7 +4852,7 @@ async fn followup_completion_watcher_observes_coalesced_completion_when_started_
             }),
             child_thread_id.to_string(),
             /*child_agent_path*/ None,
-            status_rx,
+            status_updates,
         )
         .await;
     let _ = status_tx.send_replace(AgentStatus::Running);

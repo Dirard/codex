@@ -118,7 +118,7 @@ async fn forward_events_filters_private_events_before_blocked_send_is_cancelled(
 
     let mut ops = Vec::new();
     while let Ok(sub) = rx_sub.try_recv() {
-        ops.push(sub.submission.op);
+        ops.push(sub.op);
     }
     assert!(
         ops.iter().any(|op| matches!(op, Op::Interrupt)),
