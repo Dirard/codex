@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
+assertion_line: 915
 expression: "context_snapshot::format_context_snapshot(\"Astra keeps disabled skills hidden and uses each step's selected skills after the environment changes during preparation.\",\n&entries, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Astra keeps disabled skills hidden and uses each step's selected skills after the environment changes during preparation.

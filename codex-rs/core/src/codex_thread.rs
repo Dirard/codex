@@ -396,8 +396,7 @@ impl CodexThread {
         self.io
             .submit_with_trace(
                 op, trace, /*parent_turn_id*/ None, /*root_turn_id*/ None,
-                /*residency_guard*/ None,
-                /*turn_spawn_budget*/ None,
+                /*residency_guard*/ None, /*turn_spawn_budget*/ None,
             )
             .await
     }
@@ -416,7 +415,7 @@ impl CodexThread {
             TurnInputMode::StartOrSteer,
             /*turn_spawn_budget*/ None,
         )
-            .await
+        .await
     }
 
     /// Starts a regular turn only when the thread is idle.

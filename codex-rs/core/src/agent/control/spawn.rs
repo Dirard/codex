@@ -287,6 +287,25 @@ impl LocalAgentControl {
         Ok(spawned_agent.thread_id)
     }
 
+    #[cfg(test)]
+    pub(crate) async fn spawn_agent_with_communication(
+        &self,
+        config: Config,
+        communication: InterAgentCommunication,
+        context: AgentCommunicationContext,
+        session_source: Option<SessionSource>,
+        options: SpawnAgentOptions,
+    ) -> CodexResult<LiveAgent> {
+        let (spawned_agent, _) = Box::pin(self.spawn_agent_internal(
+            config,
+            SpawnInitialInput::InterAgentCommunication(communication, context),
+            session_source,
+            options,
+        ))
+        .await?;
+        Ok(spawned_agent)
+    }
+
     fn validate_loaded_v2_child(
         &self,
         thread: &CodexThread,

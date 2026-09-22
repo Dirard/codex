@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
+assertion_line: 430
 expression: "context_snapshot::format_request_history_snapshot(\"Astra plans a kickoff with local and plugin skills, remotely compacts, and checks an image brief.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Astra plans a kickoff with local and plugin skills, remotely compacts, and checks an image brief.
