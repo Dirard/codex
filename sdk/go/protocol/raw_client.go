@@ -646,6 +646,24 @@ func (c RawClient) ModelList(ctx context.Context, params ModelListParams) (Model
 	return result, err
 }
 
+func (c RawClient) AccountGatewayOAuthRead(ctx context.Context) (GatewayOAuthReadResponse, error) {
+	var result GatewayOAuthReadResponse
+	err := c.sender.Call(ctx, "account/gatewayOAuth/read", nil, &result, MethodMetadataByMethod["account/gatewayOAuth/read"])
+	return result, err
+}
+
+func (c RawClient) AccountGatewayOAuthLogin(ctx context.Context) (GatewayOAuthLoginResponse, error) {
+	var result GatewayOAuthLoginResponse
+	err := c.sender.Call(ctx, "account/gatewayOAuth/login", nil, &result, MethodMetadataByMethod["account/gatewayOAuth/login"])
+	return result, err
+}
+
+func (c RawClient) AccountGatewayOAuthCancel(ctx context.Context) (GatewayOAuthCancelResponse, error) {
+	var result GatewayOAuthCancelResponse
+	err := c.sender.Call(ctx, "account/gatewayOAuth/cancel", nil, &result, MethodMetadataByMethod["account/gatewayOAuth/cancel"])
+	return result, err
+}
+
 func (c RawClient) ModelProviderCapabilitiesRead(ctx context.Context, params ModelProviderCapabilitiesReadParams) (ModelProviderCapabilitiesReadResponse, error) {
 	var result ModelProviderCapabilitiesReadResponse
 	err := c.sender.Call(ctx, "modelProvider/capabilities/read", params, &result, MethodMetadataByMethod["modelProvider/capabilities/read"])

@@ -22,16 +22,17 @@ type ClientConfig struct {
 	Env                 map[string]string
 	// ConfigOverrides accepts only audited non-secret runtime settings.
 	// Currently supported keys are model and sandbox_mode.
-	ConfigOverrides     map[string]string
-	ClientName          string
-	ClientVersion       string
-	ProtocolMode        ProtocolMode
-	Mode                ClientMode
-	Limits              ClientLimits
-	Handlers            ServerHandlers
-	Compatibility       CompatibilityPolicy
-	Transport           Transport
-	NotificationOptOuts NotificationOptOuts
+	ConfigOverrides      map[string]string
+	ClientName           string
+	ClientVersion        string
+	ExplicitGatewayOAuth bool
+	ProtocolMode         ProtocolMode
+	Mode                 ClientMode
+	Limits               ClientLimits
+	Handlers             ServerHandlers
+	Compatibility        CompatibilityPolicy
+	Transport            Transport
+	NotificationOptOuts  NotificationOptOuts
 }
 
 // LaunchOptions is reserved for typed codex global launch knobs that may appear
