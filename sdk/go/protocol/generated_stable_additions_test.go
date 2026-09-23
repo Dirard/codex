@@ -168,6 +168,34 @@ func TestGeneratedNullableStableAdditions(t *testing.T) {
 	}
 }
 
+func TestGeneratedInitializeCapabilitiesGatewayOauthDefault(t *testing.T) {
+	reused := InitializeCapabilities{ExplicitGatewayOauth: SomeNonNull(true)}
+	if err := json.Unmarshal([]byte(`{}`), &reused); err != nil {
+		t.Fatal(err)
+	}
+	value, ok := reused.ExplicitGatewayOauth.Value()
+	if !ok || value {
+		t.Fatalf("ExplicitGatewayOauth = %#v, want default false", reused.ExplicitGatewayOauth)
+	}
+	encoded, err := json.Marshal(reused)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var omitted map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &omitted); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := omitted["explicitGatewayOauth"]; exists {
+		t.Fatalf("encoded default false field: %s", encoded)
+	}
+
+	encoded, err = json.Marshal(InitializeCapabilities{ExplicitGatewayOauth: SomeNonNull(true)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertJSONEqual(t, encoded, `{"explicitGatewayOauth":true}`)
+}
+
 func TestGeneratedGatewayOAuthNotificationWireShape(t *testing.T) {
 	payload := []byte(`{
 		"authUrl":null,"providerId":"gateway","status":"notReady","error":null

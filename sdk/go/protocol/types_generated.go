@@ -3807,7 +3807,9 @@ func (v InitializeCapabilities) MarshalJSON() ([]byte, error) {
 		out["experimentalApi"] = v.ExperimentalAPI
 	}
 	if v.ExplicitGatewayOauth.IsSet() {
-		out["explicitGatewayOauth"] = v.ExplicitGatewayOauth
+		if value, ok := v.ExplicitGatewayOauth.Value(); !ok || value {
+			out["explicitGatewayOauth"] = v.ExplicitGatewayOauth
+		}
 	}
 	if v.Extensions.IsSet() {
 		out["extensions"] = v.Extensions
@@ -3846,6 +3848,10 @@ func (v *InitializeCapabilities) UnmarshalJSON(data []byte) error {
 		}
 	}
 	rawExplicitGatewayOauth, ok := raw["explicitGatewayOauth"]
+	if !ok {
+		rawExplicitGatewayOauth = []byte("false")
+		ok = true
+	}
 	if ok {
 		if err := json.Unmarshal(rawExplicitGatewayOauth, &v.ExplicitGatewayOauth); err != nil {
 			return fmt.Errorf("field explicitGatewayOauth: %w", err)
