@@ -26,6 +26,11 @@ impl Drop for LoginGuard {
     }
 }
 
+pub(crate) struct GatewayOAuthLoginAdmission {
+    cancel: CancellationToken,
+    guard: LoginGuard,
+}
+
 impl AccountRequestProcessor {
     async fn gateway_client(
         &self,
@@ -73,11 +78,11 @@ impl AccountRequestProcessor {
         })
     }
 
-    pub(crate) async fn gateway_oauth_login(
+    pub(crate) fn admit_gateway_oauth_login(
         &self,
         owner: ConnectionId,
         connection_gate: &crate::connection_rpc_gate::ConnectionRpcGate,
-    ) -> Result<GatewayOAuthLoginResponse, JSONRPCErrorError> {
+    ) -> Result<GatewayOAuthLoginAdmission, JSONRPCErrorError> {
         let cancel = CancellationToken::new();
         let guard = {
             let mut active = self
@@ -97,6 +102,18 @@ impl AccountRequestProcessor {
             });
             LoginGuard(Arc::clone(&self.gateway_login))
         };
+        Ok(GatewayOAuthLoginAdmission { cancel, guard })
+    }
+
+    pub(crate) async fn gateway_oauth_login(
+        &self,
+        owner: ConnectionId,
+        admission: GatewayOAuthLoginAdmission,
+    ) -> Result<GatewayOAuthLoginResponse, JSONRPCErrorError> {
+        let GatewayOAuthLoginAdmission {
+            cancel,
+            guard: _guard,
+        } = admission;
         let (config, client) = self.gateway_client().await?;
         let client = client
             .ok_or_else(|| invalid_request("The current provider does not use gateway OAuth"))?;
@@ -128,7 +145,6 @@ impl AccountRequestProcessor {
             }
         };
         result.map_err(|err| internal_error(err.to_string()))?;
-        drop(guard);
         Ok(GatewayOAuthLoginResponse {})
     }
 

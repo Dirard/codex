@@ -718,7 +718,7 @@ impl LocalAgentControl {
                 CompletionWatcherStart::CurrentStatus => {
                     match control.subscribe_status(child_thread_id).await {
                         Ok(status_updates) => status_updates,
-                        Err(_) => return,
+                        Err(_) => futures::stream::empty().boxed(),
                     }
                 }
                 CompletionWatcherStart::AfterCurrentTurn(status_updates) => status_updates,

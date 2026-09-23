@@ -115,7 +115,7 @@ fn reviewed_manifest_required_fields(rust_type: &str) -> Vec<SerdeFieldEntry> {
         ],
         "HooksListParams" => vec![default_skip_empty_vec_field("cwds", "cwds")],
         "InitializeCapabilities" => vec![
-            default_skip_false_field("explicit_gateway_oauth", "explicitGatewayOAuth"),
+            default_skip_false_field("explicit_gateway_oauth", "explicitGatewayOauth"),
             default_bool_field("experimental_api", "experimentalApi"),
             default_bool_field("request_attestation", "requestAttestation"),
             default_skip_false_field(

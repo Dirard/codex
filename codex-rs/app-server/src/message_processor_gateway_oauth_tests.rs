@@ -9,6 +9,7 @@ use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingMessage;
 use crate::transport::AppServerTransport;
 use anyhow::Result;
+use codex_app_server_protocol::GatewayOAuthCancelResponse;
 use codex_app_server_protocol::GatewayOAuthLoginResponse;
 use codex_app_server_protocol::GatewayOAuthReadResponse;
 use codex_app_server_protocol::GatewayOAuthStatus;
@@ -185,6 +186,118 @@ delivery = {{ kind = "header", name = "X-Gateway-Authorization" }}
         provider.api_auth().await?.to_auth_headers()["x-gateway-authorization"],
         "Bearer new-access"
     );
+    processor.shutdown_threads().await;
+    processor.drain_background_tasks().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gateway_oauth_cancel_before_unpolled_login_prevents_auth_flow() -> Result<()> {
+    let oauth = MockServer::start().await;
+    let home = TempDir::new()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            r#"
+model_provider = "gateway"
+[model_providers.gateway]
+name = "Gateway"
+base_url = "{url}/v1"
+wire_api = "responses"
+[model_providers.gateway.gateway_oauth]
+authorization_url = "{url}/authorize"
+token_url = "{url}/token"
+client_id = "cancel-before-poll"
+delivery = {{ kind = "header", name = "X-Gateway-Authorization" }}
+"#,
+            url = oauth.uri()
+        ),
+    )?;
+    let config = Arc::new(
+        ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .build()
+            .await?,
+    );
+    let auth_manager = AuthManager::from_auth_for_testing_with_home(
+        CodexAuth::from_api_key("primary"),
+        home.path().to_path_buf(),
+    );
+    let (processor, mut outgoing) = build_test_processor(config, auth_manager).await;
+    let session = Arc::new(ConnectionSessionState::new(
+        crate::transport::ConnectionOrigin::Stdio,
+    ));
+    send_request(
+        &processor,
+        &session,
+        json!({
+            "id": 1, "method": "initialize", "params": {
+                "clientInfo": {"name": "gateway-race-test", "version": "1"}
+            }
+        }),
+    )
+    .await;
+    let _: InitializeResponse = read_response(&mut outgoing, /*request_id*/ 1).await;
+
+    let dropped = processor
+        .account_processor
+        .admit_gateway_oauth_login(TEST_CONNECTION_ID, &session.rpc_gate)
+        .expect("first login should be admitted");
+    let dropped_login = processor
+        .account_processor
+        .gateway_oauth_login(TEST_CONNECTION_ID, dropped);
+    drop(dropped_login);
+
+    send_request(
+        &processor,
+        &session,
+        json!({"id": 2, "method": "account/gatewayOAuth/login"}),
+    )
+    .await;
+    let mut cancel = std::pin::pin!(
+        processor
+            .account_processor
+            .gateway_oauth_cancel(TEST_CONNECTION_ID)
+    );
+    assert!(matches!(
+        futures::poll!(&mut cancel),
+        std::task::Poll::Pending
+    ));
+    let error = timeout(Duration::from_secs(/*secs*/ 10), async {
+        loop {
+            let envelope = outgoing
+                .recv()
+                .await
+                .expect("outgoing channel open during cancellation");
+            if let OutgoingEnvelope::ToConnection { message, .. } = envelope {
+                match message {
+                    OutgoingMessage::Error(error) => break error.error,
+                    OutgoingMessage::AppServerNotification(notification) => {
+                        if let ServerNotification::GatewayOAuthChanged(changed) =
+                            notification.notification
+                        {
+                            assert_eq!(changed.auth_url, None);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    })
+    .await?;
+    assert_eq!(error.message, "Gateway sign-in was canceled");
+    assert_eq!(
+        cancel.await.expect("cancel should be acknowledged"),
+        GatewayOAuthCancelResponse {}
+    );
+    assert!(
+        oauth
+            .received_requests()
+            .await
+            .expect("mock request log")
+            .is_empty()
+    );
+
     processor.shutdown_threads().await;
     processor.drain_background_tasks().await;
     Ok(())
