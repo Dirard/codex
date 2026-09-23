@@ -476,7 +476,7 @@ fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
     let [ResponsesApiNamespaceTool::Function(v1)] = namespace.tools.as_slice() else {
         panic!("wait_agent v1 should contain function tools");
     };
-    assert_eq!(v1.name, "check_agent_status");
+    assert_eq!(v1.name, "wait_agent");
 
     let ToolSpec::Function(ResponsesApiTool {
         name,
@@ -492,7 +492,7 @@ fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
     else {
         panic!("wait_agent should be a function tool");
     };
-    assert_eq!(name, "check_agent_status");
+    assert_eq!(name, "wait_agent");
     assert_eq!(
         parameters.schema_type,
         Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object))

@@ -1444,7 +1444,7 @@ async fn sleep_tool_stays_direct_and_outside_code_mode() {
         );
         let sleep_tool_name = ToolName::namespaced("clock", "sleep").to_string();
         let wait_agent_tool_name =
-            ToolName::namespaced(MULTI_AGENT_V2_NAMESPACE, "check_agent_status").to_string();
+            ToolName::namespaced(MULTI_AGENT_V2_NAMESPACE, "wait_agent").to_string();
         assert_eq!(
             plan.exposure(&sleep_tool_name),
             ToolExposure::DirectModelOnly
@@ -2747,7 +2747,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         "spawn_agent",
         "send_input",
         "resume_agent",
-        "check_agent_status",
+        "wait_agent",
         "close_agent",
         "interrupt_agent",
         "send_message",
@@ -2758,7 +2758,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
     assert_eq!(
         v1.namespace_function_names(MULTI_AGENT_V1_NAMESPACE),
         &[
-            "check_agent_status".to_string(),
+            "wait_agent".to_string(),
             "close_agent".to_string(),
             "resume_agent".to_string(),
             "send_input".to_string(),
@@ -2804,7 +2804,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         "spawn_agent",
         "send_message",
         "followup_task",
-        "check_agent_status",
+        "wait_agent",
         "interrupt_agent",
         "list_agents",
         "send_input",
@@ -2816,7 +2816,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         "spawn_agent",
         "send_message",
         "followup_task",
-        "check_agent_status",
+        "wait_agent",
         "interrupt_agent",
         "list_agents",
     ] {
@@ -2872,7 +2872,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
     })
     .await;
     direct_model_only.assert_visible_contains(&[MULTI_AGENT_V2_NAMESPACE]);
-    direct_model_only.assert_visible_lacks(&["spawn_agent", "send_message", "check_agent_status"]);
+    direct_model_only.assert_visible_lacks(&["spawn_agent", "send_message", "wait_agent"]);
     assert_eq!(
         direct_model_only
             .exposure(&ToolName::namespaced(MULTI_AGENT_V2_NAMESPACE, "spawn_agent").to_string()),
@@ -2933,7 +2933,7 @@ async fn multi_agent_v2_can_disable_wait_agent() {
         ]
     );
     plan.assert_visible_lacks(&["clock"]);
-    plan.assert_registered_lacks(&["collaboration.check_agent_status", "clock.sleep"]);
+    plan.assert_registered_lacks(&["collaboration.wait_agent", "clock.sleep"]);
     assert!(plan.can_manage_children);
 }
 
@@ -2968,7 +2968,7 @@ async fn v1_multi_agent_tools_defer_when_tool_search_available() {
         "spawn_agent",
         "send_input",
         "resume_agent",
-        "check_agent_status",
+        "wait_agent",
         "close_agent",
         "interrupt_agent",
     ]);
@@ -2976,7 +2976,7 @@ async fn v1_multi_agent_tools_defer_when_tool_search_available() {
         "spawn_agent",
         "send_input",
         "resume_agent",
-        "check_agent_status",
+        "wait_agent",
         "close_agent",
     ] {
         let namespaced_tool_name = ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, tool_name);
@@ -3028,7 +3028,7 @@ async fn multi_agent_v2_can_use_configured_tool_namespace() {
         "spawn_agent",
         "send_message",
         "followup_task",
-        "check_agent_status",
+        "wait_agent",
         "interrupt_agent",
         "list_agents",
     ] {
@@ -3207,7 +3207,7 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
         "spawn_agent",
         "send_message",
         "followup_task",
-        "check_agent_status",
+        "wait_agent",
         "interrupt_agent",
         "list_agents",
     ] {

@@ -677,12 +677,7 @@ fn required_child_management_tool_names(
         MultiAgentVersion::Disabled => return Vec::new(),
         MultiAgentVersion::V1 => (
             Some(MULTI_AGENT_V1_NAMESPACE),
-            &[
-                "send_input",
-                "check_agent_status",
-                "resume_agent",
-                "close_agent",
-            ],
+            &["send_input", "wait_agent", "resume_agent", "close_agent"],
         ),
         MultiAgentVersion::V2 => (
             namespace_tools_enabled(turn_context)
@@ -702,10 +697,7 @@ fn required_child_management_tool_names(
         .collect::<Vec<_>>();
     if multi_agent_v2_enabled(turn_context) && turn_context.config.multi_agent_v2.wait_agent_enabled
     {
-        tools.push(ToolName::new(
-            namespace.map(str::to_owned),
-            "check_agent_status",
-        ));
+        tools.push(ToolName::new(namespace.map(str::to_owned), "wait_agent"));
     }
     tools
 }
