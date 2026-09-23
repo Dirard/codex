@@ -599,12 +599,7 @@ async fn cold_resume_preserves_effective_developer_instructions_for_worker(
         },
         responses::sse(vec![
             responses::ev_response_created("initial-parent-wait"),
-            responses::ev_function_call_with_namespace(
-                WAIT_CALL_ID,
-                NAMESPACE,
-                "check_agent_status",
-                "{}",
-            ),
+            responses::ev_function_call_with_namespace(WAIT_CALL_ID, NAMESPACE, "wait_agent", "{}"),
             responses::ev_completed("initial-parent-wait"),
         ]),
     )
