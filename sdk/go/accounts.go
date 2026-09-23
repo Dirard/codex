@@ -150,18 +150,22 @@ func (c *AccountsClient) StartGatewayOAuthLogin(ctx context.Context) (*GatewayOA
 		return nil, &UnsupportedError{Reason: "a gateway OAuth login is already in progress on this client"}
 	}
 	stream := c.client.router.subscribeGlobal()
-	loginCtx, cancelLogin := context.WithCancel(context.Background())
 	handle := &GatewayOAuthHandle{
-		client:      c.client,
-		providerID:  readiness.ProviderID,
-		stream:      stream,
-		done:        make(chan struct{}),
-		cancelLogin: cancelLogin,
+		client:     c.client,
+		providerID: readiness.ProviderID,
+		stream:     stream,
+		done:       make(chan struct{}),
 	}
 	c.client.gatewayLogin = handle
 	c.client.gatewayLoginMu.Unlock()
+	// Send before observing cancellation so cancel cannot overtake the login request.
+	done, err := c.client.callAsync(ctx, "account/gatewayOAuth/login", nil, &protocol.GatewayOAuthLoginResponse{}, protocol.MethodMetadataByMethod["account/gatewayOAuth/login"])
+	if err != nil {
+		handle.cleanup()
+		return nil, err
+	}
 	go func() {
-		_, handle.loginErr = c.client.Raw().AccountGatewayOAuthLogin(loginCtx)
+		handle.loginErr = <-done
 		close(handle.done)
 		handle.cleanup()
 	}()
@@ -194,13 +198,12 @@ func (c *AccountsClient) StartGatewayOAuthLogin(ctx context.Context) (*GatewayOA
 }
 
 type GatewayOAuthHandle struct {
-	client      *Client
-	providerID  string
-	authURL     string
-	stream      *NotificationStream
-	done        chan struct{}
-	loginErr    error
-	cancelLogin context.CancelFunc
+	client     *Client
+	providerID string
+	authURL    string
+	stream     *NotificationStream
+	done       chan struct{}
+	loginErr   error
 }
 
 type GatewayOAuthResult struct {
@@ -264,7 +267,6 @@ func (h *GatewayOAuthHandle) Cancel(ctx context.Context) error {
 		}
 	}
 	h.client.gatewayLogin = nil
-	h.cancelLogin()
 	h.stream.Close()
 	return nil
 }
@@ -273,7 +275,8 @@ func (h *GatewayOAuthHandle) abort(cause error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err := h.Cancel(ctx)
-	h.cleanup()
+	// A failed remote cancellation leaves ownership with the pending login RPC.
+	h.stream.Close()
 	return errors.Join(cause, err)
 }
 
@@ -283,7 +286,6 @@ func (h *GatewayOAuthHandle) cleanup() {
 		h.client.gatewayLogin = nil
 	}
 	h.client.gatewayLoginMu.Unlock()
-	h.cancelLogin()
 	h.stream.Close()
 }
 

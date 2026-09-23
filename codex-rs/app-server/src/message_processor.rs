@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
@@ -65,6 +66,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::ExperimentalApi;
+use codex_app_server_protocol::GatewayOAuthLoginResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -105,6 +107,10 @@ use crate::models_refresh_worker::ModelsRefreshWorker;
 use crate::turn_admission::TurnAdmission;
 
 const CONNECTION_RPC_DRAIN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);
+
+type GatewayOAuthLoginFuture = Pin<
+    Box<dyn Future<Output = Result<GatewayOAuthLoginResponse, JSONRPCErrorError>> + Send + 'static>,
+>;
 
 fn deserialize_client_request(request: JSONRPCRequest) -> Result<ClientRequest, JSONRPCErrorError> {
     reject_obsolete_request_fields(&request)?;
@@ -1005,6 +1011,29 @@ impl MessageProcessor {
             _ => (None, false),
         };
 
+        let gateway_oauth_login = match &codex_request {
+            ClientRequest::GatewayOAuthLogin { .. } => {
+                if session
+                    .opted_out_notification_methods()
+                    .contains("account/gatewayOAuth/changed")
+                {
+                    return Err(invalid_request(
+                        "Gateway login requires account/gatewayOAuth/changed notifications",
+                    ));
+                }
+                let admission = self
+                    .account_processor
+                    .admit_gateway_oauth_login(connection_id, &session.rpc_gate)?;
+                let account_processor = Arc::clone(&self.account_processor);
+                Some(Box::pin(async move {
+                    account_processor
+                        .gateway_oauth_login(connection_id, admission)
+                        .await
+                }) as GatewayOAuthLoginFuture)
+            }
+            _ => None,
+        };
+
         let event_stream_ready = match &codex_request {
             ClientRequest::McpServerEventStreamStart { params, .. } => Some(
                 session
@@ -1037,6 +1066,7 @@ impl MessageProcessor {
                     request_context,
                     session,
                     event_stream_ready,
+                    gateway_oauth_login,
                 ))
                 .await;
                 if let Err(error) = result {
@@ -1066,6 +1096,7 @@ impl MessageProcessor {
         request_context: RequestContext,
         session: Arc<ConnectionSessionState>,
         event_stream_ready: Option<McpEventStreamReady>,
+        gateway_oauth_login: Option<GatewayOAuthLoginFuture>,
     ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
@@ -1742,23 +1773,10 @@ impl MessageProcessor {
                     .await
                     .map(|response| Some(response.into()))
             }
-            ClientRequest::GatewayOAuthLogin { .. } => {
-                if session
-                    .opted_out_notification_methods()
-                    .contains("account/gatewayOAuth/changed")
-                {
-                    Err(invalid_request(
-                        "Gateway login requires account/gatewayOAuth/changed notifications",
-                    ))
-                } else {
-                    Box::pin(
-                        self.account_processor
-                            .gateway_oauth_login(connection_id, &session.rpc_gate),
-                    )
-                    .await
-                    .map(|response| Some(response.into()))
-                }
-            }
+            ClientRequest::GatewayOAuthLogin { .. } => gateway_oauth_login
+                .ok_or_else(|| internal_error("gateway OAuth login was not admitted"))?
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::GatewayOAuthCancel { .. } => {
                 Box::pin(self.account_processor.gateway_oauth_cancel(connection_id))
                     .await

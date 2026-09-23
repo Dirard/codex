@@ -89,7 +89,7 @@ _, _ = client.Accounts.SendAddCreditsNudgeEmail(ctx, protocol.SendAddCreditsNudg
 ```
 
 For a gateway sign-in UI, set `ClientConfig.ExplicitGatewayOAuth`, probe `GatewayOAuthRead` on every connection, and use `StartGatewayOAuthLogin` to receive the authorization URL without enabling automatic browser login. Do not fall back automatically when the probe fails.
-Only one managed gateway login may be active per client. `Wait` follows the login RPC result, including errors without a notification; cancellation of `StartGatewayOAuthLogin` or `Wait` sends the connection-scoped cancel RPC. A login that completes immediately can return a handle with an empty authorization URL.
+Only one managed gateway login may be active per client. `Wait` follows the login RPC result, including errors without a notification. Cancellation stops an unsent request locally; once login has been sent, it sends the connection-scoped cancel RPC. A failed cancellation retains login ownership until the login RPC finishes. A login that completes immediately can return a handle with an empty authorization URL.
 
 See `examples/login_account` for login and account-read flows.
 
