@@ -2758,11 +2758,11 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
     assert_eq!(
         v1.namespace_function_names(MULTI_AGENT_V1_NAMESPACE),
         &[
-            "wait_agent".to_string(),
             "close_agent".to_string(),
             "resume_agent".to_string(),
             "send_input".to_string(),
             "spawn_agent".to_string(),
+            "wait_agent".to_string(),
         ]
     );
     let ToolSpec::Namespace(namespace) = v1.visible_spec(MULTI_AGENT_V1_NAMESPACE) else {
