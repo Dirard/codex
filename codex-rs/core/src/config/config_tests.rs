@@ -12717,7 +12717,7 @@ max_concurrent_threads_per_session = 17
                 .expect_text();
             assert!(hint.contains(concurrency_guidance));
             assert_eq!(
-                hint.contains("When calling `check_agent_status`, prefer longer waits"),
+                hint.contains("When calling `wait_agent`, prefer longer waits"),
                 wait_agent_enabled
             );
         }

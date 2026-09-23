@@ -303,7 +303,7 @@ async fn root_service_tier_change_updates_existing_subagent(
             ev_function_call_with_namespace(
                 PAUSE_CALL_ID,
                 "collaboration",
-                "check_agent_status",
+                "wait_agent",
                 &json!({}).to_string(),
             ),
             ev_completed("child-paused"),
@@ -326,7 +326,7 @@ async fn root_service_tier_change_updates_existing_subagent(
     let child_thread_id = created_threads.recv().await?;
     let _grandchild_thread_id = created_threads.recv().await?;
     // The grandchild cannot finish while its sleep is paused, so the child cannot
-    // observe an empty descendant set when it calls check_agent_status.
+    // observe an empty descendant set when it calls wait_agent.
     time_provider.sleep_started.notified().await;
     let child = test.thread_manager.get_thread(child_thread_id).await?;
     let original_child_service_tier = child.config_snapshot().await.service_tier;
