@@ -19,6 +19,7 @@ type RealtimeStartOptions struct {
 	Voice                    protocol.RealtimeVoice
 	IncludeStartupContext    *bool
 	ClientManagedHandoffs    *bool
+	BackendReasoningStatus   bool
 	CodexResponsesAsItems    *bool
 	CodexResponseHandoffMode protocol.CodexResponseHandoffMode
 	CodexResponseItemPrefix  string
@@ -356,6 +357,9 @@ func realtimeStartParams(opts RealtimeStartOptions, sessionID string) protocol.T
 	}
 	if opts.ClientManagedHandoffs != nil {
 		params.ClientManagedHandoffs = protocol.Some(*opts.ClientManagedHandoffs)
+	}
+	if opts.BackendReasoningStatus {
+		params.BackendReasoningStatus = protocol.SomeNonNull(true)
 	}
 	if opts.CodexResponsesAsItems != nil {
 		params.CodexResponsesAsItems = protocol.Some(*opts.CodexResponsesAsItems)

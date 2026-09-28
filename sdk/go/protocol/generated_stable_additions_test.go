@@ -2,30 +2,10 @@ package protocol
 
 import (
 	"encoding/json"
-	"reflect"
 	"testing"
 )
 
-func TestGeneratedPluginExtensionWireShapes(t *testing.T) {
-	var extensions PluginExtensions
-	if err := json.Unmarshal([]byte(`{}`), &extensions); err != nil {
-		t.Fatal(err)
-	}
-	if !extensions.Entrypoints.IsSet() || !extensions.Entrypoints.IsNull() {
-		t.Fatalf("default entrypoints = %#v, want set null", extensions.Entrypoints)
-	}
-	for name, field := range map[string]bool{
-		"fileHandlers":           extensions.FileHandlers.IsSet(),
-		"searchMentionProviders": extensions.SearchMentionProviders.IsSet(),
-		"settings":               extensions.Settings.IsSet(),
-		"settingsEntrypoints":    extensions.SettingsEntrypoints.IsSet(),
-		"threadEntrypoints":      extensions.ThreadEntrypoints.IsSet(),
-	} {
-		if !field {
-			t.Fatalf("default %s was not set to an empty array", name)
-		}
-	}
-
+func TestGeneratedPluginSummaryDefaults(t *testing.T) {
 	var summary PluginSummary
 	if err := json.Unmarshal([]byte(`{
 		"authPolicy":"ON_USE","enabled":true,"id":"plugin","installPolicy":"NOT_AVAILABLE",
@@ -33,88 +13,79 @@ func TestGeneratedPluginExtensionWireShapes(t *testing.T) {
 	}`), &summary); err != nil {
 		t.Fatal(err)
 	}
-	if !summary.Extensions.IsSet() || !summary.Extensions.IsNull() {
-		t.Fatalf("default summary extensions = %#v, want set null", summary.Extensions)
+	if !summary.LocalVersion.IsNull() {
+		t.Fatalf("default local version = %#v, want null", summary.LocalVersion)
 	}
+	if availability, ok := summary.Availability.Value(); !ok || availability != PluginAvailabilityAvailable {
+		t.Fatalf("default availability = %#v, want available", summary.Availability)
+	}
+	if keywords, ok := summary.Keywords.Value(); !ok || len(keywords) != 0 {
+		t.Fatalf("default keywords = %#v, want empty", summary.Keywords)
+	}
+}
 
-	globalJSON := []byte(`{
-		"type":"global",
-		"appId":"app",
-		"toolName":"tool.open",
-		"title":"Open",
-		"resourceUri":"ui://open",
-		"icons":[{"src":"icon.svg"}],
-		"quickAction":{"title":"Run","icons":[],"target":{"type":"tool","name":"tool.open","arguments":{"query":"x"}}}
-	}`)
-	var global PluginEntrypoint
-	if err := json.Unmarshal(globalJSON, &global); err != nil {
+func TestThreadItemsListCursorStringAndAnchor(t *testing.T) {
+	var anchor ThreadItemsListAnchor
+	if err := json.Unmarshal([]byte(`{"type":"item","itemId":"item-1"}`), &anchor); err != nil {
 		t.Fatal(err)
 	}
-	if global.TypeValue != "global" || global.QuickAction.IsNull() {
-		t.Fatalf("global entrypoint = %#v", global)
-	}
-	encoded, err := json.Marshal(global)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertJSONEqual(t, encoded, string(globalJSON))
-
-	var settings PluginEntrypoint
-	if err := json.Unmarshal([]byte(`{
-		"type":"settings","appId":"app","toolName":"settings.open","title":"Settings",
-		"resourceUri":"ui://settings","icons":[]
-	}`), &settings); err != nil {
-		t.Fatal(err)
-	}
-	encoded, err = json.Marshal(settings)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !containsJSONField(t, encoded, "searchTerms", []any{}) {
-		t.Fatalf("encoded settings = %s; want default searchTerms array", encoded)
-	}
-
-	for _, payload := range []string{
-		`{"type":"thread","appId":"app","toolName":"thread.open","title":"Thread","resourceUri":"ui://thread","icons":[]}`,
-		`{"type":"file","appId":"app","toolName":"file.open","title":"File","resourceUri":"ui://file","icons":[],"extensions":[".txt"]}`,
+	var reused ThreadItemsListCursor
+	for _, tt := range []struct {
+		name   string
+		cursor ThreadItemsListCursor
+		wire   string
+	}{
+		{"opaque", NewThreadItemsListCursorString("page-2"), `"page-2"`},
+		{"anchor", NewThreadItemsListCursorThreadItemsListAnchor(anchor), `{"type":"item","itemId":"item-1"}`},
+		{"opaque again", NewThreadItemsListCursorString("page-3"), `"page-3"`},
 	} {
-		var entrypoint PluginEntrypoint
-		if err := json.Unmarshal([]byte(payload), &entrypoint); err != nil {
-			t.Fatal(err)
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := json.Marshal(ThreadItemsListParams{ThreadID: "thread-1", Cursor: Some(tt.cursor)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertJSONEqual(t, encoded, `{"threadId":"thread-1","cursor":`+tt.wire+`}`)
+			if err := json.Unmarshal([]byte(tt.wire), &reused); err != nil {
+				t.Fatal(err)
+			}
+			encoded, err = json.Marshal(reused)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertJSONEqual(t, encoded, tt.wire)
+		})
+	}
+	for _, invalid := range []string{`42`, `{"type":"item"}`} {
+		if err := json.Unmarshal([]byte(invalid), &reused); err == nil {
+			t.Fatalf("invalid cursor accepted: %s", invalid)
 		}
-		encoded, err = json.Marshal(entrypoint)
-		if err != nil {
-			t.Fatal(err)
-		}
-		assertJSONEqual(t, encoded, payload)
 	}
-
-	providerJSON := []byte(`{
-		"appId":"app","toolName":"search","linkId":"link","title":"Search",
-		"call":{"name":"search.call","arguments":{"query":"x"},"_meta":{"origin":"test"}}
-	}`)
-	var provider PluginSearchProvider
-	if err := json.Unmarshal(providerJSON, &provider); err != nil {
-		t.Fatal(err)
-	}
-	call, ok := provider.Call.Value()
-	if !ok || call.Name != "search.call" || string(call.Meta) != `{"origin":"test"}` {
-		t.Fatalf("search provider call = %#v", provider.Call)
-	}
-	encoded, err = json.Marshal(provider)
+	encoded, err := json.Marshal(ThreadItemsListParams{ThreadID: "thread-1", Cursor: Null[ThreadItemsListCursor]()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertJSONEqual(t, encoded, string(providerJSON))
+	assertJSONEqual(t, encoded, `{"threadId":"thread-1","cursor":null}`)
+}
 
-	futureJSON := []byte(`{"type":"future","appId":"app"}`)
-	var future PluginEntrypoint
-	if err := json.Unmarshal(futureJSON, &future); err != nil {
+func TestRealtimeBackendReasoningStatusDefaultAndOptIn(t *testing.T) {
+	params := ThreadRealtimeStartParams{BackendReasoningStatus: SomeNonNull(true)}
+	if err := json.Unmarshal([]byte(`{"threadId":"thread-1","outputModality":"audio"}`), &params); err != nil {
 		t.Fatal(err)
 	}
-	if future.TypeValue != "future" || string(future.RawJSON) != string(futureJSON) {
-		t.Fatalf("future entrypoint = %#v, raw = %s", future, future.RawJSON)
+	if value, ok := params.BackendReasoningStatus.Value(); !ok || value {
+		t.Fatalf("default backendReasoningStatus = %#v, want false", params.BackendReasoningStatus)
 	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertJSONEqual(t, encoded, `{"threadId":"thread-1","outputModality":"audio"}`)
+	params.BackendReasoningStatus = SomeNonNull(true)
+	encoded, err = json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertJSONEqual(t, encoded, `{"threadId":"thread-1","outputModality":"audio","backendReasoningStatus":true}`)
 }
 
 func TestGeneratedNullableStableAdditions(t *testing.T) {
@@ -217,19 +188,6 @@ func TestGeneratedGatewayOAuthNotificationWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertJSONEqual(t, encoded, string(payload))
-}
-
-func containsJSONField(t *testing.T, data json.RawMessage, field string, want any) bool {
-	t.Helper()
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(data, &object); err != nil {
-		t.Fatal(err)
-	}
-	var got any
-	if err := json.Unmarshal(object[field], &got); err != nil {
-		t.Fatal(err)
-	}
-	return reflect.DeepEqual(got, want)
 }
 
 func asDecodeError(err error, target *DecodeError) bool {

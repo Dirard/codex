@@ -20,6 +20,7 @@ func TestRealtimeSessionInjectsThreadIdentity(t *testing.T) {
 		ThreadID:                 "thread-1",
 		Model:                    "gpt-5.4",
 		Prompt:                   "speak plainly",
+		BackendReasoningStatus:   true,
 		CodexResponseHandoffMode: protocol.CodexResponseHandoffModeCommentary,
 	})
 	if err != nil {
@@ -33,6 +34,13 @@ func TestRealtimeSessionInjectsThreadIdentity(t *testing.T) {
 	assertRealtimeSessionID(t, startParams, session.ID())
 	assertRealtimeOutputModality(t, startParams, "audio")
 	assertRealtimeHandoffMode(t, startParams, "commentary")
+	var startPayload map[string]any
+	if err := json.Unmarshal(startParams, &startPayload); err != nil {
+		t.Fatal(err)
+	}
+	if startPayload["backendReasoningStatus"] != true {
+		t.Fatalf("backendReasoningStatus = %v, want true", startPayload["backendReasoningStatus"])
+	}
 
 	calls := []struct {
 		name   string

@@ -114,6 +114,9 @@ func renderDefinitionType(name, key string, schema Schema, names map[string]stri
 			return rendered
 		}
 	}
+	if ref, ok := stringRefUnion(schema); ok {
+		return renderStringRefUnion(name, typeNameForRef(ref, names))
+	}
 	serdeShape := serdeShapeForType(name, key, serdeShapes)
 	if enumValues, ok := stringEnumValues(schema); ok {
 		return renderStringEnum(name, enumValues, serdeShape)
@@ -286,6 +289,41 @@ func refUnionRefs(schema Schema) ([]string, bool) {
 		refs = append(refs, ref)
 	}
 	return refs, true
+}
+
+func stringRefUnion(schema Schema) (string, bool) {
+	branches := schema.OneOf
+	if len(branches) == 0 {
+		branches = schema.AnyOf
+	}
+	if len(branches) != 2 {
+		return "", false
+	}
+	var ref string
+	var hasString bool
+	for _, branch := range branches {
+		if branch.Type == "string" && len(branch.Enum) == 0 {
+			hasString = true
+		} else if branchRef, ok := branch.SingleRef(); ok {
+			ref = branchRef
+		} else {
+			return "", false
+		}
+	}
+	return ref, hasString && ref != ""
+}
+
+func renderStringRefUnion(name, typeName string) string {
+	fieldName := unexportedGoFieldName(typeName)
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("type %s struct {\n\tstringValue *string\n\t%s *%s\n}\n\n", name, fieldName, typeName))
+	b.WriteString(fmt.Sprintf("func New%sString(value string) %s { return %s{stringValue: &value} }\n\n", name, name, name))
+	b.WriteString(fmt.Sprintf("func New%s%s(value %s) %s { return %s{%s: &value} }\n\n", name, typeName, typeName, name, name, fieldName))
+	b.WriteString(fmt.Sprintf("func (v %s) StringValue() (string, bool) {\n\tif v.stringValue == nil { return \"\", false }\n\treturn *v.stringValue, true\n}\n\n", name))
+	b.WriteString(fmt.Sprintf("func (v %s) %s() (%s, bool) {\n\tif v.%s == nil { return %s{}, false }\n\treturn *v.%s, true\n}\n\n", name, typeName, typeName, fieldName, typeName, fieldName))
+	b.WriteString(fmt.Sprintf("func (v %s) MarshalJSON() ([]byte, error) {\n\tswitch {\n\tcase v.stringValue != nil && v.%s == nil:\n\t\treturn json.Marshal(v.stringValue)\n\tcase v.%s != nil && v.stringValue == nil:\n\t\treturn json.Marshal(v.%s)\n\tdefault:\n\t\treturn nil, DecodeError{Field: \"\", Reason: \"empty or ambiguous %s\"}\n\t}\n}\n\n", name, fieldName, fieldName, fieldName, name))
+	b.WriteString(fmt.Sprintf("func (v *%s) UnmarshalJSON(data []byte) error {\n\ttrimmed := bytes.TrimSpace(data)\n\tif len(trimmed) == 0 { return DecodeError{Field: \"\", Reason: \"empty %s\"} }\n\tif bytes.Equal(trimmed, []byte(\"null\")) { return DecodeError{Field: \"\", Reason: \"cannot be null\"} }\n\tswitch trimmed[0] {\n\tcase '\"':\n\t\tvar value string\n\t\tif err := json.Unmarshal(trimmed, &value); err != nil { return err }\n\t\t*v = New%sString(value)\n\tcase '{':\n\t\tvar value %s\n\t\tif err := json.Unmarshal(trimmed, &value); err != nil { return err }\n\t\t*v = New%s%s(value)\n\tdefault:\n\t\treturn DecodeError{Field: \"\", Reason: \"no matching union variant\"}\n\t}\n\treturn nil\n}\n", name, name, name, typeName, name, typeName))
+	return b.String()
 }
 
 func renderRefUnion(name string, refs []string, names map[string]string, bundle *SchemaBundle) (string, bool) {
