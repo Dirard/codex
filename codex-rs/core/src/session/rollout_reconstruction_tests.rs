@@ -163,7 +163,11 @@ async fn sender_context_follows_its_delivery_through_checkpoint_and_rollback() {
         ];
         live.record_annotated_items(
             &mut input,
-            turn_context.model_info().truncation_policy.into(),
+            codex_utils_output_truncation::OutputTruncation::from(
+                codex_utils_output_truncation::TruncationPolicy::from(
+                    turn_context.model_info().truncation_policy,
+                ),
+            ),
         );
         items.extend(input.into_iter().map(RolloutItem::ResponseItem));
         snapshots.push(snapshot);

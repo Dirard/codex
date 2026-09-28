@@ -248,9 +248,11 @@ async fn spawn_idle_v2_test_agent(
     let agent_path = AgentPath::root()
         .join(task_name)
         .expect("test agent path should be valid");
-    session
+    let control = session
         .services
-        .agent_control
+        .local_agent_runtime
+        .control(session.session_id());
+    control
         .spawn_agent_with_communication(
             (*turn.config).clone(),
             InterAgentCommunication::new(
@@ -500,9 +502,11 @@ async fn seventeenth_spawn_is_rejected_after_sixteen_closed_children_in_one_turn
                 .expect("spawn should emit a creation notification"),
             child_id
         );
-        session
+        let control = session
             .services
-            .agent_control
+            .local_agent_runtime
+            .control(session.session_id());
+        control
             .close_agent(child_id)
             .await
             .expect("child should close");
@@ -550,9 +554,11 @@ async fn seventeenth_spawn_is_rejected_after_sixteen_closed_children_in_one_turn
     let rejected_path = AgentPath::root()
         .join("typed_rejection")
         .expect("test agent path should be valid");
-    let error = session
+    let control = session
         .services
-        .agent_control
+        .local_agent_runtime
+        .control(session.session_id());
+    let error = control
         .spawn_agent_with_communication(
             (*turn.config).clone(),
             InterAgentCommunication::new(
@@ -2251,7 +2257,7 @@ async fn live_followup_does_not_replace_child_turn_spawn_budget_epoch() {
         .await
         .expect("root thread should start");
     root.thread.session.new_default_turn().await;
-    session.services.agent_control = manager.agent_control();
+    set_agent_control(&mut session, manager.agent_control());
     session.thread_id = root.thread_id;
     let session = Arc::new(session);
     let turn = Arc::new(turn);
@@ -2270,7 +2276,7 @@ async fn live_followup_does_not_replace_child_turn_spawn_budget_epoch() {
         .expect("the sole turn slot should spawn the worker");
     let worker_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker should resolve");
@@ -3361,7 +3367,7 @@ async fn multi_agent_v2_wait_agent_returns_immediately_without_active_agents() {
         .start_thread(StartThreadOptions::new((*turn.config).clone()))
         .await
         .expect("root thread should start");
-    session.services.agent_control = manager.agent_control();
+    set_agent_control(&mut session, manager.agent_control());
     session.thread_id = root.thread_id;
     let mut config = (*turn.config).clone();
     config
@@ -3403,7 +3409,7 @@ async fn multi_agent_v2_wait_agent_clamps_timeout_below_configured_min() {
         .start_thread(StartThreadOptions::new((*turn.config).clone()))
         .await
         .expect("root thread should start");
-    session.services.agent_control = manager.agent_control();
+    set_agent_control(&mut session, manager.agent_control());
     session.thread_id = root.thread_id;
     let mut config = (*turn.config).clone();
     config
@@ -3458,7 +3464,7 @@ async fn multi_agent_v2_wait_agent_accepts_explicit_timeout_at_configured_min() 
         .start_thread(StartThreadOptions::new((*turn.config).clone()))
         .await
         .expect("root thread should start");
-    session.services.agent_control = manager.agent_control();
+    set_agent_control(&mut session, manager.agent_control());
     session.thread_id = root.thread_id;
     let mut config = (*turn.config).clone();
     config
@@ -3504,7 +3510,7 @@ async fn multi_agent_v2_wait_agent_uses_configured_default_timeout() {
         .start_thread(StartThreadOptions::new((*turn.config).clone()))
         .await
         .expect("root thread should start");
-    session.services.agent_control = manager.agent_control();
+    set_agent_control(&mut session, manager.agent_control());
     session.thread_id = root.thread_id;
     let mut config = (*turn.config).clone();
     config
@@ -3568,7 +3574,7 @@ async fn multi_agent_v2_wait_agent_zero_timeout_checks_once_without_spinning() {
         .start_thread(StartThreadOptions::new((*turn.config).clone()))
         .await
         .expect("root thread should start");
-    session.services.agent_control = manager.agent_control();
+    set_agent_control(&mut session, manager.agent_control());
     session.thread_id = root.thread_id;
     let mut config = (*turn.config).clone();
     config
@@ -3608,7 +3614,7 @@ async fn multi_agent_v2_wait_agent_timeout_includes_bounded_status_snapshot() {
         .start_thread(StartThreadOptions::new((*turn.config).clone()))
         .await
         .expect("root thread should start");
-    session.services.agent_control = manager.agent_control();
+    set_agent_control(&mut session, manager.agent_control());
     session.thread_id = root.thread_id;
     let mut config = (*turn.config).clone();
     config
@@ -3652,6 +3658,7 @@ async fn multi_agent_v2_wait_agent_timeout_includes_bounded_status_snapshot() {
                 turn_id: Some("interrupted-turn".to_string()),
                 started_at: None,
                 reason: TurnAbortReason::Interrupted,
+                error: None,
                 completed_at: None,
                 duration_ms: None,
             }),
@@ -3722,7 +3729,7 @@ async fn multi_agent_v2_wait_agent_accepts_explicit_timeout_at_configured_max() 
         .start_thread(StartThreadOptions::new((*turn.config).clone()))
         .await
         .expect("root thread should start");
-    session.services.agent_control = manager.agent_control();
+    set_agent_control(&mut session, manager.agent_control());
     session.thread_id = root.thread_id;
     let mut config = (*turn.config).clone();
     config

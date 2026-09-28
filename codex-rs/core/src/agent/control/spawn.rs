@@ -246,8 +246,9 @@ impl LocalAgentControl {
                     .map_err(|err| {
                         CodexErr::InvalidRequest(format!("invalid stored agent path: {err}"))
                     })?;
-                let mut reservation =
-                    registry.reserve_spawn_slot(/*max_threads*/ None, /*turn_spawn_budget*/ None)?;
+                let mut reservation = registry.reserve_spawn_slot(
+                    /*max_threads*/ None, /*turn_spawn_budget*/ None,
+                )?;
                 let mut metadata = self.prepare_agent_metadata(
                     &mut reservation,
                     config,

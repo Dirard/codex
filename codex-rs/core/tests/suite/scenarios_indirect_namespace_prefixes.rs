@@ -106,7 +106,7 @@ async fn catalog_namespace_prefixes_follow_the_selected_model(
     wait_for_mcp_server(&test.codex, "reports.one").await?;
     let script = r#"
 const descriptions = ["view_image", "collaboration__list_agents", "mcp__reports_one__echo"]
-  .map(name => ALL_TOOLS.find(t => t.name === name).description);
+  .map(name => EXEC_TOOLS.find(t => t.name === name).description);
 const report = await tools.mcp__reports_one__echo({message: "ping"});
 const agents = await tools.collaboration__list_agents({});
 text({descriptions, echo: report.structuredContent.echo, agent: agents.agents[0].agent_name});

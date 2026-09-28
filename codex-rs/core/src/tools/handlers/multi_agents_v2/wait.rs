@@ -238,16 +238,18 @@ async fn active_descendant_snapshot(
 ) -> Result<ActiveAgentSnapshot, FunctionCallError> {
     session
         .services
-        .agent_control
+        .local_agent_runtime
         .register_session_root(session.thread_id, turn.parent_thread_id);
     let current_agent_path = turn
         .session_source
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
     let current_agent_name = current_agent_path.to_string();
-    let agents = session
+    let local_agent_control = session
         .services
-        .agent_control
+        .local_agent_runtime
+        .control(session.session_id());
+    let agents = local_agent_control
         .list_agents(&turn.session_source, Some(&current_agent_name))
         .await
         .map_err(collab_spawn_error)?;
