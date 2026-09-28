@@ -9,6 +9,7 @@ use codex_core::AgentConfigUpdate;
 use codex_core::AgentControl;
 use codex_core::AgentExecutionGuard;
 use codex_core::AgentInfo;
+use codex_core::AgentMetadata;
 use codex_core::AgentTarget;
 use codex_core::AgentTurnOutcome;
 use codex_core::DeliveryReceipt;
@@ -31,6 +32,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -52,6 +54,7 @@ struct TestAgentControl {
     mail: Mutex<Vec<codex_protocol::protocol::InterAgentCommunication>>,
     mailbox_state: tokio::sync::watch::Sender<bool>,
     agents: Mutex<HashMap<String, ThreadId>>,
+    listed_agents: Mutex<Option<Vec<LiveAgent>>>,
 }
 
 impl TestAgentControl {
@@ -62,6 +65,7 @@ impl TestAgentControl {
             mail: Mutex::default(),
             mailbox_state: tokio::sync::watch::channel(/*init*/ false).0,
             agents: Mutex::new(HashMap::from([("/root".into(), thread_id)])),
+            listed_agents: Mutex::default(),
         }
     }
 }
@@ -140,10 +144,20 @@ impl AgentControl for TestAgentControl {
         caller: ThreadId,
         _parent: Option<ThreadId>,
         _source: &'a SessionSource,
-        _path_prefix: Option<&'a str>,
+        path_prefix: Option<&'a str>,
     ) -> BoxFuture<'a, CodexResult<Vec<LiveAgent>>> {
         assert_eq!(caller, self.thread_id);
-        Box::pin(async { Err(CodexErr::InvalidRequest("host list rejection".to_string())) })
+        let agents = self
+            .listed_agents
+            .lock()
+            .expect("listed agents lock")
+            .clone();
+        if agents.is_some() {
+            assert_eq!(path_prefix, Some("/root"));
+        }
+        Box::pin(async move {
+            agents.ok_or_else(|| CodexErr::InvalidRequest("host list rejection".to_string()))
+        })
     }
 
     fn child_agent_paths(&self, _parent: ThreadId) -> BoxFuture<'_, Vec<AgentPath>> {
@@ -532,6 +546,57 @@ async fn collaboration_tools_dispatch_to_the_host_controller() -> anyhow::Result
                 .contains(&format!("host {call} rejection"))
         );
     }
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wait_agent_counts_host_owned_running_child() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let (test, controller) = test_with_host_control(&server).await?;
+    *controller.listed_agents.lock().expect("listed agents lock") = Some(vec![LiveAgent {
+        thread_id: ThreadId::new(),
+        metadata: AgentMetadata {
+            agent_path: Some(AgentPath::root().join("worker").expect("valid child path")),
+            ..Default::default()
+        },
+        status: AgentStatus::Running,
+    }]);
+
+    let calls = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("wait"),
+                responses::ev_function_call_with_namespace(
+                    "wait",
+                    "collaboration",
+                    "wait_agent",
+                    r#"{"timeout_ms":0}"#,
+                ),
+                responses::ev_completed("wait"),
+            ]),
+            responses::sse(vec![responses::ev_completed("done")]),
+        ],
+    )
+    .await;
+    test.submit_text_turn("Wait for the host-owned child.")
+        .await?;
+    let requests = calls.requests();
+    assert_eq!(requests.len(), 2);
+    let output: serde_json::Value = serde_json::from_str(
+        &requests[1]
+            .function_call_output_text("wait")
+            .expect("wait_agent output"),
+    )?;
+    assert_eq!(
+        output,
+        serde_json::json!({
+            "message": "Wait timed out. Active agents: pending_init=0, running=1, interrupted=0.",
+            "timed_out": true,
+        })
+    );
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }
