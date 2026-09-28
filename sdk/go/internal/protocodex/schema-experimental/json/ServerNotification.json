@@ -662,9 +662,11 @@
             "sessionBudgetExceeded",
             "usageLimitExceeded",
             "rateLimitExceeded",
+            "flexUnavailable",
             "serverOverloaded",
             "cyberPolicy",
             "misalignmentPolicyViolation",
+            "tooManyDenials",
             "internalServerError",
             "unauthorized",
             "badRequest",
@@ -1932,6 +1934,43 @@
         "sessionId"
       ],
       "type": "object"
+    },
+    "GatewayOAuthChangedNotification": {
+      "properties": {
+        "authUrl": {
+          "description": "Authorization handoff, sent only to the connection that started login.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "providerId": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/GatewayOAuthStatus"
+        }
+      },
+      "required": [
+        "providerId",
+        "status"
+      ],
+      "type": "object"
+    },
+    "GatewayOAuthStatus": {
+      "enum": [
+        "notReady",
+        "started",
+        "succeeded",
+        "failed"
+      ],
+      "type": "string"
     },
     "GitInfo": {
       "properties": {
@@ -3289,6 +3328,7 @@
         "plus",
         "pro",
         "prolite",
+        "promax",
         "team",
         "self_serve_business_prolite",
         "self_serve_business_usage_based",
@@ -6298,7 +6338,7 @@
               "type": "null"
             }
           ],
-          "description": "Only populated when the Turn's status is failed."
+          "description": "Error associated with a failed or interrupted turn."
         },
         "id": {
           "description": "Identifier for this turn. Codex-generated turn IDs are UUIDv7.",
@@ -6906,43 +6946,6 @@
         "samplePaths"
       ],
       "type": "object"
-    },
-    "GatewayOAuthChangedNotification": {
-      "properties": {
-        "authUrl": {
-          "description": "Authorization handoff, sent only to the connection that started login.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "error": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "providerId": {
-          "type": "string"
-        },
-        "status": {
-          "$ref": "#/definitions/GatewayOAuthStatus"
-        }
-      },
-      "required": [
-        "providerId",
-        "status"
-      ],
-      "type": "object"
-    },
-    "GatewayOAuthStatus": {
-      "enum": [
-        "notReady",
-        "started",
-        "succeeded",
-        "failed"
-      ],
-      "type": "string"
     }
   },
   "description": "Notification sent from the server to the client.",
@@ -7877,6 +7880,26 @@
       "properties": {
         "method": {
           "enum": [
+            "account/gatewayOAuth/changed"
+          ],
+          "title": "Account/gatewayOAuth/changedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/GatewayOAuthChangedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Account/gatewayOAuth/changedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
             "account/rateLimits/updated"
           ],
           "title": "Account/rateLimits/updatedNotificationMethod",
@@ -8593,26 +8616,6 @@
         "params"
       ],
       "title": "Account/login/completedNotification",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "method": {
-          "enum": [
-            "account/gatewayOAuth/changed"
-          ],
-          "title": "Account/gatewayOAuth/changedNotificationMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/GatewayOAuthChangedNotification"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ],
-      "title": "Account/gatewayOAuth/changedNotification",
       "type": "object"
     }
   ],
