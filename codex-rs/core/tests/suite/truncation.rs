@@ -15,6 +15,8 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::user_input::UserInput;
+use codex_utils_output_truncation::OutputTruncation;
+use codex_utils_output_truncation::truncate_text_with_config;
 use core_test_support::TempDirExt;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
@@ -34,6 +36,7 @@ use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
+use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
@@ -940,5 +943,64 @@ async fn mcp_tool_output_limit_survives_resume(output_token_limit: Option<usize>
         output
     );
 
+    Ok(())
+}
+
+#[test_case(TruncationPolicy::Tokens(1_000), Some(2); "lines")]
+#[test_case(TruncationPolicy::Bytes(30), None; "bytes")]
+#[test_case(TruncationPolicy::Tokens(10), None; "tokens")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_raw_rollout_applies_originating_output_limits(
+    policy: TruncationPolicy,
+    max_lines: Option<usize>,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let fixture = test_codex().build_with_auto_env(&server).await?;
+    fixture.codex.ensure_rollout_materialized().await;
+    fixture.codex.shutdown_and_wait().await?;
+    let rollout_path = fixture.session_configured.rollout_path.clone().unwrap();
+    let raw = (0..100)
+        .map(|line| format!("legacy output {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let expected = truncate_text_with_config(&raw, OutputTruncation::new(policy, max_lines));
+    assert_ne!(expected, raw);
+
+    // Older versions persisted raw output, even when its saved policy capped live history.
+    let mut rollout = tokio::fs::read_to_string(&rollout_path).await?;
+    for item in [
+        json!({"type": "response_item", "payload": {
+            "type": "message", "role": "user", "content": [{"type": "input_text", "text": "old turn"}]
+        }}),
+        json!({"type": "response_item", "payload": {
+            "type": "function_call", "call_id": "legacy-output", "name": "exec_command", "arguments": "{}"
+        }}),
+        json!({"type": "response_item", "payload": {
+            "type": "function_call_output", "call_id": "legacy-output", "output": raw
+        }, "metadata": {
+            "fallback_token_limit_override": policy.token_budget(),
+            "history_truncation_policy": policy,
+            "history_truncation_max_lines": max_lines
+        }}),
+    ] {
+        let mut line = item;
+        line["timestamp"] = json!("2026-09-22T00:00:00.000Z");
+        rollout.push_str(&serde_json::to_string(&line)?);
+        rollout.push('\n');
+    }
+    tokio::fs::write(&rollout_path, rollout).await?;
+    let response = mount_sse_once(&server, responses::sse_completed("resumed")).await;
+    let resumed = test_codex()
+        .with_config(|config| config.tool_output_token_limit = Some(50_000))
+        .resume(&server, fixture.home.clone(), rollout_path)
+        .await?;
+    resumed.submit_turn("continue").await?;
+    assert_eq!(
+        response
+            .single_request()
+            .function_call_output_text("legacy-output"),
+        Some(expected)
+    );
     Ok(())
 }
