@@ -221,21 +221,20 @@ async fn active_descendant_snapshot(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
 ) -> Result<ActiveAgentSnapshot, FunctionCallError> {
-    session
-        .services
-        .local_agent_runtime
-        .register_session_root(session.thread_id, turn.parent_thread_id);
     let current_agent_path = turn
         .session_source
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
     let current_agent_name = current_agent_path.to_string();
-    let local_agent_control = session
+    let agents = session
         .services
-        .local_agent_runtime
-        .control(session.session_id());
-    let agents = local_agent_control
-        .list_agents(&turn.session_source, Some(&current_agent_name))
+        .agent_control
+        .list(
+            session.thread_id,
+            turn.parent_thread_id,
+            &turn.session_source,
+            Some(&current_agent_name),
+        )
         .await
         .map_err(collab_spawn_error)?;
     let mut snapshot = ActiveAgentSnapshot::default();
