@@ -4328,14 +4328,19 @@ impl Session {
         for mut recording in pending {
             let _ = recording.changed().await;
         }
-        {
+        let processed_response_item = {
             let mut state = self.state.lock().await;
             state.current_time_reminder.note_recorded_items(items);
-            state.history.record_annotated_items(
-                std::slice::from_mut(&mut response_item),
-                turn_context.output_truncation(),
-            );
-        }
+            state
+                .history
+                .record_annotated_items(
+                    std::slice::from_mut(&mut response_item),
+                    turn_context.output_truncation(),
+                )
+                .into_iter()
+                .next()
+                .unwrap_or(response_item)
+        };
         if let Some(delivery) = &communication.delivery {
             delivery.consumed(self.thread_id);
         }
@@ -4343,7 +4348,7 @@ impl Session {
             RolloutItem::InterAgentCommunicationMetadata {
                 trigger_turn: communication.trigger_turn,
             },
-            RolloutItem::ResponseItem(response_item),
+            RolloutItem::ResponseItem(processed_response_item),
         ])
         .await;
         drop(boundary);

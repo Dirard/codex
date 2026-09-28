@@ -6208,6 +6208,7 @@ async fn standalone_settings_invalidate_continuation_before_delivering_acceptanc
             root_turn_id: None,
             residency_guard: None,
             message_delivery: None,
+            turn_spawn_budget: None,
         })
         .await
         .expect("submit settings");

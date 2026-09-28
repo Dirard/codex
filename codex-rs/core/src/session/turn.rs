@@ -2858,10 +2858,12 @@ async fn try_run_sampling_request(
                 }
                 // TODO: Reconcile any response item already being presented to the client.
                 drop(stream);
+                let made_progress = last_agent_message.is_some();
                 break Ok(SamplingRequestResult {
                     needs_follow_up: true,
                     made_progress: last_agent_message.is_some(),
                     last_agent_message,
+                    made_progress,
                 });
             }
             Err(_) => break Err(CodexErr::TurnAborted),

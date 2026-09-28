@@ -221,7 +221,7 @@ async fn yielded_notifications_keep_originating_budgets_after_model_switch(
     replay_config.model = Some(MODEL_A.to_string());
     let replayed = test
         .thread_manager
-        .resume_thread_from_rollout(
+        .resume_legacy_thread_from_rollout(
             replay_config,
             rollout_path,
             codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("dummy")),
