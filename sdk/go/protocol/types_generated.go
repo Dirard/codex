@@ -12040,9 +12040,11 @@ var (
 	CodexErrorInfoSessionBudgetExceeded       = CodexErrorInfo{StringValue: "sessionBudgetExceeded"}
 	CodexErrorInfoUsageLimitExceeded          = CodexErrorInfo{StringValue: "usageLimitExceeded"}
 	CodexErrorInfoRateLimitExceeded           = CodexErrorInfo{StringValue: "rateLimitExceeded"}
+	CodexErrorInfoFlexUnavailable             = CodexErrorInfo{StringValue: "flexUnavailable"}
 	CodexErrorInfoServerOverloaded            = CodexErrorInfo{StringValue: "serverOverloaded"}
 	CodexErrorInfoCyberPolicy                 = CodexErrorInfo{StringValue: "cyberPolicy"}
 	CodexErrorInfoMisalignmentPolicyViolation = CodexErrorInfo{StringValue: "misalignmentPolicyViolation"}
+	CodexErrorInfoTooManyDenials              = CodexErrorInfo{StringValue: "tooManyDenials"}
 	CodexErrorInfoInternalServerError         = CodexErrorInfo{StringValue: "internalServerError"}
 	CodexErrorInfoUnauthorized                = CodexErrorInfo{StringValue: "unauthorized"}
 	CodexErrorInfoBadRequest                  = CodexErrorInfo{StringValue: "badRequest"}
@@ -12077,7 +12079,7 @@ func (v CodexErrorInfo) MarshalJSON() ([]byte, error) {
 			return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
 		}
 		switch v.StringValue {
-		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "rateLimitExceeded", "serverOverloaded", "cyberPolicy", "misalignmentPolicyViolation", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other":
+		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "rateLimitExceeded", "flexUnavailable", "serverOverloaded", "cyberPolicy", "misalignmentPolicyViolation", "tooManyDenials", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other":
 			return json.Marshal(v.StringValue)
 		default:
 			return nil, DecodeError{Field: "", Reason: fmt.Sprintf("unsupported CodexErrorInfo string value %q", v.StringValue)}
@@ -12143,7 +12145,7 @@ func (v *CodexErrorInfo) UnmarshalJSON(data []byte) error {
 	var stringValue string
 	if err := json.Unmarshal(trimmed, &stringValue); err == nil {
 		switch stringValue {
-		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "rateLimitExceeded", "serverOverloaded", "cyberPolicy", "misalignmentPolicyViolation", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other":
+		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "rateLimitExceeded", "flexUnavailable", "serverOverloaded", "cyberPolicy", "misalignmentPolicyViolation", "tooManyDenials", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other":
 			*v = CodexErrorInfo{StringValue: stringValue}
 		default:
 			*v = CodexErrorInfo{RawJSON: append(json.RawMessage(nil), data...)}
@@ -16509,6 +16511,7 @@ func (v *DynamicToolSpec) UnmarshalJSON(data []byte) error {
 }
 
 type EnvironmentAddParams struct {
+	AuthBearerToken  Optional[string] `json:"authBearerToken,omitempty"`
 	ConnectTimeoutMs Optional[uint64] `json:"connectTimeoutMs,omitempty"`
 	EnvironmentID    string           `json:"environmentId,omitempty"`
 	ExecServerURL    string           `json:"execServerUrl,omitempty"`
@@ -16516,6 +16519,9 @@ type EnvironmentAddParams struct {
 
 func (v EnvironmentAddParams) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
+	if v.AuthBearerToken.IsSet() {
+		out["authBearerToken"] = v.AuthBearerToken
+	}
 	if v.ConnectTimeoutMs.IsSet() {
 		out["connectTimeoutMs"] = v.ConnectTimeoutMs
 	}
@@ -16532,6 +16538,12 @@ func (v *EnvironmentAddParams) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
+	}
+	rawAuthBearerToken, ok := raw["authBearerToken"]
+	if ok {
+		if err := json.Unmarshal(rawAuthBearerToken, &v.AuthBearerToken); err != nil {
+			return fmt.Errorf("field authBearerToken: %w", err)
+		}
 	}
 	rawConnectTimeoutMs, ok := raw["connectTimeoutMs"]
 	if ok {
@@ -22753,10 +22765,11 @@ func (v *ItemStartedNotification) UnmarshalJSON(data []byte) error {
 type LegacyAppPathString string
 
 type ListMcpServerStatusParams struct {
-	Cursor   Optional[string]                `json:"cursor,omitempty"`
-	Detail   Optional[McpServerStatusDetail] `json:"detail,omitempty"`
-	Limit    Optional[uint32]                `json:"limit,omitempty"`
-	ThreadID Optional[string]                `json:"threadId,omitempty"`
+	Cursor     Optional[string]                `json:"cursor,omitempty"`
+	Detail     Optional[McpServerStatusDetail] `json:"detail,omitempty"`
+	Limit      Optional[uint32]                `json:"limit,omitempty"`
+	ServerName Optional[string]                `json:"serverName,omitempty"`
+	ThreadID   Optional[string]                `json:"threadId,omitempty"`
 }
 
 func (v ListMcpServerStatusParams) MarshalJSON() ([]byte, error) {
@@ -22769,6 +22782,9 @@ func (v ListMcpServerStatusParams) MarshalJSON() ([]byte, error) {
 	}
 	if v.Limit.IsSet() {
 		out["limit"] = v.Limit
+	}
+	if v.ServerName.IsSet() {
+		out["serverName"] = v.ServerName
 	}
 	if v.ThreadID.IsSet() {
 		out["threadId"] = v.ThreadID
@@ -22806,6 +22822,12 @@ func (v *ListMcpServerStatusParams) UnmarshalJSON(data []byte) error {
 			if valueLimit < 0 {
 				return DecodeError{Field: "limit", Reason: "below minimum 0"}
 			}
+		}
+	}
+	rawServerName, ok := raw["serverName"]
+	if ok {
+		if err := json.Unmarshal(rawServerName, &v.ServerName); err != nil {
+			return fmt.Errorf("field serverName: %w", err)
 		}
 	}
 	rawThreadID, ok := raw["threadId"]
@@ -27502,6 +27524,7 @@ const (
 	PlanTypePlus                        PlanType = "plus"
 	PlanTypePro                         PlanType = "pro"
 	PlanTypeProlite                     PlanType = "prolite"
+	PlanTypePromax                      PlanType = "promax"
 	PlanTypeTeam                        PlanType = "team"
 	PlanTypeSelfServeBusinessProlite    PlanType = "self_serve_business_prolite"
 	PlanTypeSelfServeBusinessUsageBased PlanType = "self_serve_business_usage_based"
@@ -27720,440 +27743,6 @@ const (
 	PluginDisabledReasonUnknown                PluginDisabledReason = "unknown"
 )
 
-type PluginEntrypoint struct {
-	AppID       OptionalNonNull[string]       `json:"appId,omitempty"`
-	Extensions  OptionalNonNull[[]string]     `json:"extensions,omitempty"`
-	Icons       OptionalNonNull[[]PluginIcon] `json:"icons,omitempty"`
-	QuickAction Optional[PluginQuickAction]   `json:"quickAction,omitempty"`
-	ResourceUri OptionalNonNull[string]       `json:"resourceUri,omitempty"`
-	SearchTerms OptionalNonNull[[]string]     `json:"searchTerms,omitempty"`
-	Title       OptionalNonNull[string]       `json:"title,omitempty"`
-	ToolName    OptionalNonNull[string]       `json:"toolName,omitempty"`
-	TypeValue   string                        `json:"type,omitempty"`
-	RawJSON     json.RawMessage               `json:"-"`
-}
-
-func (v PluginEntrypoint) MarshalJSON() ([]byte, error) {
-	out := map[string]any{}
-	if v.AppID.IsSet() {
-		out["appId"] = v.AppID
-	}
-	if v.Extensions.IsSet() {
-		out["extensions"] = v.Extensions
-	}
-	if v.Icons.IsSet() {
-		out["icons"] = v.Icons
-	}
-	if v.QuickAction.IsSet() {
-		out["quickAction"] = v.QuickAction
-	}
-	if v.ResourceUri.IsSet() {
-		out["resourceUri"] = v.ResourceUri
-	}
-	if v.SearchTerms.IsSet() {
-		out["searchTerms"] = v.SearchTerms
-	}
-	if v.Title.IsSet() {
-		out["title"] = v.Title
-	}
-	if v.ToolName.IsSet() {
-		out["toolName"] = v.ToolName
-	}
-	out["type"] = v.TypeValue
-	switch v.TypeValue {
-	case "global":
-		if !v.AppID.IsSet() {
-			return nil, DecodeError{Field: "appId", Reason: "missing required field for type global"}
-		}
-		if !v.Icons.IsSet() {
-			return nil, DecodeError{Field: "icons", Reason: "missing required field for type global"}
-		}
-		if !v.ResourceUri.IsSet() {
-			return nil, DecodeError{Field: "resourceUri", Reason: "missing required field for type global"}
-		}
-		if !v.Title.IsSet() {
-			return nil, DecodeError{Field: "title", Reason: "missing required field for type global"}
-		}
-		if !v.ToolName.IsSet() {
-			return nil, DecodeError{Field: "toolName", Reason: "missing required field for type global"}
-		}
-	case "settings":
-		if !v.AppID.IsSet() {
-			return nil, DecodeError{Field: "appId", Reason: "missing required field for type settings"}
-		}
-		if !v.Icons.IsSet() {
-			return nil, DecodeError{Field: "icons", Reason: "missing required field for type settings"}
-		}
-		if !v.ResourceUri.IsSet() {
-			return nil, DecodeError{Field: "resourceUri", Reason: "missing required field for type settings"}
-		}
-		if !v.Title.IsSet() {
-			return nil, DecodeError{Field: "title", Reason: "missing required field for type settings"}
-		}
-		if !v.ToolName.IsSet() {
-			return nil, DecodeError{Field: "toolName", Reason: "missing required field for type settings"}
-		}
-	case "thread":
-		if !v.AppID.IsSet() {
-			return nil, DecodeError{Field: "appId", Reason: "missing required field for type thread"}
-		}
-		if !v.Icons.IsSet() {
-			return nil, DecodeError{Field: "icons", Reason: "missing required field for type thread"}
-		}
-		if !v.ResourceUri.IsSet() {
-			return nil, DecodeError{Field: "resourceUri", Reason: "missing required field for type thread"}
-		}
-		if !v.Title.IsSet() {
-			return nil, DecodeError{Field: "title", Reason: "missing required field for type thread"}
-		}
-		if !v.ToolName.IsSet() {
-			return nil, DecodeError{Field: "toolName", Reason: "missing required field for type thread"}
-		}
-	case "file":
-		if !v.AppID.IsSet() {
-			return nil, DecodeError{Field: "appId", Reason: "missing required field for type file"}
-		}
-		if !v.Extensions.IsSet() {
-			return nil, DecodeError{Field: "extensions", Reason: "missing required field for type file"}
-		}
-		if !v.Icons.IsSet() {
-			return nil, DecodeError{Field: "icons", Reason: "missing required field for type file"}
-		}
-		if !v.ResourceUri.IsSet() {
-			return nil, DecodeError{Field: "resourceUri", Reason: "missing required field for type file"}
-		}
-		if !v.Title.IsSet() {
-			return nil, DecodeError{Field: "title", Reason: "missing required field for type file"}
-		}
-		if !v.ToolName.IsSet() {
-			return nil, DecodeError{Field: "toolName", Reason: "missing required field for type file"}
-		}
-	default:
-		if len(v.RawJSON) > 0 {
-			return append([]byte(nil), v.RawJSON...), nil
-		}
-		return nil, DecodeError{Field: "type", Reason: fmt.Sprintf("unsupported discriminator value %q", v.TypeValue)}
-	}
-	return json.Marshal(out)
-}
-
-func (v *PluginEntrypoint) UnmarshalJSON(data []byte) error {
-	trimmed := bytes.TrimSpace(data)
-	if bytes.Equal(trimmed, []byte("null")) {
-		return DecodeError{Field: "", Reason: "cannot be null"}
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &raw); err != nil {
-		return err
-	}
-	rawTypeValueDiscriminator, ok := raw["type"]
-	if !ok {
-		return DecodeError{Field: "type", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawTypeValueDiscriminator, []byte("null")) {
-		return DecodeError{Field: "type", Reason: "cannot be null"}
-	}
-	var TypeValueDiscriminator string
-	if err := json.Unmarshal(rawTypeValueDiscriminator, &TypeValueDiscriminator); err != nil {
-		return fmt.Errorf("field type: %w", err)
-	}
-	switch TypeValueDiscriminator {
-	case "global":
-	case "settings":
-	case "thread":
-	case "file":
-	default:
-		v.TypeValue = TypeValueDiscriminator
-		v.RawJSON = append(v.RawJSON[:0], data...)
-		return nil
-	}
-	rawAppID, ok := raw["appId"]
-	if ok {
-		if err := json.Unmarshal(rawAppID, &v.AppID); err != nil {
-			return fmt.Errorf("field appId: %w", err)
-		}
-	}
-	rawExtensions, ok := raw["extensions"]
-	if ok {
-		if err := json.Unmarshal(rawExtensions, &v.Extensions); err != nil {
-			return fmt.Errorf("field extensions: %w", err)
-		}
-	}
-	rawIcons, ok := raw["icons"]
-	if ok {
-		if err := json.Unmarshal(rawIcons, &v.Icons); err != nil {
-			return fmt.Errorf("field icons: %w", err)
-		}
-	}
-	rawQuickAction, ok := raw["quickAction"]
-	if !ok && (bytes.Equal(bytes.TrimSpace(raw["type"]), []byte("\"global\""))) {
-		rawQuickAction = []byte("null")
-		ok = true
-	}
-	if ok {
-		if err := json.Unmarshal(rawQuickAction, &v.QuickAction); err != nil {
-			return fmt.Errorf("field quickAction: %w", err)
-		}
-	}
-	rawResourceUri, ok := raw["resourceUri"]
-	if ok {
-		if err := json.Unmarshal(rawResourceUri, &v.ResourceUri); err != nil {
-			return fmt.Errorf("field resourceUri: %w", err)
-		}
-	}
-	rawSearchTerms, ok := raw["searchTerms"]
-	if !ok && (bytes.Equal(bytes.TrimSpace(raw["type"]), []byte("\"settings\""))) {
-		rawSearchTerms = []byte("[]")
-		ok = true
-	}
-	if ok {
-		if err := json.Unmarshal(rawSearchTerms, &v.SearchTerms); err != nil {
-			return fmt.Errorf("field searchTerms: %w", err)
-		}
-	}
-	rawTitle, ok := raw["title"]
-	if ok {
-		if err := json.Unmarshal(rawTitle, &v.Title); err != nil {
-			return fmt.Errorf("field title: %w", err)
-		}
-	}
-	rawToolName, ok := raw["toolName"]
-	if ok {
-		if err := json.Unmarshal(rawToolName, &v.ToolName); err != nil {
-			return fmt.Errorf("field toolName: %w", err)
-		}
-	}
-	rawTypeValue, ok := raw["type"]
-	if !ok {
-		return DecodeError{Field: "type", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawTypeValue, []byte("null")) {
-		return DecodeError{Field: "type", Reason: "cannot be null"}
-	}
-	if err := json.Unmarshal(rawTypeValue, &v.TypeValue); err != nil {
-		return fmt.Errorf("field type: %w", err)
-	}
-	v.RawJSON = nil
-	switch v.TypeValue {
-	case "global":
-		if rawValue, ok := raw["appId"]; !ok {
-			return DecodeError{Field: "appId", Reason: "missing required field for type global"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "appId", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["icons"]; !ok {
-			return DecodeError{Field: "icons", Reason: "missing required field for type global"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "icons", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["resourceUri"]; !ok {
-			return DecodeError{Field: "resourceUri", Reason: "missing required field for type global"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "resourceUri", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["title"]; !ok {
-			return DecodeError{Field: "title", Reason: "missing required field for type global"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "title", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["toolName"]; !ok {
-			return DecodeError{Field: "toolName", Reason: "missing required field for type global"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "toolName", Reason: "cannot be null"}
-		}
-	case "settings":
-		if rawValue, ok := raw["appId"]; !ok {
-			return DecodeError{Field: "appId", Reason: "missing required field for type settings"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "appId", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["icons"]; !ok {
-			return DecodeError{Field: "icons", Reason: "missing required field for type settings"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "icons", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["resourceUri"]; !ok {
-			return DecodeError{Field: "resourceUri", Reason: "missing required field for type settings"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "resourceUri", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["title"]; !ok {
-			return DecodeError{Field: "title", Reason: "missing required field for type settings"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "title", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["toolName"]; !ok {
-			return DecodeError{Field: "toolName", Reason: "missing required field for type settings"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "toolName", Reason: "cannot be null"}
-		}
-	case "thread":
-		if rawValue, ok := raw["appId"]; !ok {
-			return DecodeError{Field: "appId", Reason: "missing required field for type thread"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "appId", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["icons"]; !ok {
-			return DecodeError{Field: "icons", Reason: "missing required field for type thread"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "icons", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["resourceUri"]; !ok {
-			return DecodeError{Field: "resourceUri", Reason: "missing required field for type thread"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "resourceUri", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["title"]; !ok {
-			return DecodeError{Field: "title", Reason: "missing required field for type thread"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "title", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["toolName"]; !ok {
-			return DecodeError{Field: "toolName", Reason: "missing required field for type thread"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "toolName", Reason: "cannot be null"}
-		}
-	case "file":
-		if rawValue, ok := raw["appId"]; !ok {
-			return DecodeError{Field: "appId", Reason: "missing required field for type file"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "appId", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["extensions"]; !ok {
-			return DecodeError{Field: "extensions", Reason: "missing required field for type file"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "extensions", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["icons"]; !ok {
-			return DecodeError{Field: "icons", Reason: "missing required field for type file"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "icons", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["resourceUri"]; !ok {
-			return DecodeError{Field: "resourceUri", Reason: "missing required field for type file"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "resourceUri", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["title"]; !ok {
-			return DecodeError{Field: "title", Reason: "missing required field for type file"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "title", Reason: "cannot be null"}
-		}
-		if rawValue, ok := raw["toolName"]; !ok {
-			return DecodeError{Field: "toolName", Reason: "missing required field for type file"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "toolName", Reason: "cannot be null"}
-		}
-	default:
-		v.RawJSON = append(v.RawJSON[:0], data...)
-	}
-	return nil
-}
-
-type PluginExtensions struct {
-	Entrypoints            Optional[[]PluginEntrypoint]            `json:"entrypoints,omitempty"`
-	FileHandlers           OptionalNonNull[[]PluginEntrypoint]     `json:"fileHandlers,omitempty"`
-	SearchMentionProviders OptionalNonNull[[]PluginSearchProvider] `json:"searchMentionProviders,omitempty"`
-	Settings               OptionalNonNull[[]PluginSettings]       `json:"settings,omitempty"`
-	SettingsEntrypoints    OptionalNonNull[[]PluginEntrypoint]     `json:"settingsEntrypoints,omitempty"`
-	ThreadEntrypoints      OptionalNonNull[[]PluginEntrypoint]     `json:"threadEntrypoints,omitempty"`
-}
-
-func (v PluginExtensions) MarshalJSON() ([]byte, error) {
-	out := map[string]any{}
-	if v.Entrypoints.IsSet() {
-		out["entrypoints"] = v.Entrypoints
-	}
-	if v.FileHandlers.IsSet() {
-		out["fileHandlers"] = v.FileHandlers
-	}
-	if v.SearchMentionProviders.IsSet() {
-		out["searchMentionProviders"] = v.SearchMentionProviders
-	}
-	if v.Settings.IsSet() {
-		out["settings"] = v.Settings
-	}
-	if v.SettingsEntrypoints.IsSet() {
-		out["settingsEntrypoints"] = v.SettingsEntrypoints
-	}
-	if v.ThreadEntrypoints.IsSet() {
-		out["threadEntrypoints"] = v.ThreadEntrypoints
-	}
-	return json.Marshal(out)
-}
-
-func (v *PluginExtensions) UnmarshalJSON(data []byte) error {
-	trimmed := bytes.TrimSpace(data)
-	if bytes.Equal(trimmed, []byte("null")) {
-		return DecodeError{Field: "", Reason: "cannot be null"}
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &raw); err != nil {
-		return err
-	}
-	rawEntrypoints, ok := raw["entrypoints"]
-	if !ok {
-		rawEntrypoints = []byte("null")
-		ok = true
-	}
-	if ok {
-		if err := json.Unmarshal(rawEntrypoints, &v.Entrypoints); err != nil {
-			return fmt.Errorf("field entrypoints: %w", err)
-		}
-	}
-	rawFileHandlers, ok := raw["fileHandlers"]
-	if !ok {
-		rawFileHandlers = []byte("[]")
-		ok = true
-	}
-	if ok {
-		if err := json.Unmarshal(rawFileHandlers, &v.FileHandlers); err != nil {
-			return fmt.Errorf("field fileHandlers: %w", err)
-		}
-	}
-	rawSearchMentionProviders, ok := raw["searchMentionProviders"]
-	if !ok {
-		rawSearchMentionProviders = []byte("[]")
-		ok = true
-	}
-	if ok {
-		if err := json.Unmarshal(rawSearchMentionProviders, &v.SearchMentionProviders); err != nil {
-			return fmt.Errorf("field searchMentionProviders: %w", err)
-		}
-	}
-	rawSettings, ok := raw["settings"]
-	if !ok {
-		rawSettings = []byte("[]")
-		ok = true
-	}
-	if ok {
-		if err := json.Unmarshal(rawSettings, &v.Settings); err != nil {
-			return fmt.Errorf("field settings: %w", err)
-		}
-	}
-	rawSettingsEntrypoints, ok := raw["settingsEntrypoints"]
-	if !ok {
-		rawSettingsEntrypoints = []byte("[]")
-		ok = true
-	}
-	if ok {
-		if err := json.Unmarshal(rawSettingsEntrypoints, &v.SettingsEntrypoints); err != nil {
-			return fmt.Errorf("field settingsEntrypoints: %w", err)
-		}
-	}
-	rawThreadEntrypoints, ok := raw["threadEntrypoints"]
-	if !ok {
-		rawThreadEntrypoints = []byte("[]")
-		ok = true
-	}
-	if ok {
-		if err := json.Unmarshal(rawThreadEntrypoints, &v.ThreadEntrypoints); err != nil {
-			return fmt.Errorf("field threadEntrypoints: %w", err)
-		}
-	}
-	return nil
-}
-
 type PluginHookSummary struct {
 	EventName HookEventName `json:"eventName,omitempty"`
 	Key       string        `json:"key,omitempty"`
@@ -28194,68 +27783,6 @@ func (v *PluginHookSummary) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawKey, &v.Key); err != nil {
 		return fmt.Errorf("field key: %w", err)
-	}
-	return nil
-}
-
-type PluginIcon struct {
-	MimeType Optional[string]   `json:"mimeType,omitempty"`
-	Sizes    Optional[[]string] `json:"sizes,omitempty"`
-	Src      string             `json:"src,omitempty"`
-	Theme    Optional[string]   `json:"theme,omitempty"`
-}
-
-func (v PluginIcon) MarshalJSON() ([]byte, error) {
-	out := map[string]any{}
-	if v.MimeType.IsSet() {
-		out["mimeType"] = v.MimeType
-	}
-	if v.Sizes.IsSet() {
-		out["sizes"] = v.Sizes
-	}
-	out["src"] = v.Src
-	if v.Theme.IsSet() {
-		out["theme"] = v.Theme
-	}
-	return json.Marshal(out)
-}
-
-func (v *PluginIcon) UnmarshalJSON(data []byte) error {
-	trimmed := bytes.TrimSpace(data)
-	if bytes.Equal(trimmed, []byte("null")) {
-		return DecodeError{Field: "", Reason: "cannot be null"}
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &raw); err != nil {
-		return err
-	}
-	rawMimeType, ok := raw["mimeType"]
-	if ok {
-		if err := json.Unmarshal(rawMimeType, &v.MimeType); err != nil {
-			return fmt.Errorf("field mimeType: %w", err)
-		}
-	}
-	rawSizes, ok := raw["sizes"]
-	if ok {
-		if err := json.Unmarshal(rawSizes, &v.Sizes); err != nil {
-			return fmt.Errorf("field sizes: %w", err)
-		}
-	}
-	rawSrc, ok := raw["src"]
-	if !ok {
-		return DecodeError{Field: "src", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawSrc, []byte("null")) {
-		return DecodeError{Field: "src", Reason: "cannot be null"}
-	}
-	if err := json.Unmarshal(rawSrc, &v.Src); err != nil {
-		return fmt.Errorf("field src: %w", err)
-	}
-	rawTheme, ok := raw["theme"]
-	if ok {
-		if err := json.Unmarshal(rawTheme, &v.Theme); err != nil {
-			return fmt.Errorf("field theme: %w", err)
-		}
 	}
 	return nil
 }
@@ -28867,155 +28394,6 @@ func (v *PluginMarketplaceEntry) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type PluginQuickAction struct {
-	Icons  []PluginIcon            `json:"icons,omitempty"`
-	Target PluginQuickActionTarget `json:"target,omitempty"`
-	Title  string                  `json:"title,omitempty"`
-}
-
-func (v PluginQuickAction) MarshalJSON() ([]byte, error) {
-	out := map[string]any{}
-	out["icons"] = v.Icons
-	out["target"] = v.Target
-	out["title"] = v.Title
-	return json.Marshal(out)
-}
-
-func (v *PluginQuickAction) UnmarshalJSON(data []byte) error {
-	trimmed := bytes.TrimSpace(data)
-	if bytes.Equal(trimmed, []byte("null")) {
-		return DecodeError{Field: "", Reason: "cannot be null"}
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &raw); err != nil {
-		return err
-	}
-	rawIcons, ok := raw["icons"]
-	if !ok {
-		return DecodeError{Field: "icons", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawIcons, []byte("null")) {
-		return DecodeError{Field: "icons", Reason: "cannot be null"}
-	}
-	if err := json.Unmarshal(rawIcons, &v.Icons); err != nil {
-		return fmt.Errorf("field icons: %w", err)
-	}
-	rawTarget, ok := raw["target"]
-	if !ok {
-		return DecodeError{Field: "target", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawTarget, []byte("null")) {
-		return DecodeError{Field: "target", Reason: "cannot be null"}
-	}
-	if err := json.Unmarshal(rawTarget, &v.Target); err != nil {
-		return fmt.Errorf("field target: %w", err)
-	}
-	rawTitle, ok := raw["title"]
-	if !ok {
-		return DecodeError{Field: "title", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawTitle, []byte("null")) {
-		return DecodeError{Field: "title", Reason: "cannot be null"}
-	}
-	if err := json.Unmarshal(rawTitle, &v.Title); err != nil {
-		return fmt.Errorf("field title: %w", err)
-	}
-	return nil
-}
-
-type PluginQuickActionTarget struct {
-	Arguments json.RawMessage         `json:"arguments,omitempty"`
-	Name      OptionalNonNull[string] `json:"name,omitempty"`
-	TypeValue string                  `json:"type,omitempty"`
-	RawJSON   json.RawMessage         `json:"-"`
-}
-
-func (v PluginQuickActionTarget) MarshalJSON() ([]byte, error) {
-	out := map[string]any{}
-	if len(v.Arguments) > 0 {
-		out["arguments"] = v.Arguments
-	}
-	if v.Name.IsSet() {
-		out["name"] = v.Name
-	}
-	out["type"] = v.TypeValue
-	switch v.TypeValue {
-	case "tool":
-		if !v.Name.IsSet() {
-			return nil, DecodeError{Field: "name", Reason: "missing required field for type tool"}
-		}
-	default:
-		if len(v.RawJSON) > 0 {
-			return append([]byte(nil), v.RawJSON...), nil
-		}
-		return nil, DecodeError{Field: "type", Reason: fmt.Sprintf("unsupported discriminator value %q", v.TypeValue)}
-	}
-	return json.Marshal(out)
-}
-
-func (v *PluginQuickActionTarget) UnmarshalJSON(data []byte) error {
-	trimmed := bytes.TrimSpace(data)
-	if bytes.Equal(trimmed, []byte("null")) {
-		return DecodeError{Field: "", Reason: "cannot be null"}
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &raw); err != nil {
-		return err
-	}
-	rawTypeValueDiscriminator, ok := raw["type"]
-	if !ok {
-		return DecodeError{Field: "type", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawTypeValueDiscriminator, []byte("null")) {
-		return DecodeError{Field: "type", Reason: "cannot be null"}
-	}
-	var TypeValueDiscriminator string
-	if err := json.Unmarshal(rawTypeValueDiscriminator, &TypeValueDiscriminator); err != nil {
-		return fmt.Errorf("field type: %w", err)
-	}
-	switch TypeValueDiscriminator {
-	case "tool":
-	default:
-		v.TypeValue = TypeValueDiscriminator
-		v.RawJSON = append(v.RawJSON[:0], data...)
-		return nil
-	}
-	rawArguments, ok := raw["arguments"]
-	if ok {
-		if err := json.Unmarshal(rawArguments, &v.Arguments); err != nil {
-			return fmt.Errorf("field arguments: %w", err)
-		}
-	}
-	rawName, ok := raw["name"]
-	if ok {
-		if err := json.Unmarshal(rawName, &v.Name); err != nil {
-			return fmt.Errorf("field name: %w", err)
-		}
-	}
-	rawTypeValue, ok := raw["type"]
-	if !ok {
-		return DecodeError{Field: "type", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawTypeValue, []byte("null")) {
-		return DecodeError{Field: "type", Reason: "cannot be null"}
-	}
-	if err := json.Unmarshal(rawTypeValue, &v.TypeValue); err != nil {
-		return fmt.Errorf("field type: %w", err)
-	}
-	v.RawJSON = nil
-	switch v.TypeValue {
-	case "tool":
-		if rawValue, ok := raw["name"]; !ok {
-			return DecodeError{Field: "name", Reason: "missing required field for type tool"}
-		} else if bytes.Equal(rawValue, []byte("null")) {
-			return DecodeError{Field: "name", Reason: "cannot be null"}
-		}
-	default:
-		v.RawJSON = append(v.RawJSON[:0], data...)
-	}
-	return nil
-}
-
 type PluginReadParams struct {
 	MarketplacePath       Optional[AbsolutePathBuf] `json:"marketplacePath,omitempty"`
 	PluginName            string                    `json:"pluginName,omitempty"`
@@ -29343,134 +28721,6 @@ func (v *PluginSearchParams) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type PluginSearchProvider struct {
-	AppID    string                             `json:"appId,omitempty"`
-	Call     Optional[PluginSearchProviderCall] `json:"call,omitempty"`
-	LinkID   string                             `json:"linkId,omitempty"`
-	Title    string                             `json:"title,omitempty"`
-	ToolName string                             `json:"toolName,omitempty"`
-}
-
-func (v PluginSearchProvider) MarshalJSON() ([]byte, error) {
-	out := map[string]any{}
-	out["appId"] = v.AppID
-	if v.Call.IsSet() {
-		out["call"] = v.Call
-	}
-	out["linkId"] = v.LinkID
-	out["title"] = v.Title
-	out["toolName"] = v.ToolName
-	return json.Marshal(out)
-}
-
-func (v *PluginSearchProvider) UnmarshalJSON(data []byte) error {
-	trimmed := bytes.TrimSpace(data)
-	if bytes.Equal(trimmed, []byte("null")) {
-		return DecodeError{Field: "", Reason: "cannot be null"}
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &raw); err != nil {
-		return err
-	}
-	rawAppID, ok := raw["appId"]
-	if !ok {
-		return DecodeError{Field: "appId", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawAppID, []byte("null")) {
-		return DecodeError{Field: "appId", Reason: "cannot be null"}
-	}
-	if err := json.Unmarshal(rawAppID, &v.AppID); err != nil {
-		return fmt.Errorf("field appId: %w", err)
-	}
-	rawCall, ok := raw["call"]
-	if ok {
-		if err := json.Unmarshal(rawCall, &v.Call); err != nil {
-			return fmt.Errorf("field call: %w", err)
-		}
-	}
-	rawLinkID, ok := raw["linkId"]
-	if !ok {
-		return DecodeError{Field: "linkId", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawLinkID, []byte("null")) {
-		return DecodeError{Field: "linkId", Reason: "cannot be null"}
-	}
-	if err := json.Unmarshal(rawLinkID, &v.LinkID); err != nil {
-		return fmt.Errorf("field linkId: %w", err)
-	}
-	rawTitle, ok := raw["title"]
-	if !ok {
-		return DecodeError{Field: "title", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawTitle, []byte("null")) {
-		return DecodeError{Field: "title", Reason: "cannot be null"}
-	}
-	if err := json.Unmarshal(rawTitle, &v.Title); err != nil {
-		return fmt.Errorf("field title: %w", err)
-	}
-	rawToolName, ok := raw["toolName"]
-	if !ok {
-		return DecodeError{Field: "toolName", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawToolName, []byte("null")) {
-		return DecodeError{Field: "toolName", Reason: "cannot be null"}
-	}
-	if err := json.Unmarshal(rawToolName, &v.ToolName); err != nil {
-		return fmt.Errorf("field toolName: %w", err)
-	}
-	return nil
-}
-
-type PluginSearchProviderCall struct {
-	Meta      json.RawMessage `json:"_meta,omitempty"`
-	Arguments json.RawMessage `json:"arguments,omitempty"`
-	Name      string          `json:"name,omitempty"`
-}
-
-func (v PluginSearchProviderCall) MarshalJSON() ([]byte, error) {
-	out := map[string]any{}
-	out["_meta"] = v.Meta
-	out["arguments"] = v.Arguments
-	out["name"] = v.Name
-	return json.Marshal(out)
-}
-
-func (v *PluginSearchProviderCall) UnmarshalJSON(data []byte) error {
-	trimmed := bytes.TrimSpace(data)
-	if bytes.Equal(trimmed, []byte("null")) {
-		return DecodeError{Field: "", Reason: "cannot be null"}
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &raw); err != nil {
-		return err
-	}
-	rawMeta, ok := raw["_meta"]
-	if !ok {
-		return DecodeError{Field: "_meta", Reason: "missing required field"}
-	}
-	if err := json.Unmarshal(rawMeta, &v.Meta); err != nil {
-		return fmt.Errorf("field _meta: %w", err)
-	}
-	rawArguments, ok := raw["arguments"]
-	if !ok {
-		return DecodeError{Field: "arguments", Reason: "missing required field"}
-	}
-	if err := json.Unmarshal(rawArguments, &v.Arguments); err != nil {
-		return fmt.Errorf("field arguments: %w", err)
-	}
-	rawName, ok := raw["name"]
-	if !ok {
-		return DecodeError{Field: "name", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawName, []byte("null")) {
-		return DecodeError{Field: "name", Reason: "cannot be null"}
-	}
-	if err := json.Unmarshal(rawName, &v.Name); err != nil {
-		return fmt.Errorf("field name: %w", err)
-	}
-	return nil
-}
-
 type PluginSearchResponse struct {
 	Data       []PluginSearchResult `json:"data,omitempty"`
 	NextCursor Optional[string]     `json:"nextCursor,omitempty"`
@@ -29574,62 +28824,6 @@ const (
 	PluginSearchScopeWorkspace PluginSearchScope = "workspace"
 	PluginSearchScopePersonal  PluginSearchScope = "personal"
 )
-
-type PluginSettings struct {
-	AppID          string `json:"appId,omitempty"`
-	ReadToolName   string `json:"readToolName,omitempty"`
-	UpdateToolName string `json:"updateToolName,omitempty"`
-}
-
-func (v PluginSettings) MarshalJSON() ([]byte, error) {
-	out := map[string]any{}
-	out["appId"] = v.AppID
-	out["readToolName"] = v.ReadToolName
-	out["updateToolName"] = v.UpdateToolName
-	return json.Marshal(out)
-}
-
-func (v *PluginSettings) UnmarshalJSON(data []byte) error {
-	trimmed := bytes.TrimSpace(data)
-	if bytes.Equal(trimmed, []byte("null")) {
-		return DecodeError{Field: "", Reason: "cannot be null"}
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &raw); err != nil {
-		return err
-	}
-	rawAppID, ok := raw["appId"]
-	if !ok {
-		return DecodeError{Field: "appId", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawAppID, []byte("null")) {
-		return DecodeError{Field: "appId", Reason: "cannot be null"}
-	}
-	if err := json.Unmarshal(rawAppID, &v.AppID); err != nil {
-		return fmt.Errorf("field appId: %w", err)
-	}
-	rawReadToolName, ok := raw["readToolName"]
-	if !ok {
-		return DecodeError{Field: "readToolName", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawReadToolName, []byte("null")) {
-		return DecodeError{Field: "readToolName", Reason: "cannot be null"}
-	}
-	if err := json.Unmarshal(rawReadToolName, &v.ReadToolName); err != nil {
-		return fmt.Errorf("field readToolName: %w", err)
-	}
-	rawUpdateToolName, ok := raw["updateToolName"]
-	if !ok {
-		return DecodeError{Field: "updateToolName", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawUpdateToolName, []byte("null")) {
-		return DecodeError{Field: "updateToolName", Reason: "cannot be null"}
-	}
-	if err := json.Unmarshal(rawUpdateToolName, &v.UpdateToolName); err != nil {
-		return fmt.Errorf("field updateToolName: %w", err)
-	}
-	return nil
-}
 
 type PluginShareCheckoutParams struct {
 	RemotePluginID string `json:"remotePluginId,omitempty"`
@@ -30661,7 +29855,6 @@ type PluginSummary struct {
 	DisabledReason                   Optional[PluginDisabledReason]      `json:"disabledReason,omitempty"`
 	EligiblePlanTypes                Optional[[]string]                  `json:"eligiblePlanTypes,omitempty"`
 	Enabled                          bool                                `json:"enabled,omitempty"`
-	Extensions                       Optional[PluginExtensions]          `json:"extensions,omitempty"`
 	ID                               string                              `json:"id,omitempty"`
 	InstallPolicy                    PluginInstallPolicy                 `json:"installPolicy,omitempty"`
 	InstallPolicySource              Optional[PluginInstallPolicySource] `json:"installPolicySource,omitempty"`
@@ -30691,9 +29884,6 @@ func (v PluginSummary) MarshalJSON() ([]byte, error) {
 		out["eligiblePlanTypes"] = v.EligiblePlanTypes
 	}
 	out["enabled"] = v.Enabled
-	if v.Extensions.IsSet() {
-		out["extensions"] = v.Extensions
-	}
 	out["id"] = v.ID
 	out["installPolicy"] = v.InstallPolicy
 	if v.InstallPolicySource.IsSet() {
@@ -30779,16 +29969,6 @@ func (v *PluginSummary) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawEnabled, &v.Enabled); err != nil {
 		return fmt.Errorf("field enabled: %w", err)
-	}
-	rawExtensions, ok := raw["extensions"]
-	if !ok {
-		rawExtensions = []byte("null")
-		ok = true
-	}
-	if ok {
-		if err := json.Unmarshal(rawExtensions, &v.Extensions); err != nil {
-			return fmt.Errorf("field extensions: %w", err)
-		}
 	}
 	rawID, ok := raw["id"]
 	if !ok {
@@ -41509,12 +40689,160 @@ func (v *ThreadItemEntry) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type ThreadItemsListAnchor struct {
+	ItemID    OptionalNonNull[string] `json:"itemId,omitempty"`
+	TypeValue string                  `json:"type,omitempty"`
+	RawJSON   json.RawMessage         `json:"-"`
+}
+
+func (v ThreadItemsListAnchor) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if v.ItemID.IsSet() {
+		out["itemId"] = v.ItemID
+	}
+	out["type"] = v.TypeValue
+	switch v.TypeValue {
+	case "item":
+		if !v.ItemID.IsSet() {
+			return nil, DecodeError{Field: "itemId", Reason: "missing required field for type item"}
+		}
+	default:
+		if len(v.RawJSON) > 0 {
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "type", Reason: fmt.Sprintf("unsupported discriminator value %q", v.TypeValue)}
+	}
+	return json.Marshal(out)
+}
+
+func (v *ThreadItemsListAnchor) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawTypeValueDiscriminator, ok := raw["type"]
+	if !ok {
+		return DecodeError{Field: "type", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawTypeValueDiscriminator, []byte("null")) {
+		return DecodeError{Field: "type", Reason: "cannot be null"}
+	}
+	var TypeValueDiscriminator string
+	if err := json.Unmarshal(rawTypeValueDiscriminator, &TypeValueDiscriminator); err != nil {
+		return fmt.Errorf("field type: %w", err)
+	}
+	switch TypeValueDiscriminator {
+	case "item":
+	default:
+		v.TypeValue = TypeValueDiscriminator
+		v.RawJSON = append(v.RawJSON[:0], data...)
+		return nil
+	}
+	rawItemID, ok := raw["itemId"]
+	if ok {
+		if err := json.Unmarshal(rawItemID, &v.ItemID); err != nil {
+			return fmt.Errorf("field itemId: %w", err)
+		}
+	}
+	rawTypeValue, ok := raw["type"]
+	if !ok {
+		return DecodeError{Field: "type", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawTypeValue, []byte("null")) {
+		return DecodeError{Field: "type", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawTypeValue, &v.TypeValue); err != nil {
+		return fmt.Errorf("field type: %w", err)
+	}
+	v.RawJSON = nil
+	switch v.TypeValue {
+	case "item":
+		if rawValue, ok := raw["itemId"]; !ok {
+			return DecodeError{Field: "itemId", Reason: "missing required field for type item"}
+		} else if bytes.Equal(rawValue, []byte("null")) {
+			return DecodeError{Field: "itemId", Reason: "cannot be null"}
+		}
+	default:
+		v.RawJSON = append(v.RawJSON[:0], data...)
+	}
+	return nil
+}
+
+type ThreadItemsListCursor struct {
+	stringValue           *string
+	threadItemsListAnchor *ThreadItemsListAnchor
+}
+
+func NewThreadItemsListCursorString(value string) ThreadItemsListCursor {
+	return ThreadItemsListCursor{stringValue: &value}
+}
+
+func NewThreadItemsListCursorThreadItemsListAnchor(value ThreadItemsListAnchor) ThreadItemsListCursor {
+	return ThreadItemsListCursor{threadItemsListAnchor: &value}
+}
+
+func (v ThreadItemsListCursor) StringValue() (string, bool) {
+	if v.stringValue == nil {
+		return "", false
+	}
+	return *v.stringValue, true
+}
+
+func (v ThreadItemsListCursor) ThreadItemsListAnchor() (ThreadItemsListAnchor, bool) {
+	if v.threadItemsListAnchor == nil {
+		return ThreadItemsListAnchor{}, false
+	}
+	return *v.threadItemsListAnchor, true
+}
+
+func (v ThreadItemsListCursor) MarshalJSON() ([]byte, error) {
+	switch {
+	case v.stringValue != nil && v.threadItemsListAnchor == nil:
+		return json.Marshal(v.stringValue)
+	case v.threadItemsListAnchor != nil && v.stringValue == nil:
+		return json.Marshal(v.threadItemsListAnchor)
+	default:
+		return nil, DecodeError{Field: "", Reason: "empty or ambiguous ThreadItemsListCursor"}
+	}
+}
+
+func (v *ThreadItemsListCursor) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return DecodeError{Field: "", Reason: "empty ThreadItemsListCursor"}
+	}
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	switch trimmed[0] {
+	case '"':
+		var value string
+		if err := json.Unmarshal(trimmed, &value); err != nil {
+			return err
+		}
+		*v = NewThreadItemsListCursorString(value)
+	case '{':
+		var value ThreadItemsListAnchor
+		if err := json.Unmarshal(trimmed, &value); err != nil {
+			return err
+		}
+		*v = NewThreadItemsListCursorThreadItemsListAnchor(value)
+	default:
+		return DecodeError{Field: "", Reason: "no matching union variant"}
+	}
+	return nil
+}
+
 type ThreadItemsListParams struct {
-	Cursor        Optional[string]        `json:"cursor,omitempty"`
-	Limit         Optional[uint32]        `json:"limit,omitempty"`
-	SortDirection Optional[SortDirection] `json:"sortDirection,omitempty"`
-	ThreadID      string                  `json:"threadId,omitempty"`
-	TurnID        Optional[string]        `json:"turnId,omitempty"`
+	Cursor        Optional[ThreadItemsListCursor] `json:"cursor,omitempty"`
+	Limit         Optional[uint32]                `json:"limit,omitempty"`
+	SortDirection Optional[SortDirection]         `json:"sortDirection,omitempty"`
+	ThreadID      string                          `json:"threadId,omitempty"`
+	TurnID        Optional[string]                `json:"turnId,omitempty"`
 }
 
 func (v ThreadItemsListParams) MarshalJSON() ([]byte, error) {
@@ -43923,6 +43251,7 @@ const (
 )
 
 type ThreadRealtimeStartParams struct {
+	BackendReasoningStatus              OptionalNonNull[bool]                  `json:"backendReasoningStatus,omitempty"`
 	ClientManagedHandoffs               Optional[bool]                         `json:"clientManagedHandoffs,omitempty"`
 	CodexResponseHandoffChannelPrefixes Optional[map[string][]string]          `json:"codexResponseHandoffChannelPrefixes,omitempty"`
 	CodexResponseHandoffMode            Optional[CodexResponseHandoffMode]     `json:"codexResponseHandoffMode,omitempty"`
@@ -43946,6 +43275,11 @@ type ThreadRealtimeStartParams struct {
 
 func (v ThreadRealtimeStartParams) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
+	if v.BackendReasoningStatus.IsSet() {
+		if value, ok := v.BackendReasoningStatus.Value(); !ok || value {
+			out["backendReasoningStatus"] = v.BackendReasoningStatus
+		}
+	}
 	if v.ClientManagedHandoffs.IsSet() {
 		out["clientManagedHandoffs"] = v.ClientManagedHandoffs
 	}
@@ -44010,6 +43344,16 @@ func (v *ThreadRealtimeStartParams) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &raw); err != nil {
 		return err
+	}
+	rawBackendReasoningStatus, ok := raw["backendReasoningStatus"]
+	if !ok {
+		rawBackendReasoningStatus = []byte("false")
+		ok = true
+	}
+	if ok {
+		if err := json.Unmarshal(rawBackendReasoningStatus, &v.BackendReasoningStatus); err != nil {
+			return fmt.Errorf("field backendReasoningStatus: %w", err)
+		}
 	}
 	rawClientManagedHandoffs, ok := raw["clientManagedHandoffs"]
 	if ok {

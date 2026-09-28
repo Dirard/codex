@@ -196,21 +196,8 @@ fn reviewed_manifest_required_fields(rust_type: &str) -> Vec<SerdeFieldEntry> {
             default_empty_vec_field("featured_plugin_ids", "featuredPluginIds"),
         ],
         "PluginDetail" => vec![default_null_field("onboarding_skill", "onboardingSkill")],
-        "PluginEntrypoint" => vec![
-            default_null_field("quick_action", "quickAction"),
-            default_empty_vec_field("search_terms", "searchTerms"),
-        ],
-        "PluginExtensions" => vec![
-            default_null_field("entrypoints", "entrypoints"),
-            default_empty_vec_field("settings_entrypoints", "settingsEntrypoints"),
-            default_empty_vec_field("settings", "settings"),
-            default_empty_vec_field("thread_entrypoints", "threadEntrypoints"),
-            default_empty_vec_field("file_handlers", "fileHandlers"),
-            default_empty_vec_field("search_mention_providers", "searchMentionProviders"),
-        ],
         "PluginShareContext" => vec![default_null_field("remote_version", "remoteVersion")],
         "PluginSummary" => vec![
-            default_null_field("extensions", "extensions"),
             default_null_field("local_version", "localVersion"),
             default_field(
                 "availability",
@@ -276,6 +263,10 @@ fn reviewed_manifest_required_fields(rust_type: &str) -> Vec<SerdeFieldEntry> {
             "role",
             SerdePresence::OptionalNonNull,
             "\"user\"",
+        )],
+        "ThreadRealtimeStartParams" => vec![default_skip_false_field(
+            "backend_reasoning_status",
+            "backendReasoningStatus",
         )],
         "ThreadSettings" => vec![
             default_empty_vec_field("disabled_plugin_ids", "disabledPluginIds"),
@@ -429,8 +420,6 @@ pub(crate) fn schema_reachable_serde_attribute_required_types() -> &'static [&'s
         "PermissionsRequestApprovalResponse",
         "PluginAvailability",
         "PluginDetail",
-        "PluginEntrypoint",
-        "PluginExtensions",
         "PluginInstalledResponse",
         "PluginListResponse",
         "PluginShareContext",
@@ -450,6 +439,7 @@ pub(crate) fn schema_reachable_serde_attribute_required_types() -> &'static [&'s
         "ThreadNameUpdatedNotification",
         "ThreadReadParams",
         "ThreadRealtimeAppendTextParams",
+        "ThreadRealtimeStartParams",
         "ThreadSettings",
         "ToolRequestUserInputParams",
         "Turn",
