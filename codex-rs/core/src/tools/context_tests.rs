@@ -28,8 +28,10 @@ fn recorded_mcp_output(output: McpToolOutput) -> FunctionCallOutputPayload {
     let mut history = ContextManager::new();
     history.record_annotated_items(std::slice::from_mut(&mut response), truncation);
     let mut replay = ContextManager::new();
-    let replay_response = response.clone();
-    replay.record_replayed_annotated_items(std::slice::from_ref(&replay_response));
+    replay.replay_annotated_item(
+        &response,
+        OutputTruncation::new(TruncationPolicy::Bytes(1), /*max_lines*/ Some(0)),
+    );
     assert_eq!(
         replay.raw_items().collect::<Vec<_>>(),
         history.raw_items().collect::<Vec<_>>()
