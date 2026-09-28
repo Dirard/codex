@@ -39,7 +39,6 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::CodeModeToolMessages;
-use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ToolMessage;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::EnvironmentConfigState;
@@ -1455,7 +1454,7 @@ async fn code_mode_catalog_messages() -> Result<()> {
                             "additionalProperties": false
                         }).to_string()),
                     }),
-                    deferred_nested_tools_guidance: Some("Catalog discovery: find nested tools by name and description in ALL_TOOLS.".to_string()),
+                    deferred_nested_tools_guidance: Some("Catalog discovery: find nested tools by name and description in EXEC_TOOLS.".to_string()),
                     mcp_typescript_preamble: Some("type CallToolResult<T = unknown> = { content: unknown[]; structuredContent?: T; isError?: boolean };".to_string()),
                 });
         })

@@ -1760,6 +1760,7 @@ async fn run_sampling_request(
                 SamplingRequestResult {
                     needs_follow_up: true,
                     last_agent_message: None,
+                    made_progress: false,
                 },
                 std::mem::take(original_input),
             ));
@@ -2683,9 +2684,11 @@ async fn try_run_sampling_request(
                 }
                 // TODO: Reconcile any response item already being presented to the client.
                 drop(stream);
+                let made_progress = last_agent_message.is_some();
                 break Ok(SamplingRequestResult {
                     needs_follow_up: true,
                     last_agent_message,
+                    made_progress,
                 });
             }
             Err(_) => break Err(CodexErr::TurnAborted),

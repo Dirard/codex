@@ -2298,7 +2298,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
     assert!(Arc::ptr_eq(&resumed.thread, &source.thread));
 
     let initial_history = manager
-        .initial_history_from_rollout_path(rollout_path)
+        .legacy_initial_history_from_rollout_path(rollout_path)
         .await
         .expect("reload active source history");
     let parent_thread_id = initial_history.get_resumed_parent_thread_id();

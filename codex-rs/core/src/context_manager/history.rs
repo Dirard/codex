@@ -510,13 +510,9 @@ impl ContextManager {
         I::Item: Deref<Target = ResponseItem>,
     {
         let truncation = truncation.into();
-        items
-            .into_iter()
-            .filter_map(|item| {
-                self.record_item_with_metadata(&item, /*metadata*/ None, truncation)
-                    .map(|(envelope, /*retained_source*/ _)| envelope.item)
-            })
-            .collect()
+        for item in items {
+            self.record_item_with_metadata(&item, /*metadata*/ None, truncation);
+        }
     }
 
     /// Records output and annotates the original envelopes with captured provenance.
@@ -525,17 +521,24 @@ impl ContextManager {
         &mut self,
         items: &mut [ResponseItemEnvelope],
         truncation: impl Into<OutputTruncation>,
-    ) {
+    ) -> Vec<ResponseItemEnvelope> {
         let truncation = truncation.into();
+        let mut processed_items = Vec::with_capacity(items.len());
         for envelope in items {
-            if let Some((_, source)) = self.record_item_with_metadata(
+            if let Some((processed, source)) = self.record_item_with_metadata(
                 &envelope.item,
                 envelope.metadata.as_ref(),
                 truncation,
             ) {
-                envelope.metadata.get_or_insert_default().retained_source = Some(source);
+                if let Some(source) = source {
+                    envelope.metadata.get_or_insert_default().retained_source = Some(source);
+                }
+                processed_items.push(processed);
+            } else {
+                processed_items.push(envelope.clone());
             }
         }
+        processed_items
     }
 
     /// Appends rollout items that were already truncated before persistence.
@@ -592,10 +595,7 @@ impl ContextManager {
         if !is_api_message(item, metadata) {
             return None;
         }
-        let item_truncation = metadata
-            .and_then(|metadata| metadata.history_truncation_token_limit)
-            .map(TruncationPolicy::Tokens)
-            .map_or(truncation, |policy| truncation.with_policy(policy));
+        let item_truncation = truncation_from_metadata(metadata, truncation);
         let mut processed = ResponseItemEnvelope {
             item: Self::process_item(item, item_truncation),
             metadata: metadata.cloned(),

@@ -892,7 +892,10 @@ fn register_code_mode_executors(
         if exposure == ToolExposure::DirectModelOnly {
             let spec = tool.runtime.spec();
             direct_tool_stubs.extend(
-                collect_code_mode_exec_prompt_tool_definitions(std::iter::once(&spec))
+                collect_code_mode_exec_prompt_tool_definitions(
+                    std::iter::once(&spec),
+                    turn_context.config.code_mode.tool_input_schema_max_bytes,
+                )
                     .into_iter()
                     .map(|mut definition| {
                         let name = definition.name.clone();

@@ -117,7 +117,10 @@ async fn spawned_v2_agent_inherits_turn_budget_before_publication() {
         .await
         .expect("start root thread");
     let control = manager.agent_control();
-    let state = control.upgrade().expect("thread manager should be live");
+    let state = control
+        .runtime
+        .upgrade()
+        .expect("thread manager should be live");
     let budget = TurnSpawnBudget::new(/*limit*/ 1);
     let child = spawn_v2_subagent(
         &control,
