@@ -427,19 +427,16 @@ impl Session {
                     history.record_retained_context(event);
                 }
                 RolloutItem::ResponseItem(response_item) => {
-                    if response_item
-                        .metadata
-                        .as_ref()
-                        .and_then(|metadata| metadata.fallback_token_limit_override)
-                        .is_some()
-                    {
+                    if response_item.metadata.as_ref().is_some_and(|metadata| {
+                        metadata.history_truncation_policy.is_some()
+                            || metadata.history_truncation_token_limit.is_some()
+                            || metadata.history_truncation_max_lines.is_some()
+                            || metadata.history_truncation_mcp_max_lines.is_some()
+                    }) {
                         history
                             .record_replayed_annotated_items(std::slice::from_ref(response_item));
                     } else {
-                        history.replay_annotated_item(
-                            response_item,
-                            replay_output_truncation,
-                        );
+                        history.replay_annotated_item(response_item, replay_output_truncation);
                     }
                 }
                 RolloutItem::InterAgentCommunication(communication) => {

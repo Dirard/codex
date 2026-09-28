@@ -1359,7 +1359,10 @@ async fn cancelled_cold_resume_finishes_residency_accounting() {
     .await
     .expect("child should become unloadable");
 
-    let state = control.upgrade().expect("thread manager should be live");
+    let state = control
+        .runtime
+        .upgrade()
+        .expect("thread manager should be live");
     let eviction_slot = control
         .reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
         .await
@@ -5021,6 +5024,7 @@ async fn assert_followup_completion_watcher_replaces_initial_watcher(
                 turn_id: Some(previous_turn_context.sub_id.clone()),
                 reason: TurnAbortReason::Interrupted,
                 started_at: None,
+                error: None,
                 completed_at: None,
                 duration_ms: None,
             }),

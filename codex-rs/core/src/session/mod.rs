@@ -3617,7 +3617,7 @@ impl Session {
             .iter()
             .map(|envelope| envelope.item.clone())
             .collect::<Vec<_>>();
-        {
+        let processed_items = {
             let mut state = self.state.lock().await;
             state
                 .current_time_reminder
@@ -3657,8 +3657,8 @@ impl Session {
             }
             state
                 .history
-                .record_annotated_items(&mut items, originating_truncation);
-        }
+                .record_annotated_items(&mut items, originating_truncation)
+        };
         for image in image_preparations {
             self.services
                 .analytics_events_client
@@ -3667,8 +3667,10 @@ impl Session {
                     metadata: image,
                 });
         }
-        let rollout_items: Vec<RolloutItem> =
-            items.into_iter().map(RolloutItem::ResponseItem).collect();
+        let rollout_items: Vec<RolloutItem> = processed_items
+            .into_iter()
+            .map(RolloutItem::ResponseItem)
+            .collect();
         if self.persist_rollout_items(&rollout_items).await
             && let Some(revision) = mcp_revision
         {
@@ -4021,19 +4023,24 @@ impl Session {
         for mut recording in pending {
             let _ = recording.changed().await;
         }
-        {
+        let processed_response_item = {
             let mut state = self.state.lock().await;
             state.current_time_reminder.note_recorded_items(items);
-            state.history.record_annotated_items(
-                std::slice::from_mut(&mut response_item),
-                turn_context.output_truncation(),
-            );
-        }
+            state
+                .history
+                .record_annotated_items(
+                    std::slice::from_mut(&mut response_item),
+                    turn_context.output_truncation(),
+                )
+                .into_iter()
+                .next()
+                .unwrap_or(response_item)
+        };
         self.persist_rollout_items(&[
             RolloutItem::InterAgentCommunicationMetadata {
                 trigger_turn: communication.trigger_turn,
             },
-            RolloutItem::ResponseItem(response_item),
+            RolloutItem::ResponseItem(processed_response_item),
         ])
         .await;
         drop(boundary);

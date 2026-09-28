@@ -2,7 +2,6 @@ use crate::TurnInputRequest;
 use crate::TurnInputSubmission;
 use crate::TurnStartOptions;
 use crate::agent::AgentStatus;
-use crate::agent::api::StatusSubscription;
 #[cfg(test)]
 pub(crate) use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
@@ -87,9 +86,6 @@ mod spawn_telemetry;
 mod target;
 mod user_authorization;
 mod watch;
-
-const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
-const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;
 
 enum CompletionWatcherStart {
     CurrentStatus,
@@ -297,7 +293,8 @@ impl LocalAgentControl {
         let state = self.runtime.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
         if communication.trigger_turn {
-            self.ensure_execution_capacity_for_turn_start(&thread)
+            thread
+                .ensure_execution_capacity_for_turn_start(self)
                 .await?;
         }
         let communication_for_log =

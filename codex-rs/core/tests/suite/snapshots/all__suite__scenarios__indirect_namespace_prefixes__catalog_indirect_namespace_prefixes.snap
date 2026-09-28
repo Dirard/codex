@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/scenarios_indirect_namespace_prefixes.rs
-expression: "context_snapshot::format_request_history_snapshot(\"Catalog namespace and raw MCP server prefixes annotate embedded docs and ALL_TOOLS; a model switch clears them without changing nested dispatch.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+expression: "context_snapshot::format_request_history_snapshot(\"Catalog namespace and raw MCP server prefixes annotate embedded docs and EXEC_TOOLS; a model switch clears them without changing nested dispatch.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
-Scenario: Catalog namespace and raw MCP server prefixes annotate embedded docs and ALL_TOOLS; a model switch clears them without changing nested dispatch.
+Scenario: Catalog namespace and raw MCP server prefixes annotate embedded docs and EXEC_TOOLS; a model switch clears them without changing nested dispatch.
 
 ## Window 1
 Settings:
@@ -16,8 +16,8 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (4; hash=045ecf3b2d3b6af5):
-    - custom/exec: Run JavaScript code to orchestrate/compose tool calls - Evaluates the provided JavaScript code in...; hash=e9cdd499ac568220
+  tools (4; hash=f974df4222409432):
+    - custom/exec: Run JavaScript code to orchestrate/compose tool calls - Evaluates the provided JavaScript code in...; hash=ccaf32e654843dbb
     - function/wait: Waits on a yielded `exec` cell and returns new output or completion. - Use `wait` only after `exe...; args=[cell_id, max_tokens, terminate, yield_time_ms]; hash=6692d8f6c55be489
     - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
     - web_search; hash=e214d4db1bc49e89
@@ -35,7 +35,7 @@ Settings:
 -- request 2 (turn) --
 05:custom_tool_call/exec:
     const descriptions = ["view_image", "collaboration__list_agents", "mcp__reports_one__echo"]
-      .map(name => ALL_TOOLS.find(t => t.name === name).description);
+      .map(name => EXEC_TOOLS.find(t => t.name === name).description);
     const report = await tools.mcp__reports_one__echo({message: "ping"});
     const agents = await tools.collaboration__list_agents({});
     text({descriptions, echo: report.structuredContent.echo, agent: agents.agents[0].agent_name});
@@ -48,8 +48,8 @@ Settings:
 ## Window 2 (after request 2)
 Settings: relative to window 1
   model: "prefixes-cleared"
-  tools (4; hash=dec6fdcb7bf3fec7):
-    ~ custom/exec: Run JavaScript code to orchestrate/compose tool calls - Evaluates the provided JavaScript code in...; hash=39e1eedcbc703718
+  tools (4; hash=33591e23f46a194c):
+    ~ custom/exec: Run JavaScript code to orchestrate/compose tool calls - Evaluates the provided JavaScript code in...; hash=82f9fb1f95100b53
 -- request 3 (turn) --
 00:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
@@ -63,7 +63,7 @@ Settings: relative to window 1
     Find echo, call it, and list the agents.
 05:custom_tool_call/exec:
     const descriptions = ["view_image", "collaboration__list_agents", "mcp__reports_one__echo"]
-      .map(name => ALL_TOOLS.find(t => t.name === name).description);
+      .map(name => EXEC_TOOLS.find(t => t.name === name).description);
     const report = await tools.mcp__reports_one__echo({message: "ping"});
     const agents = await tools.collaboration__list_agents({});
     text({descriptions, echo: report.structuredContent.echo, agent: agents.agents[0].agent_name});
@@ -81,7 +81,7 @@ Settings: relative to window 1
 -- request 4 (turn) --
 10:custom_tool_call/exec:
     const descriptions = ["view_image", "collaboration__list_agents", "mcp__reports_one__echo"]
-      .map(name => ALL_TOOLS.find(t => t.name === name).description);
+      .map(name => EXEC_TOOLS.find(t => t.name === name).description);
     const report = await tools.mcp__reports_one__echo({message: "ping"});
     const agents = await tools.collaboration__list_agents({});
     text({descriptions, echo: report.structuredContent.echo, agent: agents.agents[0].agent_name});
