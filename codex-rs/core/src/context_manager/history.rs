@@ -522,40 +522,15 @@ impl ContextManager {
         &mut self,
         items: &mut [ResponseItemEnvelope],
         truncation: impl Into<OutputTruncation>,
-    ) -> Vec<ResponseItemEnvelope> {
+    ) {
         let truncation = truncation.into();
-        let mut processed_items = Vec::with_capacity(items.len());
         for envelope in items {
-            if let Some((processed, source)) = self.record_item_with_metadata(
+            if let Some((_, Some(source))) = self.record_item_with_metadata(
                 &envelope.item,
                 envelope.metadata.as_ref(),
                 truncation,
             ) {
-                if let Some(source) = source {
-                    envelope.metadata.get_or_insert_default().retained_source = Some(source);
-                }
-                processed_items.push(processed);
-            } else {
-                processed_items.push(envelope.clone());
-            }
-        }
-        processed_items
-    }
-
-    /// Appends rollout items that were already truncated before persistence.
-    pub(crate) fn record_replayed_annotated_items(&mut self, items: &[ResponseItemEnvelope]) {
-        for envelope in items {
-            if !is_api_message(&envelope.item, envelope.metadata.as_ref()) {
-                continue;
-            }
-            if let Some(review_history) = &mut self.review_history
-                && !is_guardian_context_message(&envelope.item)
-            {
-                review_history.record(envelope);
-            }
-            Arc::make_mut(&mut self.items).push(envelope.clone());
-            if crate::context::is_user_authorization_message(&envelope.item) {
-                self.user_message_revision = self.user_message_revision.saturating_add(1);
+                envelope.metadata.get_or_insert_default().retained_source = Some(source);
             }
         }
     }
