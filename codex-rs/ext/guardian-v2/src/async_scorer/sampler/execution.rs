@@ -54,7 +54,8 @@ impl SamplingExecution {
                 ApiError::Retryable { .. }
                 | ApiError::RateLimitExceeded { .. }
                 | ApiError::Stream(_)
-                | ApiError::ServerOverloaded,
+                | ApiError::ServerOverloaded { .. }
+                | ApiError::FlexUnavailable,
             )
             | LunaSamplerError::Api(ApiError::Transport(
                 TransportError::RetryLimit
@@ -85,7 +86,9 @@ impl SamplingExecution {
             | LunaSamplerError::InputTooLarge
             | LunaSamplerError::Api(
                 ApiError::Transport(
-                    TransportError::Build(_) | TransportError::ResponseTooLarge { .. },
+                    TransportError::Build(_)
+                    | TransportError::ResponseTooLarge { .. }
+                    | TransportError::Policy(_),
                 )
                 | ApiError::ContextWindowExceeded
                 | ApiError::QuotaExceeded

@@ -291,6 +291,11 @@ impl App {
             }
         }
 
+        let voice_owner = self.voice_owner_thread_id().map(|id| id.to_string());
+        let voice_session = threads
+            .iter()
+            .find(|thread| Some(&thread.id) == voice_owner.as_ref())
+            .map(|thread| &thread.session_id);
         let mut roots = threads
             .iter()
             .filter(|thread| thread.parent_thread_id.is_none())
@@ -316,6 +321,7 @@ impl App {
                 thread_id,
                 group,
                 is_current: self.primary_thread_id == Some(thread_id),
+                has_voice: voice_session == Some(&root.session_id),
             });
         }
 
@@ -372,7 +378,10 @@ impl App {
         if self.reject_pending_permission_root_switch() {
             return Ok(AppRunControl::Continue);
         }
-        loading::draw(tui)?;
+        if startup_draft.is_none() {
+            loading::draw(tui)?;
+        }
+        let mut restored_blank_session = false;
         if self.primary_thread_id != Some(root_thread_id) {
             let previous_displayed_thread_id = self.current_displayed_thread_id();
             if let Some(id) = previous_displayed_thread_id
@@ -499,7 +508,9 @@ impl App {
                 local_settings = self.local_settings.reloaded(&resume_config);
             }
             // Folder selection and trust prompts can replace or clear the loading frame.
-            loading::draw(tui)?;
+            if startup_draft.is_none() {
+                loading::draw(tui)?;
+            }
             let baseline_approval = resume_config.permissions.approval_policy.value();
             let baseline_permissions =
                 RuntimePermissionProfileOverride::from_config(&resume_config);
@@ -536,7 +547,9 @@ impl App {
                 }
             };
             let mut history_notice = None;
-            let presentation = if started.is_some() {
+            let presentation = if startup_draft.is_some() {
+                ThreadAttachPresentation::FreshWithDraft
+            } else if started.is_some() {
                 ThreadAttachPresentation::Fresh
             } else {
                 ThreadAttachPresentation::SessionLineage
@@ -548,7 +561,10 @@ impl App {
             {
                 // An untouched task has no rollout for thread/resume yet. Its live
                 // subscription and saved settings are sufficient to restore the editor.
-                (blank.clone(), false)
+                restored_blank_session = true;
+                let mut blank = blank.clone();
+                blank.session.thread_name.clone_from(&target_thread.name);
+                (blank, false)
             } else {
                 match app_server
                     .resume_thread(
@@ -634,10 +650,19 @@ impl App {
                 match startup_draft.as_deref_mut() {
                     Some(draft) => {
                         draft
-                            .run_until(tui, self.shutdown_current_thread(app_server))
+                            .run_until(
+                                tui,
+                                self.detach_current_thread_for_navigation(
+                                    app_server,
+                                    Some(root_thread_id),
+                                ),
+                            )
                             .await?
                     }
-                    None => self.shutdown_current_thread(app_server).await,
+                    None => {
+                        self.detach_current_thread_for_navigation(app_server, Some(root_thread_id))
+                            .await
+                    }
                 }
             }
             // Explicit choices carry across cold resumes and new sessions.
@@ -676,7 +701,9 @@ impl App {
                 return Ok(AppRunControl::Continue);
             }
             // Replacing the widget clears the terminal before the remaining server requests.
-            loading::draw(tui)?;
+            if startup_draft.is_none() {
+                loading::draw(tui)?;
+            }
             if read_only {
                 self.ensure_thread_channel(root_thread_id)
                     .mark_external_writer();
@@ -727,6 +754,7 @@ impl App {
             for thread_id in previous_thread_ids {
                 if previous_running_thread_ids.is_empty()
                     && thread_id != root_thread_id
+                    && self.voice_owner_thread_id() != Some(thread_id)
                     && Some(thread_id) != previous_displayed_thread_id
                     && !self.agents_overview.blank_sessions.contains_key(&thread_id)
                     && let Err(error) = StartupDraftPump::run_with_optional_draft(
@@ -754,8 +782,12 @@ impl App {
                 .await;
         }
         if self.current_displayed_thread_id() == Some(root_thread_id)
-            && let Some(input_state) = self.agents_overview.input_states.remove(&root_thread_id)
+            && let Some(mut input_state) = self.agents_overview.input_states.remove(&root_thread_id)
         {
+            // A saved draft includes model settings, so apply newer server settings after it.
+            let pending_settings = restored_blank_session
+                .then(|| input_state.pending_thread_settings.take())
+                .flatten();
             let preserve_in_flight_turn = !read_only
                 && self
                     .active_turn_id_for_thread(root_thread_id)
@@ -767,6 +799,9 @@ impl App {
                     preserve_in_flight_turn,
                 },
             );
+            if let Some(settings) = pending_settings {
+                self.chat_widget.on_thread_settings_updated(settings);
+            }
             if !preserve_in_flight_turn {
                 self.chat_widget.maybe_send_next_queued_input();
             }
