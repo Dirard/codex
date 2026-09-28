@@ -1716,7 +1716,9 @@ async fn remote_compact_v2_rewrites_multiple_trailing_function_call_outputs(
             .with_extensions(Arc::new(extensions.build()))
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
-                config.model_context_window = Some(2_000);
+                // Upstream base prompts no longer fit the old 2k fixture after compaction.
+                // Keep room for the compacted prompt while the two large outputs still force rewriting.
+                config.model_context_window = Some(10_000);
                 config.model_auto_compact_token_limit = Some(200_000);
             }),
     )
@@ -1742,8 +1744,8 @@ async fn remote_compact_v2_rewrites_multiple_trailing_function_call_outputs(
         json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": second_user_message}]}),
         json!({"type": "function_call", "call_id": first_trimmed_call_id, "name": "exec_command", "arguments": "{}"}),
         json!({"type": "function_call", "call_id": second_trimmed_call_id, "name": "exec_command", "arguments": "{}"}),
-        json!({"type": "function_call_output", "call_id": first_trimmed_call_id, "output": "x".repeat(12_000)}),
-        json!({"type": "function_call_output", "call_id": second_trimmed_call_id, "output": "y".repeat(12_000)}),
+        json!({"type": "function_call_output", "call_id": first_trimmed_call_id, "output": "x".repeat(20_000)}),
+        json!({"type": "function_call_output", "call_id": second_trimmed_call_id, "output": "y".repeat(20_000)}),
     ]
     .into_iter()
     .map(serde_json::from_value)

@@ -527,21 +527,17 @@ impl Session {
         if let Some(id) = start_options.root_turn_id {
             turn_context.turn_metadata_state.set_root_turn_id(id);
         }
+        let local_agent_control = self.services.local_agent_runtime.control(self.session_id());
         if has_trigger_turn
             && turn_context.multi_agent_version != MultiAgentVersion::V2
-            && let Ok(status_rx) = self
-                .services
-                .agent_control
-                .subscribe_status(self.thread_id)
-                .await
+            && let Ok(status_rx) = local_agent_control.subscribe_status(self.thread_id).await
         {
             let child_agent_path = turn_context.session_source.get_agent_path();
             let child_reference = child_agent_path
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| self.thread_id.to_string());
-            self.services
-                .agent_control
+            local_agent_control
                 .start_followup_completion_watcher(
                     self.thread_id,
                     turn_context.session_source.clone(),

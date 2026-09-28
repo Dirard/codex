@@ -971,6 +971,26 @@ mod tests {
         }
     }
 
+    fn mixed_text_image_message(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: text.to_string(),
+                },
+                ContentItem::InputImage {
+                    image: codex_protocol::models::ImageReference::Inline {
+                        image_url: "data:image/png;base64,AAAA".to_string(),
+                    },
+                    detail: None,
+                },
+            ],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }
+    }
+
     fn build_without_metadata(
         input: Vec<ResponseItem>,
         output: ResponseItem,

@@ -1017,10 +1017,10 @@ pub(super) async fn mcp_schema_max_bytes_scenario() -> Result<Vec<ResponsesReque
     wait_for_mcp_server(&test.codex, "expanded_schema").await?;
     let lookup = r#"
 const results = ["default_schema", "expanded_schema"].map(server => {
-  const description = ALL_TOOLS.find(({name}) => name === `mcp__${server}__search`)?.description ?? "";
+  const description = EXEC_TOOLS.find(({name}) => name === `mcp__${server}__search`)?.description ?? "";
   return [description.includes("budget_description_marker"), description.includes("query: string;")];
 });
-const shared = ALL_TOOLS.find(({name}) => name === "mcp__default_schema__shared")?.description ?? "";
+const shared = EXEC_TOOLS.find(({name}) => name === "mcp__default_schema__shared")?.description ?? "";
 results.push([shared.includes("code_mode_description_marker"), shared.includes("term: string;")]);
 text(JSON.stringify(results));"#;
     let responses = responses::mount_sse_sequence(
@@ -1077,9 +1077,9 @@ text(JSON.stringify(results));"#;
     assert!(shared_declaration.contains("code_mode_description_marker"));
     assert!(shared_declaration.contains("term: string;"));
     let (output, success) = custom_tool_output_body_and_success(&requests[1], "lookup");
-    assert_ne!(success, Some(false), "ALL_TOOLS lookup failed: {output}");
+    assert_ne!(success, Some(false), "EXEC_TOOLS lookup failed: {output}");
     let output =
-        custom_tool_output_last_non_empty_text(&requests[1], "lookup").expect("ALL_TOOLS output");
+        custom_tool_output_last_non_empty_text(&requests[1], "lookup").expect("EXEC_TOOLS output");
     assert_eq!(output, "[[false,true],[true,true],[true,true]]");
     Ok(requests)
 }
@@ -2424,7 +2424,7 @@ async fn result_metadata_preserves_results_within_request_budget(
     } else {
         let arguments = serde_json::to_string(&arguments)?;
         let code = format!(
-            "const tool = ALL_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
+            "const tool = EXEC_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
              const results = []; \
              for (const args of {arguments}) {{ \
                  const result = await tools[tool.name](args); \
@@ -3016,7 +3016,7 @@ async fn code_mode_late_truncated_result_metadata_survives_waits() -> Result<()>
     let arguments = serde_json::json!({ "query": "x".repeat(9_000) });
     let later_arguments = serde_json::json!({ "query": "later" });
     let code = format!(
-        "const tool = ALL_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
+        "const tool = EXEC_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
          const pending = tools[tool.name]({arguments}); yield_control(); await pending; \
          await tools[tool.name]({later_arguments}); text(\"accepted\"); \
          yield_control(); await new Promise(() => {{}});"

@@ -529,11 +529,7 @@ async fn execute_with_delegate(
     delegate: Arc<dyn CodeModeSessionDelegate>,
 ) -> RuntimeResponse {
     service
-        .execute(
-            request,
-            delegate,
-            /*preempt*/ None,
-        )
+        .execute(request, delegate, /*preempt*/ None)
         .await
         .unwrap()
         .initial_response()
@@ -920,6 +916,7 @@ async fn started_but_unsettled_tool_call_emits_side_effect_warning() {
                 ..execute_request("")
             },
             delegate.clone(),
+            /*preempt*/ None,
         )
         .await
         .unwrap();
