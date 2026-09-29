@@ -5044,7 +5044,8 @@ async fn auto_compact_accounts_for_encrypted_reasoning(first_response_includes_r
     let second_user = "TRIGGER_COMPACT_AT_LIMIT";
     let third_user = "AFTER_REMOTE_COMPACT";
 
-    let pre_last_reasoning_content = "a".repeat(2_400);
+    // Leave room for the fixed prompt after compaction while earlier reasoning exceeds the limit.
+    let pre_last_reasoning_content = "a".repeat(120_000);
     let post_last_reasoning_content = "b".repeat(4_000);
 
     let first_turn = sse(vec![
@@ -5084,7 +5085,7 @@ async fn auto_compact_accounts_for_encrypted_reasoning(first_response_includes_r
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             set_test_compact_prompt(config);
-            config.model_auto_compact_token_limit = Some(300);
+            config.model_auto_compact_token_limit = Some(20_000);
         })
         .build(&server)
         .await

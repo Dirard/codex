@@ -13,7 +13,7 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
 02:message/user:
     BEFORE_SWITCH_USER
 
-## Window 2 (after request 1: settings changed (model, parallel_tool_calls, reasoning, text, tools))
+## Window 2 (after request 1: settings changed (model, reasoning, text, tools))
 -- request 2 (compaction; Local Compaction Request) --
 00:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
@@ -26,7 +26,7 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
 04:message/user:
     <SUMMARIZATION_PROMPT>
 
-## Window 3 (after request 2: input diverged at item 00, settings changed (parallel_tool_calls, tools))
+## Window 3 (after request 2: input diverged at item 00)
 -- request 3 (turn; Local Post-Compaction History Layout) --
 00:message/user:
     BEFORE_SWITCH_USER

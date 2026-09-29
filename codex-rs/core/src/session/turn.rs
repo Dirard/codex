@@ -3192,7 +3192,7 @@ async fn try_run_sampling_request(
             conversation.id = %sess.thread_id,
             turn.id = %turn_context.sub_id,
         );
-        drain_in_flight(&mut in_flight, sess.clone(), &step_context).await?;
+        drain_in_flight(&mut in_flight, sess.clone(), &step_context).await?
     };
     drop(tool_blocking_timing_guard);
 

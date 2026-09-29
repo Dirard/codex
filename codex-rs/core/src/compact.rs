@@ -352,7 +352,7 @@ async fn run_compact_task_inner_impl(
                     e,
                     &mut client_session,
                     &sess,
-                    turn_context.as_ref(),
+                    step_context.as_ref(),
                     ResponsesStreamRequest::LocalCompaction,
                 )
                 .await?

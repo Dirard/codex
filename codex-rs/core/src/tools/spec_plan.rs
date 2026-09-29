@@ -118,6 +118,7 @@ struct CoreToolPlanContext<'a> {
     wait_agent_timeouts: WaitAgentTimeoutOptions,
 }
 
+/// Builds the allowed tool surface, retaining explicit extensions for isolated reviewers.
 #[instrument(level = "trace", skip_all)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_tool_router(
@@ -151,9 +152,8 @@ pub(crate) fn build_tool_router(
     add_core_tool_sources(&context, &mut registry);
 
     let mut mcp_omitted_exposures = HashMap::new();
-    let hosted_specs = if crate::guardian::is_basic_session_source(&turn_context.session_source) {
-        Vec::new()
-    } else {
+    let is_basic_session = crate::guardian::is_basic_session_source(&turn_context.session_source);
+    if !is_basic_session {
         let registered_mcp_tools = session.services.mcp_handler_cache.append_mcp_tools(
             mcp,
             &turn_context.config,
@@ -169,12 +169,16 @@ pub(crate) fn build_tool_router(
             &registered_mcp_tools,
             &mut registry,
         );
-        let standalone_web_search_tool = append_extension_tool_executors(
-            turn_context,
-            model_info,
-            extension_tool_executors(session, step_store),
-            &mut registry,
-        );
+    }
+    let standalone_web_search_tool = append_extension_tool_executors(
+        turn_context,
+        model_info,
+        extension_tool_executors(session, step_store),
+        &mut registry,
+    );
+    let hosted_specs = if is_basic_session {
+        Vec::new()
+    } else {
         append_dynamic_tool_runtimes(&turn_context.dynamic_tools, &mut registry);
         hosted_model_tool_specs(
             turn_context,
