@@ -15,7 +15,7 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
 03:message/user:
     BEFORE_SWITCH_USER
 
-## Window 2 (after request 1: settings changed (model, parallel_tool_calls, reasoning, text, tools))
+## Window 2 (after request 1: settings changed (model, reasoning, text, tools))
 -- request 2 (compaction; Local Compaction Request) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>

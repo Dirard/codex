@@ -21,6 +21,7 @@ use codex_tools::ToolName;
 use codex_tools::ToolOutput;
 use codex_tools::ToolSpec;
 use codex_tools::mcp_tool_to_responses_api_tool;
+use codex_utils_output_truncation::OutputTruncation;
 use codex_utils_output_truncation::TruncationPolicy;
 use serde_json::json;
 
@@ -170,7 +171,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for HistoryTool {
                     result_metadata_capture_allowed: false,
                     wall_time: started.elapsed(),
                     original_image_detail_supported: false,
-                    truncation_policy,
+                    truncation: OutputTruncation::new(truncation_policy, /*max_lines*/ None),
                 }) as Box<dyn ToolOutput>)
             }
             .await;

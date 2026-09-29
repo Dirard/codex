@@ -19,8 +19,6 @@ Scenario: Pre-turn auto-compaction uses the prior context without the incoming u
     FIRST_REPLY
 05:message/user:
     USER_TWO
-
-## Window 2 (after request 2: settings changed (parallel_tool_calls, tools))
 -- request 3 (compaction) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>

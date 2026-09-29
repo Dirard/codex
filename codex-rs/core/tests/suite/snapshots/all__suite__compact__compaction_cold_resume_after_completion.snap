@@ -33,8 +33,6 @@ Scenario: Real paginated mid-turn compaction and cold resume from the bounded su
     <MULTI_AGENT_MODE>
 04:message/user:
     function call limit push
-
-## Window 2 (after request 1: settings changed (parallel_tool_calls, tools))
 -- request 2 (compaction) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
