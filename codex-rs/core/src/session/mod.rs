@@ -2343,6 +2343,7 @@ impl Session {
     }
 
     /// Forwards terminal turn events from spawned MultiAgentV2 children to their direct parent.
+    /// Returns the child's status, which may differ from the parent notification status.
     async fn maybe_notify_parent_of_terminal_turn(
         &self,
         turn_context: &TurnContext,
@@ -2376,10 +2377,12 @@ impl Session {
             return event_status;
         }
 
+        let mut child_status = event_status.clone();
         let mut error_info = None;
         let status = match turn_context.terminal_error.lock().await.take() {
             Some(error) => {
                 let status = AgentStatus::Errored(error.message);
+                child_status = Some(status.clone());
                 self.agent_status.send_replace(status.clone());
                 status
             }
@@ -2420,7 +2423,7 @@ impl Session {
                 &self.services.rollout_thread_trace,
             )
             .await;
-        Some(status)
+        child_status
     }
 
     async fn maybe_mirror_event_text_to_realtime(&self, msg: &EventMsg) {
