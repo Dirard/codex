@@ -14,8 +14,6 @@ Scenario: Pre-sampling compaction on model switch to a smaller context window: c
     <ENVIRONMENT_CONTEXT>
 03:message/user:
     before switch
-
-## Window 2 (after request 1: settings changed (parallel_tool_calls, tools))
 -- request 2 (compaction; Pre-sampling Compaction Request) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>

@@ -116,6 +116,7 @@ struct CoreToolPlanContext<'a> {
     wait_agent_timeouts: WaitAgentTimeoutOptions,
 }
 
+/// Builds the allowed tool surface, retaining explicit extensions for isolated reviewers.
 #[instrument(level = "trace", skip_all)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_tool_router(
@@ -148,34 +149,41 @@ pub(crate) fn build_tool_router(
     let mut registry = ToolRegistry::with_tool_policy(Arc::clone(&session.tool_policy));
     add_core_tool_sources(&context, &mut registry);
 
-    let registered_mcp_tools = session.services.mcp_handler_cache.append_mcp_tools(
-        mcp,
-        &turn_context.config,
-        apps_enabled,
-        &mcp.config().mcp_server_catalog,
-        model_info.supports_search_tool,
-        &mut registry,
-    );
-    let mcp_omitted_exposures = apply_mcp_tool_exposure_policy(
-        turn_context,
-        model_info,
-        mcp,
-        &registered_mcp_tools,
-        &mut registry,
-    );
+    let mut mcp_omitted_exposures = HashMap::new();
+    let is_basic_session = crate::guardian::is_basic_session_source(&turn_context.session_source);
+    if !is_basic_session {
+        let registered_mcp_tools = session.services.mcp_handler_cache.append_mcp_tools(
+            mcp,
+            &turn_context.config,
+            apps_enabled,
+            &mcp.config().mcp_server_catalog,
+            model_info.supports_search_tool,
+            &mut registry,
+        );
+        mcp_omitted_exposures = apply_mcp_tool_exposure_policy(
+            turn_context,
+            model_info,
+            mcp,
+            &registered_mcp_tools,
+            &mut registry,
+        );
+    }
     let standalone_web_search_tool = append_extension_tool_executors(
         turn_context,
         model_info,
         extension_tool_executors(session, step_store),
         &mut registry,
     );
-    append_dynamic_tool_runtimes(&turn_context.dynamic_tools, &mut registry);
-    let hosted_specs = hosted_model_tool_specs(
-        turn_context,
-        model_info,
-        standalone_web_search_tool.as_slice(),
-    );
-
+    let hosted_specs = if is_basic_session {
+        Vec::new()
+    } else {
+        append_dynamic_tool_runtimes(&turn_context.dynamic_tools, &mut registry);
+        hosted_model_tool_specs(
+            turn_context,
+            model_info,
+            standalone_web_search_tool.as_slice(),
+        )
+    };
     finalize_tool_router(
         turn_context,
         model_info,
