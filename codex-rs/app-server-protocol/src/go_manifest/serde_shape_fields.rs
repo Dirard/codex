@@ -140,8 +140,24 @@ fn reviewed_manifest_required_fields(rust_type: &str) -> Vec<SerdeFieldEntry> {
             )]
         }
         "McpServerOauthLoginCompletedNotification" => {
-            vec![optional_skip_none_field("error", "error")]
+            vec![
+                serde_field(
+                    "login_id",
+                    "loginId",
+                    &[],
+                    SerdeFieldShape {
+                        presence: SerdePresence::OptionalNullable,
+                        default: None,
+                        skip_serializing_if: None,
+                        flattened: false,
+                        custom_serialize: None,
+                        custom_deserialize: None,
+                    },
+                ),
+                optional_skip_none_field("error", "error"),
+            ]
         }
+        "McpServerOauthLoginResponse" => vec![default_null_field("login_id", "loginId")],
         "McpServerOauthLoginParams" => vec![
             optional_skip_none_field("scopes", "scopes"),
             optional_skip_none_field("timeout_secs", "timeoutSecs"),
@@ -411,6 +427,7 @@ pub(crate) fn schema_reachable_serde_attribute_required_types() -> &'static [&'s
         "McpServerElicitationRequestParams",
         "McpServerOauthLoginCompletedNotification",
         "McpServerOauthLoginParams",
+        "McpServerOauthLoginResponse",
         "McpServerToolCallParams",
         "McpServerToolCallResponse",
         "McpResourceReadTarget",
