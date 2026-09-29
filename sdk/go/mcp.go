@@ -17,6 +17,7 @@ type MCPOAuthHandle struct {
 	client           *Client
 	name             string
 	threadID         string
+	loginID          string
 	authorizationURL string
 }
 
@@ -47,7 +48,8 @@ func (c *MCPClient) OAuthLogin(ctx context.Context, opts MCPOAuthLoginOptions) (
 	if err != nil {
 		return nil, err
 	}
-	return &MCPOAuthHandle{client: c.client, name: opts.Name, threadID: opts.ThreadID, authorizationURL: response.AuthorizationURL}, nil
+	loginID, _ := response.LoginID.Value()
+	return &MCPOAuthHandle{client: c.client, name: opts.Name, threadID: opts.ThreadID, loginID: loginID, authorizationURL: response.AuthorizationURL}, nil
 }
 
 func (c *MCPClient) ListStatus(ctx context.Context, params protocol.ListMcpServerStatusParams) (protocol.ListMcpServerStatusResponse, error) {
@@ -91,7 +93,7 @@ func (h *MCPOAuthHandle) Wait(ctx context.Context) (*MCPOAuthResult, error) {
 	if h.threadID != "" {
 		keys = append(keys, routerKey{domain: "mcpServer", identity: h.threadID})
 	}
-	stream := h.client.router.subscribeKeys(keys, mcpOAuthCompletionFilter(h.name, h.threadID))
+	stream := h.client.router.subscribeKeys(keys, mcpOAuthCompletionFilter(h.name, h.threadID, h.loginID))
 	defer stream.Close()
 	for {
 		notification, ok := stream.Next(ctx)
@@ -116,11 +118,17 @@ func (h *MCPOAuthHandle) Wait(ctx context.Context) (*MCPOAuthResult, error) {
 	}
 }
 
-func mcpOAuthCompletionFilter(name string, threadID string) func(Notification) bool {
+func mcpOAuthCompletionFilter(name string, threadID string, loginID string) func(Notification) bool {
 	return func(notification Notification) bool {
 		payload, ok := notification.Payload.(protocol.McpServerOauthLoginCompletedNotification)
 		if !ok || payload.Name != name {
 			return false
+		}
+		if loginID != "" {
+			completedID, ok := payload.LoginID.Value()
+			if !ok || completedID != loginID {
+				return false
+			}
 		}
 		if threadID == "" {
 			return true

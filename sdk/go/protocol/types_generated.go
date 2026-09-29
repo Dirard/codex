@@ -24642,6 +24642,7 @@ const (
 
 type McpServerOauthLoginCompletedNotification struct {
 	Error    Optional[string] `json:"error,omitempty"`
+	LoginID  Optional[string] `json:"loginId,omitempty"`
 	Name     string           `json:"name,omitempty"`
 	Success  bool             `json:"success,omitempty"`
 	ThreadID Optional[string] `json:"threadId,omitempty"`
@@ -24651,6 +24652,9 @@ func (v McpServerOauthLoginCompletedNotification) MarshalJSON() ([]byte, error) 
 	out := map[string]any{}
 	if value, ok := v.Error.Value(); ok {
 		out["error"] = value
+	}
+	if v.LoginID.IsSet() {
+		out["loginId"] = v.LoginID
 	}
 	out["name"] = v.Name
 	out["success"] = v.Success
@@ -24673,6 +24677,12 @@ func (v *McpServerOauthLoginCompletedNotification) UnmarshalJSON(data []byte) er
 	if ok {
 		if err := json.Unmarshal(rawError, &v.Error); err != nil {
 			return fmt.Errorf("field error: %w", err)
+		}
+	}
+	rawLoginID, ok := raw["loginId"]
+	if ok {
+		if err := json.Unmarshal(rawLoginID, &v.LoginID); err != nil {
+			return fmt.Errorf("field loginId: %w", err)
 		}
 	}
 	rawName, ok := raw["name"]
@@ -24777,12 +24787,16 @@ func (v *McpServerOauthLoginParams) UnmarshalJSON(data []byte) error {
 }
 
 type McpServerOauthLoginResponse struct {
-	AuthorizationURL string `json:"authorizationUrl,omitempty"`
+	AuthorizationURL string           `json:"authorizationUrl,omitempty"`
+	LoginID          Optional[string] `json:"loginId,omitempty"`
 }
 
 func (v McpServerOauthLoginResponse) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
 	out["authorizationUrl"] = v.AuthorizationURL
+	if v.LoginID.IsSet() {
+		out["loginId"] = v.LoginID
+	}
 	return json.Marshal(out)
 }
 
@@ -24804,6 +24818,16 @@ func (v *McpServerOauthLoginResponse) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawAuthorizationURL, &v.AuthorizationURL); err != nil {
 		return fmt.Errorf("field authorizationUrl: %w", err)
+	}
+	rawLoginID, ok := raw["loginId"]
+	if !ok {
+		rawLoginID = []byte("null")
+		ok = true
+	}
+	if ok {
+		if err := json.Unmarshal(rawLoginID, &v.LoginID); err != nil {
+			return fmt.Errorf("field loginId: %w", err)
+		}
 	}
 	return nil
 }

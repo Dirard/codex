@@ -138,7 +138,7 @@ func TestMCPOAuthWaitPreservesCompletionWhileAnotherThreadSubscribed(t *testing.
 	first := client.router.subscribeKeys([]routerKey{
 		{domain: "mcpServer", identity: "server-1"},
 		{domain: "mcpServer", identity: "thread-1"},
-	}, mcpOAuthCompletionFilter("server-1", "thread-1"))
+	}, mcpOAuthCompletionFilter("server-1", "thread-1", ""))
 	defer first.Close()
 	second, err := client.MCP.OAuthLogin(ctx, MCPOAuthLoginOptions{Name: "server-1", ThreadID: "thread-2"})
 	if err != nil {
@@ -170,5 +170,57 @@ func TestMCPOAuthWaitPreservesCompletionWhileAnotherThreadSubscribed(t *testing.
 	}
 	if got := nextNotificationForTest(t, first).Payload; got != completion {
 		t.Fatalf("first completion = %#v, want %#v", got, completion)
+	}
+}
+
+func TestMCPOAuthWaitCorrelatesConcurrentSameServerAndThread(t *testing.T) {
+	ctx := context.Background()
+	transport := newWorkflowTransport(t)
+	client, err := NewClient(ctx, ClientConfig{Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	login := func(id protocol.Optional[string]) *MCPOAuthHandle {
+		transport.responses["mcpServer/oauth/login"] = mustJSON(t, protocol.McpServerOauthLoginResponse{
+			AuthorizationURL: "https://example.test/oauth",
+			LoginID:          id,
+		})
+		handle, err := client.MCP.OAuthLogin(ctx, MCPOAuthLoginOptions{Name: "server-1", ThreadID: "thread-1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return handle
+	}
+	first := login(protocol.Some("login-1"))
+	second := login(protocol.Some("login-2"))
+	for _, completion := range []protocol.McpServerOauthLoginCompletedNotification{
+		{Name: "server-1", ThreadID: protocol.Some("thread-1"), Success: false, Error: protocol.Some("plugin")},
+		{Name: "server-1", ThreadID: protocol.Some("thread-1"), LoginID: protocol.Some("login-2"), Success: false, Error: protocol.Some("second")},
+		{Name: "server-1", ThreadID: protocol.Some("thread-1"), LoginID: protocol.Some("login-1"), Success: true},
+	} {
+		if err := client.HandleServerNotification(ctx, "mcpServer/oauthLogin/completed", mustJSON(t, completion), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	for _, test := range []struct {
+		handle *MCPOAuthHandle
+		want   MCPOAuthResult
+	}{
+		{first, MCPOAuthResult{Name: "server-1", Success: true}},
+		{second, MCPOAuthResult{Name: "server-1", Error: "second"}},
+		{login(protocol.Null[string]()), MCPOAuthResult{Name: "server-1", Error: "plugin"}},
+	} {
+		result, err := test.handle.Wait(waitCtx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result == nil || *result != test.want {
+			t.Fatalf("result = %#v, want %#v", result, test.want)
+		}
 	}
 }

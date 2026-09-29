@@ -67,6 +67,45 @@ func TestThreadItemsListCursorStringAndAnchor(t *testing.T) {
 	assertJSONEqual(t, encoded, `{"threadId":"thread-1","cursor":null}`)
 }
 
+func TestMcpOAuthLoginIDsRemainCompatibleWithOlderServers(t *testing.T) {
+	response := McpServerOauthLoginResponse{LoginID: Some("stale")}
+	for _, wire := range []string{
+		`{"authorizationUrl":"https://example.test/oauth"}`,
+		`{"authorizationUrl":"https://example.test/oauth","loginId":null}`,
+	} {
+		if err := json.Unmarshal([]byte(wire), &response); err != nil {
+			t.Fatal(err)
+		}
+		if !response.LoginID.IsNull() {
+			t.Fatalf("response loginId = %#v, want default/null", response.LoginID)
+		}
+	}
+	if err := json.Unmarshal([]byte(`{"authorizationUrl":"https://example.test/oauth","loginId":"login-1"}`), &response); err != nil {
+		t.Fatal(err)
+	}
+	if id, ok := response.LoginID.Value(); !ok || id != "login-1" {
+		t.Fatalf("response loginId = %#v, want login-1", response.LoginID)
+	}
+
+	for _, test := range []struct {
+		wire string
+		id   string
+	}{
+		{`{"name":"server","threadId":null,"success":true}`, ""},
+		{`{"name":"server","threadId":null,"loginId":null,"success":true}`, ""},
+		{`{"name":"server","threadId":null,"loginId":"login-1","success":true}`, "login-1"},
+	} {
+		var completion McpServerOauthLoginCompletedNotification
+		if err := json.Unmarshal([]byte(test.wire), &completion); err != nil {
+			t.Fatal(err)
+		}
+		id, _ := completion.LoginID.Value()
+		if id != test.id {
+			t.Fatalf("completion loginId = %#v, want %q", completion.LoginID, test.id)
+		}
+	}
+}
+
 func TestRealtimeBackendReasoningStatusDefaultAndOptIn(t *testing.T) {
 	params := ThreadRealtimeStartParams{BackendReasoningStatus: SomeNonNull(true)}
 	if err := json.Unmarshal([]byte(`{"threadId":"thread-1","outputModality":"audio"}`), &params); err != nil {

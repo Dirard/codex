@@ -17001,6 +17001,13 @@
               "null"
             ]
           },
+          "loginId": {
+            "description": "Identifies the explicit login attempt. Older servers omit this field.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -17072,6 +17079,14 @@
         "properties": {
           "authorizationUrl": {
             "type": "string"
+          },
+          "loginId": {
+            "default": null,
+            "description": "Identifies this login attempt across the response and completion notification. Older servers omit this field; current servers always return it.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
