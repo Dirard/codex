@@ -12,21 +12,13 @@ Scenario: Pre-sampling compaction on model switch to a smaller context window: c
     <ENVIRONMENT_CONTEXT>
 02:message/user:
     before switch
-
-## Window 2 (after request 1: settings changed (parallel_tool_calls, tools))
 -- request 2 (compaction; Pre-sampling Compaction Request) --
-00:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
-02:message/user:
-    before switch
 03:message/assistant:
     before switch
 04:message/user:
     <SUMMARIZATION_PROMPT>
 
-## Window 3 (after request 2: input diverged at item 00, settings changed (model, parallel_tool_calls, tools))
+## Window 2 (after request 2: input diverged at item 00, settings changed (model))
 -- request 3 (turn; Post-Compaction Follow-up Request (Next Model)) --
 00:message/user:
     before switch
