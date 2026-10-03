@@ -2777,14 +2777,13 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix(
         .expect("parent shutdown should submit");
 }
 
-#[test_case::test_case(MultiAgentVersion::V1, true, false; "v1_gate_enabled")]
-#[test_case::test_case(MultiAgentVersion::V2, false, false; "v2_gate_disabled")]
-#[test_case::test_case(MultiAgentVersion::V2, true, true; "v2_gate_enabled")]
+#[test_case::test_case(MultiAgentVersion::V1, true; "v1_gate_enabled")]
+#[test_case::test_case(MultiAgentVersion::V2, false; "v2_gate_disabled")]
+#[test_case::test_case(MultiAgentVersion::V2, true; "v2_gate_enabled")]
 #[tokio::test]
 async fn spawn_agent_without_fork_from_paginated_parent_stays_fresh_and_paginated(
     multi_agent_version: MultiAgentVersion,
     dynamic_tools_enabled: bool,
-    inherits_dynamic_tools: bool,
 ) {
     let mut harness = AgentControlHarness::new().await;
     let features = &mut harness.config.features;
@@ -2796,7 +2795,7 @@ async fn spawn_agent_without_fork_from_paginated_parent_stays_fresh_and_paginate
     } else {
         features.disable(Feature::MultiAgentV2DynamicTools)
     }
-    .expect("configure dynamic tool inheritance");
+    .expect("configure V2 dynamic-tools feature");
     let dynamic_tools = vec![codex_protocol::dynamic_tools::DynamicToolSpec::Function(
         codex_protocol::dynamic_tools::DynamicToolFunctionSpec {
             name: "echo".to_string(),
@@ -2842,15 +2841,7 @@ async fn spawn_agent_without_fork_from_paginated_parent_stays_fresh_and_paginate
         .get_thread(child_thread_id)
         .await
         .expect("child thread should be registered");
-    let expected_dynamic_tools = if inherits_dynamic_tools {
-        dynamic_tools
-    } else {
-        Vec::new()
-    };
-    assert_eq!(
-        child_thread.session.dynamic_tools().await,
-        expected_dynamic_tools
-    );
+    assert_eq!(child_thread.session.dynamic_tools().await, dynamic_tools);
     assert!(
         !history_contains_text(
             child_thread.session.clone_history().await.raw_items(),
@@ -2872,10 +2863,7 @@ async fn spawn_agent_without_fork_from_paginated_parent_stays_fresh_and_paginate
     .expect("read child session metadata");
     assert_eq!(meta.meta.history_mode, ThreadHistoryMode::Paginated);
     assert_eq!(meta.meta.subagent_history_start_ordinal, None);
-    assert_eq!(
-        meta.meta.dynamic_tools.unwrap_or_default(),
-        expected_dynamic_tools
-    );
+    assert_eq!(meta.meta.dynamic_tools.unwrap_or_default(), dynamic_tools);
 
     let _ = harness
         .control

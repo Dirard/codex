@@ -572,10 +572,8 @@ impl Session {
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
         let mut active_turn_to_clear = None;
-        let mut turn_context = None;
         if let Some(mut active_turn) = self.take_active_turn(&reason).await {
             let task = active_turn.task.take();
-            turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
             if let Some(task) = task {
                 self.handle_task_abort(
                     task,
@@ -586,11 +584,6 @@ impl Session {
                 .await;
                 active_turn_to_clear = Some(active_turn);
             }
-        }
-
-        if let Some(turn_context) = turn_context.as_deref() {
-            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
-                .await;
         }
 
         if let Some(active_turn) = active_turn_to_clear {
