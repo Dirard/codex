@@ -463,6 +463,20 @@ func TestGeneratedUntaggedObjectUnionPreservesUnknownVariant(t *testing.T) {
 	assertJSONEqual(t, encoded, openAIFormPayload)
 }
 
+func TestGeneratedCodexErrorInfoPreservesOpenVariants(t *testing.T) {
+	for _, payload := range []string{`"futureError"`, `{"futureError":true}`} {
+		var value CodexErrorInfo
+		if err := json.Unmarshal([]byte(payload), &value); err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertJSONEqual(t, encoded, payload)
+	}
+}
+
 func TestGeneratedMultiAgentModeSupportsBuiltInAndCustomUnion(t *testing.T) {
 	encoded, err := json.Marshal(MultiAgentModeProactive)
 	if err != nil {

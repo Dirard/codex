@@ -1502,7 +1502,7 @@ func collectStructProperties(schema Schema) (map[string][]Schema, map[string]boo
 		if taggedUnion, ok := taggedObjectUnion(schema); ok {
 			required[taggedUnion.Discriminator] = true
 		}
-		for _, variant := range schema.OneOf {
+		for _, variant := range schemaUnionVariants(schema) {
 			objects := append([]Schema{variant}, variant.AnyOf...)
 			for _, object := range objects {
 				for name, property := range object.Properties {
@@ -1798,10 +1798,11 @@ func stringEnumValues(schema Schema) ([]string, bool) {
 }
 
 func oneOfObjectUnion(schema Schema) bool {
-	if len(schema.OneOf) == 0 {
+	branches := schemaUnionVariants(schema)
+	if len(branches) == 0 {
 		return false
 	}
-	for _, variant := range schema.OneOf {
+	for _, variant := range branches {
 		if variant.Type == "object" || len(variant.Properties) > 0 {
 			return true
 		}
@@ -1810,13 +1811,16 @@ func oneOfObjectUnion(schema Schema) bool {
 }
 
 func mixedStringObjectUnionValues(schema Schema) ([]string, bool) {
-	if len(schema.OneOf) == 0 {
+	branches := schemaUnionVariants(schema)
+	if len(branches) == 0 {
 		return nil, false
 	}
 	var values []string
 	hasObject := false
-	for _, variant := range schema.OneOf {
+	for _, variant := range branches {
 		switch {
+		case isOpenStringObjectVariant(variant):
+			continue
 		case variant.Type == "string" && len(variant.Enum) > 0:
 			for _, raw := range variant.Enum {
 				var value string
@@ -1841,7 +1845,7 @@ type unionFieldNullability struct {
 
 func unionFieldNullabilityByName(schema Schema) map[string]unionFieldNullability {
 	nullabilityByField := map[string]unionFieldNullability{}
-	for _, variant := range schema.OneOf {
+	for _, variant := range schemaUnionVariants(schema) {
 		objects := append([]Schema{variant}, variant.AnyOf...)
 		for _, object := range objects {
 			for name, property := range object.Properties {
@@ -1927,13 +1931,14 @@ func taggedObjectUnion(schema Schema) (renderedTaggedUnion, bool) {
 }
 
 func untaggedObjectUnion(schema Schema, hasTaggedUnion bool) (renderedUntaggedUnion, bool) {
-	if hasTaggedUnion || len(schema.OneOf) == 0 {
+	branches := schemaUnionVariants(schema)
+	if hasTaggedUnion || len(branches) == 0 {
 		return renderedUntaggedUnion{}, false
 	}
 	nullabilityByField := unionFieldNullabilityByName(schema)
 	var variants []renderedUntaggedUnionVariant
-	for _, variant := range schema.OneOf {
-		if variant.Type == "string" && len(variant.Enum) > 0 {
+	for _, variant := range branches {
+		if (variant.Type == "string" && len(variant.Enum) > 0) || isOpenStringObjectVariant(variant) {
 			continue
 		}
 		if variant.Type != "object" && len(variant.Properties) == 0 {
@@ -1963,4 +1968,21 @@ func untaggedObjectUnion(schema Schema, hasTaggedUnion bool) (renderedUntaggedUn
 		variants = append(variants, rendered)
 	}
 	return renderedUntaggedUnion{Variants: variants}, len(variants) > 0
+}
+
+func schemaUnionVariants(schema Schema) []Schema {
+	if len(schema.OneOf) > 0 {
+		return schema.OneOf
+	}
+	for _, variant := range schema.AnyOf {
+		if isOpenStringObjectVariant(variant) {
+			return schema.AnyOf
+		}
+	}
+	return nil
+}
+
+func isOpenStringObjectVariant(schema Schema) bool {
+	return len(schema.Properties) == 0 && len(schema.Types) == 2 &&
+		hasType(schema.Types, "string") && hasType(schema.Types, "object")
 }

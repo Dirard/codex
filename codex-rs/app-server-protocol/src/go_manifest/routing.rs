@@ -57,6 +57,7 @@ pub(crate) fn notification_routing_strategy(method: &'static str) -> Notificatio
         | "thread/reverted"
         | "thread/name/updated"
         | "thread/attachment/updated"
+        | "thread/prediction/updated"
         | "thread/goal/cleared"
         | "thread/queue/changed"
         | "thread/settings/updated"
