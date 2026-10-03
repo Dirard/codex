@@ -1990,7 +1990,6 @@ impl ThreadManagerState {
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
         let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
-        let dynamic_tools = self.dynamic_tools_for_child(parent_thread_id).await;
         let options = StartThreadOptions {
             history_mode,
             session_source: Some(session_source),
@@ -1999,7 +1998,6 @@ impl ThreadManagerState {
             dynamic_tools,
             environments,
             client_mcp_extensions,
-            dynamic_tools,
             ..StartThreadOptions::new(config)
         };
         let mut request =
@@ -2238,9 +2236,8 @@ impl ThreadManagerState {
                         )));
                     }
                     drop(threads);
-                    let session_configured = thread
-                        .startup_metadata()
-                        .to_session_configured_event(initial_history.get_event_msgs());
+                    let session_configured =
+                        thread.startup_metadata().to_session_configured_event();
                     startup_state.release_membership();
                     if let Some(startup_guard) = startup_guard {
                         startup_guard.disarm();

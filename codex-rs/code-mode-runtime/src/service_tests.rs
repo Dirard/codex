@@ -974,7 +974,7 @@ async fn started_but_unsettled_tool_call_emits_side_effect_warning() {
         .await
         .unwrap();
     let response = tokio::spawn(started.initial_response());
-    wait_until_tool_started(&delegate).await;
+    wait_until_tool_started(&delegate).await.unwrap();
     let response = response.await.unwrap().unwrap();
 
     assert_eq!(

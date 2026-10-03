@@ -16,6 +16,7 @@ use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use futures::future::AbortHandle;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -23,9 +24,12 @@ use std::sync::OnceLock;
 use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
+
+type CompletionWatcher = (AbortHandle, JoinHandle<()>);
 
 #[derive(Debug, Default)]
 pub(crate) struct AgentTreeShutdownState {
@@ -91,8 +95,6 @@ impl Drop for AgentTreeTeardownGuard {
         }
     }
 }
-use tokio::task::JoinHandle;
-
 /// Local tree state, kept separate from the shared agent operation interface.
 #[derive(Clone)]
 pub(crate) struct LocalAgentRuntime {
@@ -117,7 +119,7 @@ pub(crate) struct LocalAgentRuntime {
     pub(crate) shutdown: CancellationToken,
     shutdown_state: Arc<AgentTreeShutdownState>,
     /// Most recent detached legacy completion watcher for each child thread.
-    pub(super) completion_watchers: Arc<Mutex<HashMap<ThreadId, JoinHandle<()>>>>,
+    pub(super) completion_watchers: Arc<Mutex<HashMap<ThreadId, CompletionWatcher>>>,
 }
 
 impl LocalAgentRuntime {

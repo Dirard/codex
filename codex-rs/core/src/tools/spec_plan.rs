@@ -891,9 +891,8 @@ fn register_code_mode_executors(
                 && tool.runtime.is_third_party_tool())
             || (!code_mode_only_strict_3p_tools(turn_context, model_info)
                 && mcp_omitted_exposures
-                .get(&tool_name)
-                .is_some_and(|exposures| exposures.contains(ToolExposures::CODE_MODE))
-        )
+                    .get(&tool_name)
+                    .is_some_and(|exposures| exposures.contains(ToolExposures::CODE_MODE)))
         {
             continue;
         }

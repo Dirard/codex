@@ -115,10 +115,11 @@ impl Session {
         // A failed append or checkpoint must not change live authorization or its revision.
         self.try_ensure_rollout_materialized(PersistContext::ThreadPreparation)
             .await?;
-        self.state.lock().await.history.record_annotated_items(
-            std::slice::from_mut(&mut item),
-            context.model_info().truncation_policy.into(),
-        );
+        self.state
+            .lock()
+            .await
+            .history
+            .record_annotated_items(std::slice::from_mut(&mut item), context.output_truncation());
         self.send_raw_response_items(&context, std::slice::from_ref(&item.item))
             .await;
         Ok(())

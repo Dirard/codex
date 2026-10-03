@@ -589,6 +589,7 @@ async fn child_threads_inherit_parent_dynamic_tools() {
         manager.agent_control(),
         child_source.clone(),
         /*history_mode*/ None,
+        dynamic_tools.clone(),
         /*parent_thread_id*/ Some(parent.thread_id),
         /*forked_from_thread_id*/ None,
         /*thread_source*/ Some(ThreadSource::Subagent),
