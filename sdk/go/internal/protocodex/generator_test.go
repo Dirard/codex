@@ -35,6 +35,32 @@ func TestRenderMixedStringObjectUnionPreservesBothWireShapes(t *testing.T) {
 	}
 }
 
+func TestRenderAnyOfOpenStringObjectUnionPreservesRawFallback(t *testing.T) {
+	schema := Schema{AnyOf: []Schema{
+		{Type: "string", Enum: []json.RawMessage{json.RawMessage(`"other"`)}},
+		{
+			Type:       "object",
+			Required:   []string{"httpConnectionFailed"},
+			Properties: map[string]Schema{"httpConnectionFailed": {Type: "object"}},
+		},
+		{Types: []string{"string", "object"}},
+	}}
+	rendered := renderDefinitionType("CodexErrorInfo", "CodexErrorInfo", schema, map[string]string{}, nil, nil, nil)
+	for _, required := range []string{
+		"StringValue string",
+		"HttpConnectionFailed OptionalNonNull[map[string]json.RawMessage]",
+		"RawJSON json.RawMessage",
+		"v.RawJSON = append(v.RawJSON[:0], data...)",
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("open anyOf union rendering missing %q\n%s", required, rendered)
+		}
+	}
+	if strings.Contains(rendered, "type CodexErrorInfo = json.RawMessage") {
+		t.Fatalf("open anyOf union degraded to json.RawMessage\n%s", rendered)
+	}
+}
+
 func TestRenderTaggedObjectUnionRequiresOnlyTheDiscriminatorGlobally(t *testing.T) {
 	schema := Schema{OneOf: []Schema{
 		{

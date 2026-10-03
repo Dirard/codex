@@ -100,6 +100,12 @@ func (c RawClient) ThreadNameSet(ctx context.Context, params ThreadSetNameParams
 	return result, err
 }
 
+func (c RawClient) ThreadPredictionRequest(ctx context.Context, params ThreadPredictionRequestParams) (ThreadPredictionRequestResponse, error) {
+	var result ThreadPredictionRequestResponse
+	err := c.sender.Call(ctx, "thread/prediction/request", params, &result, MethodMetadataByMethod["thread/prediction/request"])
+	return result, err
+}
+
 func (c RawClient) ThreadGoalSet(ctx context.Context, params ThreadGoalSetParams) (ThreadGoalSetResponse, error) {
 	var result ThreadGoalSetResponse
 	err := c.sender.Call(ctx, "thread/goal/set", params, &result, MethodMetadataByMethod["thread/goal/set"])
@@ -169,6 +175,12 @@ func (c RawClient) ThreadAttachmentAdd(ctx context.Context, params ThreadAttachm
 func (c RawClient) ThreadAttachmentList(ctx context.Context, params ThreadAttachmentListParams) (ThreadAttachmentListResponse, error) {
 	var result ThreadAttachmentListResponse
 	err := c.sender.Call(ctx, "thread/attachment/list", params, &result, MethodMetadataByMethod["thread/attachment/list"])
+	return result, err
+}
+
+func (c RawClient) ThreadAttachmentOwnerList(ctx context.Context, params ThreadAttachmentOwnerListParams) (ThreadAttachmentOwnerListResponse, error) {
+	var result ThreadAttachmentOwnerListResponse
+	err := c.sender.Call(ctx, "thread/attachmentOwner/list", params, &result, MethodMetadataByMethod["thread/attachmentOwner/list"])
 	return result, err
 }
 
@@ -831,6 +843,12 @@ func (c RawClient) AccountBedrockDiscover(ctx context.Context, params BedrockDis
 func (c RawClient) AccountBedrockSetup(ctx context.Context, params BedrockSetupParams) (BedrockSetupResponse, error) {
 	var result BedrockSetupResponse
 	err := c.sender.Call(ctx, "account/bedrock/setup", params, &result, MethodMetadataByMethod["account/bedrock/setup"])
+	return result, err
+}
+
+func (c RawClient) AccountBedrockCheckGovCloudRequirements(ctx context.Context, params BedrockCheckGovCloudRequirementsParams) (BedrockCheckGovCloudRequirementsResponse, error) {
+	var result BedrockCheckGovCloudRequirementsResponse
+	err := c.sender.Call(ctx, "account/bedrock/checkGovCloudRequirements", params, &result, MethodMetadataByMethod["account/bedrock/checkGovCloudRequirements"])
 	return result, err
 }
 
