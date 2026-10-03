@@ -155,7 +155,7 @@ pub(crate) fn build_tool_router(
         &turn_context.config,
         apps_enabled,
         &mcp.config().mcp_server_catalog,
-        search_tool_enabled(turn_context, model_info),
+        model_info.supports_search_tool,
         &mut registry,
     );
     apply_mcp_tool_exposure_policy(
@@ -187,6 +187,15 @@ pub(crate) fn build_tool_router(
     )
 }
 
+/// Use the effective mode because the model can override the thread's configured mode.
+fn code_mode_only_strict_3p_tools(turn_context: &TurnContext, model_info: &ModelInfo) -> bool {
+    effective_tool_mode(turn_context, model_info) == ToolMode::CodeModeOnly
+        && turn_context
+            .config
+            .features
+            .enabled(Feature::CodeModeOnlyStrictThirdPartyTools)
+}
+
 fn apply_mcp_tool_exposure_policy(
     turn_context: &TurnContext,
     model_info: &ModelInfo,
@@ -198,6 +207,7 @@ fn apply_mcp_tool_exposure_policy(
     let apps_config = apps_config_from_layer_stack(&turn_context.config.config_layer_stack);
     for tool in mcp.tools() {
         let tool_name = tool.canonical_tool_name();
+        // Disabled, denied, app-only and over-budget MCP tools are absent from this set.
         if !registered_mcp_tools.contains(&tool_name) {
             continue;
         }
@@ -230,6 +240,17 @@ fn apply_mcp_tool_exposure_policy(
         let Some(omitted_exposures) = omitted_exposures_by_tool.get(&tool_name) else {
             continue;
         };
+        if code_mode_only_strict_3p_tools(turn_context, model_info) {
+            // Ignore MCP/app omit_tools_from; eligible tools must stay deferred in exec.
+            // Log conflicts without adding a warning to the model's prompt.
+            if omitted_exposures.intersects(ToolExposures::DEFERRED | ToolExposures::CODE_MODE) {
+                tracing::warn!(
+                    tool_name = %tool_name,
+                    "Ignoring MCP/app omit_tools_from because code_mode_only_strict_3p_tools is enabled"
+                );
+            }
+            continue;
+        }
         let tool_name = tool_name.with_default_namespace();
 
         let mut exposures = ToolExposures::ALL.difference(*omitted_exposures);
@@ -243,7 +264,7 @@ fn apply_mcp_tool_exposure_policy(
             exposures = exposures.difference(ToolExposures::DEFERRED | ToolExposures::CODE_MODE);
         }
 
-        exposures = if search_tool_enabled(turn_context, model_info)
+        exposures = if model_info.supports_search_tool
             && exposures.contains(ToolExposures::DEFERRED)
             && (effective_tool_mode(turn_context, model_info) != ToolMode::CodeModeOnly
                 || exposures.contains(ToolExposures::CODE_MODE))
@@ -355,6 +376,7 @@ pub(crate) fn finalize_tool_router(
 ) -> CodexResult<ToolRouter> {
     hosted_specs.retain(|spec| registry.tool_policy.allows(&ToolName::plain(spec.name())));
     apply_direct_model_only_namespace_overrides(turn_context, &mut registry);
+    enforce_strict_3p_tools(turn_context, model_info, &mut registry);
     let tool_mode = effective_tool_mode(turn_context, model_info);
     let code_mode_enabled = matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly);
     if code_mode_enabled {
@@ -368,7 +390,7 @@ pub(crate) fn finalize_tool_router(
         }
     }
     let tool_search_name = ToolName::plain(TOOL_SEARCH_TOOL_NAME);
-    if search_tool_enabled(turn_context, model_info)
+    if model_info.supports_search_tool
         && registry.entries().any(|tool| {
             tool.runtime.tool_name() != tool_search_name
                 && tool.exposure.is_deferred()
@@ -550,6 +572,31 @@ fn apply_direct_model_only_namespace_overrides(
     }
 }
 
+/// Run after namespace overrides so eligible third-party tools always remain deferred.
+fn enforce_strict_3p_tools(
+    turn_context: &TurnContext,
+    model_info: &ModelInfo,
+    registry: &mut ToolRegistry,
+) {
+    if !code_mode_only_strict_3p_tools(turn_context, model_info) {
+        return;
+    }
+
+    for tool in registry.entries_mut() {
+        // Remaining Hidden entries failed eligibility or budget checks; keep them hidden.
+        if !tool.runtime.is_third_party_tool() || tool.exposure == ToolExposure::Hidden {
+            continue;
+        }
+        if tool.exposure != ToolExposure::Deferred {
+            tracing::warn!(
+                tool_name = %tool.runtime.tool_name().with_default_namespace(),
+                "Deferring third-party tool because code_mode_only_strict_3p_tools is enabled"
+            );
+            tool.exposure = ToolExposure::Deferred;
+        }
+    }
+}
+
 #[instrument(level = "trace", skip_all)]
 fn build_model_visible_specs(
     turn_context: &TurnContext,
@@ -583,11 +630,6 @@ fn build_model_visible_specs(
     specs.extend(hosted_specs);
 
     merge_into_namespaces(specs)
-        .into_iter()
-        .filter(|spec| {
-            namespace_tools_enabled(turn_context) || !matches!(spec, ToolSpec::Namespace(_))
-        })
-        .collect()
 }
 
 fn spec_for_model_request(
@@ -650,19 +692,11 @@ fn hosted_model_tool_specs(
     specs
 }
 
-pub(crate) fn search_tool_enabled(turn_context: &TurnContext, model_info: &ModelInfo) -> bool {
-    model_info.supports_search_tool && namespace_tools_enabled(turn_context)
-}
-
 pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
     let features = turn_context.config.features.get();
     features.enabled(Feature::ToolSuggest)
         && features.enabled(Feature::Apps)
         && features.enabled(Feature::Plugins)
-}
-
-fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.provider.capabilities().namespace_tools
 }
 
 fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
@@ -698,9 +732,7 @@ fn required_child_management_tool_names(
             &["send_input", "wait_agent", "resume_agent", "close_agent"],
         ),
         MultiAgentVersion::V2 => (
-            namespace_tools_enabled(turn_context)
-                .then_some(turn_context.config.multi_agent_v2.tool_namespace.as_deref())
-                .flatten(),
+            turn_context.config.multi_agent_v2.tool_namespace.as_deref(),
             if turn_context.config.multi_agent_v2.disable_direct_message {
                 &["interrupt_agent", "list_agents"]
             } else {
@@ -744,8 +776,7 @@ fn image_generation_available(turn_context: &TurnContext, model_info: &ModelInfo
         return false;
     }
 
-    let capabilities = turn_context.provider.capabilities();
-    if !capabilities.image_generation || !capabilities.namespace_tools {
+    if !turn_context.provider.capabilities().image_generation {
         return false;
     }
 
@@ -832,7 +863,7 @@ fn register_code_mode_executors(
     let mut exec_prompt_tool_specs = Vec::new();
     let mut deferred_exec_prompt_tool_specs = Vec::new();
     let mut included_deferred_mcp_output_schema = false;
-    let deferred_tools_guidance_enabled = search_tool_enabled(turn_context, model_info);
+    let deferred_tools_guidance_enabled = model_info.supports_search_tool;
     for tool in registry.entries() {
         let exposure = tool.exposure;
         if !exposure.is_available_in_code_mode() {
@@ -840,7 +871,11 @@ fn register_code_mode_executors(
         }
 
         let tool_name = tool.runtime.tool_name();
-        if is_excluded_from_code_mode(turn_context, &tool_name) {
+        // Deferred third-party tools still need an exec route to be discoverable.
+        if is_excluded_from_code_mode(turn_context, &tool_name)
+            && !(code_mode_only_strict_3p_tools(turn_context, model_info)
+                && tool.runtime.is_third_party_tool())
+        {
             continue;
         }
 
@@ -1036,8 +1071,7 @@ fn add_core_tool_sources(context: &CoreToolPlanContext<'_>, registry: &mut ToolR
 }
 
 fn standalone_web_search_enabled(turn_context: &TurnContext, model_info: &ModelInfo) -> bool {
-    namespace_tools_enabled(turn_context)
-        && turn_context.provider.capabilities().web_search
+    turn_context.provider.capabilities().web_search
         && (model_info.use_responses_lite
             || turn_context
                 .config
@@ -1130,7 +1164,9 @@ fn unified_exec_should_include_shell_parameter(
 
 #[instrument(level = "trace", skip_all)]
 fn add_mcp_resource_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistry) {
-    if context.mcp.has_servers() {
+    if context.mcp.has_servers()
+        || effective_tool_mode(context.turn_context, context.model_info) == ToolMode::CodeModeOnly
+    {
         let messages = ResolvedModelMessages::from_model(context.model_info).mcp_resources();
         registry.add(ListMcpResourcesHandler::new(
             messages.and_then(|messages| messages.list_mcp_resources.as_ref()),
@@ -1308,9 +1344,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
             } else {
                 ToolExposure::Direct
             };
-            let tool_namespace = namespace_tools_enabled(turn_context)
-                .then_some(turn_context.config.multi_agent_v2.tool_namespace.as_deref())
-                .flatten();
+            let tool_namespace = turn_context.config.multi_agent_v2.tool_namespace.as_deref();
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
             let hide_spawn_agent_metadata =
@@ -1320,6 +1354,11 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     SpawnAgentHandlerV2::new(
                         SpawnAgentToolOptions {
                             available_models: turn_context.available_models.clone(),
+                            multi_agent_version: turn_context.multi_agent_version,
+                            model_catalog_in_context: turn_context
+                                .config
+                                .features
+                                .enabled(Feature::ModelCatalogInContext),
                             agent_type_description,
                             expose_agent_type: !turn_context.config.agent_roles.is_empty(),
                             hide_agent_type_model_reasoning: hide_spawn_agent_metadata,
@@ -1327,7 +1366,6 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                                 .config
                                 .multi_agent_v2
                                 .expose_spawn_agent_model_overrides,
-                            multi_agent_version: turn_context.multi_agent_version,
                             usage_hint_text: turn_context
                                 .config
                                 .multi_agent_v2
@@ -1337,7 +1375,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                         spawn_agent_description.map(str::to_owned),
                     ),
                     tool_namespace,
-                    // Spawn composes the selected description with runtime model and usage guidance.
+                    // Spawn composes the selected description with inheritance and usage guidance.
                     /*description_override*/
                     None,
                     model_messages.multi_agent_tool_parameters_override("spawn_agent"),
@@ -1396,7 +1434,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
         } else {
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
-            let exposure = if search_tool_enabled(turn_context, context.model_info) {
+            let exposure = if context.model_info.supports_search_tool {
                 ToolExposure::Deferred
             } else {
                 ToolExposure::Direct
@@ -1404,11 +1442,15 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
             registry.add_with_exposure(
                 SpawnAgentHandler::new(SpawnAgentToolOptions {
                     available_models: turn_context.available_models.clone(),
+                    multi_agent_version: turn_context.multi_agent_version,
+                    model_catalog_in_context: turn_context
+                        .config
+                        .features
+                        .enabled(Feature::ModelCatalogInContext),
                     agent_type_description,
                     expose_agent_type: !turn_context.config.agent_roles.is_empty(),
                     hide_agent_type_model_reasoning: false,
                     expose_spawn_agent_model_overrides: true,
-                    multi_agent_version: turn_context.multi_agent_version,
                     usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
                 }),
                 exposure,

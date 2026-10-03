@@ -2699,10 +2699,10 @@ async fn excluded_deferred_namespaces_do_not_enable_nested_tool_guidance() {
         panic!("expected code mode exec tool");
     };
     assert!(
-        !exec
-            .description
+        exec.description
             .contains("Some deferred nested tools may be omitted")
     );
+    assert!(!exec.description.contains("excluded__lookup("));
     plan.assert_registered_contains(&[
         &ToolName::namespaced("excluded", "lookup").to_string(),
         "tool_search",
@@ -3409,3 +3409,6 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
     bedrock_with_standalone_web_search.assert_visible_contains(&["web_search"]);
     bedrock_with_standalone_web_search.assert_visible_lacks(&["web"]);
 }
+
+#[path = "spec_plan_strict_third_party_tests.rs"]
+mod strict_third_party;

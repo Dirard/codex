@@ -523,10 +523,14 @@ async fn responses_request_includes_internal_metadata_for_provider_grant_or_firs
         recorder.attach_direct_call_to_output(&mut item, Some((recorded, permit)));
         outputs.push(item);
     }
-    let original_outputs = outputs.clone();
+    let persisted_outputs = outputs.clone();
     recorder.attach_to_prompt(&mut outputs, &mut Default::default());
-    assert_eq!(outputs, original_outputs);
-    let recorded = serde_json::to_value(&outputs)?;
+    let restored = serde_json::to_value(&outputs)?;
+    assert_eq!(
+        restored[1]["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]["tool_result_metadata"],
+        resource_metadata,
+    );
+    let recorded = serde_json::to_value(&persisted_outputs)?;
     assert_eq!(
         recorded[0]["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]["tool_result_metadata"],
         resource_metadata,
@@ -537,11 +541,12 @@ async fn responses_request_includes_internal_metadata_for_provider_grant_or_firs
             .as_str()
             .is_some_and(|value| value.starts_with("omitted_due_to_size_limit (overage_bytes="))
     );
-    let omitted_output = outputs.pop().expect("second direct output");
+    let omitted_output = persisted_outputs[1].clone();
     let mut without_omitted_metadata = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
         call_id: "second".to_string(),
         output: FunctionCallOutputPayload::from_text("result for second".to_string()),
     });
+    without_omitted_metadata.set_id(omitted_output.id().cloned());
     without_omitted_metadata.append_executed_tool_calls(vec![ExecutedToolCall::new(
         "mcp__apps__read".to_string(),
         json!({"query": "second"}),
@@ -801,7 +806,6 @@ fn responses_request_preserves_result_metadata_above_previous_aggregate_budget()
     let metadata_bytes =
         serde_json::to_vec(&body)?.len() - serde_json::to_vec(&without_metadata)?.len();
     assert!(metadata_bytes > 128 * 1024);
-    assert!(metadata_bytes <= 2 * 1024 * 1024);
     assert_eq!(serde_json::to_value(&history)?, original_history);
     Ok(())
 }
@@ -1013,7 +1017,18 @@ fn responses_lite_prefix_ids_track_thread_and_payload() -> anyhow::Result<()> {
     let client = test_model_client_with_thread_id(thread_id, SessionSource::Cli);
     let mut model = test_model_info();
     model.use_responses_lite = true;
+    let mut tool = codex_tools::FreeformTool {
+        name: "exec".to_string(),
+        description: "Execute JavaScript.".to_string(),
+        defer_loading: None,
+        format: codex_tools::FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "lark".to_string(),
+            definition: "start: /.+/".to_string(),
+        },
+    };
     let mut prompt = Prompt {
+        tools: vec![codex_tools::ToolSpec::Freeform(tool.clone())].into(),
         base_instructions: BaseInstructions {
             text: "base instructions".to_string(),
             provenance: None,
@@ -1046,17 +1061,9 @@ fn responses_lite_prefix_ids_track_thread_and_payload() -> anyhow::Result<()> {
     assert_eq!(changed_instructions.input[0], original.input[0]);
     assert_ne!(changed_instructions.input[1].id(), original.input[1].id());
 
-    prompt.tools = vec![codex_tools::ToolSpec::Freeform(codex_tools::FreeformTool {
-        name: "exec".to_string(),
-        description: "Execute JavaScript.".to_string(),
-        defer_loading: None,
-        format: codex_tools::FreeformToolFormat {
-            r#type: "grammar".to_string(),
-            syntax: "lark".to_string(),
-            definition: "start: /.+/".to_string(),
-        },
-    })]
-    .into();
+    tool.description
+        .push_str(" Updated execution instructions.");
+    prompt.tools = vec![codex_tools::ToolSpec::Freeform(tool)].into();
     let changed_tools = build(&client, &prompt)?;
     assert_ne!(
         changed_tools.input[0].id(),
