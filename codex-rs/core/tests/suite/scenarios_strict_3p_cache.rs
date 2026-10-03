@@ -69,7 +69,7 @@ async fn strict_3p_mcp_refresh_preserves_cache_while_exec_tracks_available_tools
         .build_with_auto_env(&server)
         .await?;
 
-    let script = r#"const available = ALL_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
+    let script = r#"const available = EXEC_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
 const results = [];
 for (const t of available) {
   const result = await tools[t.name]({});

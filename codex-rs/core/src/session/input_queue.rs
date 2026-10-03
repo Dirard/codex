@@ -1,6 +1,6 @@
 use crate::agent::api::AgentControl;
-use crate::agent_communication::PENDING_MAILBOX_MESSAGES;
 use crate::agent::types::TurnSpawnBudget;
+use crate::agent_communication::PENDING_MAILBOX_MESSAGES;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
 use crate::state::TurnState;

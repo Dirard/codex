@@ -121,6 +121,7 @@ fn spawn_agent_tool_v2_guides_self_contained_tasks_away_from_full_history() {
             hide_agent_type_model_reasoning: false,
             expose_spawn_agent_model_overrides: true,
             multi_agent_version: MultiAgentVersion::V2,
+            model_catalog_in_context: false,
             usage_hint_text: None,
         },
         /*description_override*/ None,

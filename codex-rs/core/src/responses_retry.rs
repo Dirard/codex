@@ -129,7 +129,6 @@ pub(crate) async fn handle_response_stream_error(
         return Ok(());
     }
 
-    // TODO(anp): Respect server retry advice before issuing the fallback HTTP request.
     if *retries >= max_retries
         && client_session.try_switch_fallback_transport(
             &turn_context.session_telemetry,

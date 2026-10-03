@@ -46,7 +46,7 @@ Settings:
     List and call the tools provided by the environment MCP server.
 07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn; turn 1: exec discovery and call results) --
-08:custom_tool_call/exec:const available = ALL_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
+08:custom_tool_call/exec:const available = EXEC_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
     const results = [];
     for (const t of available) {
       const result = await tools[t.name]({});
@@ -61,7 +61,7 @@ Settings:
 10:message/user:
     List and call the tools provided by the environment MCP server.
 -- request 4 (turn; turn 2: exec discovery and call results) --
-11:custom_tool_call/exec:const available = ALL_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
+11:custom_tool_call/exec:const available = EXEC_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
     const results = [];
     for (const t of available) {
       const result = await tools[t.name]({});
@@ -76,7 +76,7 @@ Settings:
 13:message/user:
     List and call the tools provided by the environment MCP server.
 -- request 6 (turn; turn 3: exec discovery and call results) --
-14:custom_tool_call/exec:const available = ALL_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
+14:custom_tool_call/exec:const available = EXEC_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
     const results = [];
     for (const t of available) {
       const result = await tools[t.name]({});
@@ -91,7 +91,7 @@ Settings:
 16:message/user:
     List and call the tools provided by the environment MCP server.
 -- request 8 (turn; turn 4: exec discovery and call results) --
-17:custom_tool_call/exec:const available = ALL_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
+17:custom_tool_call/exec:const available = EXEC_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
     const results = [];
     for (const t of available) {
       const result = await tools[t.name]({});
