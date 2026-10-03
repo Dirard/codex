@@ -567,14 +567,9 @@ pub(super) async fn submission_loop(
                         request: *request,
                         turn_extension_init: sub.turn_extension_init,
                     };
-                    let result = turn_input::handle(
-                        &sess,
-                        request,
-                        mode,
-                        sub.id.clone(),
-                        turn_spawn_budget,
-                    )
-                    .await;
+                    let result =
+                        turn_input::handle(&sess, request, mode, sub.id.clone(), turn_spawn_budget)
+                            .await;
                     let _ = reply.send(result);
                     false
                 }

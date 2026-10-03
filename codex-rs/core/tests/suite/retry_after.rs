@@ -1859,15 +1859,18 @@ async fn websocket_upgrade_rejection_uses_retry_after() -> Result<()> {
     submit_user_input(&test, "retry the rejected websocket upgrade").await?;
     wait_for_turn_completion(&test).await;
 
-    // Both WebSocket advice deadlines apply, including the one before transport fallback.
-    assert!(start.elapsed() >= Duration::from_secs(2));
+    // All four WebSocket advice deadlines apply, including the one before transport fallback.
+    assert!(start.elapsed() >= Duration::from_secs(4));
     let requests = server.received_requests().await.unwrap_or_default();
     let methods = requests
         .iter()
         .filter(|request| request.url.path() == "/v1/responses")
         .map(|request| request.method.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(methods, vec!["GET", "GET", "GET", "POST", "POST"]);
+    assert_eq!(
+        methods,
+        vec!["GET", "GET", "GET", "GET", "GET", "POST", "POST"]
+    );
     assert_eq!(response_mock.requests().len(), 2);
     Ok(())
 }

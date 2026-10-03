@@ -1032,7 +1032,7 @@ async fn stdin_approval_observes_strict_review_enabled_while_queued() -> anyhow:
             input: "\0",
             yield_time_ms: 250,
             max_output_tokens: None,
-            truncation_policy: TruncationPolicy::Tokens(10_000),
+            truncation: OutputTruncation::new(TruncationPolicy::Tokens(10_000), None),
             interaction_event: None,
         },
     ));

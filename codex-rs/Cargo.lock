@@ -2600,7 +2600,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cloud-client"
-version = "0.0.0"
+version = "0.159.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5337,7 +5337,7 @@ dependencies = [
 
 [[package]]
 name = "codex-windows-sandbox-test-support"
-version = "0.0.0"
+version = "0.159.0"
 dependencies = [
  "dirs",
 ]

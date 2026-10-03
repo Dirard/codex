@@ -57,6 +57,8 @@ use codex_protocol::user_input::UserInput;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::ReadThreadParams;
 use futures::StreamExt;
+use futures::future::AbortHandle;
+use futures::future::Abortable;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -588,12 +590,12 @@ impl LocalAgentControl {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&child_thread_id);
-        if let Some(previous_watcher) = previous_watcher {
+        if let Some((abort, completion)) = previous_watcher {
             match previous_watcher_action {
                 PreviousWatcherAction::Wait => {}
-                PreviousWatcherAction::Abort => previous_watcher.abort(),
+                PreviousWatcherAction::Abort => abort.abort(),
             }
-            let _ = previous_watcher.await;
+            let _ = completion.await;
         }
         self.start_completion_watcher(
             child_thread_id,
@@ -623,7 +625,7 @@ impl LocalAgentControl {
         };
         let teardown = membership.into_teardown_guard("completion_watcher", Some(child_thread_id));
         let control = self.clone();
-        let watcher = tokio::spawn(async move {
+        let watcher = async move {
             let mut status_updates = match watcher_start {
                 CompletionWatcherStart::CurrentStatus => {
                     match control.subscribe_status(child_thread_id).await {
@@ -731,8 +733,9 @@ impl LocalAgentControl {
                 )
                 .await;
         };
-        tokio::spawn(async move {
-            watcher.await;
+        let (abort, registration) = AbortHandle::new_pair();
+        let completion = tokio::spawn(async move {
+            let _ = Abortable::new(watcher, registration).await;
             teardown.complete();
         });
         if let Some(previous_watcher) = self
@@ -740,9 +743,9 @@ impl LocalAgentControl {
             .completion_watchers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(child_thread_id, watcher)
+            .insert(child_thread_id, (abort, completion))
         {
-            previous_watcher.abort();
+            previous_watcher.0.abort();
         }
     }
 

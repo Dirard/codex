@@ -1676,8 +1676,17 @@ async fn cancelled_cold_resume_finishes_residency_accounting() {
         .runtime
         .upgrade()
         .expect("thread manager should be live");
+    let membership = control
+        .runtime
+        .admit_start()
+        .expect("reserve tree membership");
     let eviction_slot = control
-        .reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
+        .reserve_v2_residency_slot(
+            &state,
+            &config,
+            &membership,
+            /*protected_thread_id*/ None,
+        )
         .await
         .expect("cold eviction slot");
     drop(eviction_slot);
@@ -1719,7 +1728,7 @@ async fn cancelled_cold_resume_finishes_residency_accounting() {
         spawned_agent.thread_id
     );
     let Err(err) = control
-        .reserve_v2_residency_slot(&state, &config, Some(spawned_agent.thread_id))
+        .reserve_v2_residency_slot(&state, &config, &membership, Some(spawned_agent.thread_id))
         .await
     else {
         panic!("resumed protected thread should consume the only residency slot");
@@ -5442,6 +5451,50 @@ async fn completion_watcher_does_not_hide_tree_shutdown_failure() {
         .await
         .expect("completion watcher should stop during tree shutdown")
         .expect_err("recorded tree shutdown failure should be returned");
+}
+
+#[tokio::test]
+async fn panicked_completion_watcher_fails_tree_shutdown() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, _) = harness.start_thread().await;
+    let child_thread_id = ThreadId::new();
+    let status_updates: StatusSubscription =
+        stream::once(async { panic!("completion watcher panic") }).boxed();
+    harness.control.start_completion_watcher(
+        child_thread_id,
+        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: Some("explorer".to_string()),
+        })),
+        child_thread_id.to_string(),
+        /*child_agent_path*/ None,
+        CompletionWatcherStart::AfterCurrentTurn(status_updates),
+    );
+    let (_, completion) = harness
+        .control
+        .runtime
+        .completion_watchers
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(&child_thread_id)
+        .expect("completion watcher should start");
+    assert!(
+        completion
+            .await
+            .expect_err("watcher should panic")
+            .is_panic()
+    );
+
+    timeout(
+        Duration::from_secs(5),
+        harness.control.runtime.request_shutdown().wait(),
+    )
+    .await
+    .expect("tree shutdown should finish")
+    .expect_err("panicked watcher must fail tree shutdown");
 }
 
 #[tokio::test]

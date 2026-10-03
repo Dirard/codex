@@ -151,10 +151,9 @@ impl AgentControl for LocalAgentControl {
                             "target agent is missing an agent_path".to_string(),
                         )
                     })?;
-                    let turn_spawn_budget =
-                        (mode == MessageDeliveryMode::TriggerTurn)
-                            .then_some(turn_spawn_budget)
-                            .flatten();
+                    let turn_spawn_budget = (mode == MessageDeliveryMode::TriggerTurn)
+                        .then_some(turn_spawn_budget)
+                        .flatten();
                     // Cold-restored children still reload lazily on any message. Only
                     // locally evicted recipients can retain mail without reloading.
                     // Loaded recipients go straight to delivery, which rejects sends
