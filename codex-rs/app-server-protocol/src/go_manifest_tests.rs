@@ -2314,6 +2314,10 @@ fn expected_server_notification_routes() -> Vec<(&'static str, ExpectedRouting)>
             ExpectedRouting::Routed(&["threadId", "turnId?"]),
         ),
         (
+            "thread/prediction/updated",
+            ExpectedRouting::Routed(&["threadId"]),
+        ),
+        (
             "thread/goal/cleared",
             ExpectedRouting::Routed(&["threadId"]),
         ),

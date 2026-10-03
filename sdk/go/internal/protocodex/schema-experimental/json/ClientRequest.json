@@ -213,6 +213,9 @@
         }
       ]
     },
+    "BedrockCheckGovCloudRequirementsParams": {
+      "type": "object"
+    },
     "BedrockDiscoverParams": {
       "type": "object"
     },
@@ -824,7 +827,7 @@
       "type": "string"
     },
     "CyberAccessProgram": {
-      "description": "Requested cyber treatment for a ChatGPT-authenticated Codex turn. Authorization and model-tier restrictions remain server-owned.",
+      "description": "Requested cyber treatment for an OpenAI model turn. Authorization and model-tier restrictions remain server-owned.",
       "enum": [
         "standard",
         "daybreakBlue",
@@ -3591,6 +3594,37 @@
       "oneOf": [
         {
           "properties": {
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": "string"
+            },
+            "tools": {
+              "items": true,
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "additional_tools"
+              ],
+              "title": "AdditionalToolsResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "role",
+            "tools",
+            "type"
+          ],
+          "title": "AdditionalToolsResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "content": {
               "items": {
                 "$ref": "#/definitions/ContentItem"
@@ -4934,6 +4968,43 @@
       ],
       "type": "object"
     },
+    "ThreadAttachmentOwnerListParams": {
+      "description": "Parameters for reverse lookup by attachment identity within this server's store.",
+      "properties": {
+        "archived": {
+          "description": "Omitted or null returns all matches; false returns non-archived threads only.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "attachmentType": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "identityKey": {
+          "type": "string"
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "attachmentType",
+        "identityKey"
+      ],
+      "type": "object"
+    },
     "ThreadAttachmentRemoveParams": {
       "description": "Parameters for deleting an attachment by its stable thread-local identity.",
       "properties": {
@@ -5192,6 +5263,17 @@
     },
     "ThreadGoalClearParams": {
       "properties": {
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadGoalMutationOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Missing provenance does not supply user authorization."
+        },
         "threadId": {
           "type": "string"
         }
@@ -5212,6 +5294,14 @@
       ],
       "type": "object"
     },
+    "ThreadGoalMutationOrigin": {
+      "description": "Distinguishes explicit user actions from automatic goal lifecycle mutations.",
+      "enum": [
+        "user",
+        "automatic"
+      ],
+      "type": "string"
+    },
     "ThreadGoalSetParams": {
       "properties": {
         "objective": {
@@ -5219,6 +5309,17 @@
             "string",
             "null"
           ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadGoalMutationOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Missing provenance does not supply user authorization."
         },
         "status": {
           "anyOf": [
@@ -5623,6 +5724,21 @@
         }
       },
       "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadPredictionRequestParams": {
+      "properties": {
+        "sourceTurnId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourceTurnId",
         "threadId"
       ],
       "type": "object"
@@ -7284,7 +7400,7 @@
               "type": "null"
             }
           ],
-          "description": "EXPERIMENTAL - Request a workspace-authorized cyber program for this turn. Omission preserves automatic behavior. This does not grant access."
+          "description": "EXPERIMENTAL - Request an authorized cyber program for this turn. Omission preserves automatic behavior. This does not grant access."
         },
         "disabledPluginIds": {
           "description": "Replace this thread's disabled plugin IDs. Omitted/null preserves the list; [] clears it.",
@@ -8194,6 +8310,30 @@
         },
         "method": {
           "enum": [
+            "thread/prediction/request"
+          ],
+          "title": "Thread/prediction/requestRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadPredictionRequestParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/prediction/requestRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "thread/goal/set"
           ],
           "title": "Thread/goal/setRequestMethod",
@@ -8473,6 +8613,30 @@
         "params"
       ],
       "title": "Thread/attachment/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/attachmentOwner/list"
+          ],
+          "title": "Thread/attachmentOwner/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadAttachmentOwnerListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/attachmentOwner/listRequest",
       "type": "object"
     },
     {
@@ -11124,6 +11288,30 @@
         "params"
       ],
       "title": "Account/bedrock/setupRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/bedrock/checkGovCloudRequirements"
+          ],
+          "title": "Account/bedrock/checkGovCloudRequirementsRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/BedrockCheckGovCloudRequirementsParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Account/bedrock/checkGovCloudRequirementsRequest",
       "type": "object"
     },
     {
