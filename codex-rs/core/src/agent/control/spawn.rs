@@ -25,7 +25,6 @@ use crate::session::multi_agents::resolve_usage_hints;
 use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
 use codex_extension_api::ExtensionDataInit;
-use codex_features::Feature;
 use codex_history::ResponseItemEnvelope;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::intersect_effective_permission_profiles;
@@ -796,13 +795,7 @@ impl LocalAgentControl {
                         ThreadHistoryMode::Paginated
                     )
                     .then_some(ThreadHistoryMode::Paginated);
-                    let dynamic_tools = if multi_agent_version == MultiAgentVersion::V2
-                        && config.features.enabled(Feature::MultiAgentV2DynamicTools)
-                    {
-                        parent_thread.session.dynamic_tools().await
-                    } else {
-                        Vec::new()
-                    };
+                    let dynamic_tools = parent_thread.session.dynamic_tools().await;
                     (history_mode, dynamic_tools)
                 } else {
                     (None, Vec::new())
