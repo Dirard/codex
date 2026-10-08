@@ -90,6 +90,8 @@ pub(crate) mod test_support;
 mod tmux;
 #[cfg(any(windows, test))]
 mod windows_console;
+#[cfg(any(windows, test))]
+mod windows_key_sequence;
 
 /// Target frame interval for UI redraw scheduling.
 pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME_INTERVAL;
@@ -404,6 +406,9 @@ pub fn restore_after_exit() -> Result<()> {
     )
     .err();
     if let Err(err) = terminal_stderr::finish() {
+        first_error.get_or_insert(err);
+    }
+    if let Err(err) = crate::iterm_session_status::clear_iterm_session_status() {
         first_error.get_or_insert(err);
     }
 
@@ -994,6 +999,7 @@ impl Tui {
             let _ = self.enter_alt_screen();
         }
 
+        crate::iterm_session_status::invalidate_iterm_session_status();
         self.resume_events();
         self.schedule_screen_size_recheck(Duration::ZERO);
         output

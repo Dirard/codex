@@ -1463,13 +1463,24 @@ impl BottomPane {
             return false;
         }
 
+        let search_query = if params.is_searchable {
+            self.view_stack
+                .last()
+                .and_then(|view| view.search_query())
+                .map(str::to_string)
+        } else {
+            None
+        };
         self.view_stack.pop();
         self.apply_standard_popup_hint(&mut params);
-        let view = list_selection_view::ListSelectionView::new(
+        let mut view = list_selection_view::ListSelectionView::new(
             params,
             self.app_event_tx.clone(),
             self.keymap.list.clone(),
         );
+        if let Some(search_query) = search_query {
+            view.set_search_query(search_query);
+        }
         self.push_view(Box::new(view));
         true
     }
@@ -3563,7 +3574,7 @@ mod tests {
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                path: test_path_buf("/tmp/test-skill/SKILL.md").abs(),
+                path: test_path_buf("/tmp/test-skill/SKILL.md").abs().into(),
                 scope: crate::test_support::skill_scope_user(),
                 enabled: true,
                 plugin_id: None,

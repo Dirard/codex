@@ -67,6 +67,26 @@ const fn default_enabled() -> bool {
     true
 }
 
+/// Last selected grouping in Agent Command Center.
+#[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentsOverviewGrouping {
+    #[default]
+    Project,
+    Status,
+    Model,
+}
+
+impl AgentsOverviewGrouping {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Status => "status",
+            Self::Model => "model",
+        }
+    }
+}
+
 /// Preferred layout for the resume/fork session picker.
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -174,6 +194,8 @@ pub enum WindowsSandboxModeToml {
 #[schemars(deny_unknown_fields)]
 pub struct WindowsToml {
     pub sandbox: Option<WindowsSandboxModeToml>,
+    /// False blocks both explicit MXC configuration and automatic selection.
+    pub allow_mxc: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, JsonSchema)]
@@ -932,6 +954,10 @@ pub struct Tui {
     #[serde(default)]
     pub session_picker_view: Option<SessionPickerViewMode>,
 
+    /// Last selected grouping in Agent Command Center.
+    #[serde(default)]
+    pub agents_overview_grouping: AgentsOverviewGrouping,
+
     /// Working directory to use when resuming or forking a session.
     /// When unset, prompt if the current and session directories differ.
     #[serde(default)]
@@ -981,6 +1007,8 @@ pub struct ExternalConfigMigrationPrompts {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct Notice {
+    /// Tracks whether the user has acknowledged the AWS GovCloud guidance.
+    pub hide_gov_cloud_guidance: Option<bool>,
     /// Tracks whether the user has acknowledged the full access warning prompt.
     pub hide_full_access_warning: Option<bool>,
     /// Tracks whether the user has acknowledged the Windows world-writable directories warning.
@@ -1006,11 +1034,49 @@ pub use crate::skills_config::BundledSkillsConfig;
 pub use crate::skills_config::SkillConfig;
 pub use crate::skills_config::SkillsConfig;
 
+/// Default activation settings for installed plugins.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct PluginsDefaultConfig {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+/// Plugin activation and capability settings loaded from configuration layers.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct PluginsConfigToml {
+    /// Defaults for installed plugin activation. Omission preserves source enablement.
+    /// Explicit plugin enablement settings override this default, but cannot enable
+    /// an installation disabled by its source.
+    #[serde(default, rename = "_default", skip_serializing_if = "Option::is_none")]
+    pub default: Option<PluginsDefaultConfig>,
+
+    #[serde(default, flatten)]
+    pub plugins: HashMap<String, PluginConfig>,
+}
+
+impl PluginsConfigToml {
+    /// Whether configuration permits a source-enabled plugin to remain active.
+    /// Without `_default`, preserve legacy source and account enablement.
+    /// Otherwise, an explicit enablement setting overrides the configured default.
+    pub fn allows_plugin(&self, plugin_id: &str) -> bool {
+        let Some(default) = &self.default else {
+            return true;
+        };
+        self.plugins
+            .get(plugin_id)
+            .and_then(|plugin| plugin.enabled)
+            .unwrap_or(default.enabled)
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct PluginConfig {
-    #[serde(default = "default_enabled")]
-    pub enabled: bool,
+    /// Explicit activation override. Omission inherits the installed-plugin default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
 
     /// Per-MCP-server policy overlays for MCP servers contributed by this plugin.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

@@ -78,6 +78,8 @@ impl App {
                     task.abort();
                 }
                 self.agents_overview.request_id = None;
+                self.agents_overview.refresh_show_more = false;
+                self.agents_overview.active_refresh_thread_ids.clear();
                 self.agents_overview.refresh_pending = false;
                 self.agents_overview.initialized = false;
                 self.agents_overview.refresh_notifications.clear();
@@ -460,25 +462,12 @@ impl App {
                 {
                     return;
                 }
-                if self.primary_thread_id.is_some()
-                    && self.primary_thread_id != Some(thread_id)
-                    && !self.thread_event_channels.contains_key(&thread_id)
-                    && self.agent_navigation.get(&thread_id).is_none()
-                    && !self.side_threads.contains_key(&thread_id)
-                    && !matches!(&notification, ServerNotification::McpServerStatusUpdated(_))
-                    && !matches!(
-                        &notification,
-                        ServerNotification::ThreadStarted(started)
-                            if matches!(
-                                &started.thread.source,
-                                SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                                    parent_thread_id,
-                                    ..
-                                }) if self.primary_thread_id == Some(*parent_thread_id)
-                                    || self.thread_event_channels.contains_key(parent_thread_id)
-                                    || self.agent_navigation.get(parent_thread_id).is_some()
-                            )
-                    )
+                let untracked_thread =
+                    self.primary_thread_id.is_some() && !self.owns_thread_for_routing(thread_id);
+                if untracked_thread
+                    && !self
+                        .owns_untracked_notification(app_server_client, thread_id, &notification)
+                        .await
                 {
                     return;
                 }
@@ -635,11 +624,13 @@ impl App {
             app_server_client
                 .thread_tool_transport()
                 .configure(&mut thread_start_params);
+            let features = self.config.features.get().clone();
             let task = tokio::spawn(async move {
                 let response = crate::dynamic_tools::execute(
                     request_handle,
                     params,
                     thread_start_params,
+                    features,
                     status_updates,
                     Some(&app_event_tx),
                 )
@@ -754,10 +745,7 @@ impl App {
             else {
                 return;
             };
-            if self.primary_thread_id != Some(parent_thread_id)
-                && !self.thread_event_channels.contains_key(&parent_thread_id)
-                && self.agent_navigation.get(&parent_thread_id).is_none()
-            {
+            if !self.owns_thread_for_routing(parent_thread_id) {
                 if self
                     .agents_overview
                     .dispatched_requests

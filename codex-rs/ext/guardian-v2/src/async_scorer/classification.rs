@@ -308,7 +308,6 @@ impl Classification {
                 parent_turn_id: turn_id.clone(),
                 root_turn_id,
             };
-            let mut sampling_started = Instant::now();
             let result = match transcript {
                 ClassificationContext::Snapshot(context) => {
                     sampling.input = context.into_messages();
@@ -325,8 +324,10 @@ impl Classification {
                             "not_initialized",
                         );
                     }
-                    sampling_started = Instant::now();
-                    sampler.sample(sampling).await
+                    let sampling_started = Instant::now();
+                    let result = sampler.sample(sampling).await;
+                    responses_duration = Some(sampling_started.elapsed());
+                    result
                 }
 
                 ClassificationContext::Conversation {
@@ -345,20 +346,19 @@ impl Classification {
                         );
                     }
                     let (ready, score) = tokio::sync::oneshot::channel();
-                    reservation.submit(ConversationRequest {
+                    tokio::spawn(reservation.run(ConversationRequest {
                         evidence,
                         sampling,
-                        reset_token_limit: guardian_config
-                            .async_classifier_conversation_token_limit,
+                        reset_token_limit:
+                            guardian_config.async_classifier_conversation_token_limit,
                         ready,
                         authorization: score_authorization.clone(),
                         thread: Arc::clone(&thread),
                         metrics: metrics.clone(),
-                    });
+                    }));
                     score.await.unwrap_or(Err(LunaSamplerError::Superseded))
                 }
             };
-            responses_duration = Some(sampling_started.elapsed());
             let output = match result {
                 Ok(output) => output,
                 Err(LunaSamplerError::Superseded) => {
