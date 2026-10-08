@@ -18,10 +18,10 @@ use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
 #[cfg(test)]
 use crate::tools::spec_plan::finalize_tool_router;
+use codex_features::MultiAgentMessageDelivery;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_REGISTRATIONS_METRIC;
 use codex_otel::TOOL_REGISTRATIONS_METRIC_BUCKETS;
-use codex_features::MultiAgentMessageDelivery;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 #[cfg(test)]

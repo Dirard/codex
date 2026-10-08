@@ -684,8 +684,10 @@ fn thread_identity_can_move_between_agent_paths() {
 #[test]
 fn spawn_failure_context_distinguishes_registry_rejections() {
     let registry = Arc::new(AgentRegistry::default());
-    let mut reservation = registry.reserve_spawn_slot(Some(1)).expect("first slot");
-    let capacity_error = match registry.reserve_spawn_slot(Some(1)) {
+    let mut reservation = registry
+        .reserve_spawn_slot(Some(1), /*turn_spawn_budget*/ None)
+        .expect("first slot");
+    let capacity_error = match registry.reserve_spawn_slot(Some(1), /*turn_spawn_budget*/ None) {
         Ok(_) => panic!("registry limit should be enforced"),
         Err(err) => err,
     };

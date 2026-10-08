@@ -701,10 +701,18 @@ async fn test_control_server(
             } else {
                 "1.0.0"
             };
+            let digests = codex_app_server_protocol::go_manifest::initialize_digest_snapshot();
             websocket.send(tokio_tungstenite::tungstenite::Message::Text(
                 serde_json::json!({"id": 1, "result": {
                     "userAgent": format!("codex_app_server_daemon/{version}"),
                     "codexHome": codex_home, "platformFamily": "unix", "platformOs": std::env::consts::OS,
+                    "stableProtocolDigest": digests.stable_protocol_digest,
+                    "experimentalProtocolDigest": digests.experimental_protocol_digest,
+                    "stableSchemaDigest": digests.stable_schema_digest,
+                    "experimentalSchemaDigest": digests.experimental_schema_digest,
+                    "stableManifestDigest": digests.stable_manifest_digest,
+                    "experimentalManifestDigest": digests.experimental_manifest_digest,
+                    "activeProtocolMode": codex_app_server_protocol::ActiveProtocolMode::Stable,
                 }}).to_string().into(),
             )).await.expect("initialize response");
             websocket

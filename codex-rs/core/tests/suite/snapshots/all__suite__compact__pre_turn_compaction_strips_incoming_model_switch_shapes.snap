@@ -30,7 +30,7 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
 05:message/user:
     <SUMMARIZATION_PROMPT>
 
-## Window 3 (after request 2: input diverged at item 01, settings changed (parallel_tool_calls, tools))
+## Window 3 (after request 2: input diverged at item 01)
 -- request 3 (turn; Local Post-Compaction History Layout) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>

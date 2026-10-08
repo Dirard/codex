@@ -97,6 +97,8 @@ type TurnOptions struct {
 	ServiceTierForTurn         string
 	CyberAccessProgram         protocol.CyberAccessProgram
 	TurnTrigger                string
+	ParentTurnID               string
+	RootTurnID                 string
 	ToolOutput                 *protocol.TurnToolOutput
 	Effort                     protocol.ReasoningEffort
 	Summary                    protocol.ReasoningSummary
@@ -741,6 +743,12 @@ func applyTurnOptions(params *protocol.TurnStartParams, opts TurnOptions) {
 	}
 	if opts.TurnTrigger != "" {
 		params.TurnTrigger = protocol.Some(opts.TurnTrigger)
+	}
+	if opts.ParentTurnID != "" {
+		params.ParentTurnID = protocol.Some(opts.ParentTurnID)
+	}
+	if opts.RootTurnID != "" {
+		params.RootTurnID = protocol.Some(opts.RootTurnID)
 	}
 	if opts.ToolOutput != nil {
 		params.ToolOutput = protocol.Some(*opts.ToolOutput)

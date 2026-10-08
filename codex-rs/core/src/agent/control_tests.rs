@@ -1209,6 +1209,7 @@ async fn cancelled_v2_send_finishes_reload_registration() {
             mode: MessageDeliveryMode::TriggerTurn,
         },
         start_options: Default::default(),
+        turn_spawn_budget: None,
     };
     let mut created = harness.manager.subscribe_thread_created();
     let state = control.runtime.upgrade().unwrap();
@@ -1728,6 +1729,7 @@ async fn cancelled_cold_resume_finishes_residency_accounting() {
         .send_event(
             terminal_turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
+                root_turn_id: None,
                 turn_id: terminal_turn.sub_id.clone(),
                 started_at: None,
                 last_agent_message: Some("done".to_string()),
@@ -2672,12 +2674,21 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix(
     let harness = AgentControlHarness::new().await;
     let client_mcp_extensions =
         ClientMcpExtensions::new([(OPENAI_FORM_EXTENSION_ID.to_string(), serde_json::json!({}))]);
+    let dynamic_tools = vec![codex_protocol::dynamic_tools::DynamicToolSpec::Function(
+        codex_protocol::dynamic_tools::DynamicToolFunctionSpec {
+            name: "inherited_echo".to_string(),
+            description: "Return a message.".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            defer_loading: false,
+        },
+    )];
     let parent = harness
         .manager
         .start_thread(StartThreadOptions {
             history_mode: Some(ThreadHistoryMode::Paginated),
             environments: Some(Vec::new()),
             client_mcp_extensions: client_mcp_extensions.clone(),
+            dynamic_tools: dynamic_tools.clone(),
             ..StartThreadOptions::new(harness.config.clone())
         })
         .await
@@ -2799,6 +2810,7 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix(
     assert_eq!(meta_line.meta.parent_thread_id, Some(parent_thread_id));
     assert_eq!(meta_line.meta.forked_from_id, Some(parent_thread_id));
     assert_eq!(child_thread.client_mcp_extensions(), client_mcp_extensions);
+    assert_eq!(child_thread.session.dynamic_tools().await, dynamic_tools);
     let prefix_end = usize::try_from(
         meta_line
             .meta
@@ -5008,6 +5020,7 @@ async fn multi_agent_v2_terminal_error_is_published_after_parent_mailbox() {
         .send_event(
             tester_turn.as_ref(),
             EventMsg::TurnStarted(TurnStartedEvent {
+                turn_attribution: None,
                 turn_id: tester_turn.sub_id.clone(),
                 root_turn_id: Some(tester_turn.sub_id.clone()),
                 trace_id: None,
@@ -5067,6 +5080,7 @@ async fn multi_agent_v2_terminal_error_is_published_after_parent_mailbox() {
         .send_event(
             tester_turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
+                root_turn_id: None,
                 turn_id: tester_turn.sub_id.clone(),
                 started_at: None,
                 last_agent_message: Some("done".to_string()),
@@ -5168,6 +5182,7 @@ async fn followup_to_non_v2_child_notifies_parent_on_second_completion() {
         .send_event(
             first_turn.as_ref(),
             EventMsg::TurnStarted(TurnStartedEvent {
+                turn_attribution: None,
                 turn_id: first_turn.sub_id.clone(),
                 root_turn_id: Some(first_turn.sub_id.clone()),
                 trace_id: None,
@@ -5182,6 +5197,7 @@ async fn followup_to_non_v2_child_notifies_parent_on_second_completion() {
         .send_event(
             first_turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
+                root_turn_id: None,
                 turn_id: first_turn.sub_id.clone(),
                 started_at: None,
                 last_agent_message: Some("first completion".to_string()),
@@ -5365,6 +5381,7 @@ async fn assert_followup_completion_watcher_replaces_initial_watcher(
     let (previous_terminal_event, expected_status) = match previous_turn {
         PreviousWatcherTurn::Completed => (
             EventMsg::TurnComplete(TurnCompleteEvent {
+                root_turn_id: None,
                 turn_id: previous_turn_context.sub_id.clone(),
                 started_at: None,
                 last_agent_message: Some("initial completion".to_string()),
@@ -5377,6 +5394,7 @@ async fn assert_followup_completion_watcher_replaces_initial_watcher(
         ),
         PreviousWatcherTurn::Interrupted => (
             EventMsg::TurnAborted(TurnAbortedEvent {
+                root_turn_id: None,
                 turn_id: Some(previous_turn_context.sub_id.clone()),
                 reason: TurnAbortReason::Interrupted,
                 started_at: None,
@@ -5416,6 +5434,7 @@ async fn assert_followup_completion_watcher_replaces_initial_watcher(
         .send_event(
             followup_turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
+                root_turn_id: None,
                 turn_id: followup_turn.sub_id.clone(),
                 started_at: None,
                 last_agent_message: Some("followup completion".to_string()),

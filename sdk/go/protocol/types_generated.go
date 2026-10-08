@@ -11685,6 +11685,36 @@ func (v *BrowserUseConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type BrowserUseExtensionRequirements struct {
+	RequestHeaders Optional[[]RequestHeader] `json:"requestHeaders,omitempty"`
+}
+
+func (v BrowserUseExtensionRequirements) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if v.RequestHeaders.IsSet() {
+		out["requestHeaders"] = v.RequestHeaders
+	}
+	return json.Marshal(out)
+}
+
+func (v *BrowserUseExtensionRequirements) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawRequestHeaders, ok := raw["requestHeaders"]
+	if ok {
+		if err := json.Unmarshal(rawRequestHeaders, &v.RequestHeaders); err != nil {
+			return fmt.Errorf("field requestHeaders: %w", err)
+		}
+	}
+	return nil
+}
+
 type BrowserUseOriginPolicy struct {
 	Access                 Optional[AllowDenyRequirement]             `json:"access,omitempty"`
 	AccessApprovalLifetime Optional[BrowserUseAccessApprovalLifetime] `json:"accessApprovalLifetime,omitempty"`
@@ -11841,6 +11871,7 @@ type BrowserUseRequirements struct {
 	AllowWebmcp                   Optional[bool]                              `json:"allowWebmcp,omitempty"`
 	DefaultOriginPolicy           Optional[BrowserUseOriginPolicy]            `json:"defaultOriginPolicy,omitempty"`
 	DisableAutoReview             Optional[bool]                              `json:"disableAutoReview,omitempty"`
+	Extension                     Optional[BrowserUseExtensionRequirements]   `json:"extension,omitempty"`
 	Origins                       Optional[map[string]BrowserUseOriginPolicy] `json:"origins,omitempty"`
 }
 
@@ -11860,6 +11891,9 @@ func (v BrowserUseRequirements) MarshalJSON() ([]byte, error) {
 	}
 	if v.DisableAutoReview.IsSet() {
 		out["disableAutoReview"] = v.DisableAutoReview
+	}
+	if v.Extension.IsSet() {
+		out["extension"] = v.Extension
 	}
 	if v.Origins.IsSet() {
 		out["origins"] = v.Origins
@@ -11904,6 +11938,12 @@ func (v *BrowserUseRequirements) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawDisableAutoReview, &v.DisableAutoReview); err != nil {
 			return fmt.Errorf("field disableAutoReview: %w", err)
+		}
+	}
+	rawExtension, ok := raw["extension"]
+	if ok {
+		if err := json.Unmarshal(rawExtension, &v.Extension); err != nil {
+			return fmt.Errorf("field extension: %w", err)
 		}
 	}
 	rawOrigins, ok := raw["origins"]
@@ -15120,13 +15160,17 @@ func (v *ConfigRequirements) UnmarshalJSON(data []byte) error {
 }
 
 type ConfigRequirementsReadResponse struct {
-	Requirements Optional[ConfigRequirements] `json:"requirements,omitempty"`
+	Requirements                  Optional[ConfigRequirements] `json:"requirements,omitempty"`
+	SupportsIndependentSpeedModes Optional[bool]               `json:"supportsIndependentSpeedModes,omitempty"`
 }
 
 func (v ConfigRequirementsReadResponse) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
 	if v.Requirements.IsSet() {
 		out["requirements"] = v.Requirements
+	}
+	if v.SupportsIndependentSpeedModes.IsSet() {
+		out["supportsIndependentSpeedModes"] = v.SupportsIndependentSpeedModes
 	}
 	return json.Marshal(out)
 }
@@ -15144,6 +15188,12 @@ func (v *ConfigRequirementsReadResponse) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawRequirements, &v.Requirements); err != nil {
 			return fmt.Errorf("field requirements: %w", err)
+		}
+	}
+	rawSupportsIndependentSpeedModes, ok := raw["supportsIndependentSpeedModes"]
+	if ok {
+		if err := json.Unmarshal(rawSupportsIndependentSpeedModes, &v.SupportsIndependentSpeedModes); err != nil {
+			return fmt.Errorf("field supportsIndependentSpeedModes: %w", err)
 		}
 	}
 	return nil
@@ -16632,10 +16682,12 @@ func (v *DynamicToolSpec) UnmarshalJSON(data []byte) error {
 }
 
 type EnvironmentAddParams struct {
-	AuthBearerToken  Optional[string] `json:"authBearerToken,omitempty"`
-	ConnectTimeoutMs Optional[uint64] `json:"connectTimeoutMs,omitempty"`
-	EnvironmentID    string           `json:"environmentId,omitempty"`
-	ExecServerURL    string           `json:"execServerUrl,omitempty"`
+	AuthBearerToken    Optional[string]                  `json:"authBearerToken,omitempty"`
+	ConnectTimeoutMs   Optional[uint64]                  `json:"connectTimeoutMs,omitempty"`
+	EnvironmentID      string                            `json:"environmentId,omitempty"`
+	ExecServerURL      string                            `json:"execServerUrl,omitempty"`
+	Skills             Optional[EnvironmentSkillsParams] `json:"skills,omitempty"`
+	WebsocketRequestID Optional[string]                  `json:"websocketRequestId,omitempty"`
 }
 
 func (v EnvironmentAddParams) MarshalJSON() ([]byte, error) {
@@ -16648,6 +16700,12 @@ func (v EnvironmentAddParams) MarshalJSON() ([]byte, error) {
 	}
 	out["environmentId"] = v.EnvironmentID
 	out["execServerUrl"] = v.ExecServerURL
+	if v.Skills.IsSet() {
+		out["skills"] = v.Skills
+	}
+	if v.WebsocketRequestID.IsSet() {
+		out["websocketRequestId"] = v.WebsocketRequestID
+	}
 	return json.Marshal(out)
 }
 
@@ -16696,6 +16754,18 @@ func (v *EnvironmentAddParams) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawExecServerURL, &v.ExecServerURL); err != nil {
 		return fmt.Errorf("field execServerUrl: %w", err)
+	}
+	rawSkills, ok := raw["skills"]
+	if ok {
+		if err := json.Unmarshal(rawSkills, &v.Skills); err != nil {
+			return fmt.Errorf("field skills: %w", err)
+		}
+	}
+	rawWebsocketRequestID, ok := raw["websocketRequestId"]
+	if ok {
+		if err := json.Unmarshal(rawWebsocketRequestID, &v.WebsocketRequestID); err != nil {
+			return fmt.Errorf("field websocketRequestId: %w", err)
+		}
 	}
 	return nil
 }
@@ -16879,6 +16949,36 @@ func (v *EnvironmentShellInfo) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(rawPath, &v.Path); err != nil {
 		return fmt.Errorf("field path: %w", err)
+	}
+	return nil
+}
+
+type EnvironmentSkillsParams struct {
+	Required Optional[[]string] `json:"required,omitempty"`
+}
+
+func (v EnvironmentSkillsParams) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if v.Required.IsSet() {
+		out["required"] = v.Required
+	}
+	return json.Marshal(out)
+}
+
+func (v *EnvironmentSkillsParams) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawRequired, ok := raw["required"]
+	if ok {
+		if err := json.Unmarshal(rawRequired, &v.Required); err != nil {
+			return fmt.Errorf("field required: %w", err)
+		}
 	}
 	return nil
 }
@@ -25817,8 +25917,9 @@ const (
 type MessagePhase string
 
 const (
-	MessagePhaseCommentary  MessagePhase = "commentary"
-	MessagePhaseFinalAnswer MessagePhase = "final_answer"
+	MessagePhaseCommentary    MessagePhase = "commentary"
+	MessagePhasePartialAnswer MessagePhase = "partial_answer"
+	MessagePhaseFinalAnswer   MessagePhase = "final_answer"
 )
 
 type MigrationDetails struct {
@@ -25952,6 +26053,7 @@ func (v *MigrationDetails) UnmarshalJSON(data []byte) error {
 type MisalignmentErrorDetails struct {
 	DetailedExplanation Optional[string]            `json:"detailedExplanation,omitempty"`
 	ErrorType           Optional[string]            `json:"errorType,omitempty"`
+	ReviewTarget        Optional[string]            `json:"reviewTarget,omitempty"`
 	Steer               Optional[MisalignmentSteer] `json:"steer,omitempty"`
 }
 
@@ -25962,6 +26064,9 @@ func (v MisalignmentErrorDetails) MarshalJSON() ([]byte, error) {
 	}
 	if v.ErrorType.IsSet() {
 		out["errorType"] = v.ErrorType
+	}
+	if v.ReviewTarget.IsSet() {
+		out["reviewTarget"] = v.ReviewTarget
 	}
 	if v.Steer.IsSet() {
 		out["steer"] = v.Steer
@@ -25988,6 +26093,12 @@ func (v *MisalignmentErrorDetails) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawErrorType, &v.ErrorType); err != nil {
 			return fmt.Errorf("field errorType: %w", err)
+		}
+	}
+	rawReviewTarget, ok := raw["reviewTarget"]
+	if ok {
+		if err := json.Unmarshal(rawReviewTarget, &v.ReviewTarget); err != nil {
+			return fmt.Errorf("field reviewTarget: %w", err)
 		}
 	}
 	rawSteer, ok := raw["steer"]
@@ -33447,6 +33558,50 @@ func (v *RemoteControlStatusReadResponse) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type RequestHeader struct {
+	Name  string `json:"name,omitempty"`
+	Value string `json:"value,omitempty"`
+}
+
+func (v RequestHeader) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	out["name"] = v.Name
+	out["value"] = v.Value
+	return json.Marshal(out)
+}
+
+func (v *RequestHeader) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	rawName, ok := raw["name"]
+	if !ok {
+		return DecodeError{Field: "name", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawName, []byte("null")) {
+		return DecodeError{Field: "name", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawName, &v.Name); err != nil {
+		return fmt.Errorf("field name: %w", err)
+	}
+	rawValue, ok := raw["value"]
+	if !ok {
+		return DecodeError{Field: "value", Reason: "missing required field"}
+	}
+	if bytes.Equal(rawValue, []byte("null")) {
+		return DecodeError{Field: "value", Reason: "cannot be null"}
+	}
+	if err := json.Unmarshal(rawValue, &v.Value); err != nil {
+		return fmt.Errorf("field value: %w", err)
+	}
+	return nil
+}
+
 type V2RequestID = json.RawMessage
 
 type RequestPermissionProfile struct {
@@ -35892,7 +36047,7 @@ type SkillMetadata struct {
 	Enabled          bool                        `json:"enabled,omitempty"`
 	InterfaceValue   Optional[SkillInterface]    `json:"interface,omitempty"`
 	Name             string                      `json:"name,omitempty"`
-	Path             AbsolutePathBuf             `json:"path,omitempty"`
+	Path             LegacyAppPathString         `json:"path,omitempty"`
 	PluginID         Optional[string]            `json:"pluginId,omitempty"`
 	Scope            SkillScope                  `json:"scope,omitempty"`
 	ShortDescription Optional[string]            `json:"shortDescription,omitempty"`
@@ -36048,12 +36203,12 @@ const (
 )
 
 type SkillSummary struct {
-	Description      string                    `json:"description,omitempty"`
-	Enabled          bool                      `json:"enabled,omitempty"`
-	InterfaceValue   Optional[SkillInterface]  `json:"interface,omitempty"`
-	Name             string                    `json:"name,omitempty"`
-	Path             Optional[AbsolutePathBuf] `json:"path,omitempty"`
-	ShortDescription Optional[string]          `json:"shortDescription,omitempty"`
+	Description      string                        `json:"description,omitempty"`
+	Enabled          bool                          `json:"enabled,omitempty"`
+	InterfaceValue   Optional[SkillInterface]      `json:"interface,omitempty"`
+	Name             string                        `json:"name,omitempty"`
+	Path             Optional[LegacyAppPathString] `json:"path,omitempty"`
+	ShortDescription Optional[string]              `json:"shortDescription,omitempty"`
 }
 
 func (v SkillSummary) MarshalJSON() ([]byte, error) {
@@ -38840,26 +38995,27 @@ func (v *ThreadExtra) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadForkParams struct {
-	ApprovalPolicy        Optional[AskForApproval]             `json:"approvalPolicy,omitempty"`
-	ApprovalsReviewer     Optional[ApprovalsReviewer]          `json:"approvalsReviewer,omitempty"`
-	BaseInstructions      Optional[string]                     `json:"baseInstructions,omitempty"`
-	BeforeTurnID          Optional[string]                     `json:"beforeTurnId,omitempty"`
-	Config                Optional[map[string]json.RawMessage] `json:"config,omitempty"`
-	Cwd                   Optional[string]                     `json:"cwd,omitempty"`
-	DeferGoalContinuation OptionalNonNull[bool]                `json:"deferGoalContinuation,omitempty"`
-	DeveloperInstructions Optional[string]                     `json:"developerInstructions,omitempty"`
-	Ephemeral             OptionalNonNull[bool]                `json:"ephemeral,omitempty"`
-	ExcludeTurns          OptionalNonNull[bool]                `json:"excludeTurns,omitempty"`
-	LastTurnID            Optional[string]                     `json:"lastTurnId,omitempty"`
-	Model                 Optional[string]                     `json:"model,omitempty"`
-	ModelProvider         Optional[string]                     `json:"modelProvider,omitempty"`
-	Path                  Optional[string]                     `json:"path,omitempty"`
-	Permissions           Optional[string]                     `json:"permissions,omitempty"`
-	RuntimeWorkspaceRoots Optional[[]AbsolutePathBuf]          `json:"runtimeWorkspaceRoots,omitempty"`
-	Sandbox               Optional[SandboxMode]                `json:"sandbox,omitempty"`
-	ServiceTier           Optional[string]                     `json:"serviceTier,omitempty"`
-	ThreadID              string                               `json:"threadId,omitempty"`
-	ThreadSource          Optional[ThreadSource]               `json:"threadSource,omitempty"`
+	ApprovalPolicy             Optional[AskForApproval]             `json:"approvalPolicy,omitempty"`
+	ApprovalsReviewer          Optional[ApprovalsReviewer]          `json:"approvalsReviewer,omitempty"`
+	BaseInstructions           Optional[string]                     `json:"baseInstructions,omitempty"`
+	BeforeTurnID               Optional[string]                     `json:"beforeTurnId,omitempty"`
+	Config                     Optional[map[string]json.RawMessage] `json:"config,omitempty"`
+	Cwd                        Optional[string]                     `json:"cwd,omitempty"`
+	DeferGoalContinuation      OptionalNonNull[bool]                `json:"deferGoalContinuation,omitempty"`
+	DeveloperInstructions      Optional[string]                     `json:"developerInstructions,omitempty"`
+	Ephemeral                  OptionalNonNull[bool]                `json:"ephemeral,omitempty"`
+	ExcludeTurns               OptionalNonNull[bool]                `json:"excludeTurns,omitempty"`
+	ExperimentalPredictionMode OptionalNonNull[bool]                `json:"experimentalPredictionMode,omitempty"`
+	LastTurnID                 Optional[string]                     `json:"lastTurnId,omitempty"`
+	Model                      Optional[string]                     `json:"model,omitempty"`
+	ModelProvider              Optional[string]                     `json:"modelProvider,omitempty"`
+	Path                       Optional[string]                     `json:"path,omitempty"`
+	Permissions                Optional[string]                     `json:"permissions,omitempty"`
+	RuntimeWorkspaceRoots      Optional[[]AbsolutePathBuf]          `json:"runtimeWorkspaceRoots,omitempty"`
+	Sandbox                    Optional[SandboxMode]                `json:"sandbox,omitempty"`
+	ServiceTier                Optional[string]                     `json:"serviceTier,omitempty"`
+	ThreadID                   string                               `json:"threadId,omitempty"`
+	ThreadSource               Optional[ThreadSource]               `json:"threadSource,omitempty"`
 }
 
 func (v ThreadForkParams) MarshalJSON() ([]byte, error) {
@@ -38897,6 +39053,9 @@ func (v ThreadForkParams) MarshalJSON() ([]byte, error) {
 		if value, ok := v.ExcludeTurns.Value(); !ok || value {
 			out["excludeTurns"] = v.ExcludeTurns
 		}
+	}
+	if v.ExperimentalPredictionMode.IsSet() {
+		out["experimentalPredictionMode"] = v.ExperimentalPredictionMode
 	}
 	if v.LastTurnID.IsSet() {
 		out["lastTurnId"] = v.LastTurnID
@@ -39004,6 +39163,12 @@ func (v *ThreadForkParams) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawExcludeTurns, &v.ExcludeTurns); err != nil {
 			return fmt.Errorf("field excludeTurns: %w", err)
+		}
+	}
+	rawExperimentalPredictionMode, ok := raw["experimentalPredictionMode"]
+	if ok {
+		if err := json.Unmarshal(rawExperimentalPredictionMode, &v.ExperimentalPredictionMode); err != nil {
+			return fmt.Errorf("field experimentalPredictionMode: %w", err)
 		}
 	}
 	rawLastTurnID, ok := raw["lastTurnId"]
@@ -41313,21 +41478,22 @@ func (v *ThreadItemsListResponse) UnmarshalJSON(data []byte) error {
 type ThreadListCwdFilter = json.RawMessage
 
 type ThreadListParams struct {
-	AncestorThreadID Optional[string]              `json:"ancestorThreadId,omitempty"`
-	Archived         Optional[bool]                `json:"archived,omitempty"`
-	Cursor           Optional[string]              `json:"cursor,omitempty"`
-	Cwd              Optional[ThreadListCwdFilter] `json:"cwd,omitempty"`
-	Limit            Optional[uint32]              `json:"limit,omitempty"`
-	ModelProviders   Optional[[]string]            `json:"modelProviders,omitempty"`
-	Originators      Optional[[]string]            `json:"originators,omitempty"`
-	ParentThreadID   Optional[string]              `json:"parentThreadId,omitempty"`
-	ProjectID        Optional[string]              `json:"projectId,omitempty"`
-	SearchTerm       Optional[string]              `json:"searchTerm,omitempty"`
-	SectionID        Optional[string]              `json:"sectionId,omitempty"`
-	SortDirection    Optional[SortDirection]       `json:"sortDirection,omitempty"`
-	SortKey          Optional[ThreadSortKey]       `json:"sortKey,omitempty"`
-	SourceKinds      Optional[[]ThreadSourceKind]  `json:"sourceKinds,omitempty"`
-	UseStateDbOnly   OptionalNonNull[bool]         `json:"useStateDbOnly,omitempty"`
+	AncestorThreadID  Optional[string]              `json:"ancestorThreadId,omitempty"`
+	Archived          Optional[bool]                `json:"archived,omitempty"`
+	Cursor            Optional[string]              `json:"cursor,omitempty"`
+	Cwd               Optional[ThreadListCwdFilter] `json:"cwd,omitempty"`
+	ExcludedThreadIDs Optional[[]string]            `json:"excludedThreadIds,omitempty"`
+	Limit             Optional[uint32]              `json:"limit,omitempty"`
+	ModelProviders    Optional[[]string]            `json:"modelProviders,omitempty"`
+	Originators       Optional[[]string]            `json:"originators,omitempty"`
+	ParentThreadID    Optional[string]              `json:"parentThreadId,omitempty"`
+	ProjectID         Optional[string]              `json:"projectId,omitempty"`
+	SearchTerm        Optional[string]              `json:"searchTerm,omitempty"`
+	SectionID         Optional[string]              `json:"sectionId,omitempty"`
+	SortDirection     Optional[SortDirection]       `json:"sortDirection,omitempty"`
+	SortKey           Optional[ThreadSortKey]       `json:"sortKey,omitempty"`
+	SourceKinds       Optional[[]ThreadSourceKind]  `json:"sourceKinds,omitempty"`
+	UseStateDbOnly    OptionalNonNull[bool]         `json:"useStateDbOnly,omitempty"`
 }
 
 func (v ThreadListParams) MarshalJSON() ([]byte, error) {
@@ -41343,6 +41509,9 @@ func (v ThreadListParams) MarshalJSON() ([]byte, error) {
 	}
 	if v.Cwd.IsSet() {
 		out["cwd"] = v.Cwd
+	}
+	if v.ExcludedThreadIDs.IsSet() {
+		out["excludedThreadIds"] = v.ExcludedThreadIDs
 	}
 	if v.Limit.IsSet() {
 		out["limit"] = v.Limit
@@ -41413,6 +41582,12 @@ func (v *ThreadListParams) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawCwd, &v.Cwd); err != nil {
 			return fmt.Errorf("field cwd: %w", err)
+		}
+	}
+	rawExcludedThreadIDs, ok := raw["excludedThreadIds"]
+	if ok {
+		if err := json.Unmarshal(rawExcludedThreadIDs, &v.ExcludedThreadIDs); err != nil {
+			return fmt.Errorf("field excludedThreadIds: %w", err)
 		}
 	}
 	rawLimit, ok := raw["limit"]
@@ -48353,6 +48528,7 @@ type Turn struct {
 	ID          string                         `json:"id,omitempty"`
 	Items       []ThreadItem                   `json:"items,omitempty"`
 	ItemsView   OptionalNonNull[TurnItemsView] `json:"itemsView,omitempty"`
+	RootTurnID  Optional[string]               `json:"rootTurnId,omitempty"`
 	StartedAt   Optional[int64]                `json:"startedAt,omitempty"`
 	Status      TurnStatus                     `json:"status,omitempty"`
 }
@@ -48372,6 +48548,9 @@ func (v Turn) MarshalJSON() ([]byte, error) {
 	out["items"] = v.Items
 	if v.ItemsView.IsSet() {
 		out["itemsView"] = v.ItemsView
+	}
+	if v.RootTurnID.IsSet() {
+		out["rootTurnId"] = v.RootTurnID
 	}
 	if v.StartedAt.IsSet() {
 		out["startedAt"] = v.StartedAt
@@ -48435,6 +48614,12 @@ func (v *Turn) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawItemsView, &v.ItemsView); err != nil {
 			return fmt.Errorf("field itemsView: %w", err)
+		}
+	}
+	rawRootTurnID, ok := raw["rootTurnId"]
+	if ok {
+		if err := json.Unmarshal(rawRootTurnID, &v.RootTurnID); err != nil {
+			return fmt.Errorf("field rootTurnId: %w", err)
 		}
 	}
 	rawStartedAt, ok := raw["startedAt"]
@@ -49068,9 +49253,11 @@ type TurnStartParams struct {
 	Model                      Optional[string]                            `json:"model,omitempty"`
 	MultiAgentMode             Optional[MultiAgentMode]                    `json:"multiAgentMode,omitempty"`
 	OutputSchema               json.RawMessage                             `json:"outputSchema,omitempty"`
+	ParentTurnID               Optional[string]                            `json:"parentTurnId,omitempty"`
 	Permissions                Optional[string]                            `json:"permissions,omitempty"`
 	Personality                Optional[Personality]                       `json:"personality,omitempty"`
 	ResponsesapiClientMetadata Optional[map[string]string]                 `json:"responsesapiClientMetadata,omitempty"`
+	RootTurnID                 Optional[string]                            `json:"rootTurnId,omitempty"`
 	RuntimeWorkspaceRoots      Optional[[]AbsolutePathBuf]                 `json:"runtimeWorkspaceRoots,omitempty"`
 	SandboxPolicy              Optional[SandboxPolicy]                     `json:"sandboxPolicy,omitempty"`
 	ServiceTier                Optional[string]                            `json:"serviceTier,omitempty"`
@@ -49126,6 +49313,9 @@ func (v TurnStartParams) MarshalJSON() ([]byte, error) {
 	if len(v.OutputSchema) > 0 {
 		out["outputSchema"] = v.OutputSchema
 	}
+	if v.ParentTurnID.IsSet() {
+		out["parentTurnId"] = v.ParentTurnID
+	}
 	if v.Permissions.IsSet() {
 		out["permissions"] = v.Permissions
 	}
@@ -49134,6 +49324,9 @@ func (v TurnStartParams) MarshalJSON() ([]byte, error) {
 	}
 	if v.ResponsesapiClientMetadata.IsSet() {
 		out["responsesapiClientMetadata"] = v.ResponsesapiClientMetadata
+	}
+	if v.RootTurnID.IsSet() {
+		out["rootTurnId"] = v.RootTurnID
 	}
 	if v.RuntimeWorkspaceRoots.IsSet() {
 		out["runtimeWorkspaceRoots"] = v.RuntimeWorkspaceRoots
@@ -49260,6 +49453,12 @@ func (v *TurnStartParams) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("field outputSchema: %w", err)
 		}
 	}
+	rawParentTurnID, ok := raw["parentTurnId"]
+	if ok {
+		if err := json.Unmarshal(rawParentTurnID, &v.ParentTurnID); err != nil {
+			return fmt.Errorf("field parentTurnId: %w", err)
+		}
+	}
 	rawPermissions, ok := raw["permissions"]
 	if ok {
 		if err := json.Unmarshal(rawPermissions, &v.Permissions); err != nil {
@@ -49276,6 +49475,12 @@ func (v *TurnStartParams) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawResponsesapiClientMetadata, &v.ResponsesapiClientMetadata); err != nil {
 			return fmt.Errorf("field responsesapiClientMetadata: %w", err)
+		}
+	}
+	rawRootTurnID, ok := raw["rootTurnId"]
+	if ok {
+		if err := json.Unmarshal(rawRootTurnID, &v.RootTurnID); err != nil {
+			return fmt.Errorf("field rootTurnId: %w", err)
 		}
 	}
 	rawRuntimeWorkspaceRoots, ok := raw["runtimeWorkspaceRoots"]

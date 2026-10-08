@@ -24,8 +24,8 @@ async fn strict_ignores_app_omissions_but_preserves_app_access() -> anyhow::Resu
     AppsTestServer::mount_with_tools(&server, Arc::new(Mutex::new(tools))).await?;
     let mut extensions = ExtensionRegistryBuilder::new();
     extensions.mcp_server_contributor(Arc::new(AppsServer(vec![])));
-    let script = r#"const names = ALL_TOOLS.filter(t => t.name.startsWith("mcp__codex_apps__calendar__")).map(t => t.name).sort();
-const t = ALL_TOOLS.find(t => t.name === "mcp__codex_apps__calendar__lookup");
+    let script = r#"const names = EXEC_TOOLS.filter(t => t.name.startsWith("mcp__codex_apps__calendar__")).map(t => t.name).sort();
+const t = EXEC_TOOLS.find(t => t.name === "mcp__codex_apps__calendar__lookup");
 text(JSON.stringify({names, result: t ? (await tools[t.name]({})).content[0].text : null}));"#;
     let mock = responses::mount_sse_sequence(
         &server,
@@ -87,7 +87,7 @@ enabled = false
             "names": ["mcp__codex_apps__calendar__lookup"],
             "result": "called lookup for  at  with "
         }),
-        "app omissions are ignored; disabled and app-only tools never enter ALL_TOOLS"
+        "app omissions are ignored; disabled and app-only tools never enter EXEC_TOOLS"
     );
     // The spawned Core session does not inherit the test span.
     let logs = String::from_utf8(

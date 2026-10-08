@@ -797,6 +797,7 @@ bar"
             crate::DEFAULT_EXEC_YIELD_TIME_MS,
             /*code_mode_only*/ false,
             ImageDetailVisibility::Visible,
+            DeferredToolDiscovery::Catalog,
             /*messages*/ None,
         );
 
