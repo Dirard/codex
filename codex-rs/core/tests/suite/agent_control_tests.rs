@@ -1,5 +1,6 @@
 //! Verifies host controller selection and routing through existing runtime entry points.
 
+use anyhow::Context;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -607,6 +608,14 @@ use codex_protocol::protocol::InternalSessionSource;
 async fn host_mailbox_notifies_waiting_agent_and_delivers_once() -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
     let (test, controller) = test_with_host_control(&server).await?;
+    *controller.listed_agents.lock().expect("listed agents lock") = Some(vec![LiveAgent {
+        thread_id: ThreadId::new(),
+        metadata: AgentMetadata {
+            agent_path: Some(AgentPath::root().join("worker").expect("valid child path")),
+            ..Default::default()
+        },
+        status: AgentStatus::Running,
+    }]);
     responses::mount_sse_once(
         &server,
         responses::sse(vec![
@@ -659,7 +668,8 @@ async fn host_mailbox_notifies_waiting_agent_and_delivers_once() -> anyhow::Resu
         .function_call_output_text("wait-mail")
         .expect("wait_agent output");
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&wait_output)?,
+        serde_json::from_str::<serde_json::Value>(&wait_output)
+            .with_context(|| format!("unexpected wait_agent output: {wait_output:?}"))?,
         serde_json::json!({"message": "Wait completed.", "timed_out": false})
     );
     assert_eq!(

@@ -10121,6 +10121,20 @@
         },
         "type": "object"
       },
+      "BrowserUseExtensionRequirements": {
+        "properties": {
+          "requestHeaders": {
+            "items": {
+              "$ref": "#/definitions/v2/RequestHeader"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "BrowserUseOriginPolicy": {
         "properties": {
           "access": {
@@ -10271,6 +10285,16 @@
             "type": [
               "boolean",
               "null"
+            ]
+          },
+          "extension": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/BrowserUseExtensionRequirements"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "origins": {
@@ -12203,6 +12227,14 @@
               }
             ],
             "description": "Null if no requirements are configured (e.g. no requirements.toml/MDM entries)."
+          },
+          "supportsIndependentSpeedModes": {
+            "default": null,
+            "description": "Whether Fast and Ultra Fast requirements are enforced independently. Older servers omit this field and use Fast mode as a shared speed gate.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         },
         "title": "ConfigRequirementsReadResponse",
@@ -12999,6 +13031,24 @@
           },
           "execServerUrl": {
             "type": "string"
+          },
+          "skills": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/EnvironmentSkillsParams"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Required skills supplied by this environment, checked before model inference."
+          },
+          "websocketRequestId": {
+            "description": "Optional X-Request-ID for the direct WebSocket upgrade, including reconnects. Requires a secure transport or a loopback destination.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -13082,6 +13132,21 @@
           "name",
           "path"
         ],
+        "type": "object"
+      },
+      "EnvironmentSkillsParams": {
+        "properties": {
+          "required": {
+            "description": "Exact catalog names that must be available from this environment.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "EnvironmentStatusKind": {
@@ -17598,7 +17663,7 @@
         "type": "string"
       },
       "MessagePhase": {
-        "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
+        "description": "Classifies assistant text as commentary, a partial answer, or a terminal answer.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
         "oneOf": [
           {
             "description": "Mid-turn assistant text (for example preamble/progress narration).\n\nAdditional tool calls or assistant output may follow before turn completion.",
@@ -17608,7 +17673,14 @@
             "type": "string"
           },
           {
-            "description": "The assistant's terminal answer text for the current turn.",
+            "description": "Stable answer text that may be followed by more assistant output or tools.",
+            "enum": [
+              "partial_answer"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The assistant's declared terminal answer text for the current turn.",
             "enum": [
               "final_answer"
             ],
@@ -17687,6 +17759,13 @@
           },
           "errorType": {
             "description": "Open-ended classification; clients must accept categories added by Responses.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reviewTarget": {
+            "description": "Opaque server-issued block target. Presence alone does not enable target-based continuation.",
             "type": [
               "string",
               "null"
@@ -21653,6 +21732,21 @@
         "title": "RemoteControlStatusReadResponse",
         "type": "object"
       },
+      "RequestHeader": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "type": "object"
+      },
       "RequestId": {
         "anyOf": [
           {
@@ -23489,7 +23583,7 @@
             "type": "string"
           },
           "path": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
+            "$ref": "#/definitions/v2/LegacyAppPathString"
           },
           "pluginId": {
             "description": "Owning plugin ID, matching `PluginSummary.id`, when known.",
@@ -23562,7 +23656,7 @@
           "path": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/AbsolutePathBuf"
+                "$ref": "#/definitions/v2/LegacyAppPathString"
               },
               {
                 "type": "null"
@@ -24918,6 +25012,10 @@
             "description": "When true, return only thread metadata and live fork state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after forking. Full-history hydration is deprecated for paginated threads; use this with `thread/turns/list` and `thread/items/list` instead.",
             "type": "boolean"
           },
+          "experimentalPredictionMode": {
+            "description": "Start from the loaded parent's effective config, tools, environments, and persisted history to maximize prompt-cache reuse. Requires a loaded, persisted parent and `ephemeral: true`. Enables `features.reasoning_effort_override` on the fork. Cannot be combined with configuration overrides, `path`, `lastTurnId`, or `beforeTurnId`.",
+            "type": "boolean"
+          },
           "lastTurnId": {
             "description": "Optional last turn id to fork through, inclusive.\n\nWhen specified, turns after `last_turn_id` are omitted from the fork. The referenced turn cannot be in progress.",
             "type": [
@@ -26019,6 +26117,24 @@
               "kind": {
                 "$ref": "#/definitions/v2/SubAgentActivityKind"
               },
+              "model": {
+                "description": "Resolved model at sub-agent creation; absent from older records and other activities.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reasoningEffort": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ReasoningEffort"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Resolved reasoning effort at sub-agent creation, when known."
+              },
               "type": {
                 "enum": [
                   "subAgentActivity"
@@ -26459,6 +26575,16 @@
               }
             ],
             "description": "Optional cwd filter or filters; when set, only threads whose session cwd exactly matches one of these paths are returned."
+          },
+          "excludedThreadIds": {
+            "description": "Thread IDs to exclude before applying the result limit. Up to 100 entries; invalid IDs or a larger list are rejected, never truncated. Send the same exclusions on each page. Omitted, null, or empty means no exclusions.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "limit": {
             "description": "Optional page size; defaults to a reasonable server-side value.",
@@ -28379,7 +28505,7 @@
             ]
           },
           "searchTerm": {
-            "description": "Case-insensitive literal substring to find in visible user messages and final assistant messages.",
+            "description": "Case-insensitive literal substring to find in visible user messages and both partial and final assistant answers.",
             "type": "string"
           },
           "threadId": {
@@ -30248,6 +30374,13 @@
             "default": "full",
             "description": "Describes how much of `items` has been loaded for this turn."
           },
+          "rootTurnId": {
+            "description": "ID of the first turn in the chain of work that led to this turn. Pass this as `rootTurnId` when starting work on behalf of this turn. May be null in older history or a `review/start` response.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "startedAt": {
             "description": "Unix timestamp (in seconds) when the turn started.",
             "format": "int64",
@@ -30715,6 +30848,13 @@
           "outputSchema": {
             "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
           },
+          "parentTurnId": {
+            "description": "ID of the turn that caused this new turn to start.\n\nSet this when starting work on behalf of another turn, such as delegated work in a different thread. Leave unset for work started directly by the user. Ignored when this request adds input to an active turn.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "permissions": {
             "description": "Select a named permissions profile id for this turn and subsequent turns. Cannot be combined with `sandboxPolicy`.",
             "type": [
@@ -30740,6 +30880,13 @@
             "description": "Optional metadata to enrich Codex's ResponsesAPI turn metadata.\n\nEntries are flattened into the JSON string sent as `client_metadata[\"x-codex-turn-metadata\"]` on ResponsesAPI HTTP and websocket requests.\n\nThey are not sent as top-level ResponsesAPI `client_metadata` keys, and reserved keys such as `session_id`, `thread_id`, `turn_id`, and `window_id` cannot be overridden.",
             "type": [
               "object",
+              "null"
+            ]
+          },
+          "rootTurnId": {
+            "description": "ID of the first turn in the chain of work that led to this new turn.\n\nWhen setting `parentTurnId`, set this to the parent turn's `rootTurnId` when known. This keeps descendant work attributed to the original turn. If omitted, the new turn becomes its own root. Ignored when this request adds input to an active turn.",
+            "type": [
+              "string",
               "null"
             ]
           },

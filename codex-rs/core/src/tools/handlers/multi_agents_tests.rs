@@ -3638,6 +3638,7 @@ async fn multi_agent_v2_wait_agent_timeout_includes_bounded_status_snapshot() {
         .send_event_raw(Event {
             id: "running-turn".to_string(),
             msg: EventMsg::TurnStarted(TurnStartedEvent {
+                turn_attribution: None,
                 turn_id: "running-turn".to_string(),
                 root_turn_id: Some("running-turn".to_string()),
                 trace_id: None,
@@ -3655,6 +3656,7 @@ async fn multi_agent_v2_wait_agent_timeout_includes_bounded_status_snapshot() {
         .send_event_raw(Event {
             id: "interrupted-turn".to_string(),
             msg: EventMsg::TurnAborted(TurnAbortedEvent {
+                root_turn_id: None,
                 turn_id: Some("interrupted-turn".to_string()),
                 started_at: None,
                 reason: TurnAbortReason::Interrupted,

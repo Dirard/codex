@@ -219,14 +219,9 @@ impl AgentControl for LocalAgentControl {
                 .session
                 .current_turn_spawn_budget(config.max_spawned_threads_per_turn)
                 .await;
-            self.ensure_v2_agent_loaded(
-                config,
-                child,
-                Some(parent),
-                Some(turn_spawn_budget),
-            )
-            .await
-            .map(drop)
+            self.ensure_v2_agent_loaded(config, child, Some(parent), Some(turn_spawn_budget))
+                .await
+                .map(drop)
         })
     }
 

@@ -52,10 +52,12 @@ func TestThreadAndTurnOptionCoverageAgainstGeneratedParams(t *testing.T) {
 		"Model":                      "TurnOptions.Model",
 		"MultiAgentMode":             "TurnOptions.MultiAgentMode",
 		"OutputSchema":               "TurnOptions.OutputSchema",
+		"ParentTurnID":               "TurnOptions.ParentTurnID",
 		"Permissions":                "TurnOptions.Permissions",
 		"Personality":                "TurnOptions.Personality",
 		"ResponsesapiClientMetadata": "TurnOptions.ResponsesAPIClientMetadata",
 		"RuntimeWorkspaceRoots":      "TurnOptions.RuntimeWorkspaceRoots",
+		"RootTurnID":                 "TurnOptions.RootTurnID",
 		"SandboxPolicy":              "TurnOptions.SandboxPolicy",
 		"ServiceTier":                "TurnOptions.ServiceTier",
 		"ServiceTierForTurn":         "TurnOptions.ServiceTierForTurn",
@@ -97,6 +99,19 @@ func TestThreadAndTurnOptionsPreserveOptionalEmptyValues(t *testing.T) {
 	}
 }
 
+func TestTurnLineageOptions(t *testing.T) {
+	params := turnStartParams("child", nil, TurnOptions{ParentTurnID: "parent", RootTurnID: "root"})
+	if parent, ok := params.ParentTurnID.Value(); !ok || parent != "parent" {
+		t.Fatalf("parentTurnId = %q, %v; want parent", parent, ok)
+	}
+	if root, ok := params.RootTurnID.Value(); !ok || root != "root" {
+		t.Fatalf("rootTurnId = %q, %v; want root", root, ok)
+	}
+	if empty := turnStartParams("child", nil, TurnOptions{}); empty.ParentTurnID.IsSet() || empty.RootTurnID.IsSet() {
+		t.Fatal("empty lineage IDs must remain omitted")
+	}
+}
+
 func TestDeferredThreadNamespaceOptionCoverageIsDocumented(t *testing.T) {
 	stage5Reason := "Stage 5 method-level resource matrix owns non-first-screen thread namespace wrappers"
 	assertGeneratedParamCoverage(t, "ThreadResumeOptions deferred", reflect.TypeOf(protocol.ThreadResumeParams{}), nil, map[string]string{
@@ -120,26 +135,27 @@ func TestDeferredThreadNamespaceOptionCoverageIsDocumented(t *testing.T) {
 		"ThreadID":              stage5Reason,
 	})
 	assertGeneratedParamCoverage(t, "ThreadForkOptions deferred", reflect.TypeOf(protocol.ThreadForkParams{}), nil, map[string]string{
-		"ApprovalPolicy":        stage5Reason,
-		"ApprovalsReviewer":     stage5Reason,
-		"BaseInstructions":      stage5Reason,
-		"BeforeTurnID":          stage5Reason,
-		"Config":                stage5Reason,
-		"Cwd":                   stage5Reason,
-		"DeveloperInstructions": stage5Reason,
-		"DeferGoalContinuation": stage5Reason,
-		"Ephemeral":             stage5Reason,
-		"ExcludeTurns":          stage5Reason,
-		"LastTurnID":            stage5Reason,
-		"Model":                 stage5Reason,
-		"ModelProvider":         stage5Reason,
-		"Path":                  stage5Reason,
-		"Permissions":           stage5Reason,
-		"RuntimeWorkspaceRoots": stage5Reason,
-		"Sandbox":               stage5Reason,
-		"ServiceTier":           stage5Reason,
-		"ThreadID":              stage5Reason,
-		"ThreadSource":          stage5Reason,
+		"ApprovalPolicy":             stage5Reason,
+		"ApprovalsReviewer":          stage5Reason,
+		"BaseInstructions":           stage5Reason,
+		"BeforeTurnID":               stage5Reason,
+		"Config":                     stage5Reason,
+		"Cwd":                        stage5Reason,
+		"DeveloperInstructions":      stage5Reason,
+		"DeferGoalContinuation":      stage5Reason,
+		"Ephemeral":                  stage5Reason,
+		"ExperimentalPredictionMode": "experimental prediction is raw-only via protocol.ThreadForkParams",
+		"ExcludeTurns":               stage5Reason,
+		"LastTurnID":                 stage5Reason,
+		"Model":                      stage5Reason,
+		"ModelProvider":              stage5Reason,
+		"Path":                       stage5Reason,
+		"Permissions":                stage5Reason,
+		"RuntimeWorkspaceRoots":      stage5Reason,
+		"Sandbox":                    stage5Reason,
+		"ServiceTier":                stage5Reason,
+		"ThreadID":                   stage5Reason,
+		"ThreadSource":               stage5Reason,
 	})
 }
 

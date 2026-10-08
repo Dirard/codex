@@ -104,7 +104,10 @@ pub(crate) async fn build_compaction_context_for_window(
             sess.build_initial_context_with_world_state_for_window(step_context, world_state, ids)
                 .await
         }
-        None => sess.build_initial_context_with_world_state(step_context, world_state).await,
+        None => {
+            sess.build_initial_context_with_world_state(step_context, world_state)
+                .await
+        }
     };
     let (prefix, context) = split_prefix_updates(updates);
     (prefix, merge_world_state_updates(context), snapshot)
@@ -323,7 +326,7 @@ async fn run_compact_task_inner_impl(
         let prompt = Prompt {
             input: turn_input,
             tools: step_context.tool_router.model_visible_specs(),
-            parallel_tool_calls: turn_context.model_info().supports_parallel_tool_calls,
+            parallel_tool_calls: true,
             base_instructions,
             cyber_access_program: turn_context.cyber_access_program,
             ..Default::default()

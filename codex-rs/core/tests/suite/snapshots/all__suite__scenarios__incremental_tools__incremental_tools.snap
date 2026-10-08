@@ -16,8 +16,8 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=49f981f03ae5c5ce):
-        - namespace/functions; hash=cc6e8cf0e5405f3a
+00:additional_tools/developer (2; hash=de5535263f56848c):
+        - namespace/functions; hash=06c25888d2de32fe
           - custom/exec
           - function/wait
           - function/exec_command
@@ -42,8 +42,8 @@ Settings:
 Settings: relative to window 1
   model: "updated-tools-model"
 -- request 3 (turn) --
-00:additional_tools/developer (2; hash=49f981f03ae5c5ce):
-        - namespace/functions; hash=cc6e8cf0e5405f3a
+00:additional_tools/developer (2; hash=de5535263f56848c):
+        - namespace/functions; hash=06c25888d2de32fe
           - custom/exec
           - function/wait
           - function/exec_command
@@ -62,8 +62,8 @@ Settings: relative to window 1
     Begin work.
 05:message/user:
     Continue with the same tools.
-06:additional_tools/developer (1; hash=fd00dfa0a0c11da2):
-        - namespace/functions: This is an incremental namespace update. Previously declared tools remain available for direct ca...; hash=dd09638a0d29d0ca
+06:additional_tools/developer (1; hash=ab6af39932d60ef0):
+        - namespace/functions: This is an incremental namespace update. Previously declared tools remain available for direct ca...; hash=cab09ba30eb23458
           - custom/exec
 07:message/developer:
     <MODEL_SWITCH>

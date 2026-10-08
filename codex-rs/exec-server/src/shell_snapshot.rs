@@ -328,6 +328,12 @@ impl ShellSnapshotCache {
             "{startup}if ! {restore} >/dev/null; then printf 'failed to restore shell snapshot\\n' >&2; fi\n{}",
             params.argv[2]
         );
+        if shell_type == ShellType::Bash {
+            // Seccomp can make Bash misdetect remote startup and re-read .bashrc.
+            prepared
+                .command
+                .insert(shell_start + 1, "--norc".to_string());
+        }
 
         telemetry.shell_snapshot_command(wait, availability, "used");
         Ok(reader)

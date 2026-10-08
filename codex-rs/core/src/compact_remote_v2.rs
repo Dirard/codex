@@ -364,18 +364,16 @@ async fn run_remote_compact_task_inner_impl(
             retained_message_token_budget,
             retained_image_budget,
         );
-        let new_history = assemble_compaction_history(
-            compacted_history,
-            prefix.clone(),
-            context.clone(),
-        );
+        let new_history =
+            assemble_compaction_history(compacted_history, prefix.clone(), context.clone());
         let candidate_tokens = estimate_history_token_count(&new_history, &base_instructions);
         let status = context_window_token_status_for_usage(
             replacement_step_context.turn.config.as_ref(),
             replacement_step_context.turn.model_info().as_ref(),
             candidate_tokens,
             matches!(
-                replacement_step_context.turn
+                replacement_step_context
+                    .turn
                     .config
                     .model_auto_compact_token_limit_scope,
                 AutoCompactTokenLimitScope::BodyAfterPrefix
@@ -384,7 +382,8 @@ async fn run_remote_compact_task_inner_impl(
         );
         let overflow = compaction_candidate_overflow(
             &status,
-            replacement_step_context.turn
+            replacement_step_context
+                .turn
                 .config
                 .model_auto_compact_token_limit_scope,
         );
@@ -407,18 +406,15 @@ async fn run_remote_compact_task_inner_impl(
                 /*retained_message_token_budget*/ 0,
                 retained_image_budget,
             );
-            let new_history = assemble_compaction_history(
-                compacted_history,
-                prefix,
-                context,
-            );
+            let new_history = assemble_compaction_history(compacted_history, prefix, context);
             let candidate_tokens = estimate_history_token_count(&new_history, &base_instructions);
             let status = context_window_token_status_for_usage(
                 replacement_step_context.turn.config.as_ref(),
                 replacement_step_context.turn.model_info().as_ref(),
                 candidate_tokens,
                 matches!(
-                    replacement_step_context.turn
+                    replacement_step_context
+                        .turn
                         .config
                         .model_auto_compact_token_limit_scope,
                     AutoCompactTokenLimitScope::BodyAfterPrefix
@@ -427,7 +423,8 @@ async fn run_remote_compact_task_inner_impl(
             );
             if compaction_candidate_overflow(
                 &status,
-                replacement_step_context.turn
+                replacement_step_context
+                    .turn
                     .config
                     .model_auto_compact_token_limit_scope,
             ) > 0
@@ -496,7 +493,8 @@ async fn run_remote_compact_task_inner_impl(
     debug_assert_eq!(
         compaction_candidate_overflow(
             &installed_status,
-            replacement_step_context.turn
+            replacement_step_context
+                .turn
                 .config
                 .model_auto_compact_token_limit_scope,
         ),

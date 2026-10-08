@@ -361,9 +361,6 @@ impl LocalAgentControl {
             && let Ok(thread) = state.get_thread(thread_id).await
         {
             let pin = self.runtime.pin_v2_residency(&state, &thread).await?;
-            if let Some(budget) = turn_spawn_budget {
-                thread.session.set_turn_spawn_budget(budget).await;
-            }
             return Ok(pin);
         }
         if self
@@ -418,9 +415,6 @@ impl LocalAgentControl {
             if let Ok(thread) = state.get_thread(thread_id).await {
                 self.validate_loaded_v2_child(&thread, parent_thread_id)?;
                 let pin = self.runtime.pin_v2_residency(&state, &thread).await?;
-                if let Some(budget) = turn_spawn_budget {
-                    thread.session.set_turn_spawn_budget(budget).await;
-                }
                 return Ok(pin);
             }
         }
@@ -636,29 +630,34 @@ impl LocalAgentControl {
         tokio::spawn(async move {
             let _membership = membership;
             match state
-            .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
-                config,
-                initial_history,
-                agent_control: control.clone(),
-                session_source,
-                parent_thread_id,
-                environment_selections,
-                inherited_environments,
-                inherited_instructions,
-                inherited_exec_policy,
-                client_mcp_extensions,
-                turn_spawn_budget: turn_spawn_budget.clone(),
-            })
-            .await
-        {
-            Ok(ThreadSpawnOutcome::Spawned(reloaded_thread)) => {
-                if let Some(parent_thread_id) = owner_thread_id {
-                    control.validate_loaded_v2_child(&reloaded_thread.thread, parent_thread_id)?;
-                }
-                    let residency_pin = control.runtime
+                .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
+                    config,
+                    initial_history,
+                    agent_control: control.clone(),
+                    session_source,
+                    parent_thread_id,
+                    environment_selections,
+                    inherited_environments,
+                    inherited_instructions,
+                    inherited_exec_policy,
+                    client_mcp_extensions,
+                    turn_spawn_budget: turn_spawn_budget.clone(),
+                })
+                .await
+            {
+                Ok(ThreadSpawnOutcome::Spawned(reloaded_thread)) => {
+                    if let Some(parent_thread_id) = owner_thread_id {
+                        control
+                            .validate_loaded_v2_child(&reloaded_thread.thread, parent_thread_id)?;
+                    }
+                    let residency_pin = control
+                        .runtime
                         .pin_v2_residency(&state, &reloaded_thread.thread)
                         .await?;
-                    control.runtime.registry.clear_evicted_environments(thread_id);
+                    control
+                        .runtime
+                        .registry
+                        .clear_evicted_environments(thread_id);
                     if let Some(turn_spawn_budget) = turn_spawn_budget {
                         reloaded_thread
                             .thread
@@ -687,34 +686,38 @@ impl LocalAgentControl {
                     }
                     state.notify_thread_created(reloaded_thread.thread_id);
                     Ok(residency_pin)
-            }
-            Ok(ThreadSpawnOutcome::AlreadyRunning(reloaded_thread)) => {
-                if let Some(parent_thread_id) = owner_thread_id {
-                    control.validate_loaded_v2_child(&reloaded_thread.thread, parent_thread_id)?;
                 }
-                let pin = control.runtime.pin_v2_residency(&state, &reloaded_thread.thread).await?;
-                control.runtime.registry.clear_evicted_environments(thread_id);
-                drop(residency_slot);
-                if let Some(budget) = turn_spawn_budget {
-                    reloaded_thread.thread.session.set_turn_spawn_budget(budget).await;
-                }
-                Ok(pin)
-            }
-            Err(err) => {
-                if let Ok(thread) = state.get_thread(thread_id).await {
+                Ok(ThreadSpawnOutcome::AlreadyRunning(reloaded_thread)) => {
                     if let Some(parent_thread_id) = owner_thread_id {
-                        control.validate_loaded_v2_child(&thread, parent_thread_id)?;
+                        control
+                            .validate_loaded_v2_child(&reloaded_thread.thread, parent_thread_id)?;
                     }
-                    let pin = control.runtime.pin_v2_residency(&state, &thread).await?;
-                    control.runtime.registry.clear_evicted_environments(thread_id);
+                    let pin = control
+                        .runtime
+                        .pin_v2_residency(&state, &reloaded_thread.thread)
+                        .await?;
+                    control
+                        .runtime
+                        .registry
+                        .clear_evicted_environments(thread_id);
                     drop(residency_slot);
-                    if let Some(budget) = turn_spawn_budget {
-                        thread.session.set_turn_spawn_budget(budget).await;
-                    }
-                    return Ok(pin);
+                    Ok(pin)
                 }
-                Err(err)
-            }
+                Err(err) => {
+                    if let Ok(thread) = state.get_thread(thread_id).await {
+                        if let Some(parent_thread_id) = owner_thread_id {
+                            control.validate_loaded_v2_child(&thread, parent_thread_id)?;
+                        }
+                        let pin = control.runtime.pin_v2_residency(&state, &thread).await?;
+                        control
+                            .runtime
+                            .registry
+                            .clear_evicted_environments(thread_id);
+                        drop(residency_slot);
+                        return Ok(pin);
+                    }
+                    Err(err)
+                }
             }
         })
         .await?

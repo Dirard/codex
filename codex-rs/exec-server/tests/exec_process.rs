@@ -287,6 +287,10 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
             profile_path.to_string_lossy().into_owned(),
         );
     }
+    if use_remote && !tty && !use_sandbox && !automatic_startup && shell_name == "bash" {
+        // Trigger Bash's remote startup path without relying on host seccomp behavior.
+        configured_environment.insert("SSH_CLIENT".to_string(), "127.0.0.1 123 456".to_string());
+    }
     // Many small entries exercise capture overhead separately from the byte limit above.
     let many_entries = !use_remote && !tty && !automatic_startup;
     if many_entries {
@@ -305,6 +309,7 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
             "HOME".to_string(),
             "PATH".to_string(),
             "PROFILE_*".to_string(),
+            "SSH_CLIENT".to_string(),
         ],
     };
     let (command_prefix, expected_prefix) = if shell_name == "sh" {
