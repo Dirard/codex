@@ -399,7 +399,11 @@ pub async fn load_config_layers_state(
                 return Err(err);
             }
         };
-        apply_credential_broker_requirements(&mut project_trust_context, &config_requirements_toml);
+        apply_credential_broker_requirements(
+            &mut project_trust_context,
+            &config_requirements_toml,
+            &trusted_broker_config,
+        );
         let project_layers = load_project_layers(
             fs,
             &cwd,
@@ -810,6 +814,16 @@ fn windows_codex_system_dir() -> PathBuf {
 
 #[cfg(windows)]
 fn windows_system_requirements_toml_file() -> io::Result<AbsolutePathBuf> {
+    if let Ok(path) = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(
+            r"SOFTWARE\Policies\OpenAI\Codex",
+            winreg::enums::KEY_READ | winreg::enums::KEY_WOW64_64KEY,
+        )
+        .and_then(|key| key.get_value::<std::ffi::OsString, _>("RequirementsPath"))
+    {
+        return AbsolutePathBuf::from_absolute_path_checked(path);
+    }
+
     let requirements_toml_file = windows_codex_system_dir().join("requirements.toml");
     AbsolutePathBuf::try_from(requirements_toml_file)
 }
@@ -991,16 +1005,32 @@ enum CredentialBrokerProjectState {
 fn apply_credential_broker_requirements(
     context: &mut ProjectTrustContext,
     requirements: &crate::ConfigRequirementsWithSources,
+    trusted_broker_config: &TomlValue,
 ) {
-    if context.credential_broker == CredentialBrokerProjectState::Unconfigured {
-        return;
-    }
-    let enabled = requirements
+    let credential_masking_enabled = requirements
         .feature_requirements
         .as_ref()
-        .and_then(|requirements| requirements.entries.get("network_proxy"))
+        .and_then(|requirements| requirements.entries.get("credential_masking"))
         .copied()
-        .unwrap_or(context.credential_broker == CredentialBrokerProjectState::Enabled);
+        .or_else(|| {
+            trusted_broker_config
+                .get("features")
+                .and_then(|features| features.get("credential_masking"))
+                .and_then(TomlValue::as_bool)
+        })
+        .unwrap_or(false);
+    if !credential_masking_enabled
+        && context.credential_broker == CredentialBrokerProjectState::Unconfigured
+    {
+        return;
+    }
+    let enabled = credential_masking_enabled
+        || requirements
+            .feature_requirements
+            .as_ref()
+            .and_then(|requirements| requirements.entries.get("network_proxy"))
+            .copied()
+            .unwrap_or(context.credential_broker == CredentialBrokerProjectState::Enabled);
     context.credential_broker = if enabled
         && requirements
             .network
@@ -1171,7 +1201,11 @@ fn sanitize_project_config(
         {
             ignored_keys.push("features.multi_agent_v2.message_board_remote".to_string());
         }
-        for key in ["respect_system_proxy", "system_proxy_fallback"] {
+        for key in [
+            "respect_system_proxy",
+            "system_proxy_fallback",
+            "credential_masking",
+        ] {
             if features.remove(key).is_some() {
                 ignored_keys.push(format!("features.{key}"));
             }
@@ -1982,24 +2016,13 @@ foo = "xyzzy"
 
     #[cfg(windows)]
     #[test]
-    fn windows_system_requirements_toml_file_uses_expected_suffix() {
+    fn windows_codex_system_dir_uses_expected_suffix() {
         let expected = windows_program_data_dir_from_known_folder()
             .unwrap_or_else(|_| PathBuf::from(DEFAULT_PROGRAM_DATA_DIR_WINDOWS))
             .join("OpenAI")
-            .join("Codex")
-            .join("requirements.toml");
-        assert_eq!(
-            windows_system_requirements_toml_file()
-                .expect("requirements.toml path")
-                .as_path(),
-            expected.as_path()
-        );
-        assert!(
-            windows_system_requirements_toml_file()
-                .expect("requirements.toml path")
-                .as_path()
-                .ends_with(Path::new("OpenAI").join("Codex").join("requirements.toml"))
-        );
+            .join("Codex");
+        assert_eq!(windows_codex_system_dir(), expected);
+        assert!(windows_codex_system_dir().ends_with(Path::new("OpenAI").join("Codex")));
     }
 
     #[cfg(windows)]

@@ -360,7 +360,9 @@ impl Client {
             Ok(Err(RequestError::Other(error)))
                 if error
                     .downcast_ref::<RouteAwareRequestError>()
-                    .is_some_and(|error| error.is_connect() || error.is_timeout()) => {}
+                    .is_some_and(|error| {
+                        error.is_connect() || error.is_timeout() || error.is_request()
+                    }) => {}
             Err(_) => {}
             Ok(response) => return response,
         }
@@ -801,6 +803,8 @@ impl Client {
             crate::types::PlanType::Edu | crate::types::PlanType::Education => AccountPlanType::Edu,
             crate::types::PlanType::EduPlus => AccountPlanType::EduPlus,
             crate::types::PlanType::EduPro => AccountPlanType::EduPro,
+            crate::types::PlanType::Sci => AccountPlanType::Sci,
+            crate::types::PlanType::SciPlus => AccountPlanType::SciPlus,
             crate::types::PlanType::Guest
             | crate::types::PlanType::FreeWorkspace
             | crate::types::PlanType::Quorum

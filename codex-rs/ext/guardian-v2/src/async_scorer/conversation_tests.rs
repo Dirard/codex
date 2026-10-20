@@ -5,8 +5,10 @@ use crate::async_scorer::conversation::ConversationRequest;
 use crate::async_scorer::sampler::LunaSampler;
 use crate::async_scorer::sampler::LunaSamplerError;
 use crate::async_scorer::sampler::LunaSamplingRequest;
+use crate::async_scorer::sampler::SampledScore;
 use crate::async_scorer::sampler::tests::sample_request;
 use crate::async_scorer::sampler::tests::sampler_config;
+use crate::async_scorer::score::PendingScore;
 use crate::async_scorer::transcript::ContextInput;
 use codex_extension_api::ThreadStopInput;
 use codex_guardian_context::ContextTarget;
@@ -22,7 +24,9 @@ async fn pending_request(
     label: &str,
 ) -> Result<(
     ConversationRequest,
-    tokio::sync::oneshot::Receiver<Result<String, LunaSamplerError>>,
+    impl std::future::Future<
+        Output = Result<Result<String, LunaSamplerError>, tokio::sync::oneshot::error::RecvError>,
+    >,
 )> {
     let thread = Arc::clone(&fixture.test.codex);
     let config = thread
@@ -45,6 +49,14 @@ async fn pending_request(
     })?;
     let (ready, score) = tokio::sync::oneshot::channel();
     let authorization = ScoreAuthorization::current(&thread, &Default::default()).await;
+    let pending_score = PendingScore {
+        progress: thread
+            .thread_extension_data()
+            .get::<GuardianV2ScoreProgress>()
+            .unwrap(),
+        index: 0,
+        max_lag: config.max_tool_call_lag,
+    };
     Ok((
         ConversationRequest {
             evidence,
@@ -53,13 +65,14 @@ async fn pending_request(
             thread,
             ready,
             metrics: None,
+            pending_score,
             sampling: LunaSamplingRequest {
                 instructions,
                 input: Vec::new(),
                 ..sample_request(label)
             },
         },
-        score,
+        async move { score.await.map(|result| result.map(SampledScore::accept)) },
     ))
 }
 
@@ -79,13 +92,51 @@ async fn configured_reset_limit_rebuilds_history_without_rejecting_fresh_evidenc
             ev_completed("score"),
         ]);
         let mock = responses::mount_sse_sequence(&server, vec![events; 2]).await;
+        let metrics = Arc::new(RecordingMetrics::default());
         for index in 0..2 {
-            let (request, score) = pending_request(&fixture, "parent").await?;
+            let (mut request, score) = pending_request(&fixture, "parent").await?;
+            request.metrics = Some(metrics.clone());
             backend.reserve(|| index).1.unwrap().run(request).await;
             assert_eq!(score.await??, "low");
         }
         let requests = mock.requests();
         assert_eq!(requests.len(), 2);
+        let expected_buckets = requests
+            .iter()
+            .map(|request| {
+                let input: Vec<ResponseItem> =
+                    serde_json::from_value(request.body_json()["input"].clone()).unwrap();
+                let tokens = input
+                    .iter()
+                    .map(codex_guardian_context::estimate_input_tokens)
+                    .sum();
+                RecordedMetric::Histogram(
+                    codex_guardian_context::REQUEST_TOKENS_METRIC.to_owned(),
+                    i64::try_from(tokens).unwrap(),
+                    vec![
+                        ("target".to_owned(), "async".to_owned()),
+                        ("component".to_owned(), "total".to_owned()),
+                        (
+                            "token_bucket".to_owned(),
+                            codex_guardian_context::request_token_bucket(tokens).to_owned(),
+                        ),
+                    ],
+                )
+            })
+            .collect::<Vec<_>>();
+        let buckets = metrics
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|sample| {
+                matches!(sample, RecordedMetric::Histogram(name, _, tags)
+                if name == codex_guardian_context::REQUEST_TOKENS_METRIC
+                    && tags.iter().any(|(key, _)| key == "token_bucket"))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(buckets, expected_buckets);
         let input = requests[1].input();
         assert_eq!(input.iter().any(|item| item["id"] == "score"), reused);
         assert_eq!(
@@ -242,14 +293,17 @@ async fn delayed_preparation_does_not_block_newer_requests_and_capacity_is_bound
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn stale_authorization_and_stopped_generations_cannot_start() -> Result<()> {
+async fn stale_authorization_expiry_and_stopped_generations_cannot_start() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let fixture = GuardianFailureFixture::with_config(
         "[features.guardianv2]\nasync_classifier_mode = 'conversation'",
     )
     .await?;
-    let sampler = Arc::new(LunaSampler::new(sampler_config(server.uri())));
+    // Preparation would fail with InputTooLarge if it ran before the expiry check.
+    let mut config = sampler_config(server.uri());
+    config.max_input_tokens = 0;
+    let sampler = Arc::new(LunaSampler::new(config));
     fixture
         .test
         .codex
@@ -257,6 +311,13 @@ async fn stale_authorization_and_stopped_generations_cannot_start() -> Result<()
         .insert(ConversationBackend::new(sampler));
     let thread_store = fixture.test.codex.thread_extension_data();
     let backend = thread_store.get::<ConversationBackend>().unwrap();
+    let expired = backend.reserve(|| 0).1.unwrap();
+    let (mut request, score) = pending_request(&fixture, "expired").await?;
+    request.pending_score.max_lag = 0;
+    observe_unscored_call(&request.pending_score.progress, thread_store);
+    expired.run(request).await;
+    assert!(matches!(score.await?, Err(LunaSamplerError::Superseded)));
+
     let blocker = backend.reserve(|| 0).1.unwrap();
     let stale = backend.reserve(|| 0).1.unwrap();
     let (request, score) = pending_request(&fixture, "stale").await?;
@@ -337,10 +398,10 @@ async fn concurrent_requests_retain_only_the_newest_completed_history() -> Resul
             },
         ];
         let (server, _) = start_streaming_sse_server(streams).await;
-        let sampler = Arc::new(LunaSampler::new(sampler_config(format!(
-            "{}/v1",
-            server.uri()
-        ))));
+        let metrics = Arc::new(RecordingMetrics::default());
+        let mut config = sampler_config(format!("{}/v1", server.uri()));
+        config.metrics = Some(metrics.clone());
+        let sampler = Arc::new(LunaSampler::new(config));
         let backend = ConversationBackend::new(sampler);
         let (request, score) = pending_request(&fixture, "seed").await?;
         backend.reserve(|| 0).1.unwrap().run(request).await;
@@ -352,9 +413,13 @@ async fn concurrent_requests_retain_only_the_newest_completed_history() -> Resul
                 .test
                 .codex
                 .inject_response_items(vec![ResponseItem::Message {
+                    status: None,
+                    encrypted_content: None,
                     id: None,
                     role: "assistant".to_owned(),
                     content: vec![ContentItem::OutputText {
+                        annotations: None,
+                        logprobs: None,
                         text: format!("Observed action {index}"),
                     }],
                     phase: Some(MessagePhase::Commentary),
@@ -393,6 +458,23 @@ async fn concurrent_requests_retain_only_the_newest_completed_history() -> Resul
                 .unwrap_err();
             assert!(error.is_cancelled());
         }
+        assert_eq!(
+            metrics
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|metric| match metric {
+                    RecordedMetric::Counter(name, _, tags)
+                        if name == "codex.guardian_v2.sampling.retry_outcome" =>
+                        tags.iter()
+                            .find(|(key, _)| key == "outcome")
+                            .map(|(_, value)| value.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec!["success"; 4],
+        );
         drop(finish_older);
         let (request, score) = pending_request(&fixture, "probe").await?;
         backend.reserve(|| 4).1.unwrap().run(request).await;
@@ -452,5 +534,161 @@ async fn concurrent_requests_retain_only_the_newest_completed_history() -> Resul
         fixture.test.codex.shutdown_and_wait().await?;
         server.shutdown().await;
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn expiry_preserves_the_completed_checkpoint_and_transcript_cursor() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let fixture = GuardianFailureFixture::with_config(
+        "[features.guardianv2]\nasync_classifier_mode = 'conversation'",
+    )
+    .await?;
+    let store = fixture.test.codex.thread_extension_data();
+    let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+    let (release_expired, finish_expired) = tokio::sync::oneshot::channel();
+    let (server, _completions) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![
+                ev_assistant_message("checkpoint", "low"),
+                ev_completed("checkpoint"),
+            ]),
+        }],
+        vec![
+            StreamingSseChunk {
+                gate: None,
+                body: responses::sse(vec![
+                    responses::ev_response_created("expired"),
+                    responses::ev_output_text_delta("low"),
+                    ev_assistant_message("uncommitted", "low"),
+                ]),
+            },
+            StreamingSseChunk {
+                gate: Some(finish_expired),
+                body: responses::sse(vec![ev_completed("expired")]),
+            },
+        ],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![
+                ev_assistant_message("resumed", "low"),
+                ev_completed("resumed"),
+            ]),
+        }],
+    ])
+    .await;
+    let backend = ConversationBackend::new(Arc::new(LunaSampler::new(sampler_config(format!(
+        "{}/v1",
+        server.uri()
+    )))));
+    let (mut request, score) = pending_request(&fixture, "checkpoint").await?;
+    let (index, reservation) = backend.reserve(|| observe_unscored_call(&progress, store));
+    request.pending_score.index = index;
+    reservation.unwrap().run(request).await;
+    assert_eq!(score.await??, "low");
+
+    // This evidence is beyond the committed cursor. A cancelled review must not
+    // advance that cursor or cause its evidence to disappear from the next delta.
+    fixture
+        .test
+        .codex
+        .inject_response_items(vec![serde_json::from_value(
+            responses::ev_function_call(
+                "observed-after-checkpoint",
+                "read_file",
+                r#"{"path":"evidence-after-checkpoint"}"#,
+            )["item"]
+                .clone(),
+        )?])
+        .await?;
+    let (mut request, early_score) = pending_request(&fixture, "expired").await?;
+    let (index, reservation) = backend.reserve(|| observe_unscored_call(&progress, store));
+    request.pending_score.index = index;
+    let expired = tokio::spawn(reservation.unwrap().run(request));
+    assert_eq!(early_score.await??, "low");
+    // Keep completion gated even after the early score, then expire the request.
+    for _ in 0..3 {
+        observe_unscored_call(&progress, store);
+    }
+    tokio::time::timeout(ASYNC_TEST_TIMEOUT, expired).await??;
+    let (mut request, score) = pending_request(&fixture, "resumed").await?;
+    let (index, reservation) = backend.reserve(|| observe_unscored_call(&progress, store));
+    request.pending_score.index = index;
+    reservation.unwrap().run(request).await;
+    assert_eq!(
+        tokio::time::timeout(ASYNC_TEST_TIMEOUT, score).await???,
+        "low"
+    );
+
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 3);
+    let checkpoint: serde_json::Value = serde_json::from_slice(&requests[0])?;
+    let resumed: serde_json::Value = serde_json::from_slice(&requests[2])?;
+    let prefix = checkpoint["input"].as_array().unwrap();
+    let input = resumed["input"].as_array().unwrap();
+    assert_eq!(&input[..prefix.len()], prefix);
+    assert_eq!(
+        input
+            .iter()
+            .filter(|item| item["role"] == "assistant")
+            .filter_map(|item| item["id"].as_str())
+            .collect::<Vec<_>>(),
+        ["checkpoint"],
+    );
+    let delta = serde_json::to_string(&input[prefix.len()..])?;
+    assert!(delta.contains("TRANSCRIPT DELTA START"));
+    assert_eq!(delta.matches("evidence-after-checkpoint").count(), 1);
+
+    drop(release_expired);
+    drop(backend);
+    fixture.test.codex.shutdown_and_wait().await?;
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn expiry_discards_a_queued_score_without_recording_success() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let fixture = GuardianFailureFixture::new().await?;
+    let store = fixture.test.codex.thread_extension_data();
+    let server = responses::start_mock_server().await;
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_output_text_delta("low"),
+            ev_assistant_message("score", "low"),
+            ev_completed("score"),
+        ]),
+    )
+    .await;
+    let metrics = Arc::new(crate::async_scorer::sampler::tests::RecordingMetrics::default());
+    let mut config = sampler_config(server.uri());
+    config.metrics = Some(metrics.clone());
+    let backend = ConversationBackend::new(Arc::new(LunaSampler::new(config)));
+    let (mut request, score) = pending_request(&fixture, "queued").await?;
+    request.pending_score.max_lag = 0;
+    let (index, reservation) =
+        backend.reserve(|| observe_unscored_call(&request.pending_score.progress, store));
+    request.pending_score.index = index;
+    let pending_score = request.pending_score.clone();
+    // Finish the worker while the score stays queued and the consumer remains unpolled.
+    tokio::time::timeout(ASYNC_TEST_TIMEOUT, reservation.unwrap().run(request)).await?;
+    assert!(
+        !metrics
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|metric| metric.0 == "codex.guardian_v2.sampling.retry_outcome")
+    );
+    observe_unscored_call(&pending_score.progress, store);
+    tokio::select! {
+        biased;
+        () = pending_score.expired() => {},
+        _ = score => panic!("expired score was accepted"),
+    }
+    metrics.assert_outcome("superseded", /*attempts*/ 1, "superseded");
+    fixture.test.codex.shutdown_and_wait().await?;
     Ok(())
 }

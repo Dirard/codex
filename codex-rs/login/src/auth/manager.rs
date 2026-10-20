@@ -62,11 +62,12 @@ use crate::default_client::create_default_auth_client;
 use crate::oauth::ErrorBodyLimit;
 use crate::oauth::OAuthClient;
 use crate::oauth::OAuthError;
+use crate::oauth::RefreshReason;
 use crate::oauth::RefreshTokenGrant;
 use crate::oauth::TokenEncoding;
 use crate::oauth::TokenEndpoint;
-use crate::oauth::TokenErrorDetail;
 use crate::outbound_proxy::AuthRouteConfig;
+use crate::token_data::AccountOAuthProvenance;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_account_user_id;
 use crate::token_data::parse_chatgpt_jwt_claims;
@@ -407,7 +408,12 @@ impl CodexAuth {
         }
 
         let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
-        let client = create_default_auth_client(&refresh_token_endpoint(), auth_route_config)?;
+        let provenance = auth_dot_json
+            .tokens
+            .as_ref()
+            .and_then(|tokens| tokens.oauth_provenance.as_ref());
+        let client =
+            create_default_auth_client(&refresh_token_endpoint(provenance), auth_route_config)?;
         let state = ChatgptAuthState {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
             client,
@@ -822,6 +828,8 @@ impl CodexAuth {
                 id_token: Default::default(),
                 access_token: "Access Token".to_string(),
                 refresh_token: "test".to_string(),
+                oauth_provenance: None,
+                login_owner_id: None,
                 account_id: Some("account_id".to_string()),
             }),
             last_refresh: Some(Utc::now()),
@@ -946,7 +954,11 @@ fn persist_agent_identity_record(
         .ok_or_else(|| std::io::Error::other("auth data is not available"))?;
     auth.agent_identity = Some(AgentIdentityStorage::Record(record));
     storage.save(&auth)?;
-    *guard = Some(auth);
+    // Publishing credentials belongs to AuthManager. Persisting identity metadata must
+    // not reload different on-disk credentials into already selected auth values.
+    if let Some(cached) = guard.as_mut() {
+        cached.agent_identity = auth.agent_identity;
+    }
     Ok(())
 }
 
@@ -1599,6 +1611,8 @@ async fn load_auth(
 // Persist refreshed tokens into auth storage and update last_refresh.
 fn persist_tokens(
     storage: &Arc<dyn AuthStorageBackend>,
+    previous_refresh_token: &str,
+    provenance: Option<AccountOAuthProvenance>,
     id_token: Option<String>,
     access_token: Option<String>,
     refresh_token: Option<String>,
@@ -1608,6 +1622,10 @@ fn persist_tokens(
         .ok_or(std::io::Error::other("Token data is not available."))?;
 
     let tokens = auth_dot_json.tokens.get_or_insert_with(TokenData::default);
+    // If a concurrent writer replaced the stored refresh token and the response did not
+    // rotate it, its authority is unknown. Do not attach the earlier grant's provenance.
+    tokens.oauth_provenance = provenance
+        .filter(|_| refresh_token.is_some() || tokens.refresh_token == previous_refresh_token);
     if let Some(id_token) = id_token {
         tokens.id_token = parse_chatgpt_jwt_claims(&id_token).map_err(std::io::Error::other)?;
     }
@@ -1626,15 +1644,16 @@ fn persist_tokens(
 // The caller is responsible for persisting any returned tokens.
 async fn request_chatgpt_token_refresh(
     refresh_token: String,
+    endpoint: &str,
+    client_id: &str,
     client: &HttpClient,
+    refresh_reason: RefreshReason,
 ) -> Result<RefreshResponse, RefreshTokenError> {
-    let client_id = oauth_client_id();
-    let endpoint = refresh_token_endpoint();
     let oauth = OAuthClient::new(
         client,
         TokenEndpoint {
-            url: &endpoint,
-            client_id: &client_id,
+            url: endpoint,
+            client_id,
             encoding: TokenEncoding::Json,
             timeout: None,
             error_body_limit: ErrorBodyLimit::Unlimited,
@@ -1644,6 +1663,7 @@ async fn request_chatgpt_token_refresh(
         .refresh(RefreshTokenGrant {
             refresh_token: &refresh_token,
             resource: None,
+            refresh_reason: Some(refresh_reason),
         })
         .await
     {
@@ -1653,12 +1673,12 @@ async fn request_chatgpt_token_refresh(
                 return Err(denied.into());
             }
             let status = rejection.status;
-            let detail = &rejection.detail;
-            tracing::error!(%status, ?detail, "Failed to refresh token");
-            let code = detail.error_code();
+            // The IdP controls the response body and may echo credential material.
+            tracing::error!(%status, "Failed to refresh token");
+            let code = rejection.detail.error_code();
             let is_invalid_grant_bad_request = status == StatusCode::BAD_REQUEST
                 && code.is_some_and(|code| code.eq_ignore_ascii_case("invalid_grant"));
-            let failed = classify_refresh_token_failure(code, detail, is_invalid_grant_bad_request);
+            let failed = classify_refresh_token_failure(code, is_invalid_grant_bad_request);
             if status == StatusCode::UNAUTHORIZED
                 || failed.reason != RefreshTokenFailedReason::Other
                 || is_invalid_grant_bad_request
@@ -1666,7 +1686,7 @@ async fn request_chatgpt_token_refresh(
                 Err(RefreshTokenError::Permanent(failed))
             } else {
                 Err(RefreshTokenError::Transient(std::io::Error::other(
-                    format!("Failed to refresh token: {status}: {detail}"),
+                    format!("Failed to refresh token: {status}"),
                 )))
             }
         }
@@ -1679,7 +1699,6 @@ async fn request_chatgpt_token_refresh(
 
 fn classify_refresh_token_failure(
     code: Option<&str>,
-    detail: &TokenErrorDetail,
     is_invalid_grant_bad_request: bool,
 ) -> RefreshTokenFailedError {
     let normalized_code = code.map(str::to_ascii_lowercase);
@@ -1691,10 +1710,7 @@ fn classify_refresh_token_failure(
     };
 
     if reason == RefreshTokenFailedReason::Other && !is_invalid_grant_bad_request {
-        tracing::warn!(
-            backend_detail = ?detail,
-            "Encountered unknown response while refreshing token"
-        );
+        tracing::warn!("Encountered unknown response while refreshing token");
     }
 
     let message = match reason {
@@ -1724,9 +1740,12 @@ pub fn oauth_client_id() -> String {
         .unwrap_or_else(|| CLIENT_ID.to_string())
 }
 
-fn refresh_token_endpoint() -> String {
-    std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)
-        .unwrap_or_else(|_| REFRESH_TOKEN_URL.to_string())
+fn refresh_token_endpoint(provenance: Option<&AccountOAuthProvenance>) -> String {
+    std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR).unwrap_or_else(|_| {
+        provenance
+            .map(|provenance| format!("{}/oauth/token", provenance.issuer.trim_end_matches('/')))
+            .unwrap_or_else(|| REFRESH_TOKEN_URL.to_string())
+    })
 }
 
 impl AuthDotJson {
@@ -1746,6 +1765,8 @@ impl AuthDotJson {
             id_token: token_info,
             access_token: access_token.to_string(),
             refresh_token: String::new(),
+            oauth_provenance: None,
+            login_owner_id: None,
             account_id: Some(chatgpt_account_id.to_string()),
         };
 
@@ -2011,14 +2032,18 @@ impl UnauthorizedRecovery {
                 }
             }
             UnauthorizedRecoveryStep::RefreshToken => {
-                self.manager.refresh_token_from_authority().await?;
+                self.manager
+                    .refresh_token_from_authority_with_reason(RefreshReason::UnauthorizedRecovery)
+                    .await?;
                 self.step = UnauthorizedRecoveryStep::Done;
                 return Ok(UnauthorizedRecoveryStepResult {
                     auth_state_changed: Some(true),
                 });
             }
             UnauthorizedRecoveryStep::ExternalRefresh => {
-                self.manager.refresh_token_from_authority().await?;
+                self.manager
+                    .refresh_token_from_authority_with_reason(RefreshReason::UnauthorizedRecovery)
+                    .await?;
                 self.step = UnauthorizedRecoveryStep::Done;
                 return Ok(UnauthorizedRecoveryStepResult {
                     auth_state_changed: Some(true),
@@ -2364,6 +2389,15 @@ impl AuthManager {
             .and_then(|cached| cached.auth.clone())
     }
 
+    /// Current revisions if the selected credential still belongs to this manager's source.
+    pub fn auth_change_state_for(&self, expected: &CodexAuth) -> Option<AuthChangeState> {
+        let cached = self.inner.read().ok()?;
+        if !super::source::same_source(cached.auth.as_ref(), Some(expected)) {
+            return None;
+        }
+        Some(*self.auth_change_state_tx.borrow())
+    }
+
     /// Subscribes to cached auth changes that can affect request recovery.
     pub fn auth_change_receiver(&self) -> watch::Receiver<u64> {
         self.auth_change_tx.subscribe()
@@ -2395,8 +2429,8 @@ impl AuthManager {
         }
 
         let auth = self.auth_cached()?;
-        if Self::should_refresh_proactively(&auth)
-            && let Err(err) = self.refresh_token().await
+        if let Some(reason) = Self::proactive_refresh_reason(&auth)
+            && let Err(err) = self.refresh_token_with_reason(reason).await
         {
             tracing::error!("Failed to refresh token: {}", err);
             return Some(auth);
@@ -2632,6 +2666,8 @@ impl AuthManager {
                 !Self::auths_equal_for_refresh(previous, new_auth.as_ref());
             let owner_changed =
                 auth_changed_for_refresh && !same_owner(previous, new_auth.as_ref());
+            let source_changed = auth_changed_for_refresh
+                && !super::source::same_source(previous, new_auth.as_ref());
             if owner_changed {
                 self.auth_route_config
                     .application_network_policy()
@@ -2647,6 +2683,9 @@ impl AuthManager {
                     state.generation += 1;
                     if owner_changed {
                         state.owner_generation += 1;
+                    }
+                    if source_changed {
+                        state.source_generation += 1;
                     }
                 });
                 self.auth_change_tx.send_modify(|revision| *revision += 1);
@@ -2843,6 +2882,13 @@ impl AuthManager {
     /// we can assume that the source already refreshed it. Otherwise, ask the
     /// token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
+        self.refresh_token_with_reason(RefreshReason::Forced).await
+    }
+
+    async fn refresh_token_with_reason(
+        &self,
+        reason: RefreshReason,
+    ) -> Result<(), RefreshTokenError> {
         let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
             RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                 RefreshTokenFailedReason::Other,
@@ -2868,7 +2914,7 @@ impl AuthManager {
                 tracing::info!("Skipping token refresh because auth changed after guarded reload.");
                 Ok(())
             }
-            ReloadOutcome::ReloadedNoChange => self.refresh_token_from_authority_impl().await,
+            ReloadOutcome::ReloadedNoChange => self.refresh_token_from_authority_impl(reason).await,
             ReloadOutcome::Skipped => {
                 Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                     RefreshTokenFailedReason::Other,
@@ -2882,16 +2928,27 @@ impl AuthManager {
     /// it and update the shared cache. If the token refresh fails, returns the
     /// error to the caller.
     pub async fn refresh_token_from_authority(&self) -> Result<(), RefreshTokenError> {
+        self.refresh_token_from_authority_with_reason(RefreshReason::Forced)
+            .await
+    }
+
+    async fn refresh_token_from_authority_with_reason(
+        &self,
+        reason: RefreshReason,
+    ) -> Result<(), RefreshTokenError> {
         let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
             RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                 RefreshTokenFailedReason::Other,
                 REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
             ))
         })?;
-        self.refresh_token_from_authority_impl().await
+        self.refresh_token_from_authority_impl(reason).await
     }
 
-    async fn refresh_token_from_authority_impl(&self) -> Result<(), RefreshTokenError> {
+    async fn refresh_token_from_authority_impl(
+        &self,
+        reason: RefreshReason,
+    ) -> Result<(), RefreshTokenError> {
         tracing::info!("Refreshing token");
 
         let attempted_auth = self.auth_cached();
@@ -2913,8 +2970,12 @@ impl AuthManager {
                             "Token data is not available.",
                         ))
                     })?;
-                    self.refresh_and_persist_chatgpt_token(chatgpt_auth, token_data.refresh_token)
-                        .await
+                    Box::pin(self.refresh_and_persist_chatgpt_token(
+                        chatgpt_auth,
+                        token_data,
+                        reason,
+                    ))
+                    .await
                 }
                 Some(
                     CodexAuth::ApiKey(_)
@@ -2998,28 +3059,24 @@ impl AuthManager {
             .is_some_and(AuthMode::uses_codex_backend)
     }
 
-    fn should_refresh_proactively(auth: &CodexAuth) -> bool {
+    fn proactive_refresh_reason(auth: &CodexAuth) -> Option<RefreshReason> {
         let chatgpt_auth = match auth {
             CodexAuth::Chatgpt(chatgpt_auth) => chatgpt_auth,
-            _ => return false,
+            _ => return None,
         };
 
-        let auth_dot_json = match chatgpt_auth.current_auth_json() {
-            Some(auth_dot_json) => auth_dot_json,
-            None => return false,
-        };
+        let auth_dot_json = chatgpt_auth.current_auth_json()?;
         if let Some(tokens) = auth_dot_json.tokens.as_ref()
             && let Ok(Some(expires_at)) = parse_jwt_expiration(&tokens.access_token)
         {
-            return expires_at
+            return (expires_at
                 <= Utc::now()
-                    + chrono::Duration::minutes(CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES);
+                    + chrono::Duration::minutes(CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES))
+            .then_some(RefreshReason::ProactiveExpiry);
         }
-        let last_refresh = match auth_dot_json.last_refresh {
-            Some(last_refresh) => last_refresh,
-            None => return false,
-        };
-        last_refresh < Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL)
+        let last_refresh = auth_dot_json.last_refresh?;
+        (last_refresh < Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL))
+            .then_some(RefreshReason::Scheduled)
     }
 
     async fn refresh_external_auth(
@@ -3089,12 +3146,34 @@ impl AuthManager {
     async fn refresh_and_persist_chatgpt_token(
         &self,
         auth: &ChatgptAuth,
-        refresh_token: String,
+        tokens: TokenData,
+        reason: RefreshReason,
     ) -> Result<(), RefreshTokenError> {
-        let refresh_response = request_chatgpt_token_refresh(refresh_token, auth.client()).await?;
+        let endpoint = refresh_token_endpoint(tokens.oauth_provenance.as_ref());
+        let client_id = tokens
+            .oauth_provenance
+            .as_ref()
+            .map(|provenance| provenance.client_id.clone())
+            .unwrap_or_else(oauth_client_id);
+        let refresh_response = request_chatgpt_token_refresh(
+            tokens.refresh_token.clone(),
+            &endpoint,
+            &client_id,
+            auth.client(),
+            reason,
+        )
+        .await?;
+
+        // An explicit override may send refresh to another authority. Retain provenance
+        // only when the endpoint used by this request matches the recorded issuer.
+        let provenance = tokens.oauth_provenance.filter(|provenance| {
+            endpoint == format!("{}/oauth/token", provenance.issuer.trim_end_matches('/'))
+        });
 
         persist_tokens(
             auth.storage(),
+            &tokens.refresh_token,
+            provenance,
             refresh_response.id_token,
             refresh_response.access_token,
             refresh_response.refresh_token,
@@ -3130,3 +3209,7 @@ mod change_state_tests;
 #[cfg(test)]
 #[path = "account_user_id_tests.rs"]
 mod account_user_id_tests;
+
+#[cfg(test)]
+#[path = "source_tests.rs"]
+mod source_tests;

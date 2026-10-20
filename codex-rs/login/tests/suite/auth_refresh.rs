@@ -15,6 +15,7 @@ use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::RefreshTokenError;
 use codex_login::load_auth_dot_json;
 use codex_login::save_auth;
+use codex_login::token_data::AccountOAuthProvenance;
 use codex_login::token_data::IdTokenInfo;
 use codex_login::token_data::TokenData;
 use codex_protocol::auth::AuthMode;
@@ -32,6 +33,7 @@ use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::body_partial_json;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -119,6 +121,7 @@ async fn refresh_token_honors_respect_system_proxy() -> Result<()> {
                 "client_id": "staging-client",
                 "grant_type": "refresh_token",
                 "refresh_token": INITIAL_REFRESH_TOKEN,
+                "refresh_reason": "forced",
             })
         );
         return Ok(());
@@ -198,8 +201,18 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
         .await;
 
     let ctx = RefreshTokenTestContext::new(&server).await?;
+    // Exercise the recorded issuer instead of the test endpoint override.
+    // SAFETY: auth_env serializes these tests; ctx restores the environment on drop.
+    unsafe {
+        std::env::remove_var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR);
+    }
     let initial_last_refresh = Utc::now() - Duration::days(1);
-    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    let mut initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    initial_tokens.login_owner_id = Some("completed-login".into());
+    initial_tokens.oauth_provenance = Some(AccountOAuthProvenance {
+        issuer: server.uri(),
+        client_id: "recorded-client".into(),
+    });
     let initial_auth = AuthDotJson {
         auth_mode: Some(AuthMode::Chatgpt),
         openai_api_key: None,
@@ -221,9 +234,10 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&requests[0].body)?,
         json!({
-            "client_id": "staging-client",
+            "client_id": "recorded-client",
             "grant_type": "refresh_token",
             "refresh_token": INITIAL_REFRESH_TOKEN,
+            "refresh_reason": "forced",
         })
     );
 
@@ -333,6 +347,9 @@ async fn auth_refreshes_when_access_token_is_near_expiry() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
+        .and(body_partial_json(
+            json!({"refresh_reason": "proactive_expiry"}),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "access_token": "new-access-token",
             "refresh_token": "new-refresh-token"
@@ -384,6 +401,54 @@ async fn auth_refreshes_when_access_token_is_near_expiry() -> Result<()> {
         "last_refresh should advance"
     );
 
+    server.verify().await;
+    Ok(())
+}
+
+#[serial_test::serial(auth_env)]
+#[tokio::test]
+async fn auth_reports_scheduled_refresh_when_access_token_expiry_is_unavailable() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_partial_json(json!({"refresh_reason": "scheduled"})))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token"
+        })))
+        .expect(/*r*/ 1)
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    ctx.write_auth(&AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(initial_tokens.clone()),
+        last_refresh: Some(Utc::now() - Duration::days(9)),
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
+        bedrock_access_keys: None,
+    })
+    .await?;
+
+    let refreshed = ctx
+        .auth_manager
+        .auth()
+        .await
+        .context("auth should refresh")?;
+    assert_eq!(
+        refreshed.get_token_data()?,
+        TokenData {
+            access_token: "new-access-token".to_string(),
+            refresh_token: "new-refresh-token".to_string(),
+            ..initial_tokens
+        }
+    );
     server.verify().await;
     Ok(())
 }
@@ -1294,6 +1359,9 @@ async fn unauthorized_recovery_reloads_then_refreshes_tokens() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
+        .and(body_partial_json(
+            json!({"refresh_reason": "unauthorized_recovery"}),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "access_token": "recovered-access-token",
             "refresh_token": "recovered-refresh-token"
@@ -1632,6 +1700,8 @@ fn build_tokens(access_token: &str, refresh_token: &str) -> TokenData {
         id_token,
         access_token: access_token.to_string(),
         refresh_token: refresh_token.to_string(),
+        oauth_provenance: None,
+        login_owner_id: None,
         account_id: Some("account-id".to_string()),
     }
 }

@@ -1900,8 +1900,9 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
             vec![json!("/root"), json!("/root/worker")]
         );
         let context_windows = child_request
-            .message_input_texts("developer")
+            .message_input_text_groups("developer")
             .into_iter()
+            .map(|parts| parts.concat())
             .filter(|text| text.starts_with("<context_window>\n"))
             .collect::<Vec<_>>();
         let identities = context_windows
@@ -1946,10 +1947,9 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
         );
         assert!(
             child_request.has_message_with_input_texts("developer", |message| {
-                matches!(
-                    message,
-                    [text] if text.starts_with("<context_window>\nAgent name: /root/worker\n")
-                )
+                message
+                    .concat()
+                    .starts_with("<context_window>\nAgent name: /root/worker\n")
             })
         );
     }
@@ -2419,13 +2419,40 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
         })])
     );
     if model.is_some() {
+        let declares_collaboration = |tools: &Value| {
+            tools.as_array().is_some_and(|tools| {
+                tools
+                    .iter()
+                    .any(|tool| tool["name"] == MULTI_AGENT_V2_NAMESPACE)
+            })
+        };
         assert!(
-            !child_request
-                .body_json()
-                .to_string()
-                .contains("\"name\":\"collaboration\""),
-            "leaf workers must not receive collaboration tools",
+            !declares_collaboration(&child_body["tools"]),
+            "leaf workers must not receive top-level collaboration tools",
         );
+        let input = child_request.input();
+        if let Some(last_declaration) = input.iter().rposition(|item| {
+            item["type"] == "additional_tools" && declares_collaboration(&item["tools"])
+        }) {
+            let removed_namespace = format!("- {MULTI_AGENT_V2_NAMESPACE}");
+            let collaboration_removed = input[last_declaration + 1..]
+                .iter()
+                .filter(|item| item["role"] == "developer")
+                .filter_map(|item| {
+                    let kinds =
+                        item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                            .as_array()?;
+                    let index = kinds
+                        .iter()
+                        .position(|kind| kind == "tools.removed_definition")?;
+                    item["content"][index]["text"].as_str()
+                })
+                .any(|text| text.lines().any(|line| line == removed_namespace));
+            assert!(
+                collaboration_removed,
+                "leaf workers must mark inherited collaboration tools unavailable",
+            );
+        }
     }
     if plaintext {
         let parent_request = parent_request_log

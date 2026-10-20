@@ -8,6 +8,7 @@ mod host;
 use crate::HostSkillsSnapshot;
 use codex_exec_server::EnvironmentAccess;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
+use codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_mcp::McpResourceClient;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -38,6 +39,8 @@ pub struct SkillListQuery {
     pub mcp_resources: Option<Arc<McpResourceClient>>,
     /// Present only when the opt-in high-level executor discovery path is selected.
     pub executor_capability_discovery: Option<ExecutorCapabilityDiscoverySnapshot>,
+    /// Present when V2 is selected, including empty or failed discovery. Never falls back to V1.
+    pub executor_capability_discovery_v2: Option<Vec<ExecutorCapabilityDiscoveryV2Snapshot>>,
 }
 
 /// A skill read with the source access supplied by its callback.
@@ -82,6 +85,7 @@ pub type SkillProviderFuture<'a, T> =
 /// provider must be read or searched through the same provider/authority rather
 /// than converted into an ambient local path.
 pub trait SkillProvider: Send + Sync {
+    /// Providers set `is_partial` when listing omits entries; warnings are diagnostic only.
     fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog>;
 
     fn read<'a>(
