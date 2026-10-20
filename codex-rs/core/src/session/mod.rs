@@ -4459,6 +4459,7 @@ impl Session {
         }
         // Wait for accepted updates to finish persisting, then keep later updates from
         // overtaking the current settings snapshot while its checkpoint is written.
+        let base_instructions = self.get_base_instructions().await;
         let _settings_guard = thread_settings::acquire_persistence_lock(self).await;
         let (compacted_item, started_item) = {
             let mut state = self.state.lock().await;
@@ -4502,6 +4503,24 @@ impl Session {
                         prefix_context.into_iter().map(ResponseItemEnvelope::new),
                     );
                     items.extend_from_slice(suffix);
+                    // Validate the complete prepared replacement, including the live suffix,
+                    // before advancing the compaction window or mutating history.
+                    let candidate_tokens = crate::context_manager::estimate_history_token_count(
+                        &items,
+                        &base_instructions,
+                    );
+                    let scope = turn_context.config.model_auto_compact_token_limit_scope;
+                    let status =
+                        crate::session::context_window::context_window_token_status_for_usage(
+                            turn_context.config.as_ref(),
+                            model_info,
+                            candidate_tokens,
+                            matches!(scope, AutoCompactTokenLimitScope::BodyAfterPrefix)
+                                .then_some(candidate_tokens),
+                        );
+                    if crate::compact_remote_v2::compaction_candidate_overflow(&status, scope) > 0 {
+                        return false;
+                    }
                     // The unchanged suffix already contains updates through this baseline.
                     if let Some(checkpoint) = state.history.world_state_checkpoint() {
                         world_state_baseline = WorldStateSnapshot::from(&checkpoint.state);

@@ -125,7 +125,7 @@ fn overflow(used: i64, limit: Option<i64>) -> i64 {
     })
 }
 
-fn compaction_candidate_overflow(
+pub(crate) fn compaction_candidate_overflow(
     status: &crate::session::context_window::ContextWindowTokenStatus,
     scope: AutoCompactTokenLimitScope,
 ) -> i64 {
@@ -680,8 +680,9 @@ fn truncate_retained_messages(
             usize::try_from(estimate_item_token_count(&group.source.item)).unwrap_or(usize::MAX);
         let charge_serialized_estimate =
             client_developer || (!charge_images && image_count == 0 && !has_uncharged_audio);
-        let recheck_serialized_estimate =
-            charge_serialized_estimate || (!has_uncharged_audio && image_count == 0);
+        let recheck_serialized_estimate = client_developer
+            || (!charge_images && image_count > 0 && content_tokens > 0 && !has_uncharged_audio)
+            || (!charge_images && image_count == 0 && !has_uncharged_audio && remaining > 16);
         let source_tokens = if charge_serialized_estimate {
             serialized_tokens
         } else {
@@ -854,26 +855,6 @@ mod tests {
                 text: text.to_string(),
             }],
             phase,
-            internal_chat_message_metadata_passthrough: None,
-        }
-    }
-
-    fn mixed_text_image_message(text: &str) -> ResponseItem {
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![
-                ContentItem::InputText {
-                    text: text.to_string(),
-                },
-                ContentItem::InputImage {
-                    image: codex_protocol::models::ImageReference::Inline {
-                        image_url: "data:image/png;base64,AAAA".to_string(),
-                    },
-                    detail: None,
-                },
-            ],
-            phase: None,
             internal_chat_message_metadata_passthrough: None,
         }
     }
@@ -1200,7 +1181,7 @@ mod tests {
             .expect("positive image estimate");
 
         assert_eq!(
-            truncate_retained_messages_for_remote_compaction(vec![image_only], budget),
+            truncate_retained_messages(vec![image_only], budget, RetainedImageBudget::Enabled),
             Vec::<ResponseItemEnvelope>::new(),
         );
     }
@@ -1391,7 +1372,8 @@ mod tests {
             .expect("the image remains after text is removed");
         let fixed_cost = usize::try_from(estimate_item_token_count(&text_free.item))
             .expect("positive fixed-content estimate");
-        let retained = truncate_retained_messages_for_remote_compaction(vec![mixed], fixed_cost);
+        let retained =
+            truncate_retained_messages(vec![mixed], fixed_cost, RetainedImageBudget::Enabled);
 
         assert_eq!(retained, vec![text_free]);
     }

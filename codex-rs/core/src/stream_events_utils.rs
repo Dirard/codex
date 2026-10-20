@@ -358,7 +358,10 @@ pub(crate) async fn handle_output_item_done(
                         // The call is already in history; resume needs its output even if we never dispatch.
                         let output =
                             ToolCallRuntime::aborted_response(&call, /*elapsed_secs*/ None);
-                        return Ok(output.into_response());
+                        return Ok(ToolCallResult {
+                            response: output.into_response(),
+                            made_progress: false,
+                        });
                     }
                     runtime.handle_tool_call(call, cancellation_token).await
                 })

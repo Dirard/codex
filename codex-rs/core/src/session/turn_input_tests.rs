@@ -895,7 +895,7 @@ async fn agent_message_wake_reservation_preserves_existing_boundaries(
     );
     session
         .input_queue
-        .enqueue_mailbox_communication(communication.clone().into(), Default::default())
+        .enqueue_mailbox_communication(communication.clone().into(), Default::default(), None)
         .await;
 
     assert!(session.reserve_pending_work_turn().await.is_none());
