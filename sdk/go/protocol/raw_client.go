@@ -64,6 +64,18 @@ func (c RawClient) ThreadFork(ctx context.Context, params ThreadForkParams) (Thr
 	return result, err
 }
 
+func (c RawClient) ThreadSample(ctx context.Context, params ThreadSampleParams) (ThreadSampleResponse, error) {
+	var result ThreadSampleResponse
+	err := c.sender.Call(ctx, "thread/sample", params, &result, MethodMetadataByMethod["thread/sample"])
+	return result, err
+}
+
+func (c RawClient) ThreadSampleCancel(ctx context.Context, params ThreadSampleCancelParams) (ThreadSampleCancelResponse, error) {
+	var result ThreadSampleCancelResponse
+	err := c.sender.Call(ctx, "thread/sample/cancel", params, &result, MethodMetadataByMethod["thread/sample/cancel"])
+	return result, err
+}
+
 func (c RawClient) ThreadArchive(ctx context.Context, params ThreadArchiveParams) (ThreadArchiveResponse, error) {
 	var result ThreadArchiveResponse
 	err := c.sender.Call(ctx, "thread/archive", params, &result, MethodMetadataByMethod["thread/archive"])
@@ -370,6 +382,12 @@ func (c RawClient) ThreadRead(ctx context.Context, params ThreadReadParams) (Thr
 	return result, err
 }
 
+func (c RawClient) ThreadReadStateUpdate(ctx context.Context, params ThreadReadStateUpdateParams) (ThreadReadStateUpdateResponse, error) {
+	var result ThreadReadStateUpdateResponse
+	err := c.sender.Call(ctx, "thread/readState/update", params, &result, MethodMetadataByMethod["thread/readState/update"])
+	return result, err
+}
+
 func (c RawClient) ThreadTurnsList(ctx context.Context, params ThreadTurnsListParams) (ThreadTurnsListResponse, error) {
 	var result ThreadTurnsListResponse
 	err := c.sender.Call(ctx, "thread/turns/list", params, &result, MethodMetadataByMethod["thread/turns/list"])
@@ -379,6 +397,12 @@ func (c RawClient) ThreadTurnsList(ctx context.Context, params ThreadTurnsListPa
 func (c RawClient) ThreadItemsList(ctx context.Context, params ThreadItemsListParams) (ThreadItemsListResponse, error) {
 	var result ThreadItemsListResponse
 	err := c.sender.Call(ctx, "thread/items/list", params, &result, MethodMetadataByMethod["thread/items/list"])
+	return result, err
+}
+
+func (c RawClient) ThreadItemsRead(ctx context.Context, params ThreadItemsReadParams) (ThreadItemsReadResponse, error) {
+	var result ThreadItemsReadResponse
+	err := c.sender.Call(ctx, "thread/items/read", params, &result, MethodMetadataByMethod["thread/items/read"])
 	return result, err
 }
 

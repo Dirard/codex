@@ -82,37 +82,39 @@ type ThreadForkOptions struct {
 }
 
 type TurnOptions struct {
-	ClientUserMessageID        string
-	ResponsesAPIClientMetadata map[string]string
-	AdditionalContext          map[string]protocol.AdditionalContextEntry
-	Environments               []protocol.TurnEnvironmentParams
-	CWD                        string
-	RuntimeWorkspaceRoots      []protocol.AbsolutePathBuf
-	ApprovalPolicy             protocol.AskForApproval
-	ApprovalsReviewer          protocol.ApprovalsReviewer
-	SandboxPolicy              protocol.SandboxPolicy
-	Permissions                string
-	Model                      string
-	ServiceTier                string
-	ServiceTierForTurn         string
-	CyberAccessProgram         protocol.CyberAccessProgram
-	TurnTrigger                string
-	ParentTurnID               string
-	RootTurnID                 string
-	ToolOutput                 *protocol.TurnToolOutput
-	Effort                     protocol.ReasoningEffort
-	Summary                    protocol.ReasoningSummary
-	Personality                protocol.Personality
-	OutputSchema               OutputSchema
-	CollaborationMode          protocol.CollaborationMode
-	MultiAgentMode             protocol.MultiAgentMode
-	DisabledPluginIDs          []string
+	ClientUserMessageID             string
+	ResponsesAPIClientMetadata      map[string]string
+	ResponsesAPIClientMetadataPatch map[string]string
+	AdditionalContext               map[string]protocol.AdditionalContextEntry
+	Environments                    []protocol.TurnEnvironmentParams
+	CWD                             string
+	RuntimeWorkspaceRoots           []protocol.AbsolutePathBuf
+	ApprovalPolicy                  protocol.AskForApproval
+	ApprovalsReviewer               protocol.ApprovalsReviewer
+	SandboxPolicy                   protocol.SandboxPolicy
+	Permissions                     string
+	Model                           string
+	ServiceTier                     string
+	ServiceTierForTurn              string
+	CyberAccessProgram              protocol.CyberAccessProgram
+	TurnTrigger                     string
+	ParentTurnID                    string
+	RootTurnID                      string
+	ToolOutput                      *protocol.TurnToolOutput
+	Effort                          protocol.ReasoningEffort
+	Summary                         protocol.ReasoningSummary
+	Personality                     protocol.Personality
+	OutputSchema                    OutputSchema
+	CollaborationMode               protocol.CollaborationMode
+	MultiAgentMode                  protocol.MultiAgentMode
+	DisabledPluginIDs               []string
 }
 
 type SteerOptions struct {
-	ClientUserMessageID        string
-	ResponsesAPIClientMetadata map[string]string
-	AdditionalContext          map[string]protocol.AdditionalContextEntry
+	ClientUserMessageID             string
+	ResponsesAPIClientMetadata      map[string]string
+	ResponsesAPIClientMetadataPatch map[string]string
+	AdditionalContext               map[string]protocol.AdditionalContextEntry
 }
 
 type Thread struct {
@@ -705,6 +707,9 @@ func applyTurnOptions(params *protocol.TurnStartParams, opts TurnOptions) {
 	if len(opts.ResponsesAPIClientMetadata) > 0 {
 		params.ResponsesapiClientMetadata = protocol.Some(opts.ResponsesAPIClientMetadata)
 	}
+	if len(opts.ResponsesAPIClientMetadataPatch) > 0 {
+		params.ResponsesapiClientMetadataPatch = protocol.Some(opts.ResponsesAPIClientMetadataPatch)
+	}
 	if len(opts.AdditionalContext) > 0 {
 		params.AdditionalContext = protocol.Some(opts.AdditionalContext)
 	}
@@ -782,6 +787,9 @@ func applySteerOptions(params *protocol.TurnSteerParams, opts SteerOptions) {
 	}
 	if len(opts.ResponsesAPIClientMetadata) > 0 {
 		params.ResponsesapiClientMetadata = protocol.Some(opts.ResponsesAPIClientMetadata)
+	}
+	if len(opts.ResponsesAPIClientMetadataPatch) > 0 {
+		params.ResponsesapiClientMetadataPatch = protocol.Some(opts.ResponsesAPIClientMetadataPatch)
 	}
 	if len(opts.AdditionalContext) > 0 {
 		params.AdditionalContext = protocol.Some(opts.AdditionalContext)
