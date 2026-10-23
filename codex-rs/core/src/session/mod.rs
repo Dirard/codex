@@ -2831,15 +2831,6 @@ impl Session {
     }
 
     async fn send_event_raw_with_status(&self, event: Event, status: Option<AgentStatus>) {
-        if let Some(status) = status {
-            self.agent_status.send_replace(status);
-        }
-        if let Err(error) = self.tx_event.send(event).await {
-            debug!("dropping event because channel is closed: {error}");
-        }
-    }
-
-    async fn deliver_event_raw(&self, event: Event) {
         if let Some(parent_tx) = self.parent_observer_event_tx.get() {
             let forwarded = match &event.msg {
                 EventMsg::RawResponseItem(item) => {
@@ -2864,6 +2855,15 @@ impl Session {
                     .await;
             }
         }
+        if let Some(status) = status {
+            self.agent_status.send_replace(status);
+        }
+        if let Err(error) = self.tx_event.send(event).await {
+            debug!("dropping event because channel is closed: {error}");
+        }
+    }
+
+    async fn deliver_event_raw(&self, event: Event) {
         let status = agent_status_from_event(&event.msg);
         self.send_event_raw_with_status(event, status).await;
     }

@@ -12350,6 +12350,110 @@ async fn extension_interrupt_survives_the_calling_runtime() {
     assert_eq!(aborted.reason, TurnAbortReason::Interrupted);
 }
 
+#[test_case(false, false; "preserve host status")]
+#[test_case(false, true; "apply supplied host status")]
+#[test_case(true, false; "derive ordinary delivery status")]
+#[tokio::test]
+async fn private_event_delivery_preserves_observer_order_and_host_status(
+    derive_status: bool,
+    override_status: bool,
+) {
+    let (mut private, _, _) = make_session_and_context_with_rx().await;
+    let (parent, _, parent_rx) = make_session_and_context_with_rx().await;
+    let parent_history = parent.clone_history().await;
+    let (private_tx, private_rx) = async_channel::bounded(1);
+    Arc::get_mut(&mut private)
+        .expect("private session")
+        .tx_event = private_tx.clone();
+    private
+        .parent_observer_event_tx
+        .set(parent.get_tx_event())
+        .expect("bind parent observer");
+    let supplied_status =
+        override_status.then(|| AgentStatus::Errored("host-owned terminal status".to_string()));
+
+    for msg in [
+        EventMsg::RawResponseItem(RawResponseItemEvent {
+            item: assistant_message("private review"),
+        }),
+        EventMsg::TurnAborted(TurnAbortedEvent {
+            root_turn_id: None,
+            turn_id: Some("private-turn".to_string()),
+            reason: TurnAbortReason::Interrupted,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        }),
+    ] {
+        let expected_status = supplied_status.clone().unwrap_or_else(|| {
+            if derive_status && matches!(msg, EventMsg::TurnAborted(_)) {
+                AgentStatus::Interrupted
+            } else {
+                AgentStatus::Running
+            }
+        });
+        private.agent_status.send_replace(AgentStatus::Running);
+        let event = Event {
+            id: "private-turn".to_string(),
+            msg,
+        };
+        private_tx
+            .send(Event {
+                id: "occupied".to_string(),
+                msg: EventMsg::ShutdownComplete,
+            })
+            .await
+            .expect("block the private consumer");
+        let mut delivery = Box::pin(async {
+            if derive_status {
+                private.deliver_event_raw(event.clone()).await;
+            } else {
+                private
+                    .send_event_raw_with_persistence(
+                        event.clone(),
+                        /*persist*/ false,
+                        supplied_status.clone(),
+                    )
+                    .await;
+            }
+        });
+        assert!(futures::poll!(delivery.as_mut()).is_pending());
+
+        let forwarded = parent_rx.try_recv().expect("observer is queued first");
+        assert_eq!(forwarded.id, event.id);
+        let EventMsg::PrivateSessionEvent(forwarded) = forwarded.msg else {
+            panic!("expected private observer event");
+        };
+        assert_eq!(forwarded.thread_id, private.thread_id);
+        let forwarded = match forwarded.event {
+            PrivateSessionEventPayload::RecordedItem(item) => EventMsg::RawResponseItem(item),
+            PrivateSessionEventPayload::TurnAborted(aborted) => EventMsg::TurnAborted(aborted),
+        };
+        assert_eq!(
+            serde_json::to_value(forwarded).expect("forwarded payload"),
+            serde_json::to_value(&event.msg).expect("original payload"),
+        );
+        assert_eq!(
+            private_rx.recv().await.expect("occupied slot").id,
+            "occupied"
+        );
+        delivery.await;
+        assert_eq!(*private.agent_status.borrow(), expected_status);
+        assert_eq!(
+            serde_json::to_value(private_rx.try_recv().expect("private delivery"))
+                .expect("delivered event"),
+            serde_json::to_value(event).expect("original event"),
+        );
+        assert!(parent_rx.is_empty());
+        assert!(private_rx.is_empty());
+    }
+    assert_eq!(
+        parent.clone_history().await.annotated_items(),
+        parent_history.annotated_items(),
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_complete_flushes_terminal_event_after_delivery() {
     let (mut sess, tc, rx) = make_session_and_context_with_rx().await;

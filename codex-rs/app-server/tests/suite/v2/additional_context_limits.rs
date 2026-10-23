@@ -163,6 +163,7 @@ async fn turn_steer_rejects_additional_context_over_limits() -> Result<()> {
                 client_user_message_id: None,
                 input: text_input(case_name),
                 responsesapi_client_metadata: None,
+                responsesapi_client_metadata_patch: None,
                 additional_context: Some(additional_context),
                 expected_turn_id: turn.id.clone(),
             })
