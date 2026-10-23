@@ -3173,7 +3173,7 @@ dependencies = [
 
 [[package]]
 name = "codex-direct-tool-timing"
-version = "0.0.0"
+version = "0.160.0"
 dependencies = [
  "codex-utils-critical-path",
  "pretty_assertions",
@@ -3659,7 +3659,7 @@ dependencies = [
 
 [[package]]
 name = "codex-guardian-v3"
-version = "0.0.0"
+version = "0.160.0"
 dependencies = [
  "codex-message-board",
  "codex-protocol",
@@ -4087,7 +4087,7 @@ dependencies = [
 
 [[package]]
 name = "codex-message-board"
-version = "0.0.0"
+version = "0.160.0"
 dependencies = [
  "base64 0.22.1",
  "caseless",
@@ -4195,7 +4195,7 @@ dependencies = [
 
 [[package]]
 name = "codex-multi-env-copy-file"
-version = "0.0.0"
+version = "0.160.0"
 dependencies = [
  "anyhow",
  "codex-config",
@@ -4448,7 +4448,7 @@ dependencies = [
 
 [[package]]
 name = "codex-protocol-test-support"
-version = "0.0.0"
+version = "0.160.0"
 dependencies = [
  "codex-protocol",
 ]
@@ -4631,7 +4631,7 @@ dependencies = [
 
 [[package]]
 name = "codex-runtime-agent-instance"
-version = "0.0.0"
+version = "0.160.0"
 dependencies = [
  "base64 0.22.1",
  "codex-agent-identity",
@@ -5159,7 +5159,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-critical-path"
-version = "0.0.0"
+version = "0.160.0"
 dependencies = [
  "pretty_assertions",
 ]

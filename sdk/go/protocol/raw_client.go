@@ -220,6 +220,12 @@ func (c RawClient) ThreadMemoryModeSet(ctx context.Context, params ThreadMemoryM
 	return result, err
 }
 
+func (c RawClient) ThreadMemoryRead(ctx context.Context, params ThreadMemoryReadParams) (ThreadMemoryReadResponse, error) {
+	var result ThreadMemoryReadResponse
+	err := c.sender.Call(ctx, "thread/memory/read", params, &result, MethodMetadataByMethod["thread/memory/read"])
+	return result, err
+}
+
 func (c RawClient) MemoryStatus(ctx context.Context, params MemoryStatusParams) (MemoryStatusResponse, error) {
 	var result MemoryStatusResponse
 	err := c.sender.Call(ctx, "memory/status", params, &result, MethodMetadataByMethod["memory/status"])
@@ -935,6 +941,12 @@ func (c RawClient) AccountSendAddCreditsNudgeEmail(ctx context.Context, params S
 func (c RawClient) FeedbackUpload(ctx context.Context, params FeedbackUploadParams) (FeedbackUploadResponse, error) {
 	var result FeedbackUploadResponse
 	err := c.sender.Call(ctx, "feedback/upload", params, &result, MethodMetadataByMethod["feedback/upload"])
+	return result, err
+}
+
+func (c RawClient) FeedbackSave(ctx context.Context, params FeedbackSaveParams) (FeedbackSaveResponse, error) {
+	var result FeedbackSaveResponse
+	err := c.sender.Call(ctx, "feedback/save", params, &result, MethodMetadataByMethod["feedback/save"])
 	return result, err
 }
 

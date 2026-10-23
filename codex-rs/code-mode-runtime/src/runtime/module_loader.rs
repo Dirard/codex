@@ -116,6 +116,26 @@ pub(super) fn completion_state(
     let exit_requested = scope
         .get_slot::<RuntimeState>()
         .is_some_and(|state| state.exit_requested);
+    let error_text = if exit_requested {
+        None
+    } else if let Some(pending_promise) = pending_promise {
+        let promise = v8::Local::new(scope, pending_promise);
+        match promise.state() {
+            v8::PromiseState::Pending => return CompletionState::Pending,
+            v8::PromiseState::Fulfilled => None,
+            v8::PromiseState::Rejected => {
+                let result = promise.result(scope);
+                let error_text = value_to_error_text(scope, result);
+                (!scope
+                    .get_slot::<RuntimeState>()
+                    .is_some_and(|state| state.exit_requested))
+                .then_some(error_text)
+            }
+        }
+    } else {
+        None
+    };
+    // Error getters can store values or call exit(); capture writes after rendering.
     let (stored_value_writes, diagnostic) = scope
         .get_slot::<RuntimeState>()
         .map(|state| {
@@ -126,43 +146,10 @@ pub(super) fn completion_state(
         })
         .unwrap_or_default();
 
-    if exit_requested {
-        return CompletionState::Completed {
-            stored_value_writes,
-            error_text: None,
-            diagnostic,
-        };
-    }
-
-    let Some(pending_promise) = pending_promise else {
-        return CompletionState::Completed {
-            stored_value_writes,
-            error_text: None,
-            diagnostic,
-        };
-    };
-
-    let promise = v8::Local::new(scope, pending_promise);
-    match promise.state() {
-        v8::PromiseState::Pending => CompletionState::Pending,
-        v8::PromiseState::Fulfilled => CompletionState::Completed {
-            stored_value_writes,
-            error_text: None,
-            diagnostic,
-        },
-        v8::PromiseState::Rejected => {
-            let result = promise.result(scope);
-            let error_text = value_to_error_text(scope, result);
-            let error_text = (!scope
-                .get_slot::<RuntimeState>()
-                .is_some_and(|state| state.exit_requested))
-            .then_some(error_text);
-            CompletionState::Completed {
-                stored_value_writes,
-                error_text,
-                diagnostic,
-            }
-        }
+    CompletionState::Completed {
+        stored_value_writes,
+        error_text,
+        diagnostic,
     }
 }
 

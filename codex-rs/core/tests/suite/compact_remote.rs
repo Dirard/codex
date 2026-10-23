@@ -1412,7 +1412,7 @@ async fn remote_compact_v2_rejects_summary_only_candidate_without_headroom() -> 
     let mut at_limit =
         responses::ev_completed_with_tokens("sample-1", /*total_tokens*/ 40_000);
     at_limit["response"]["end_turn"] = json!(false);
-    let oversized_summary = "s".repeat(60_000);
+    let oversized_summary = "s".repeat(120_000);
     let responses_mock = responses::mount_sse_sequence(
         harness.server(),
         vec![
@@ -1421,8 +1421,9 @@ async fn remote_compact_v2_rejects_summary_only_candidate_without_headroom() -> 
         ],
     )
     .await;
-    let post_compact_turn_mock = responses::mount_sse_once(
+    let post_compact_turn_mock = responses::mount_sse_once_match(
         harness.server(),
+        wiremock::matchers::body_string_contains(oversized_summary),
         responses::sse(vec![
             responses::ev_response_created("should-not-run"),
             responses::ev_assistant_message("should-not-run", "SHOULD_NOT_RUN"),
@@ -1444,7 +1445,10 @@ async fn remote_compact_v2_rejects_summary_only_candidate_without_headroom() -> 
     .await;
     wait_for_turn_complete(&codex).await;
 
-    assert!(error_message.to_lowercase().contains("context window"));
+    assert!(
+        error_message.to_lowercase().contains("context window"),
+        "unexpected compaction error: {error_message}",
+    );
     assert_eq!(responses_mock.requests().len(), 2);
     assert!(post_compact_turn_mock.requests().is_empty());
     Ok(())

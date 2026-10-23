@@ -5588,11 +5588,11 @@ async fn auto_compact_accounts_for_encrypted_reasoning() {
     ]);
     let second_turn = sse(vec![
         ev_reasoning_item("post-reasoning", &["post"], &[&post_last_reasoning_content]),
-        ev_completed_with_tokens("r2", /*total_tokens*/ 80),
+        ev_completed_with_tokens("r2", /*total_tokens*/ 99_999),
     ]);
     let third_turn = sse(vec![
         ev_assistant_message("m3", THIRD_USER_MSG),
-        ev_completed_with_tokens("r3", /*total_tokens*/ 81),
+        ev_completed_with_tokens("r3", /*total_tokens*/ 100_000),
     ]);
     let compact_turn = remote_v2_compaction_response();
     let fourth_turn = sse(vec![
@@ -5620,7 +5620,7 @@ async fn auto_compact_accounts_for_encrypted_reasoning() {
         .with_config(|config| {
             config.model = Some("gpt-5.5".to_string());
             set_test_compact_prompt(config);
-            config.model_auto_compact_token_limit = Some(81);
+            config.model_auto_compact_token_limit = Some(100_000);
         })
         .build_with_auto_env(&server)
         .await
@@ -5637,7 +5637,7 @@ async fn auto_compact_accounts_for_encrypted_reasoning() {
 
     let requests = request_log.requests();
     // Responses Lite includes retained reasoning in its usage without a header.
-    // 80 must remain below the limit; 81 must trigger compaction before turn 4.
+    // Stay one token below the limit, then cross it; the replacement still needs headroom.
     assert_eq!(
         requests
             .iter()

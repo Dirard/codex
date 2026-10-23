@@ -139,6 +139,7 @@ func TestDeferredThreadNamespaceOptionCoverageIsDocumented(t *testing.T) {
 	assertGeneratedParamCoverage(t, "ThreadForkOptions deferred", reflect.TypeOf(protocol.ThreadForkParams{}), nil, map[string]string{
 		"ApprovalPolicy":                   stage5Reason,
 		"ApprovalsReviewer":                stage5Reason,
+		"AttachToSource":                   "attached thread forks are raw-only via protocol.ThreadForkParams",
 		"BaseInstructions":                 stage5Reason,
 		"BeforeTurnID":                     stage5Reason,
 		"Config":                           stage5Reason,

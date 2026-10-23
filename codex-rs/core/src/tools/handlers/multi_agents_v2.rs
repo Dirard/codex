@@ -63,9 +63,9 @@ fn agent_message_from_tool(
 ) -> AgentMessage {
     if message_delivery == MultiAgentMessageDelivery::Plaintext
         || matches!(
-        source,
-        crate::tools::context::ToolCallSource::DirectPlaintextMessage
-            | crate::tools::context::ToolCallSource::CodeMode { .. }
+            source,
+            crate::tools::context::ToolCallSource::DirectPlaintextMessage
+                | crate::tools::context::ToolCallSource::CodeMode { .. }
         )
     {
         AgentMessage::Plaintext(message)

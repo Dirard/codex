@@ -50,6 +50,7 @@ pub(crate) fn notification_routing_strategy(method: &'static str) -> Notificatio
         "error" => routed_notification(method, &[("threadId", false), ("turnId", false)]),
         "thread/started" => routed_notification(method, &[("thread.id", false)]),
         "thread/status/changed"
+        | "thread/readState/changed"
         | "thread/archived"
         | "thread/deleted"
         | "thread/unarchived"

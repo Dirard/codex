@@ -2187,7 +2187,10 @@ impl ThreadManagerState {
     }
 
     /// Spawn a new thread with optional history and register it with the manager.
-    async fn spawn_thread(&self, mut request: ThreadSpawnRequest) -> CodexResult<ThreadSpawnOutcome> {
+    async fn spawn_thread(
+        &self,
+        mut request: ThreadSpawnRequest,
+    ) -> CodexResult<ThreadSpawnOutcome> {
         let cancellation = request
             .options
             .config

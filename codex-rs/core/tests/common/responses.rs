@@ -492,6 +492,37 @@ mod tests {
         })
     }
 
+    #[tokio::test]
+    async fn once_match_records_only_matching_requests() -> Result<()> {
+        use codex_http_client::ClientRouteClass;
+        use codex_http_client::HttpClientFactory;
+        use codex_http_client::OutboundProxyPolicy;
+
+        for is_sse in [false, true] {
+            let server = MockServer::start().await;
+            let url = format!("{}/v1/responses", server.uri());
+            let client = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+                .build_client(&url, ClientRouteClass::Other)?;
+            let matcher = wiremock::matchers::header("thread-id", "parent");
+            let captured = if is_sse {
+                mount_sse_once_match(&server, matcher, String::new()).await
+            } else {
+                mount_response_once_match(&server, matcher, ResponseTemplate::new(200)).await
+            };
+            for (thread_id, status, count) in [("child", 404, 0), ("parent", 200, 1)] {
+                let response = client
+                    .post(&url)
+                    .header("thread-id", thread_id)
+                    .json(&serde_json::json!({"input": []}))
+                    .send()
+                    .await?;
+                assert_eq!(response.status().as_u16(), status);
+                assert_eq!(captured.requests().len(), count);
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn call_output_content_and_success_returns_only_single_text_content_item() {
         let single_text = request_with_input(serde_json::json!([
@@ -1121,8 +1152,11 @@ pub async fn mount_response_once_match<M>(
 where
     M: wiremock::Match + Send + Sync + 'static,
 {
-    let (mock, response_mock) = base_mock();
-    mock.and(matcher)
+    let response_mock = ResponseMock::new();
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .and(matcher)
+        .and(response_mock.clone())
         .respond_with(response)
         .up_to_n_times(1)
         .mount(server)
@@ -1150,13 +1184,7 @@ pub async fn mount_sse_once_match<M>(server: &MockServer, matcher: M, body: Stri
 where
     M: wiremock::Match + Send + Sync + 'static,
 {
-    let (mock, response_mock) = base_mock();
-    mock.and(matcher)
-        .respond_with(sse_response(body))
-        .up_to_n_times(1)
-        .mount(server)
-        .await;
-    response_mock
+    mount_response_once_match(server, matcher, sse_response(body)).await
 }
 
 pub async fn mount_sse_once(server: &MockServer, body: String) -> ResponseMock {

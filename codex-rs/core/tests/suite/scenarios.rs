@@ -1179,6 +1179,7 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn child_completion_wakes_parent_after_final_answer() -> Result<()> {
+    use codex_protocol::openai_models::ReasoningEffort;
     use core_test_support::ThreadIdle;
     use core_test_support::responses;
     use wiremock::matchers::header;
@@ -2804,7 +2805,7 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
                     ev_function_call_with_namespace("team", "collaboration", "list_agents", "{}"),
                     ev_completed_with_tokens(
                         "team-response",
-                        /*total_tokens*/ if over_budget { 9_000 } else { 75_000 },
+                        /*total_tokens*/ if over_budget { 22_000 } else { 75_000 },
                     ),
                 ],
             ),
@@ -2843,7 +2844,8 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
     let (_config_server, test) = async_compaction_test(streaming.uri(), features, move |config| {
         if over_budget {
             config.async_compaction_threshold_percent = 1;
-            config.model_auto_compact_token_limit = Some(5_000);
+            config.model_auto_compact_token_limit = Some(15_000);
+            config.base_instructions = Some("Keep task context.".to_string());
         }
     })
     .await?;
@@ -2924,6 +2926,10 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
         .expect("release foreground work");
     let mut compaction_events = Vec::new();
     wait_for_event(&test.codex, |event| {
+        assert!(
+            !matches!(event, EventMsg::Error(_)),
+            "unexpected compaction error: {event:?}"
+        );
         compaction_events.extend(compaction_event(event));
         matches!(event, EventMsg::TurnComplete(_))
     })
@@ -2933,15 +2939,11 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
         test.codex.wait_for_background_compaction_for_test(),
     )
     .await?;
-    assert_eq!(compaction_events.len(), if over_budget { 4 } else { 2 });
+    assert_eq!(compaction_events.len(), 2);
     for pair in compaction_events.as_chunks::<2>().0 {
         assert_eq!((pair[0].0, pair[1].0), ("started", "completed"));
         assert_eq!(pair[0].1, pair[1].1);
     }
-    if over_budget {
-        assert_ne!(compaction_events[0].1, compaction_events[2].1);
-    }
-
     let requests = streaming
         .requests()
         .await
@@ -2956,10 +2958,20 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
                 .iter()
                 .any(|item| item["encrypted_content"] == "SYNC")
         );
+        // Rejected adoption must leave the live work available to the foreground compactor.
         assert!(
-            continuation
+            requests[3]["input"]
+                .as_array()
+                .expect("foreground compaction input")
                 .iter()
                 .any(|item| item["output"] == retained_output)
+        );
+        assert!(
+            requests[3]["input"]
+                .as_array()
+                .expect("foreground compaction input")
+                .iter()
+                .all(|item| item["encrypted_content"] != "ASYNC_LAUNCH_CHECKPOINT")
         );
     }
     let history = test
@@ -2971,6 +2983,16 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
         [RolloutItem::Compacted(_), RolloutItem::WorldState(baseline)]
         if baseline.full && baseline.state["collaboration_mode"]["mode"] == "plan"
     )));
+    if over_budget {
+        assert_eq!(
+            history
+                .iter()
+                .filter(|item| matches!(item, RolloutItem::Compacted(_)))
+                .count(),
+            1,
+        );
+        return Ok(());
+    }
     let input = requests[3]["input"].as_array().expect("request input");
     // The full snapshot normalizes mode text; check the cutoff and later update explicitly.
     let position = |text: &str| {
@@ -3101,7 +3123,7 @@ async fn async_compaction_reuses_pending_work(
         responses.push(immediate(response(
             "second",
             ev_function_call_with_namespace("team", "collaboration", "list_agents", "{}"),
-            /*tokens*/ if over_budget { 9_000 } else { 91_000 },
+            /*tokens*/ if over_budget { 22_000 } else { 91_000 },
         )));
     }
     if !succeeds {
@@ -3127,7 +3149,8 @@ async fn async_compaction_reuses_pending_work(
         move |config| {
             if over_budget {
                 config.async_compaction_threshold_percent = 1;
-                config.model_auto_compact_token_limit = Some(5_000);
+                config.model_auto_compact_token_limit = Some(15_000);
+                config.base_instructions = Some("Keep task context.".to_string());
             }
         },
     )
@@ -3212,6 +3235,10 @@ async fn async_compaction_reuses_pending_work(
     let mut starts = vec![started.item.id()];
     let mut completed = Vec::new();
     wait_for_event(&test.codex, |event| {
+        assert!(
+            !matches!(event, EventMsg::Error(_)),
+            "unexpected compaction error: {event:?}"
+        );
         if let EventMsg::ItemStarted(event) = event
             && matches!(event.item, TurnItem::ContextCompaction(_))
         {
@@ -3226,7 +3253,7 @@ async fn async_compaction_reuses_pending_work(
     })
     .await;
     assert_eq!(completed, starts);
-    assert_eq!(starts.len(), if over_budget { 2 } else { 1 });
+    assert_eq!(starts.len(), 1);
     assert_eq!(starts.iter().collect::<HashSet<_>>().len(), starts.len());
     tokio::time::timeout(
         timeout,
@@ -3258,7 +3285,7 @@ async fn async_compaction_reuses_pending_work(
             continuation.thread_token_usage.total_tokens,
         ),
         if over_budget {
-            (12_010, 14_010)
+            (25_010, 27_010)
         } else if manual {
             (3_000, seed_tokens + if succeeds { 3_000 } else { 6_000 })
         } else if succeeds {
@@ -3279,15 +3306,25 @@ async fn async_compaction_reuses_pending_work(
         (if manual { 2 } else { 3 }) + usize::from(has_background) + usize::from(!succeeds)
     );
     if over_budget {
-        for request in &requests[3..] {
-            assert!(
-                request["input"]
-                    .as_array()
-                    .expect("compaction or continuation input")
-                    .iter()
-                    .any(|item| item["output"] == retained_output)
-            );
-        }
+        let foreground = requests[3]["input"].as_array().expect("compaction input");
+        assert!(
+            foreground
+                .iter()
+                .any(|item| item["output"] == retained_output)
+        );
+        assert!(
+            foreground
+                .iter()
+                .all(|item| item["encrypted_content"] != "ASYNC")
+        );
+        assert_eq!(
+            history
+                .items
+                .iter()
+                .filter(|item| matches!(item, RolloutItem::Compacted(_)))
+                .count(),
+            1,
+        );
     }
     if manual && !succeeds {
         let foreground = &requests[requests.len() - 2];

@@ -2295,6 +2295,10 @@ fn expected_server_notification_routes() -> Vec<(&'static str, ExpectedRouting)>
             "thread/status/changed",
             ExpectedRouting::Routed(&["threadId"]),
         ),
+        (
+            "thread/readState/changed",
+            ExpectedRouting::Routed(&["threadId"]),
+        ),
         ("thread/archived", ExpectedRouting::Routed(&["threadId"])),
         ("thread/deleted", ExpectedRouting::Routed(&["threadId"])),
         ("thread/unarchived", ExpectedRouting::Routed(&["threadId"])),

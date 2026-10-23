@@ -4976,6 +4976,7 @@ async fn multi_agent_v2_terminal_status_is_published_after_parent_mailbox() {
                 expected_message,
                 /*trigger_turn*/ false,
             )
+            .into()
         )]
     );
     assert_eq!(
@@ -5118,6 +5119,7 @@ async fn multi_agent_v2_terminal_error_is_published_after_parent_mailbox() {
                 expected_message,
                 /*trigger_turn*/ false,
             )
+            .into()
         )]
     );
     assert_eq!(

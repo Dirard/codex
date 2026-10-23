@@ -12947,7 +12947,8 @@ async fn interrupted_turn_does_not_restart_trigger_turn_mailbox_mail() {
                 Vec::new(),
                 "interrupted trigger update".to_string(),
                 /*trigger_turn*/ true,
-            ),
+            )
+            .into(),
             Default::default(),
             /*turn_spawn_budget*/ None,
         )

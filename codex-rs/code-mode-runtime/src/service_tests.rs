@@ -854,6 +854,7 @@ text(JSON.stringify(results.map(({ status, value, reason }) => ({
         response,
         RuntimeResponse::Result {
             code_mode_host_duration: None,
+            result_buffered_for: Duration::ZERO,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text:
@@ -890,6 +891,7 @@ async fn settled_nested_tool_result_without_sink_emits_one_note() {
         response,
         RuntimeResponse::Result {
             code_mode_host_duration: None,
+            result_buffered_for: Duration::ZERO,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "Code mode completed with 1 settled nested tool outcome not passed to an output helper after the last successful sink.\nPass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`.".to_string(),
@@ -935,6 +937,7 @@ try {
         response,
         RuntimeResponse::Result {
             code_mode_host_duration: None,
+            result_buffered_for: Duration::ZERO,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "Code mode completed with 1 settled nested tool outcome not passed to an output helper after the last successful sink.\nPass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`.".to_string(),
@@ -982,6 +985,7 @@ await Promise.allSettled([
         response,
         RuntimeResponse::Result {
             code_mode_host_duration: None,
+            result_buffered_for: Duration::ZERO,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "Code mode completed with 2 settled nested tool outcomes not passed to an output helper after the last successful sink.\nPass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`.".to_string(),
@@ -1017,6 +1021,7 @@ async fn completion_note_contains_counts_but_not_nested_result_content() {
         response,
         RuntimeResponse::Result {
             code_mode_host_duration: None,
+            result_buffered_for: Duration::ZERO,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "Code mode completed with 1 settled nested tool outcome not passed to an output helper after the last successful sink.\nPass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`.".to_string(),
@@ -1086,6 +1091,7 @@ async fn successful_sink_clears_settled_outcome_count() {
             response,
             RuntimeResponse::Result {
                 code_mode_host_duration: None,
+                result_buffered_for: Duration::ZERO,
                 cell_id: cell_id("1"),
                 content_items,
                 error_text: None,
@@ -1117,6 +1123,7 @@ await tools.echo({ value: "nested-secret-marker" });
         response,
         RuntimeResponse::Result {
             code_mode_host_duration: None,
+            result_buffered_for: Duration::ZERO,
             cell_id: cell_id("1"),
             content_items: vec![
                 FunctionCallOutputContentItem::InputText {
@@ -1156,6 +1163,7 @@ try {
         response,
         RuntimeResponse::Result {
             code_mode_host_duration: None,
+            result_buffered_for: Duration::ZERO,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "Code mode completed with 1 settled nested tool outcome not passed to an output helper after the last successful sink.\nPass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`.".to_string(),
@@ -1190,6 +1198,7 @@ async fn started_but_unsettled_tool_call_emits_side_effect_warning() {
         response,
         RuntimeResponse::Result {
             code_mode_host_duration: None,
+            result_buffered_for: Duration::ZERO,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "1 started nested tool call is still unsettled; the runtime does not wait for them automatically, and they may already have produced side effects.".to_string(),
@@ -1249,6 +1258,7 @@ throw new Error("top-level-marker");
         response,
         RuntimeResponse::Result {
             code_mode_host_duration: None,
+            result_buffered_for: Duration::ZERO,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "Code mode completed with 1 settled nested tool outcome not passed to an output helper after the last successful sink.\nPass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`.".to_string(),

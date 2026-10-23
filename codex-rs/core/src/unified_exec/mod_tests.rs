@@ -1032,7 +1032,7 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
                 input: "",
                 yield_time_ms: 250,
                 max_output_tokens: None,
-                truncation_policy: TruncationPolicy::Tokens(10_000),
+                truncation: OutputTruncation::new(TruncationPolicy::Tokens(10_000), None),
                 interaction_event: None,
             },
         )

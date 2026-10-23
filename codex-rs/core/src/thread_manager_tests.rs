@@ -2524,6 +2524,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
         .state
         .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
             config,
+            prompt_cache_key: None,
             initial_history,
             agent_control: manager.agent_control(),
             session_source,

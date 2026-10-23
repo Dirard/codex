@@ -2221,20 +2221,26 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
     assert_eq!(
         mailbox_items,
         vec![
-            TurnInput::InterAgentCommunication(InterAgentCommunication::new(
-                worker_path.clone(),
-                AgentPath::root(),
-                Vec::new(),
-                first_notification,
-                /*trigger_turn*/ false,
-            )),
-            TurnInput::InterAgentCommunication(InterAgentCommunication::new(
-                worker_path,
-                AgentPath::root(),
-                Vec::new(),
-                second_notification,
-                /*trigger_turn*/ false,
-            )),
+            TurnInput::InterAgentCommunication(
+                InterAgentCommunication::new(
+                    worker_path.clone(),
+                    AgentPath::root(),
+                    Vec::new(),
+                    first_notification,
+                    /*trigger_turn*/ false,
+                )
+                .into(),
+            ),
+            TurnInput::InterAgentCommunication(
+                InterAgentCommunication::new(
+                    worker_path,
+                    AgentPath::root(),
+                    Vec::new(),
+                    second_notification,
+                    /*trigger_turn*/ false,
+                )
+                .into(),
+            ),
         ]
     );
     assert_eq!(
