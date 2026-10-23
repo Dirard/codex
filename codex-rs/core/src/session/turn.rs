@@ -2897,6 +2897,7 @@ async fn try_run_sampling_request(
                     // receiving the interrupt. Do not retry without that pending input.
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
+                        made_progress: last_agent_message.is_some(),
                         last_agent_message,
                     });
                 }
