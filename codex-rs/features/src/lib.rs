@@ -16,6 +16,7 @@ use toml::Table;
 
 mod feature_configs;
 mod legacy;
+mod runtime_auth;
 pub use feature_configs::AsyncCompactionConfigToml;
 pub use feature_configs::CodeModeConfigToml;
 pub use feature_configs::CodeModeHostConfigToml;
@@ -27,6 +28,7 @@ pub use feature_configs::GuardianV2ConfigToml;
 pub use feature_configs::GuardianV2ReviewScopeConfigToml;
 pub use feature_configs::GuardianV2TranscriptConfigToml;
 pub use feature_configs::GuardianV2TranscriptSource;
+pub use feature_configs::GuardianV3ConfigToml;
 pub use feature_configs::MultiAgentV2ConfigToml;
 pub use feature_configs::NetworkProxyConfigToml;
 pub use feature_configs::NetworkProxyDomainPermissionToml;
@@ -42,6 +44,8 @@ pub use feature_configs::TokenBudgetConfigToml;
 pub use feature_configs::ToolRegistryConfigToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
+pub use runtime_auth::RuntimeAgentInstancesConfigToml;
+pub use runtime_auth::RuntimeAuthMode;
 
 /// High-level lifecycle stage for a feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +121,8 @@ pub enum Feature {
 
     /// Automatically start the shared local daemon for eligible interactive launches.
     DaemonAutoStart,
+    /// Allow the TUI to discover and select among multiple conversation backends.
+    TuiMultiBackend,
     /// Enable negotiated zstd compression for app-server WebSocket and UDS connections.
     AppServerWebSocketCompression,
 
@@ -375,6 +381,8 @@ pub enum Feature {
     SendMessageToUserAsync,
     /// Enable automatic review for approval prompts.
     GuardianApproval,
+    /// Forward private reviewer items and interruptions to raw-event observers.
+    GuardianRecordedItems,
     /// Removed compatibility flag for always-on thread-owned Guardian context.
     GuardianThreadContext,
     /// Reuse encrypted parent compaction when restarting Guardian review sessions.
@@ -394,6 +402,8 @@ pub enum Feature {
     GuardianV2,
     /// Run Decisions alongside Guardian V2 for measurement without changing approvals.
     GuardianV2DecisionsComparison,
+    /// Enable Guardian V3 integrations.
+    GuardianV3,
     /// Removed compatibility flag for the unused Guardian extension prototype.
     GuardianExt,
     /// Enable persisted thread goals and automatic goal continuation.
@@ -442,6 +452,8 @@ pub enum Feature {
     RetainClientToolOutputs,
     /// Use Agent Identity for ChatGPT-authenticated sessions.
     UseAgentIdentity,
+    /// Register an ephemeral runtime for OpenAI request authentication.
+    RuntimeAgentInstances,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
 
@@ -891,6 +903,8 @@ pub struct FeaturesToml {
     )]
     pub guardianv2: Option<FeatureToml<GuardianV2ConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guardianv3: Option<FeatureToml<GuardianV3ConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<FeatureToml<TokenBudgetConfigToml>>,
@@ -904,6 +918,8 @@ pub struct FeaturesToml {
     pub current_time_reminder: Option<FeatureToml<CurrentTimeReminderConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sleep_tool: Option<FeatureToml<SleepToolConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_agent_instances: Option<FeatureToml<RuntimeAgentInstancesConfigToml>>,
     #[serde(default, rename = "apps_mcp_path_override", skip_serializing)]
     #[schemars(skip)]
     removed_apps_mcp_path_override: Option<FeatureToml<RemovedAppsMcpPathOverrideConfigToml>>,
@@ -951,6 +967,9 @@ impl FeaturesToml {
         {
             entries.insert(Feature::GuardianThreadContext.key().to_string(), enabled);
         }
+        if let Some(enabled) = self.guardianv3.as_ref().and_then(FeatureToml::enabled) {
+            entries.insert(Feature::GuardianV3.key().to_string(), enabled);
+        }
         if let Some(enabled) = self.multi_agent_v2.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::MultiAgentV2.key().to_string(), enabled);
         }
@@ -979,6 +998,13 @@ impl FeaturesToml {
         }
         if let Some(enabled) = self.sleep_tool.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::SleepTool.key().to_string(), enabled);
+        }
+        if let Some(enabled) = self
+            .runtime_agent_instances
+            .as_ref()
+            .and_then(FeatureToml::enabled)
+        {
+            entries.insert(Feature::RuntimeAgentInstances.key().to_string(), enabled);
         }
         entries
     }
@@ -1042,6 +1068,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "daemon_auto_start",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::TuiMultiBackend,
+        key: "tui_multi_backend",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::AppServerWebSocketCompression,
@@ -1595,8 +1627,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::McpOAuthRefreshCoordination,
         key: "mcp_oauth_refresh_coordination",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::UseXaa,
@@ -1881,6 +1913,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::GuardianRecordedItems,
+        key: "guardian_recorded_items",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::GuardianThreadContext,
         key: "guardianv2.thread_context",
         stage: Stage::Removed,
@@ -1935,6 +1973,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::GuardianV3,
+        key: "guardianv3",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::GuardianExt,
         key: "guardian_ext",
         stage: Stage::Removed,
@@ -1967,8 +2011,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ReasoningEffortOverride,
         key: "reasoning_effort_override",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::CurrentTimeReminder,
@@ -2003,8 +2047,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::BedrockSetupWizard,
         key: "bedrock_setup_wizard",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Personality,
@@ -2129,6 +2173,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::UseAgentIdentity,
         key: "use_agent_identity",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RuntimeAgentInstances,
+        key: "runtime_agent_instances",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

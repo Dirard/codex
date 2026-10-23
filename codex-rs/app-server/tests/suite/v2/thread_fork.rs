@@ -116,6 +116,7 @@ async fn list_threads(mcp: &mut TestAppServer) -> Result<ThreadListResponse> {
     let list_id = mcp
         .send_thread_list_request(ThreadListParams {
             excluded_thread_ids: None,
+            attached_to_thread_id: None,
             originators: None,
             cursor: None,
             limit: Some(50),
@@ -173,7 +174,11 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     );
     let mut session_meta = read_session_meta_line(&original_path).await?;
     session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V1);
-    append_rollout_item_to_path(&original_path, &RolloutItem::SessionMeta(session_meta)).await?;
+    append_rollout_item_to_path(
+        &original_path,
+        &RolloutItem::SessionMeta(Box::new(session_meta)),
+    )
+    .await?;
     let original_contents = std::fs::read_to_string(&original_path)?;
 
     let mut mcp = TestAppServer::builder()

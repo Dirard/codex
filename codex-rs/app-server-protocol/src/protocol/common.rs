@@ -720,6 +720,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadMemoryModeSetResponse,
     },
+    #[experimental("thread/memory/read")]
+    ThreadMemoryRead => "thread/memory/read" {
+        params: v2::ThreadMemoryReadParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadMemoryReadResponse,
+    },
     #[experimental("memory/status")]
     MemoryStatus => "memory/status" {
         params: v2::MemoryStatusParams,
@@ -1385,6 +1391,12 @@ client_request_definitions! {
         params: v2::FeedbackUploadParams,
         serialization: None,
         response: v2::FeedbackUploadResponse,
+    },
+
+    FeedbackSave => "feedback/save" {
+        params: v2::FeedbackSaveParams,
+        serialization: None,
+        response: v2::FeedbackSaveResponse,
     },
 
     /// Execute a standalone command (argv vector) under the server's sandbox.

@@ -7,8 +7,12 @@
 
 #[path = "connection_manager/catalog_telemetry.rs"]
 mod catalog_telemetry;
+#[path = "connection_manager/network_policy.rs"]
+mod network_policy;
 #[path = "connection_manager/required.rs"]
 mod required;
+pub use network_policy::NetworkPolicyMetadata;
+pub use network_policy::NetworkPolicyMetadataProvider;
 #[path = "connection_manager/resources.rs"]
 mod resources;
 #[path = "connection_manager/startup.rs"]
@@ -266,6 +270,8 @@ impl McpServerView {
 
 /// A published view over a set of running MCP server connections.
 pub(crate) struct McpConnectionSet {
+    config: Option<Arc<crate::McpConfig>>,
+    network_policy_metadata: Option<Arc<dyn NetworkPolicyMetadataProvider>>,
     servers: HashMap<String, McpServerView>,
     pub(crate) event_stream_connection: Option<Arc<EventStreamConnectionSettings>>,
     disabled_servers: Vec<String>,
@@ -283,6 +289,7 @@ impl McpConnectionSet {
     /// notifications are then skipped and interactive elicitations are declined.
     pub async fn new(
         ema_auth: Option<crate::ema_auth::EmaAuthContext>,
+        existing_ema: Option<&Self>,
         previous: Option<&Self>,
         publication_gate: McpPublicationGate,
         input: McpRuntimeInput,
@@ -292,6 +299,7 @@ impl McpConnectionSet {
         let McpRuntimeInput {
             startup_policy,
             config,
+            network_policy_metadata,
             plugins_available: _,
             ready_selected_capability_roots: _,
             mcp_servers,
@@ -337,15 +345,27 @@ impl McpConnectionSet {
         // Explicit reconnects have no previous set and must replace their clients eagerly.
         let allow_deferred_startup =
             startup_policy == McpStartupPolicy::LazyWhenCached && previous.is_some();
-        let reusable_previous = previous.filter(|previous| {
-            !previous.servers.is_empty()
-                && previous.elicitation_requests.update(
-                    Arc::clone(&config),
-                    elicitation_reviewer.clone(),
-                    elicitation_lifecycle.clone(),
-                )
-        });
-        let elicitation_requests = if let Some(previous) = reusable_previous {
+        // Retained EMA clients keep callbacks attached to this manager even when
+        // an explicit reconnect replaces the ordinary clients.
+        let elicitation_previous = previous
+            .or_else(|| {
+                existing_ema.filter(|previous| {
+                    previous
+                        .servers
+                        .values()
+                        .any(|view| view.connection.client.ema_authority.is_some())
+                })
+            })
+            .filter(|previous| {
+                !previous.servers.is_empty()
+                    && previous.elicitation_requests.update(
+                        Arc::clone(&config),
+                        elicitation_reviewer.clone(),
+                        elicitation_lifecycle.clone(),
+                    )
+            });
+        let reusable_previous = previous.filter(|_| elicitation_previous.is_some());
+        let elicitation_requests = if let Some(previous) = elicitation_previous {
             previous.elicitation_requests.clone()
         } else {
             ElicitationRequestManager::new(
@@ -378,6 +398,8 @@ impl McpConnectionSet {
                 &client_mcp_extensions,
                 &server_name,
                 registration,
+                network_policy_metadata.is_some(),
+                &config.chatgpt_base_url,
             );
             let is_host_owned_codex_apps = registration.is_some_and(|server| {
                 server
@@ -557,6 +579,67 @@ impl McpConnectionSet {
                     Some(_) => None,
                 },
             };
+            if matches!(configured_config.auth, McpServerAuth::EmaAuth) && existing_ema.is_some() {
+                if let Some(previous_view) = existing_ema
+                    .filter(|_| elicitation_previous.is_some())
+                    .and_then(|previous| previous.servers.get(&server_name))
+                {
+                    let connection = &previous_view.connection;
+                    let authority_is_current = || {
+                        connection
+                            .client
+                            .ema_authority
+                            .as_ref()
+                            .is_some_and(|authority| authority.check_new_request().is_ok())
+                    };
+                    let same_identity = connection.identity.as_ref() == Some(&connection_identity)
+                        && previous_view.catalog_item_limit == catalog_item_limit
+                        && previous_view.protocol_mode == protocol_mode;
+                    let pending = same_identity
+                        && !connection.client.startup_complete.load(Ordering::Acquire)
+                        && connection.startup_timeout == startup_timeout
+                        && !connection.startup_is_dormant()
+                        && !connection.client.cancel_token.is_cancelled();
+                    let ready = same_identity
+                        && !pending
+                        && connection
+                            .reusable_client(&connection_identity)
+                            .await
+                            .is_some_and(|client| {
+                                expected_protocol_mode == Some(client.client.protocol_mode())
+                            });
+                    if authority_is_current() && (pending || ready) {
+                        servers.insert(
+                            server_name.clone(),
+                            McpServerView {
+                                connection: Arc::clone(connection),
+                                protocol_mode,
+                                startup_readiness: configured_config.startup_readiness,
+                                refresh_tool_list: config.mcp_tool_list_changed,
+                                refresh_timeout: startup_timeout,
+                                metadata,
+                                tool_filter: configured_tool_filter,
+                                tool_timeout: configured_tool_timeout,
+                                catalog_item_limit,
+                            },
+                        );
+                        if pending {
+                            let client = connection.client.clone();
+                            let publication_gate = publication_gate.clone();
+                            join_set.spawn(async move {
+                                if !publication_gate.wait().await {
+                                    return (server_name, Err(StartupOutcomeError::Cancelled));
+                                }
+                                (server_name, client.client().await)
+                            });
+                        } else {
+                            reused_ready.push(server_name);
+                        }
+                    }
+                }
+                // Post-start publications may only retain the original EMA connection.
+                continue;
+            }
             if let Some(previous_view) =
                 reusable_previous.and_then(|previous| previous.servers.get(&server_name))
                 && previous_view.refresh_tool_list == config.mcp_tool_list_changed
@@ -877,6 +960,8 @@ impl McpConnectionSet {
             }
         }
         let manager = Self {
+            config: Some(config),
+            network_policy_metadata,
             servers,
             event_stream_connection,
             disabled_servers,
@@ -935,6 +1020,8 @@ impl McpConnectionSet {
 
     pub fn empty(prefix_mcp_tool_names: bool) -> Self {
         Self {
+            config: None,
+            network_policy_metadata: None,
             servers: HashMap::new(),
             event_stream_connection: None,
             disabled_servers: Vec::new(),
@@ -1136,7 +1223,19 @@ impl McpConnectionSet {
         }
         let result: rmcp::model::CallToolResult = client
             .client
-            .call_tool(tool.to_string(), arguments, meta, effective_timeout)
+            .call_tool(
+                tool.to_string(),
+                arguments,
+                self.network_policy_meta_for_call(
+                    &client,
+                    self.config
+                        .as_ref()
+                        .and_then(|config| config.permission_profile_for_server(server)),
+                    &view.metadata.environment_id,
+                    meta,
+                ),
+                effective_timeout,
+            )
             .await
             .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
 

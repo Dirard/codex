@@ -867,6 +867,7 @@ async fn environment_mcp_policy_filters_runtime_config_and_model_tools(
         .environment_ready(
             &selection,
             EnvironmentConfig {
+                environment_hooks: Default::default(),
                 allow_login_shell: true,
                 workspace_roots: selection.workspace_roots.clone(),
                 permission_profile: PermissionProfileSnapshot::legacy(
@@ -984,6 +985,7 @@ async fn future_environment_mcp_policy_applies_on_the_next_turn() -> anyhow::Res
     wait_for_mcp_server(&fixture.codex, "environment_policy").await?;
     let selection = fixture.codex.environment_selections().await.remove(0);
     let mut config = EnvironmentConfig {
+        environment_hooks: Default::default(),
         allow_login_shell: fixture.config.permissions.allow_login_shell,
         workspace_roots: selection.workspace_roots.clone(),
         permission_profile: PermissionProfileSnapshot::legacy(
@@ -2101,6 +2103,15 @@ async fn interrupt_during_mcp_startup_preserves_user_input_in_history(
             )
         })
         .expect("an interrupted turn should retain its submitted user prompt");
+    assert!(
+        history.items[..user_prompt_index]
+            .iter()
+            .any(|item| matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(applied))
+                    if applied.thread_id == Some(fixture.session_configured.thread_id)
+            ))
+    );
     let RolloutItem::ResponseItem(envelope) = &history.items[user_prompt_index] else {
         unreachable!("found the user prompt");
     };
@@ -2608,6 +2619,7 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta(
             .environment_ready(
                 &selection,
                 EnvironmentConfig {
+                    environment_hooks: Default::default(),
                     allow_login_shell: fixture.config.permissions.allow_login_shell,
                     workspace_roots: workspace_roots.clone(),
                     permission_profile: PermissionProfileSnapshot::legacy(

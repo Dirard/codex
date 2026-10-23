@@ -149,7 +149,8 @@ async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()>
     mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
-            body_contains(request, FIRST_TASK) && !has_function_call_output(request, "first-call")
+            body_contains(request, FIRST_TASK)
+                && body_contains(request, r#"\"agent_name\":\"/root/first\""#)
         },
         sse(vec![
             ev_response_created("first-worker-response"),
@@ -175,7 +176,10 @@ async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()>
     .await;
     mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| has_function_call_output(request, "first-call"),
+        |request: &wiremock::Request| {
+            has_function_call_output(request, "first-call")
+                && body_contains(request, r#"\"agent_name\":\"/root\""#)
+        },
         sse(vec![
             ev_response_created("first-followup-response"),
             ev_assistant_message("first-followup-message", "spawned"),
@@ -466,6 +470,7 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
             .await?;
         owner_workspace_roots.push(owner_workspace_root);
         child_environment.config = EnvironmentConfigState::Ready(EnvironmentConfig {
+            environment_hooks: Default::default(),
             allow_login_shell: test.config.permissions.allow_login_shell,
             workspace_roots: owner_workspace_roots,
             permission_profile: PermissionProfileSnapshot::legacy(child_permissions),

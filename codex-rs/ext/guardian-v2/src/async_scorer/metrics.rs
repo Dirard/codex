@@ -53,6 +53,7 @@ pub(super) fn sampler_failure_reason(error: &LunaSamplerError) -> &'static str {
             ApiError::UsageNotIncluded => "usage_not_included",
             ApiError::Retryable { .. } => "retryable_api_error",
             ApiError::RateLimitExceeded { .. } | ApiError::RateLimit(_) => "rate_limit",
+            ApiError::ModelNotFound { .. } => "model_not_found",
             ApiError::InvalidRequest { .. } | ApiError::InvalidPrompt { .. } => "invalid_request",
             ApiError::CyberPolicy { .. }
             | ApiError::BioPolicy { .. }
@@ -201,7 +202,8 @@ pub(super) fn decisions_failure_reason(error: DecisionsError) -> &'static str {
     match error {
         DecisionsError::Credentials => "credentials_unavailable",
         DecisionsError::ClientSetup => "request_build_error",
-        DecisionsError::UnsupportedEvidence => "decisions_unsupported_evidence",
+        DecisionsError::UnexpectedRequestSetup => "unexpected_request_setup",
+        DecisionsError::UnsupportedInputItem => "unsupported_input_item",
         DecisionsError::UnsupportedImage => "image",
         DecisionsError::UnsupportedAudio => "audio",
         DecisionsError::InputTooLarge => "input_too_large",
@@ -232,7 +234,7 @@ pub(super) fn record_decisions_comparison(
             let outcome = match &result {
                 Ok(_) => "success",
                 Err(
-                    DecisionsError::UnsupportedEvidence
+                    DecisionsError::UnsupportedInputItem
                     | DecisionsError::UnsupportedImage
                     | DecisionsError::UnsupportedAudio
                     | DecisionsError::InputTooLarge,

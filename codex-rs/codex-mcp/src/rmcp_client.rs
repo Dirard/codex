@@ -69,6 +69,8 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
+use codex_rmcp_client::EmaAuthFailure;
+use codex_rmcp_client::EmaTokenSourceError;
 use codex_rmcp_client::ExecutorStdioServerLauncher;
 use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::McpOAuthRefreshMode;
@@ -97,6 +99,8 @@ use tracing::Instrument;
 use tracing::instrument;
 use tracing::warn;
 
+/// Experimental client/server capability for call-scoped network policy metadata.
+pub const MCP_NETWORK_POLICY_META_CAPABILITY: &str = "codex/network-policy-meta";
 /// Experimental MCP server capability for development and testing only; production servers should
 /// not use it. Its `cacheable: false` property disables sharing tool definitions across connections.
 const MCP_TOOL_CATALOG_CACHE_CAPABILITY: &str = "codex/tool-catalog-cache";
@@ -130,6 +134,7 @@ pub(crate) struct ManagedClient {
     pub(crate) tool_timeout: Option<Duration>,
     pub(crate) server_instructions: Option<String>,
     pub(crate) server_supports_sandbox_state_meta_capability: bool,
+    pub(crate) client_supports_network_policy_meta_capability: bool,
     pub(crate) codex_apps_tools_cache_context: Option<ConnectorRuntimeContext<ToolInfo>>,
 }
 
@@ -297,7 +302,7 @@ fn codex_apps_reconnect_backoff(consecutive_failures: u32) -> Duration {
 
 #[derive(Clone)]
 struct ManagedClientStartup {
-    ema_auth: Option<crate::ema_auth::EmaAuthContext>,
+    ema_auth: Option<Result<crate::ema_auth::EmaConnectionAuth, StartupOutcomeError>>,
     originator: AuthStorageOriginator,
     server_name: String,
     server: EffectiveMcpServer,
@@ -447,6 +452,7 @@ impl ManagedClientStartup {
 
 #[derive(Clone)]
 pub(crate) struct AsyncManagedClient {
+    pub(crate) ema_authority: Option<codex_rmcp_client::EmaRequestAuthority>,
     pub(crate) client: ManagedClientFuture,
     pub(crate) is_codex_apps_mcp_server: bool,
     pub(crate) cached_server_info: Option<McpServerInfo>,
@@ -498,6 +504,18 @@ impl AsyncManagedClient {
         };
         let startup_complete = Arc::new(AtomicBool::new(false));
         let server_capabilities = Arc::new(StdMutex::new(None));
+        let ema_auth = ema_auth
+            .filter(|_| matches!(server.config().auth, McpServerAuth::EmaAuth))
+            .map(|auth| {
+                auth.map(|owner| crate::ema_auth::EmaConnectionAuth {
+                    authority: owner.authority.child(),
+                    owner,
+                })
+            });
+        let ema_authority = ema_auth
+            .as_ref()
+            .and_then(|auth| auth.as_ref().ok())
+            .map(|auth| auth.authority.clone());
         let startup = Arc::new(ManagedClientStartup {
             ema_auth,
             originator: AuthStorageOriginator::current(),
@@ -536,6 +554,7 @@ impl AsyncManagedClient {
         });
         Self {
             client,
+            ema_authority,
             is_codex_apps_mcp_server,
             cached_server_info,
             server_capabilities,
@@ -664,6 +683,7 @@ pub(crate) enum StartupOutcomeError {
     Failed {
         error: String,
         is_authentication_required: bool,
+        is_ema_authentication_required: bool,
     },
 }
 
@@ -674,6 +694,7 @@ impl StartupOutcomeError {
             Self::Failed {
                 error,
                 is_authentication_required,
+                ..
             } => *is_authentication_required || error.contains("Auth required"),
         }
     }
@@ -685,6 +706,9 @@ impl From<anyhow::Error> for StartupOutcomeError {
         Self::Failed {
             error: format!("{error:#}"),
             is_authentication_required,
+            is_ema_authentication_required: is_authentication_required
+                && (error.downcast_ref::<EmaTokenSourceError>().is_some()
+                    || error.downcast_ref::<EmaAuthFailure>().is_some()),
         }
     }
 }
@@ -999,6 +1023,8 @@ async fn start_server_task(
     } = params;
     let send_elicitation =
         elicitation_requests.make_sender(server_name.clone(), tx_event, &client_mcp_extensions);
+    let client_supports_network_policy_meta =
+        client_mcp_extensions.contains(MCP_NETWORK_POLICY_META_CAPABILITY);
     let mut params =
         mcp_initialize_request_params(client_elicitation_capability, client_mcp_extensions);
     if auth_changes.is_some() {
@@ -1141,6 +1167,7 @@ async fn start_server_task(
         tool_timeout: None,
         server_instructions: initialize_result.instructions,
         server_supports_sandbox_state_meta_capability,
+        client_supports_network_policy_meta_capability: client_supports_network_policy_meta,
         codex_apps_tools_cache_context,
     };
 
@@ -1184,8 +1211,15 @@ pub(crate) fn mcp_initialize_request_params(
 ) -> InitializeRequestParams {
     let mut capabilities = ClientCapabilities::default();
     capabilities.elicitation = Some(client_elicitation_capability);
+    if client_mcp_extensions.contains(MCP_NETWORK_POLICY_META_CAPABILITY) {
+        capabilities.experimental = Some(BTreeMap::from([(
+            MCP_NETWORK_POLICY_META_CAPABILITY.to_string(),
+            serde_json::Map::new(),
+        )]));
+    }
     let extensions = client_mcp_extensions
         .iter()
+        .filter(|(id, _)| *id != MCP_NETWORK_POLICY_META_CAPABILITY)
         .filter_map(|(id, settings)| {
             settings
                 .as_object()
@@ -1241,7 +1275,7 @@ struct StartServerTaskParams {
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace", skip_all, fields(server_name = %server_name))]
 pub(crate) async fn make_rmcp_client(
-    ema_auth: Option<crate::ema_auth::EmaAuthContext>,
+    ema_auth: Option<Result<crate::ema_auth::EmaConnectionAuth, StartupOutcomeError>>,
     server_name: &str,
     server: EffectiveMcpServer,
     store_mode: OAuthCredentialsStoreMode,
@@ -1277,7 +1311,9 @@ pub(crate) async fn make_rmcp_client(
             ))
         })??;
         return auth
+            .owner
             .connect(
+                auth.authority,
                 server_name,
                 &server,
                 runtime_context.local_http_client(),
@@ -1485,6 +1521,7 @@ mod tests {
             ClientMcpExtensions::default(),
         );
         assert_eq!(unsupported.capabilities.extensions, None);
+        assert_eq!(unsupported.capabilities.experimental, None);
 
         let app_ui = serde_json::json!({
             "mimeTypes": ["text/html;profile=mcp-app"],
@@ -1493,9 +1530,20 @@ mod tests {
         let supported = mcp_initialize_request_params(
             ElicitationCapability::default(),
             ClientMcpExtensions::new([
+                (
+                    MCP_NETWORK_POLICY_META_CAPABILITY.to_string(),
+                    serde_json::json!({}),
+                ),
                 (OPENAI_FORM_EXTENSION_ID.to_string(), serde_json::json!({})),
                 (MCP_APP_UI_EXTENSION_ID.to_string(), app_ui.clone()),
             ]),
+        );
+        assert_eq!(
+            supported.capabilities.experimental,
+            Some(BTreeMap::from([(
+                MCP_NETWORK_POLICY_META_CAPABILITY.to_string(),
+                JsonObject::new()
+            )])),
         );
         assert_eq!(
             supported.capabilities.extensions,
