@@ -376,6 +376,7 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
         /*prefer_executor_snapshots*/ false,
     );
     let mut config = EnvironmentConfig {
+        environment_hooks: Default::default(),
         allow_login_shell: false,
         workspace_roots: Vec::new(),
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
@@ -669,8 +670,12 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
 
 #[cfg(unix)]
 async fn credential_snapshot_proxy() -> Result<crate::config::StartedNetworkProxy> {
-    let mut network_config = NetworkProxyConfig::default();
+    let mut network_config = NetworkProxyConfig {
+        enabled: true,
+        ..NetworkProxyConfig::default()
+    };
     network_config.set_credential_broker_enabled(/*enabled*/ true);
+    network_config.set_allowed_domains(vec!["*".to_string()]);
     network_config.allow_local_binding = Some(true);
     network_config.credential_providers.insert(
         "local".to_string(),

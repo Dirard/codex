@@ -17,12 +17,19 @@ use crate::context::ContextualUserFragment;
 use crate::context::CurrentTimeReminder;
 use crate::context::CurrentTimeUnavailable;
 use crate::context::DeveloperInstructions;
+use crate::context::GuardianApprovedAction;
 use crate::context::ManagedDeveloperInstructions;
+use crate::context::ModelInstructions;
 use crate::context::MultiAgentModeInstructions;
 use crate::context::MultiAgentRoleInstructions;
+use crate::context::MultiAgentUsageHint;
+use crate::context::world_state::IncrementalToolsHint;
 use crate::context::world_state::PersistentModeState;
 use crate::session::multi_agents::resolve_usage_hints;
+use crate::tasks::InterruptedTurnHistoryMarker;
+use crate::thread_manager::ForkSnapshot;
 use crate::thread_manager::StartThreadOptions;
+use crate::thread_manager::fork_history_from_snapshot;
 use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
 use codex_features::Feature;
@@ -128,10 +135,16 @@ fn retain_forked_developer_message(item: &mut ResponseItem, usage_hint_texts: &[
         return false;
     };
     content.retain(|content_item| {
+        // Leave base instructions for the later context-baseline retention check.
+        if content_item.kind().as_str() == BaseInstructionsFragment::KIND {
+            return true;
+        }
         // Persisted role hints can predate the current bundled wording and lack markers.
         if matches!(
             content_item.kind().as_str(),
-            "guardian.approved_action" | "multi_agent.role_instructions" | "multi_agent.usage_hint"
+            GuardianApprovedAction::KIND
+                | MultiAgentRoleInstructions::KIND
+                | MultiAgentUsageHint::KIND
         ) {
             return false;
         }
@@ -349,7 +362,11 @@ impl LocalAgentControl {
         {
             return Err(CodexErr::ThreadNotFound(thread_id));
         }
-        let mut environment_selections = self.runtime.registry.evicted_environments(thread_id);
+        let evicted_environments = self.runtime.registry.evicted_environments(thread_id);
+        let mut environment_selections = evicted_environments
+            .as_ref()
+            .map(|environments| environments.selections.clone());
+        let evicted_environments = evicted_environments.map(|environments| environments.bindings);
 
         let stored_thread = state
             .read_stored_thread(ReadThreadParams {
@@ -405,7 +422,8 @@ impl LocalAgentControl {
                     "cannot resume multi-agent v2 child {thread_id} with the current parent settings"
                 ))
             })?;
-            Some((parent, turn.initial_environments.clone()))
+            let environments = parent.session.inherited_environment_snapshot().await;
+            Some((parent, environments))
         } else {
             None
         };
@@ -477,6 +495,11 @@ impl LocalAgentControl {
                 )));
             }
             if let Some(selections) = environment_selections.as_mut() {
+                let parent_selections = parent_environments.all_selections();
+                let ready_parent = parent_environments.refresh_readiness();
+                let ready_evicted = evicted_environments
+                    .as_ref()
+                    .map(TurnEnvironmentSnapshot::refresh_readiness);
                 for selection in selections {
                     let environment_id = &selection.environment_id;
                     let invalid_environment = |reason: &str| {
@@ -484,17 +507,22 @@ impl LocalAgentControl {
                             "cannot resume multi-agent v2 child {thread_id}: cached environment {environment_id} {reason}"
                         ))
                     };
-                    // Matching the attachment also keeps startup on the captured owner executor.
-                    let owner_environment = parent_environments
+                    // A changed parent selection does not revoke the child's retained binding.
+                    // If the parent still configures this workspace, keep enforcing its current
+                    // roots and permissions rather than restoring superseded authority.
+                    let owner_environments = if parent_selections.iter().any(|parent_selection| {
+                        parent_selection.environment_id == selection.environment_id
+                            && parent_selection.cwd == selection.cwd
+                    }) {
+                        &ready_parent
+                    } else {
+                        ready_evicted.as_ref().unwrap_or(&ready_parent)
+                    };
+                    let owner_environment = owner_environments
                         .turn_environments()
-                        .find(|environment| {
-                            let parent_selection = &environment.selection;
-                            parent_selection.environment_id == selection.environment_id
-                                && parent_selection.cwd == selection.cwd
-                                && parent_selection.workspace_roots == selection.workspace_roots
-                        })
+                        .find(|environment| environment.selection.has_same_workspace(selection))
                         .ok_or_else(|| {
-                            invalid_environment("no longer matches a ready parent environment")
+                            invalid_environment("has no matching ready environment binding")
                         })?;
                     let owner_config = owner_environment.config();
                     let child_config = match &selection.config {
@@ -556,24 +584,44 @@ impl LocalAgentControl {
                 }
             }
             (
-                Some(parent_environments.clone()),
+                Some(
+                    evicted_environments
+                        .as_ref()
+                        .unwrap_or(parent_environments)
+                        .clone(),
+                ),
                 Some(Arc::clone(&parent.session.services.exec_policy)),
                 Some(parent.client_mcp_extensions()),
             )
         } else {
             (
-                self.inherited_environments_for_source(&state, Some(&session_source))
-                    .await,
+                match &evicted_environments {
+                    Some(environments) => Some(environments.clone()),
+                    None => {
+                        self.inherited_environments_for_source(&state, Some(&session_source))
+                            .await
+                    }
+                },
                 self.inherited_exec_policy_for_source(&state, Some(&session_source), &config)
                     .await,
                 None,
             )
         };
-        let inherited_instructions = if let Some((parent, _)) = parent.as_ref() {
-            Some(parent.session.inherited_instructions().await)
-        } else if let Some(parent_thread_id) = parent_thread_id
-            && let Ok(parent) = state.get_thread(parent_thread_id).await
-        {
+        let inherited_parent = if let Some((parent, _)) = parent.as_ref() {
+            Some(Arc::clone(parent))
+        } else if let Some(parent_thread_id) = parent_thread_id {
+            state.get_thread(parent_thread_id).await.ok()
+        } else {
+            None
+        };
+        let prompt_cache_key = inherited_parent.as_ref().map(|parent| {
+            parent
+                .session
+                .services
+                .model_client
+                .prompt_cache_key_policy()
+        });
+        let inherited_instructions = if let Some(parent) = inherited_parent {
             Some(parent.session.inherited_instructions().await)
         } else {
             self.runtime
@@ -606,6 +654,7 @@ impl LocalAgentControl {
         match state
             .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
                 config,
+                prompt_cache_key,
                 initial_history,
                 agent_control: self.clone(),
                 session_source,
@@ -949,6 +998,13 @@ impl LocalAgentControl {
             }
         }
         let input_admission = input_admission_started_at.elapsed();
+        // Keep provisional ownership through the final awaits. Commit and return to the
+        // backend caller in one poll; later tool-result publication is outside this boundary.
+        let status = self.get_status(new_thread.thread_id).await;
+        let config = match spawn_config {
+            Some(config) => config,
+            None => new_thread.thread.config_snapshot().await,
+        };
         reservation.commit(agent_metadata.clone());
         if let Some(residency_slot) = residency_slot {
             residency_slot.commit(new_thread.thread_id);
@@ -976,11 +1032,7 @@ impl LocalAgentControl {
         let agent = LiveAgent {
             thread_id: new_thread.thread_id,
             metadata: agent_metadata,
-            status: self.get_status(new_thread.thread_id).await,
-        };
-        let config = match spawn_config {
-            Some(config) => config,
-            None => new_thread.thread.config_snapshot().await,
+            status,
         };
         let session_telemetry = new_thread
             .thread
@@ -1090,7 +1142,7 @@ impl LocalAgentControl {
                 [parent_usage_hints.root, parent_usage_hints.subagent]
                     .into_iter()
                     .flatten()
-                    .map(|instructions| instructions.render())
+                    .map(|instructions| instructions.render().into_text().unwrap_or_default())
                     .collect()
             } else {
                 Vec::new()
@@ -1108,15 +1160,25 @@ impl LocalAgentControl {
             break;
         }
         let mut replaced_parent_developer_instructions = false;
-        // Scrub inherited hints and replace only the parent's developer-instruction fragment.
-        // Compaction stores response items separately, so sanitize both top-level messages and
-        // compacted replacement histories with the same policy.
+        let preserve_fork_prefix = multi_agent_version == MultiAgentVersion::V2
+            && config.multi_agent_v2.preserve_fork_prefix
+            && preserve_context_baselines;
+        if preserve_fork_prefix {
+            let InitialHistory::Forked(items) = fork_history_from_snapshot(
+                ForkSnapshot::Interrupted,
+                InitialHistory::Forked(forked_rollout_items),
+                InterruptedTurnHistoryMarker::Disabled,
+            ) else {
+                unreachable!("a forked snapshot remains forked");
+            };
+            forked_rollout_items = items;
+        }
         let retain_forked_item = |envelope: &mut ResponseItemEnvelope, replaced: &mut bool| {
             if multi_agent_version == MultiAgentVersion::V2
-                && matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "user" || role == "assistant")
+                && (preserve_fork_prefix
+                    || matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "user" || role == "assistant"))
             {
-                // Persist the scope of every inherited conversational message, including the suffix
-                // after a checkpoint. Resume must not recapture it as local authorization.
+                // Resume must not recapture copied parent messages as local authorization.
                 envelope
                     .metadata
                     .get_or_insert_default()
@@ -1128,6 +1190,9 @@ impl LocalAgentControl {
             {
                 // Assistant and tool positions belong to the parent counter, not the child.
                 metadata.user_input_order = None;
+            }
+            if preserve_fork_prefix {
+                return true;
             }
             let response_item = &mut envelope.item;
             // Tool declarations and their comparison baseline must survive or be rebuilt together.
@@ -1150,13 +1215,17 @@ impl LocalAgentControl {
                     return false;
                 };
                 content.retain_mut(|content_item| {
-                    if content_item.kind().as_str() == BaseInstructionsFragment::KIND {
+                    if matches!(
+                        content_item.kind().as_str(),
+                        BaseInstructionsFragment::KIND | IncrementalToolsHint::KIND
+                    ) {
                         return preserve_context_baselines;
                     }
                     let ContentItem::InputText { text } = content_item.content_mut() else {
                         return true;
                     };
                     if ManagedDeveloperInstructions::matches_text(text)
+                        || ModelInstructions::matches_text(text)
                         || PersistentModeState::matches_text(text)
                     {
                         // If the child will rebuild its initial context, drop the inherited
@@ -1195,7 +1264,9 @@ impl LocalAgentControl {
             true
         };
         forked_rollout_items.retain_mut(|item| {
-            if !keep_forked_rollout_item(item, preserve_context_baselines)
+            let keep = (preserve_fork_prefix && matches!(item, RolloutItem::ResponseItem(_)))
+                || keep_forked_rollout_item(item, preserve_context_baselines);
+            if !keep
                 || destination_history_mode == Some(ThreadHistoryMode::Paginated)
                     && matches!(
                         &*item,
@@ -1261,6 +1332,13 @@ impl LocalAgentControl {
                 | RolloutItem::SecurityRiskScore(_) => false,
             }
         });
+        if preserve_fork_prefix {
+            forked_rollout_items.push(RolloutItem::ResponseItem(
+                ContextualUserFragment::into(MultiAgentUsageHint::new(
+                    "You are now a newly spawned child agent. The preceding conversation is inherited parent context. Follow your own role, identity, and task below; earlier identities, tasks, and action-specific approvals belong to your ancestors. Inherited tool calls are historical records; live tool sessions and process handles are not inherited. Report your result to your parent.",
+                )).into(),
+            ));
+        }
         // Full forks reuse the parent's reference context instead of rebuilding it. If that
         // context omitted the parent's developer fragment, append the child's override so its
         // instructions still reach the model exactly once.
@@ -1457,6 +1535,7 @@ impl LocalAgentControl {
         let resumed_thread = state
             .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
                 config: config.clone(),
+                prompt_cache_key: None,
                 initial_history,
                 agent_control: self.clone(),
                 session_source,

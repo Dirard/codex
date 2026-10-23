@@ -22,6 +22,7 @@ use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_api::TransportError;
+use codex_history::HistoryInitialization;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthManager;
@@ -129,6 +130,7 @@ fn test_model_client_with_thread_id(
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*concurrent_reasoning_summaries_enabled*/ false,
+        /*output_token_replay_enabled*/ false,
         /*attestation_provider*/ None,
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         codex_model_provider::WorkspaceRoutingContext::new(
@@ -343,7 +345,7 @@ async fn client_setup_accepts_command_credential_refresh() {
 
         let setup = client.current_client_setup(routing).await.unwrap();
         let mut headers = http::HeaderMap::new();
-        setup.api_auth.add_auth_headers(&mut headers);
+        setup.api_auth.add_auth_headers(&mut headers).unwrap();
         assert_eq!(
             headers.get(http::header::AUTHORIZATION).unwrap(),
             "Bearer refreshed-token"
@@ -406,7 +408,7 @@ async fn client_setup_rebuilds_chatgpt_refresh_but_rejects_account_switches() {
         if expected_calls == 2 {
             let setup = result.unwrap();
             let mut headers = http::HeaderMap::new();
-            setup.api_auth.add_auth_headers(&mut headers);
+            setup.api_auth.add_auth_headers(&mut headers).unwrap();
             assert_eq!(
                 headers.get(http::header::AUTHORIZATION).unwrap(),
                 &format!("Bearer {refreshed_token}")
@@ -1433,9 +1435,13 @@ fn started_inference_attempt(temp: &TempDir) -> anyhow::Result<InferenceTraceAtt
 
 fn output_message(id: &str, text: &str) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: Some(codex_protocol::ResponseItemId::with_suffix("msg", id)),
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
+            annotations: None,
+            logprobs: None,
             text: text.to_string(),
         }],
         phase: None,
@@ -1508,7 +1514,7 @@ fn internal_session_prompt_cache_key_is_scoped_to_parent_thread() {
 
     assert_eq!(
         client.prompt_cache_key(&metadata),
-        format!("guardian:{parent_thread_id}")
+        Some(format!("guardian:{parent_thread_id}"))
     );
 }
 
@@ -1541,13 +1547,14 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
 
     let thread_id = client.state.thread_id.to_string();
     let expected_window_id = format!("{thread_id}:1");
-    let responses_metadata = test_responses_metadata_for_client(
+    let mut responses_metadata = test_responses_metadata_for_client(
         &client,
         Some("turn-123"),
         expected_window_id.clone(),
         Some(parent_thread_id),
         TestCodexResponsesRequestKind::Turn,
     );
+    responses_metadata.history_initialization = Some(HistoryInitialization::WarmFork);
     let client_metadata = client.build_ws_client_metadata(
         &responses_metadata,
         /*include_internal*/ true,
@@ -1560,6 +1567,7 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
             .expect("turn metadata"),
     )
     .expect("valid turn metadata");
+    assert_eq!(turn_metadata["history_initialization"], "warm_fork");
     for (client_key, metadata_key, expected) in [
         (
             X_CODEX_INSTALLATION_ID_HEADER,
@@ -1654,6 +1662,11 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
 
     assert_eq!(inference.execution.status, ExecutionStatus::Cancelled);
     assert_eq!(inference.response_item_ids.len(), 1);
+    // Receiving an item from the transport does not establish history acceptance.
+    assert_eq!(
+        rollout.threads["thread-root"].conversation_item_ids,
+        inference.request_item_ids
+    );
     assert_eq!(rollout.raw_payloads.len(), 2);
 
     Ok(())
@@ -1937,7 +1950,8 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
             mode: "managed",
             phase: "refresh_token",
         }),
-    );
+    )
+    .unwrap();
 
     assert_eq!(auth_context.auth_mode, Some("Chatgpt"));
     assert!(auth_context.auth_header_attached);
@@ -1957,7 +1971,8 @@ fn auth_request_telemetry_context_tracks_agent_identity_ids() {
             task_id: "task-run-context".to_string(),
         }),
         PendingUnauthorizedRetry::default(),
-    );
+    )
+    .unwrap();
 
     assert_eq!(
         auth_context.agent_identity_telemetry(),
@@ -2017,6 +2032,7 @@ fn model_client_with_counting_attestation(
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*concurrent_reasoning_summaries_enabled*/ false,
+        /*output_token_replay_enabled*/ false,
         Some(Arc::new(CountingAttestationProvider {
             calls: attestation_calls.clone(),
         })),
@@ -2068,11 +2084,11 @@ fn thread_responses_headers_are_scoped_to_model_and_backend_auth() {
     );
 }
 
-#[test_case::test_case(/*cache_key*/ None; "own_cache")]
-#[test_case::test_case(Some("parent-session"); "inherited_cache")]
+#[test_case::test_case(/*session_id_override*/ None; "own_session_id")]
+#[test_case::test_case(Some("parent-session"); "inherited_session_id")]
 #[tokio::test]
 async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses(
-    cache_key: Option<&str>,
+    session_id_override: Option<&str>,
 ) {
     let (mut model_client, attestation_calls) =
         model_client_with_counting_attestation(/*include_attestation*/ true);
@@ -2084,7 +2100,7 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses(
         TestCodexResponsesRequestKind::WebsocketConnection,
     );
 
-    model_client.prompt_cache_key_override = cache_key.map(str::to_string);
+    model_client.session_id_override = session_id_override.map(str::to_string);
     let headers = model_client
         .build_websocket_headers(&responses_metadata)
         .await;
@@ -2098,7 +2114,7 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses(
     assert_eq!(attestation_calls.load(Ordering::Relaxed), 1);
     assert_eq!(
         headers["session-id"],
-        cache_key.unwrap_or(&responses_metadata.session_id)
+        session_id_override.unwrap_or(&responses_metadata.session_id)
     );
     assert_eq!(headers["thread-id"], responses_metadata.thread_id);
 }

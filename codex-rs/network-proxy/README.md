@@ -83,6 +83,10 @@ strip_request_headers = ["authorization"]
 
 ### 2) Run the proxy
 
+In a Codex permission profile, set `version = 2` on `[permissions.<profile>.network.mitm]`
+before using scoped hooks or credential substitution. Older clients reject this table key,
+so rolling back cannot silently enable unconditional header injection.
+
 The proxy can also run without a full Codex permissions profile. Put the network policy in a
 standalone JSON file:
 
@@ -241,9 +245,12 @@ what it can reasonably guarantee.
 
 - Allowlist-first policy: if `domains` has no `allow` entries, requests are blocked until an allowlist is configured.
 - Domain patterns: exact hosts are supported, `*.example.com` matches subdomains only, and `**.example.com` matches the apex plus subdomains; the global `*` wildcard is only accepted when explicitly enabled for allowlist compilation and is otherwise rejected.
-- Within a domain pattern, `?` matches exactly one character, including a dot. For example,
+- Within a domain pattern, `?` matches exactly one byte, including a dot. For example,
   `api?.example.com` matches `api1.example.com`, but not `api.example.com` or `api12.example.com`.
   It can be combined with `*`, `*.`, and `**.` in both allow and deny entries.
+  Matching uses UTF-8 bytes with ASCII case insensitivity; it does not convert between Unicode
+  domain names and IDNA/Punycode. Internationalized domains arriving as Punycode must be matched
+  using their Punycode spelling.
 - Deny wins: `domains` entries marked `deny` always override the allowlist.
 - Local/private network protection: when `allow_local_binding = false`, the proxy blocks loopback
   and common private/link-local ranges. Explicit allowlisting of local IP literals (or `localhost`)
@@ -266,3 +273,13 @@ what it can reasonably guarantee.
 - DNS rebinding is hard to fully prevent without pinning the resolved IP(s) all the way down to the
   transport layer. If your threat model includes hostile DNS, enforce network egress at a lower
   layer too (e.g., firewall / VPC / corporate proxy policies).
+
+### Native origin and exact secret substitution
+
+MITM hook `match.schemes` and `match.ports` constrain the trusted tunnel origin;
+empty lists preserve existing behavior. An injected header can set `placeholder`
+to require one exact whole-header value before substitution. Missing, mismatched,
+or duplicate values fail closed. This form requires HTTPS port 443 and cannot
+modify routing or framing headers. Secret sources remain trusted host references;
+resolved values are marked sensitive in diagnostics and file sources are bounded
+to 64 KiB. Ambiguous semicolon paths cannot authorize scoped credentials.

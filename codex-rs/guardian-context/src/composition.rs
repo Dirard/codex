@@ -17,17 +17,23 @@ use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::user_input::UserInput;
+use codex_utils_output_truncation::TruncationPolicy as OutputTruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
 
 use crate::ActionPresentation;
 use crate::BudgetPriority;
 use crate::Budgeted;
 use crate::ContextSection;
 use crate::ConversationTranscriptEntry;
+use crate::Retention;
 use crate::SectionError;
 use crate::TranscriptContent;
 use crate::TranscriptFormat;
 use crate::TranscriptRecord;
 use crate::TruncationObservation;
+use crate::retained_instructions::RetainedInstructionKind;
+
+const MAX_APPROVAL_REASON_TOKENS: usize = 512;
 
 /// Consumer framing after the host has selected a full or delta transcript.
 pub enum ContextPresentation<'a> {
@@ -146,7 +152,7 @@ impl CollectedContext {
             .unwrap_or_default()
     }
 
-    /// Frames the selected transcript while preserving structured text through admission.
+    /// Applies consumer caps and frames the selected transcript before request admission.
     pub fn compose(
         self,
         presentation: ContextPresentation<'_>,
@@ -239,7 +245,14 @@ impl CollectedContext {
                                 content: ContentItem::InputText {
                                     text: format!("{}\n", item.content),
                                 },
-                                retention: item.retention,
+                                retention: match item.kind {
+                                    RetainedInstructionKind::UserInstruction
+                                    | RetainedInstructionKind::HostNotice
+                                    | RetainedInstructionKind::Framing => Retention::Required,
+                                    RetainedInstructionKind::AssistantContext => {
+                                        Retention::Optional(BudgetPriority::Commentary)
+                                    }
+                                },
                                 source: item.source,
                             })
                             .collect(),
@@ -371,7 +384,15 @@ impl CollectedContext {
                         SectionDelivery::user_content(items),
                     )
                 }
-                ContextSection::PlannedAction(planned) => {
+                ContextSection::PlannedAction(mut planned) => {
+                    if action != ActionPresentation::Async {
+                        planned.reason = planned.reason.map(|reason| {
+                            truncate_text(
+                                &reason,
+                                OutputTruncationPolicy::Tokens(MAX_APPROVAL_REASON_TOKENS),
+                            )
+                        });
+                    }
                     let mut items = planned
                         .render(action)
                         .into_iter()
@@ -566,6 +587,8 @@ pub(super) fn bounded_text_parts(text: &str) -> impl Iterator<Item = &str> {
 
 pub(super) fn user_message(content: Vec<ContentItem>) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_owned(),
         content,

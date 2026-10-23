@@ -102,6 +102,11 @@ impl McpBinding {
         self.connections.has_servers()
     }
 
+    /// The environment owning this server in the step's connection set, even if it exposes no tools.
+    pub fn server_environment_id(&self, server: &str) -> Option<&str> {
+        self.connections.server_environment_id(server)
+    }
+
     pub async fn list_resources(
         &self,
         server: &str,
@@ -259,6 +264,20 @@ impl PreparedMcpCall {
         permission_profile
     }
 
+    /// Attach policy aliases and the server-host launcher, replacing stale authority.
+    /// Callers negotiate the state capability before requesting this metadata.
+    pub async fn augment_sandbox_metadata(
+        &self,
+        meta: &mut Option<JsonValue>,
+        state: crate::SandboxState,
+    ) -> Result<()> {
+        crate::sandbox_metadata::augment_metadata(
+            meta,
+            state,
+            self.sandbox_codex_executable().await,
+        )
+    }
+
     /// Full CLI path usable by a local stdio server. An HTTP endpoint (even on
     /// loopback) or remote executor does not establish a shared filesystem.
     /// Capability probes are cached process-wide by absolute executable path.
@@ -396,7 +415,7 @@ impl PreparedMcpCall {
                         tokio::time::timeout_at(deadline, add_trusted_access_context)
                             .await
                             .map_err(|_| {
-                                anyhow::anyhow!("timed out awaiting tools/call after {timeout:.0?}")
+                                codex_rmcp_client::request_timeout_error("tools/call", timeout)
                             })?
                     }
                     None => add_trusted_access_context.await,
@@ -405,9 +424,7 @@ impl PreparedMcpCall {
                     Some((timeout, deadline)) => {
                         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
                         if remaining.is_zero() {
-                            return Err(anyhow::anyhow!(
-                                "timed out awaiting tools/call after {timeout:.0?}"
-                            ));
+                            return Err(codex_rmcp_client::request_timeout_error("tools/call", timeout));
                         }
                         Some(remaining)
                     }
@@ -415,7 +432,17 @@ impl PreparedMcpCall {
                 };
                 self.client
                     .client
-                    .call_tool(tool_name.clone(), arguments, meta, remaining_timeout)
+                    .call_tool(
+                        tool_name.clone(),
+                        arguments,
+                        self.connections.network_policy_meta_for_call(
+                            &self.client,
+                            Some(self.permission_profile()),
+                            self.server_environment_id(),
+                            meta,
+                        ),
+                        remaining_timeout,
+                    )
                     .await
                     .with_context(|| format!("tool call failed for `{}/{tool_name}`", self.server_name))
             })
