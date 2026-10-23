@@ -428,6 +428,16 @@ pub struct ThreadResumeParams {
     #[experimental("thread/resume.initialTurnsPage")]
     #[ts(optional = nullable)]
     pub initial_turns_page: Option<ThreadResumeInitialTurnsPageParams>,
+    /// Fork: replaces the dynamic tools the thread was started with. A client
+    /// that added tools since gives them to a thread it resumes; absent or empty
+    /// keeps the tools recorded with the thread.
+    #[experimental("thread/resume.dynamicTools")]
+    #[serde(
+        default,
+        deserialize_with = "codex_protocol::dynamic_tools::deserialize_dynamic_tool_specs"
+    )]
+    #[ts(optional = nullable)]
+    pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]

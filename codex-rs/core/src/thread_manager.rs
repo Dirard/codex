@@ -1291,6 +1291,28 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
         client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
+        self.resume_thread_with_history_and_tools(
+            config,
+            initial_history,
+            Vec::new(),
+            auth_manager,
+            parent_trace,
+            client_mcp_extensions,
+        )
+        .await
+    }
+
+    /// Fork: resumes a thread with the dynamic tools of the client instead of the
+    /// ones recorded at its start; empty keeps the recorded ones.
+    pub async fn resume_thread_with_history_and_tools(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        dynamic_tools: Vec<DynamicToolSpec>,
+        auth_manager: Arc<AuthManager>,
+        parent_trace: Option<W3cTraceContext>,
+        client_mcp_extensions: ClientMcpExtensions,
+    ) -> CodexResult<NewThread> {
         let agent_control = self.agent_control_for_config(&config);
         let (session_source, thread_source) = initial_history
             .get_resumed_session_sources()
@@ -1301,6 +1323,7 @@ impl ThreadManager {
             thread_source,
             parent_trace,
             client_mcp_extensions,
+            dynamic_tools,
             ..StartThreadOptions::new(config)
         };
         Box::pin(self.state.spawn_thread(ThreadSpawnRequest::new(

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/openai/codex/sdk/go/protocol"
@@ -369,5 +370,23 @@ func assertRequestThreadID(t *testing.T, params json.RawMessage, want string) {
 	}
 	if raw.ThreadID != want {
 		t.Fatalf("threadId = %q, want %q; params = %s", raw.ThreadID, want, params)
+	}
+}
+
+// Fork: a resumed thread gets the dynamic tools the client gives; none given — the
+// field is left out and the thread keeps the tools it was started with.
+func TestThreadResumeParamsDynamicTools(t *testing.T) {
+	tool := protocol.DynamicToolSpec{TypeValue: "function", Name: protocol.SomeNonNull("task_branch"),
+		Description: protocol.SomeNonNull("ветка задачи"), InputSchema: json.RawMessage(`{"type":"object"}`)}
+	data, err := json.Marshal(threadResumeParams(ThreadResumeOptions{ThreadID: "t", DynamicTools: []protocol.DynamicToolSpec{tool}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"dynamicTools":[{`) || !strings.Contains(string(data), `"task_branch"`) {
+		t.Fatalf("resume params: %s", data)
+	}
+	data, err = json.Marshal(threadResumeParams(ThreadResumeOptions{ThreadID: "t"}))
+	if err != nil || strings.Contains(string(data), "dynamicTools") {
+		t.Fatalf("resume params without tools: %s %v", data, err)
 	}
 }

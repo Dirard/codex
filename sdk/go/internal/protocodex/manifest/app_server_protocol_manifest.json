@@ -5715,8 +5715,8 @@
     ],
     "digests": {
       "manifestDigest": "9fce96938a347cf4fae7e86efb9192ecd230d110e45c124f8a228ba512dcf4de",
-      "protocolDigest": "99cbc06c4a44b3e6702d6d1c58aed824737241939f123e5cd0761b8407d03980",
-      "schemaDigest": "033c103c0d09cd929a53f117f50c5598bc782e5d569018940d2eeb4bb12cf5ff"
+      "protocolDigest": "8e6791f68c0684693f020554efe345af386075a26adc583b0737356c78f6bcc9",
+      "schemaDigest": "8cffbe09364b572bb26f739b3d37b7d40680897dfa5d4a92cfa4f51433835452"
     },
     "protocolMode": "experimental",
     "routingLifecycle": [

@@ -368,9 +368,9 @@ pub struct InitializeDigestSnapshot {
 pub fn initialize_digest_snapshot() -> InitializeDigestSnapshot {
     InitializeDigestSnapshot {
         stable_protocol_digest: "9ec13f8c80a82ec2025aaba7f0bcb0853e083f50c0e3e93341427eefdaf3c2ad",
-        experimental_protocol_digest: "99cbc06c4a44b3e6702d6d1c58aed824737241939f123e5cd0761b8407d03980",
+        experimental_protocol_digest: "8e6791f68c0684693f020554efe345af386075a26adc583b0737356c78f6bcc9",
         stable_schema_digest: "e901a1018d27dd56444dc9a28f76b4c4fff362d2c4b8efee5799d653e8d97fa6",
-        experimental_schema_digest: "033c103c0d09cd929a53f117f50c5598bc782e5d569018940d2eeb4bb12cf5ff",
+        experimental_schema_digest: "8cffbe09364b572bb26f739b3d37b7d40680897dfa5d4a92cfa4f51433835452",
         stable_manifest_digest: "2400b6e04b6d9b6b6b61c8e55714c4a9ec67818d0b77e6917172ac1a3620f48e",
         experimental_manifest_digest: "9fce96938a347cf4fae7e86efb9192ecd230d110e45c124f8a228ba512dcf4de",
     }

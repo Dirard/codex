@@ -56,6 +56,9 @@ type ThreadResumeOptions struct {
 	ExcludeTurns          *bool
 	History               []protocol.ResponseItem
 	InitialTurnsPage      *protocol.ThreadResumeInitialTurnsPageParams
+	// DynamicTools (fork) replace the tools the thread was started with: tools the client
+	// added since reach a thread it resumes. Empty keeps the recorded ones.
+	DynamicTools []protocol.DynamicToolSpec
 }
 
 type ThreadForkOptions struct {
@@ -624,6 +627,9 @@ func threadResumeParams(opts ThreadResumeOptions) protocol.ThreadResumeParams {
 	}
 	if opts.InitialTurnsPage != nil {
 		params.InitialTurnsPage = protocol.Some(*opts.InitialTurnsPage)
+	}
+	if len(opts.DynamicTools) > 0 {
+		params.DynamicTools = protocol.Some(opts.DynamicTools)
 	}
 	return params
 }

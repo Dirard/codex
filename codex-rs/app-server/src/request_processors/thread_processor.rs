@@ -3721,8 +3721,13 @@ impl ThreadRequestProcessor {
             personality,
             exclude_turns,
             initial_turns_page,
+            dynamic_tools,
         } = params.clone();
         let include_turns = !exclude_turns;
+        let dynamic_tools = dynamic_tools.unwrap_or_default();
+        if !dynamic_tools.is_empty() {
+            validate_dynamic_tools(&dynamic_tools).map_err(invalid_request)?;
+        }
 
         let resume_result = if let Some(history) = history {
             self.resume_thread_from_history(history.as_slice())
@@ -3983,9 +3988,10 @@ impl ThreadRequestProcessor {
 
         match self
             .thread_manager
-            .resume_thread_with_history(
+            .resume_thread_with_history_and_tools(
                 config,
                 thread_history,
+                dynamic_tools,
                 self.auth_manager.clone(),
                 match target {
                     ThreadResumeTarget::Client(request_id) => {

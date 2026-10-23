@@ -6318,6 +6318,17 @@
             "null"
           ]
         },
+        "dynamicTools": {
+          "default": null,
+          "description": "Fork: replaces the dynamic tools the thread was started with. A client that added tools since gives them to a thread it resumes; absent or empty keeps the tools recorded with the thread.",
+          "items": {
+            "$ref": "#/definitions/DynamicToolSpec"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "excludeTurns": {
           "description": "When true, return only thread metadata and live-resume state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after resuming. Full-history hydration is deprecated for paginated threads; use this with `thread/turns/list` and `thread/items/list` instead.",
           "type": "boolean"

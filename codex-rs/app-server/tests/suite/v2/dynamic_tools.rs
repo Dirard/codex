@@ -21,6 +21,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -171,6 +172,88 @@ async fn thread_start_normalizes_legacy_dynamic_tools_into_model_request() -> Re
         })
     );
 
+    Ok(())
+}
+
+// Fork: a client that added tools since a thread started gives them on resume, and the
+// model sees them instead of the recorded ones.
+#[tokio::test]
+async fn thread_resume_replaces_dynamic_tools_in_model_request() -> Result<()> {
+    let responses = vec![
+        create_final_assistant_message_sse_response("Done")?,
+        create_final_assistant_message_sse_response("Done again")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    let schema = json!({ "type": "object", "properties": {}, "additionalProperties": false });
+    let turn = |thread_id: &str, text: &str| TurnStartParams {
+        thread_id: thread_id.to_string(),
+        input: vec![V2UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }],
+        ..Default::default()
+    };
+
+    let mut primary = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized()
+        .await?;
+    let start = primary
+        .send_raw_request(
+            "thread/start",
+            Some(json!({ "dynamicTools": [
+                { "name": "old_tool", "description": "Old tool", "inputSchema": schema }
+            ] })),
+        )
+        .await?;
+    let start: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(start)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.start_turn_and_wait_for_completion(turn(&thread.id, "first")),
+    )
+    .await??;
+    timeout(DEFAULT_READ_TIMEOUT, primary.shutdown_gracefully()).await??;
+
+    let mut secondary = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized()
+        .await?;
+    let resume = secondary
+        .send_raw_request(
+            "thread/resume",
+            Some(
+                json!({ "threadId": thread.id, "excludeTurns": true, "dynamicTools": [
+                { "name": "new_tool", "description": "New tool", "inputSchema": schema }
+            ] }),
+            ),
+        )
+        .await?;
+    let resume: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        secondary.read_stream_until_response_message(RequestId::Integer(resume)),
+    )
+    .await??;
+    let _resumed = to_response::<ThreadResumeResponse>(resume)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        secondary.start_turn_and_wait_for_completion(turn(&thread.id, "second")),
+    )
+    .await??;
+
+    let bodies = responses_bodies(&server).await?;
+    assert_eq!(bodies.len(), 2);
+    assert!(find_tool(&bodies[0], "old_tool").is_some());
+    assert!(find_tool(&bodies[1], "new_tool").is_some());
+    assert!(find_tool(&bodies[1], "old_tool").is_none());
     Ok(())
 }
 
