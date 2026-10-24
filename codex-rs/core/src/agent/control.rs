@@ -295,25 +295,83 @@ impl LocalAgentControl {
         Ok(())
     }
 
+    /// Delivers a terminal result to a loaded or unloaded parent.
+    ///
+    /// Loaded recipients receive the mail synchronously, before the sender publishes its
+    /// terminal status, while their residency is pinned. Queue-only mail for an unloaded
+    /// recipient is retained in the runtime mailbox, as `submit_inter_agent_communication` does.
+    /// Results are queue-only; turn-triggering mail belongs to `send_inter_agent_communication`,
+    /// which also carries turn start options and spawn budgets.
     pub(crate) async fn enqueue_inter_agent_communication(
         &self,
         agent_id: ThreadId,
-        communication: InterAgentCommunication,
+        mut communication: InterAgentCommunication,
         context: AgentCommunicationContext,
     ) -> CodexResult<String> {
         let state = self.runtime.upgrade()?;
-        let thread = state.get_thread(agent_id).await?;
-        if communication.trigger_turn {
-            thread
-                .ensure_execution_capacity_for_turn_start(self)
-                .await?;
-        }
+        let observers = state.extensions.message_lifecycle_contributors();
+        let delivery = (!observers.is_empty()).then(|| {
+            let message_id = communication
+                .id
+                .take()
+                .filter(|id| !id.is_empty())
+                .unwrap_or_else(|| ResponseItemId::new("amsg"));
+            communication.id = Some(message_id.clone());
+            MessageDelivery::publish(context.sender_thread_id, message_id, observers)
+        });
         let communication_for_log =
             crate::agent_communication::logging_enabled().then(|| communication.clone());
-        let communication_id = thread
-            .session
-            .enqueue_inter_agent_communication(communication)
-            .await;
+        // A second attempt observes the registry after an eviction that raced the pin.
+        let mut attempts_left = 2;
+        let communication_id = loop {
+            attempts_left -= 1;
+            let thread = {
+                let threads = state.threads.read().await;
+                match threads.get(&agent_id) {
+                    Some(thread) if !thread.session_source.is_internal() => Arc::clone(thread),
+                    None if !communication.trigger_turn => {
+                        let _membership = self.runtime.admit_start()?;
+                        self.runtime.ensure_agent_known(agent_id)?;
+                        let submission_id = uuid::Uuid::now_v7().to_string();
+                        self.runtime.mailboxes.enqueue(
+                            agent_id,
+                            Some(submission_id.clone()),
+                            vec![crate::PendingAgentMessage::new(communication, delivery)],
+                        )?;
+                        break submission_id;
+                    }
+                    Some(_) | None => return Err(CodexErr::ThreadNotFound(agent_id)),
+                }
+            };
+            if communication.trigger_turn {
+                thread
+                    .ensure_execution_capacity_for_turn_start(self)
+                    .await?;
+            }
+            let _residency_guard = match thread
+                .session
+                .services
+                .local_agent_runtime
+                .pin_v2_residency(&state, &thread)
+                .await
+            {
+                Ok(guard) => guard,
+                Err(err)
+                    if attempts_left > 0
+                        && matches!(err.details(), CodexErrorDetails::ThreadNotFound(_)) =>
+                {
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
+            break thread
+                .session
+                .enqueue_inter_agent_communication(crate::PendingAgentMessage::new(
+                    communication,
+                    delivery,
+                ))
+                .await;
+        };
         if let Some(communication) = communication_for_log {
             crate::agent_communication::emit_agent_communication_send(
                 &communication_id,

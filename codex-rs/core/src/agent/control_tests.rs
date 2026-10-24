@@ -5129,6 +5129,124 @@ async fn multi_agent_v2_terminal_error_is_published_after_parent_mailbox() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test holds the thread registry to block parent delivery while the status is observed"
+)]
+async fn multi_agent_v2_terminal_error_status_waits_for_blocked_parent_delivery() {
+    let harness = AgentControlHarness::new().await;
+    let (worker_thread_id, worker_thread) = harness.start_thread().await;
+    let mut tester_config = harness.config.clone();
+    let _ = tester_config.features.enable(Feature::MultiAgentV2);
+    let worker_path = AgentPath::root().join("worker_a").expect("worker path");
+    let tester_path = worker_path.join("tester").expect("tester path");
+    let tester_thread_id = harness
+        .manager
+        .start_thread(StartThreadOptions {
+            session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: worker_thread_id,
+                depth: 2,
+                agent_path: Some(tester_path),
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+            ..StartThreadOptions::new(tester_config)
+        })
+        .await
+        .expect("tester thread should start")
+        .thread_id;
+    let tester_thread = harness
+        .manager
+        .get_thread(tester_thread_id)
+        .await
+        .expect("tester thread should exist");
+    let tester_turn = tester_thread.session.new_default_turn().await;
+    tester_thread
+        .session
+        .send_event(
+            tester_turn.as_ref(),
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_attribution: None,
+                turn_id: tester_turn.sub_id.clone(),
+                root_turn_id: Some(tester_turn.sub_id.clone()),
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: ModeKind::Default,
+            }),
+        )
+        .await;
+    tester_thread
+        .session
+        .send_event(
+            tester_turn.as_ref(),
+            EventMsg::Error(ErrorEvent {
+                misalignment: None,
+                message: "terminal-error-marker".to_string(),
+                codex_error_info: Some(CodexErrorInfo::InternalServerError),
+            }),
+        )
+        .await;
+    let status_rx = tester_thread.subscribe_status();
+    assert_eq!(status_rx.borrow().clone(), AgentStatus::Running);
+
+    // Parent delivery reads the thread registry, so holding it blocks delivery deterministically.
+    let state = harness
+        .control
+        .runtime
+        .upgrade()
+        .expect("thread manager should be live");
+    let registry_guard = state.threads.write().await;
+    let terminal = tokio::spawn({
+        let tester_thread = Arc::clone(&tester_thread);
+        let tester_turn = Arc::clone(&tester_turn);
+        async move {
+            tester_thread
+                .session
+                .send_event(
+                    tester_turn.as_ref(),
+                    EventMsg::TurnComplete(TurnCompleteEvent {
+                        root_turn_id: None,
+                        turn_id: tester_turn.sub_id.clone(),
+                        started_at: None,
+                        last_agent_message: Some("done".to_string()),
+                        error: None,
+                        completed_at: None,
+                        duration_ms: None,
+                        time_to_first_token_ms: None,
+                    }),
+                )
+                .await;
+        }
+    });
+    for _ in 0..64 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        status_rx.borrow().clone(),
+        AgentStatus::Running,
+        "terminal error must not be visible before the parent mailbox delivery"
+    );
+
+    drop(registry_guard);
+    timeout(Duration::from_secs(5), terminal)
+        .await
+        .expect("terminal event should finish")
+        .expect("terminal event task should join");
+    assert_eq!(
+        status_rx.borrow().clone(),
+        AgentStatus::Errored("terminal-error-marker".to_string())
+    );
+    assert!(
+        worker_thread
+            .session
+            .input_queue
+            .has_pending_mailbox_items()
+            .await
+    );
+}
+
+#[tokio::test]
 async fn followup_to_non_v2_child_notifies_parent_on_second_completion() {
     let server = MockServer::start().await;
     let response_mock = responses::mount_sse_once(

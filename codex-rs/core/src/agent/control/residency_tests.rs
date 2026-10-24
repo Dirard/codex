@@ -1,14 +1,17 @@
+use super::ThreadEvictionOutcome;
 use crate::StartThreadOptions;
 use crate::ThreadManager;
 use crate::agent::LocalAgentControl;
 use crate::agent::control::TurnSpawnBudget;
 use crate::agent::registry::AgentRegistry;
+use crate::agent::types::AgentMetadata;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::config::test_config;
 use crate::thread_manager::ThreadManagerState;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::protocol::EventMsg;
@@ -255,6 +258,70 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
     }
 }
 
+#[tokio::test]
+async fn grandchild_result_is_retained_for_evicted_parent() {
+    let mut config = test_config().await;
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    config.codex_home = temp_home.path().to_path_buf().try_into().unwrap();
+    config.cwd = temp_home.path().to_path_buf().try_into().unwrap();
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let root = manager
+        .start_thread(StartThreadOptions::new(config.clone()))
+        .await
+        .expect("start root thread");
+    let control = manager.agent_control();
+    let state = control
+        .runtime
+        .upgrade()
+        .expect("thread manager should be live");
+    let membership = control.runtime.admit_start().expect("admit residency work");
+
+    let worker_path = AgentPath::root().join("worker").expect("worker path");
+    let tester_path = worker_path.join("tester").expect("tester path");
+    let worker = spawn_thread_spawn_agent(
+        &control,
+        &state,
+        config.clone(),
+        root.thread_id,
+        worker_path.clone(),
+        /*depth*/ 1,
+    )
+    .await;
+    let tester = spawn_thread_spawn_agent(
+        &control,
+        &state,
+        config,
+        worker.thread_id,
+        tester_path.clone(),
+        /*depth*/ 2,
+    )
+    .await;
+
+    mark_thread_completed(worker.thread.as_ref()).await;
+    let outcome = state
+        .try_evict_v2_thread(Arc::clone(&worker.thread), &membership)
+        .await
+        .expect("evict idle worker");
+    assert!(matches!(outcome, ThreadEvictionOutcome::Evicted));
+    assert!(manager.get_thread(worker.thread_id).await.is_err());
+
+    mark_thread_completed(tester.thread.as_ref()).await;
+
+    let retained = control.runtime.mailboxes.take(worker.thread_id);
+    let [mail] = retained.as_slice() else {
+        panic!("expected one retained result for the evicted worker, got {retained:?}");
+    };
+    assert_eq!(mail.author, tester_path);
+    assert_eq!(mail.recipient, worker_path);
+    assert!(!mail.trigger_turn);
+}
+
 async fn spawn_v2_subagent(
     control: &LocalAgentControl,
     state: &Arc<ThreadManagerState>,
@@ -279,6 +346,48 @@ async fn spawn_v2_subagent(
         )
         .await
         .expect("spawn v2 subagent")
+}
+
+async fn spawn_thread_spawn_agent(
+    control: &LocalAgentControl,
+    state: &Arc<ThreadManagerState>,
+    config: Config,
+    parent_thread_id: ThreadId,
+    agent_path: AgentPath,
+    depth: i32,
+) -> crate::thread_manager::NewThread {
+    let reservation = control
+        .runtime
+        .registry
+        .reserve_spawn_slot(/*max_threads*/ None, /*turn_spawn_budget*/ None)
+        .expect("reserve spawn slot");
+    let agent = state
+        .spawn_child_thread(
+            crate::thread_manager::StartThreadOptions {
+                session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                    depth,
+                    agent_path: Some(agent_path.clone()),
+                    agent_nickname: None,
+                    agent_role: None,
+                })),
+                thread_source: Some(ThreadSource::Subagent),
+                ..crate::thread_manager::StartThreadOptions::new(config)
+            },
+            control.clone(),
+            Some(parent_thread_id),
+            /*inherited_exec_policy*/ None,
+            /*turn_spawn_budget*/ None,
+        )
+        .await
+        .expect("spawn thread-spawn agent");
+    // Register the agent as the spawn tool does, so routing knows it after eviction.
+    reservation.commit(AgentMetadata {
+        agent_id: Some(agent.thread_id),
+        agent_path: Some(agent_path),
+        ..Default::default()
+    });
+    agent
 }
 
 async fn mark_thread_completed(thread: &CodexThread) {
