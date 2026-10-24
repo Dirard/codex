@@ -129,7 +129,10 @@ pub(crate) async fn handle_response_stream_error(
         return Ok(());
     }
 
+    // Unadvised overloads only retry because of the fork's capacity retry floor; once
+    // exhausted they are terminal, as upstream, and must not switch transport.
     if *retries >= max_retries
+        && !(matches!(err.details(), CodexErrorDetails::ServerOverloaded) && retry_after.is_none())
         && client_session.try_switch_fallback_transport(
             &turn_context.session_telemetry,
             turn_context.model_info(),
