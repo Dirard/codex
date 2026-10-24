@@ -726,13 +726,6 @@ mod tests {
                     "codexHome": TEST_CODEX_HOME,
                     "platformFamily": "unix",
                     "platformOs": "macos",
-                    "stableProtocolDigest": "",
-                    "experimentalProtocolDigest": "",
-                    "stableSchemaDigest": "",
-                    "experimentalSchemaDigest": "",
-                    "stableManifestDigest": "",
-                    "experimentalManifestDigest": "",
-                    "activeProtocolMode": "stable",
                 }),
             }),
         )

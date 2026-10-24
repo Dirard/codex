@@ -7,7 +7,6 @@ use anyhow::anyhow;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
-use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
@@ -15,6 +14,7 @@ use codex_app_server_protocol::RequestId;
 use codex_uds::UnixStream;
 use futures::SinkExt;
 use futures::StreamExt;
+use serde::Deserialize;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::time::timeout;
@@ -25,6 +25,16 @@ use tokio_tungstenite::tungstenite::Message;
 pub(crate) const CONTROL_SOCKET_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 const CLIENT_NAME: &str = "codex_app_server_daemon";
 const INITIALIZE_REQUEST_ID: RequestId = RequestId::Integer(1);
+
+/// The part of an initialize result the daemon relies on.
+///
+/// Fork-only protocol digests are ignored so upstream app-servers on the same socket
+/// are still recognized by the daemon's ownership checks.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InitializeInfo {
+    pub(crate) user_agent: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProbeInfo {
@@ -99,7 +109,7 @@ pub(crate) async fn request_shutdown(socket_path: &Path, pid: u32) -> Result<()>
 pub(crate) async fn initialize<S>(
     websocket: &mut WebSocketStream<S>,
     experimental_api: bool,
-) -> Result<InitializeResponse>
+) -> Result<InitializeInfo>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -137,7 +147,7 @@ where
             break response;
         }
     };
-    serde_json::from_value::<InitializeResponse>(response.result)
+    serde_json::from_value::<InitializeInfo>(response.result)
         .context("failed to parse initialize response")
 }
 
