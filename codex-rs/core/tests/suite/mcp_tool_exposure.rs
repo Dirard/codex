@@ -1599,7 +1599,7 @@ async fn code_mode_discovered_apps_tool_survives_startup_failure_and_recovers() 
                 ev_custom_tool_call(
                     "discover",
                     "exec",
-                    "const tool = ALL_TOOLS.find(t => t.name.endsWith('list_events'));\n\
+                    "const tool = EXEC_TOOLS.find(t => t.name.endsWith('list_events'));\n\
                      store('calendar-tool', tool.name); text(tool.name);",
                 ),
                 ev_completed("discover"),
