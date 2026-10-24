@@ -200,6 +200,7 @@ fn request_param_experimental_fields(method: &'static str) -> Vec<ExperimentalFi
                 ("permissions", "thread/resume.permissions"),
                 ("exclude_turns", "thread/resume.excludeTurns"),
                 ("initial_turns_page", "thread/resume.initialTurnsPage"),
+                ("dynamic_tools", "thread/resume.dynamicTools"),
             ],
         ),
         "thread/fork" => experimental_fields(

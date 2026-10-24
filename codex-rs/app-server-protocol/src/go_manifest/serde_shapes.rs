@@ -112,24 +112,7 @@ pub(super) fn go_sdk_serde_shapes() -> Vec<SerdeShapeEntry> {
                     "allowProviderModelFallback",
                 ),
                 double_option_field("service_tier", "serviceTier"),
-                serde_field(
-                    "dynamic_tools",
-                    "dynamicTools",
-                    &[],
-                    SerdeFieldShape {
-                        presence: SerdePresence::OptionalNullable,
-                        default: Some(SerdeDefault {
-                            provider: SerdeDefaultProvider::SerdeDefault,
-                            wire_value_json: "null",
-                        }),
-                        skip_serializing_if: None,
-                        flattened: false,
-                        custom_serialize: None,
-                        custom_deserialize: Some(
-                            "codex_protocol::dynamic_tools::deserialize_dynamic_tool_specs",
-                        ),
-                    },
-                ),
+                dynamic_tools_serde_field(),
                 default_skip_false_field("experimental_raw_events", "experimentalRawEvents"),
             ],
             variant_aliases: Vec::new(),
@@ -154,6 +137,7 @@ pub(super) fn go_sdk_serde_shapes() -> Vec<SerdeShapeEntry> {
             fields: vec![
                 double_option_field("service_tier", "serviceTier"),
                 default_skip_false_field("exclude_turns", "excludeTurns"),
+                dynamic_tools_serde_field(),
             ],
             variant_aliases: Vec::new(),
             manual_payload_conversion: None,
@@ -438,4 +422,26 @@ pub(super) fn go_sdk_serde_shapes() -> Vec<SerdeShapeEntry> {
             review_note: None,
         },
     ]
+}
+
+/// `dynamicTools` on `thread/start` and `thread/resume` share one serde shape.
+fn dynamic_tools_serde_field() -> SerdeFieldEntry {
+    serde_field(
+        "dynamic_tools",
+        "dynamicTools",
+        &[],
+        SerdeFieldShape {
+            presence: SerdePresence::OptionalNullable,
+            default: Some(SerdeDefault {
+                provider: SerdeDefaultProvider::SerdeDefault,
+                wire_value_json: "null",
+            }),
+            skip_serializing_if: None,
+            flattened: false,
+            custom_serialize: None,
+            custom_deserialize: Some(
+                "codex_protocol::dynamic_tools::deserialize_dynamic_tool_specs",
+            ),
+        },
+    )
 }

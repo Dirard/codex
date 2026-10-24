@@ -6623,6 +6623,17 @@
             "null"
           ]
         },
+        "dynamicTools": {
+          "default": null,
+          "description": "Fork: replaces the dynamic tools recorded at thread start for the session this resume loads, so tools a client added since reach the thread. Omitted or empty keeps the recorded tools. The replacement lives only as long as that session: it is not written to thread metadata, so a later cold resume without this field, daemon recovery and `thread/fork` use the recorded tools. For a loaded thread a different list is a resume override: an idle thread without subscribers is rebuilt with it, otherwise it is ignored, so unsubscribe first to replace the tools of a thread this connection observes.",
+          "items": {
+            "$ref": "#/definitions/DynamicToolSpec"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "excludeTurns": {
           "description": "When true, return only thread metadata and live-resume state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after resuming. Full-history hydration is deprecated for paginated threads; use this with `thread/turns/list` and `thread/items/list` instead.",
           "type": "boolean"

@@ -428,6 +428,21 @@ pub struct ThreadResumeParams {
     #[experimental("thread/resume.initialTurnsPage")]
     #[ts(optional = nullable)]
     pub initial_turns_page: Option<ThreadResumeInitialTurnsPageParams>,
+    /// Fork: replaces the dynamic tools recorded at thread start for the session this
+    /// resume loads, so tools a client added since reach the thread. Omitted or empty
+    /// keeps the recorded tools. The replacement lives only as long as that session: it
+    /// is not written to thread metadata, so a later cold resume without this field,
+    /// daemon recovery and `thread/fork` use the recorded tools. For a loaded thread a
+    /// different list is a resume override: an idle thread without subscribers is
+    /// rebuilt with it, otherwise it is ignored, so unsubscribe first to replace the
+    /// tools of a thread this connection observes.
+    #[experimental("thread/resume.dynamicTools")]
+    #[serde(
+        default,
+        deserialize_with = "codex_protocol::dynamic_tools::deserialize_dynamic_tool_specs"
+    )]
+    #[ts(optional = nullable)]
+    pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]

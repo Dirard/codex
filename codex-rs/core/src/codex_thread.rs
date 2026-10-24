@@ -994,6 +994,11 @@ impl CodexThread {
         self.session.resume_config_snapshot().await
     }
 
+    /// Fork: the dynamic tools of this load, compared with `thread/resume` replacements.
+    pub async fn dynamic_tools(&self) -> Vec<codex_protocol::dynamic_tools::DynamicToolSpec> {
+        self.session.dynamic_tools().await
+    }
+
     /// Returns the active turn's reviewer, including live updates, or the thread default.
     pub async fn approvals_reviewer_for_turn(&self, turn_id: &str) -> ApprovalsReviewer {
         if let Some((turn, settings, _, _)) = self

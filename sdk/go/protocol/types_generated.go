@@ -45577,6 +45577,7 @@ type ThreadResumeParams struct {
 	Config                Optional[map[string]json.RawMessage]         `json:"config,omitempty"`
 	Cwd                   Optional[string]                             `json:"cwd,omitempty"`
 	DeveloperInstructions Optional[string]                             `json:"developerInstructions,omitempty"`
+	DynamicTools          Optional[[]DynamicToolSpec]                  `json:"dynamicTools,omitempty"`
 	ExcludeTurns          OptionalNonNull[bool]                        `json:"excludeTurns,omitempty"`
 	History               Optional[[]ResponseItem]                     `json:"history,omitempty"`
 	InitialTurnsPage      Optional[ThreadResumeInitialTurnsPageParams] `json:"initialTurnsPage,omitempty"`
@@ -45610,6 +45611,9 @@ func (v ThreadResumeParams) MarshalJSON() ([]byte, error) {
 	}
 	if v.DeveloperInstructions.IsSet() {
 		out["developerInstructions"] = v.DeveloperInstructions
+	}
+	if v.DynamicTools.IsSet() {
+		out["dynamicTools"] = v.DynamicTools
 	}
 	if v.ExcludeTurns.IsSet() {
 		if value, ok := v.ExcludeTurns.Value(); !ok || value {
@@ -45693,6 +45697,22 @@ func (v *ThreadResumeParams) UnmarshalJSON(data []byte) error {
 	if ok {
 		if err := json.Unmarshal(rawDeveloperInstructions, &v.DeveloperInstructions); err != nil {
 			return fmt.Errorf("field developerInstructions: %w", err)
+		}
+	}
+	rawDynamicTools, ok := raw["dynamicTools"]
+	if !ok {
+		rawDynamicTools = []byte("null")
+		ok = true
+	}
+	if ok {
+		if bytes.Equal(rawDynamicTools, []byte("null")) {
+			v.DynamicTools = Null[[]DynamicToolSpec]()
+		} else {
+			DynamicToolsValue, err := normalizeDynamicToolSpecsJSON(rawDynamicTools)
+			if err != nil {
+				return fmt.Errorf("field dynamicTools: %w", err)
+			}
+			v.DynamicTools = Some(DynamicToolsValue)
 		}
 	}
 	rawExcludeTurns, ok := raw["excludeTurns"]

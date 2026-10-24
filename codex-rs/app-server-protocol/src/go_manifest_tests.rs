@@ -1265,6 +1265,12 @@ fn field_level_experimental_inventory_covers_current_client_and_server_payloads(
                 true,
             ),
             (
+                "dynamic_tools",
+                "thread/resume.dynamicTools",
+                "ThreadResumeParams",
+                true,
+            ),
+            (
                 "runtime_workspace_roots",
                 "thread/resume.runtimeWorkspaceRoots",
                 "ThreadResumeResponse",

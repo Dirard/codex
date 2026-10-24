@@ -21,8 +21,12 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -171,6 +175,228 @@ async fn thread_start_normalizes_legacy_dynamic_tools_into_model_request() -> Re
         })
     );
 
+    Ok(())
+}
+
+// Fork: a client that added tools since a thread started gives them on cold resume, and
+// the model sees them instead of the recorded ones. The replacement lasts for that load.
+#[tokio::test]
+async fn thread_resume_replaces_dynamic_tools_in_model_request() -> Result<()> {
+    let responses = vec![
+        create_final_assistant_message_sse_response("Done")?,
+        create_final_assistant_message_sse_response("Done again")?,
+        create_final_assistant_message_sse_response("Done once more")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+
+    let mut primary = build_dynamic_tools_app_server(&codex_home).await?;
+    let thread_id = start_thread_with_dynamic_tool(&mut primary, "old_tool").await?;
+    run_user_turn(&mut primary, &thread_id, "first").await?;
+    timeout(DEFAULT_READ_TIMEOUT, primary.shutdown_gracefully()).await??;
+
+    let mut secondary = build_dynamic_tools_app_server(&codex_home).await?;
+    resume_thread(&mut secondary, &thread_id, Some("new_tool")).await?;
+    run_user_turn(&mut secondary, &thread_id, "second").await?;
+    timeout(DEFAULT_READ_TIMEOUT, secondary.shutdown_gracefully()).await??;
+
+    // The replacement is not persisted: resuming without the field restores the start tools.
+    let mut tertiary = build_dynamic_tools_app_server(&codex_home).await?;
+    resume_thread(&mut tertiary, &thread_id, /*dynamic_tool*/ None).await?;
+    run_user_turn(&mut tertiary, &thread_id, "third").await?;
+
+    let bodies = responses_bodies(&server).await?;
+    assert_eq!(bodies.len(), 3);
+    assert!(find_tool(&bodies[0], "old_tool").is_some());
+    assert!(find_tool(&bodies[1], "new_tool").is_some());
+    assert!(find_tool(&bodies[1], "old_tool").is_none());
+    assert!(find_tool(&bodies[2], "old_tool").is_some());
+    assert!(find_tool(&bodies[2], "new_tool").is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_rejects_invalid_dynamic_tools_before_loading() -> Result<()> {
+    let server = MockServer::start().await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    let mut app = build_dynamic_tools_app_server(&codex_home).await?;
+    let tool = |name: &str| {
+        json!({
+            "type": "namespace",
+            "name": "duplicate_namespace",
+            "description": "Duplicated namespace",
+            "tools": [{
+                "type": "function",
+                "name": name,
+                "description": "Tool",
+                "inputSchema": { "type": "object", "properties": {} }
+            }]
+        })
+    };
+
+    let request = app
+        .send_raw_request(
+            "thread/resume",
+            Some(json!({
+                "threadId": "00000000-0000-0000-0000-000000000000",
+                "dynamicTools": [tool("first_tool"), tool("second_tool")]
+            })),
+        )
+        .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request)),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32600);
+    assert!(
+        error
+            .error
+            .message
+            .contains("duplicate dynamic tool namespace"),
+        "unexpected error: {}",
+        error.error.message
+    );
+    Ok(())
+}
+
+// Fork: a different list for a loaded thread is a resume override. An idle thread without
+// subscribers is rebuilt with the new tools.
+#[tokio::test]
+async fn thread_resume_rebuilds_idle_loaded_thread_with_new_dynamic_tools() -> Result<()> {
+    let responses = vec![
+        create_final_assistant_message_sse_response("Done")?,
+        create_final_assistant_message_sse_response("Done again")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    let mut app = build_dynamic_tools_app_server(&codex_home).await?;
+    let thread_id = start_thread_with_dynamic_tool(&mut app, "old_tool").await?;
+    run_user_turn(&mut app, &thread_id, "first").await?;
+
+    let unsubscribe = app
+        .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
+            thread_id: thread_id.clone(),
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_response_message(RequestId::Integer(unsubscribe)),
+    )
+    .await??;
+    // The thread must still be loaded, so resume takes the rebuild path, not a cold load.
+    let loaded = app
+        .send_thread_loaded_list_request(ThreadLoadedListParams::default())
+        .await?;
+    let ThreadLoadedListResponse { data, .. } = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            app.read_stream_until_response_message(RequestId::Integer(loaded)),
+        )
+        .await??,
+    )?;
+    assert!(data.contains(&thread_id));
+    resume_thread(&mut app, &thread_id, Some("new_tool")).await?;
+    run_user_turn(&mut app, &thread_id, "second").await?;
+
+    let bodies = responses_bodies(&server).await?;
+    assert_eq!(bodies.len(), 2);
+    assert!(find_tool(&bodies[1], "new_tool").is_some());
+    assert!(find_tool(&bodies[1], "old_tool").is_none());
+    Ok(())
+}
+
+// Fork: a loaded thread that a client still observes keeps its tools on rejoin.
+#[tokio::test]
+async fn thread_resume_keeps_dynamic_tools_of_subscribed_loaded_thread() -> Result<()> {
+    let responses = vec![
+        create_final_assistant_message_sse_response("Done")?,
+        create_final_assistant_message_sse_response("Done again")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    let mut app = build_dynamic_tools_app_server(&codex_home).await?;
+    let thread_id = start_thread_with_dynamic_tool(&mut app, "old_tool").await?;
+    run_user_turn(&mut app, &thread_id, "first").await?;
+
+    resume_thread(&mut app, &thread_id, Some("new_tool")).await?;
+    run_user_turn(&mut app, &thread_id, "second").await?;
+
+    let bodies = responses_bodies(&server).await?;
+    assert_eq!(bodies.len(), 2);
+    assert!(find_tool(&bodies[1], "old_tool").is_some());
+    assert!(find_tool(&bodies[1], "new_tool").is_none());
+    Ok(())
+}
+
+async fn build_dynamic_tools_app_server(codex_home: &TempDir) -> Result<TestAppServer> {
+    TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized()
+        .await
+}
+
+fn dynamic_tool_json(name: &str) -> Value {
+    json!({
+        "name": name,
+        "description": format!("{name} description"),
+        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+    })
+}
+
+async fn start_thread_with_dynamic_tool(app: &mut TestAppServer, name: &str) -> Result<String> {
+    let request = app
+        .send_raw_request(
+            "thread/start",
+            Some(json!({ "dynamicTools": [dynamic_tool_json(name)] })),
+        )
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_response_message(RequestId::Integer(request)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(response)?;
+    Ok(thread.id)
+}
+
+async fn resume_thread(
+    app: &mut TestAppServer,
+    thread_id: &str,
+    dynamic_tool: Option<&str>,
+) -> Result<()> {
+    let mut params = json!({ "threadId": thread_id, "excludeTurns": true });
+    if let Some(name) = dynamic_tool {
+        params["dynamicTools"] = json!([dynamic_tool_json(name)]);
+    }
+    let request = app.send_raw_request("thread/resume", Some(params)).await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_response_message(RequestId::Integer(request)),
+    )
+    .await??;
+    let _resumed = to_response::<ThreadResumeResponse>(response)?;
+    Ok(())
+}
+
+async fn run_user_turn(app: &mut TestAppServer, thread_id: &str, text: &str) -> Result<()> {
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread_id.to_string(),
+            input: vec![V2UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    )
+    .await??;
     Ok(())
 }
 

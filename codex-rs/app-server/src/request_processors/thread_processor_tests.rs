@@ -702,6 +702,44 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
+    fn dynamic_tools_override_mismatch_compares_normalized_lists() {
+        let params = |tools: serde_json::Value| {
+            serde_json::from_value::<ThreadResumeParams>(serde_json::json!({
+                "threadId": "thread-1",
+                "dynamicTools": tools,
+            }))
+            .expect("resume params")
+            .dynamic_tools
+            .expect("dynamic tools")
+        };
+        let schema = serde_json::json!({ "type": "object", "properties": {} });
+        let canonical = params(serde_json::json!([
+            { "type": "function", "name": "lookup", "description": "Lookup", "inputSchema": schema },
+            { "type": "function", "name": "search", "description": "Search", "inputSchema": schema }
+        ]));
+        let legacy = params(serde_json::json!([
+            { "name": "lookup", "description": "Lookup", "inputSchema": schema },
+            { "name": "search", "description": "Search", "inputSchema": schema }
+        ]));
+        let reordered = canonical.iter().rev().cloned().collect::<Vec<_>>();
+
+        assert_eq!(dynamic_tools_override_mismatch(None, &canonical), None);
+        assert_eq!(dynamic_tools_override_mismatch(Some(&[]), &canonical), None);
+        assert_eq!(
+            dynamic_tools_override_mismatch(Some(&legacy), &canonical),
+            None
+        );
+        assert_eq!(
+            dynamic_tools_override_mismatch(Some(&reordered), &canonical),
+            Some("dynamic_tools requested=[search,lookup] active=[lookup,search]".to_string())
+        );
+        assert_eq!(
+            dynamic_tools_override_mismatch(Some(&canonical[..1]), &[]),
+            Some("dynamic_tools requested=[lookup] active=[]".to_string())
+        );
+    }
+
+    #[test]
     fn collect_resume_override_mismatches_includes_service_tier() {
         let cwd = test_path_buf("/tmp").abs();
         let request = ThreadResumeParams {
@@ -723,6 +761,7 @@ mod thread_processor_behavior_tests {
             personality: None,
             exclude_turns: false,
             initial_turns_page: None,
+            dynamic_tools: None,
         };
         let config_snapshot = ThreadConfigSnapshot {
             turn_extension_init: Default::default(),

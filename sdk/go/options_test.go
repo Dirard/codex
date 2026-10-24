@@ -123,6 +123,7 @@ func TestDeferredThreadNamespaceOptionCoverageIsDocumented(t *testing.T) {
 		"Config":                stage5Reason,
 		"Cwd":                   stage5Reason,
 		"DeveloperInstructions": stage5Reason,
+		"DynamicTools":          stage5Reason,
 		"ExcludeTurns":          stage5Reason,
 		"History":               stage5Reason,
 		"InitialTurnsPage":      stage5Reason,

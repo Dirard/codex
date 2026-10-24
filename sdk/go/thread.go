@@ -56,6 +56,13 @@ type ThreadResumeOptions struct {
 	ExcludeTurns          *bool
 	History               []protocol.ResponseItem
 	InitialTurnsPage      *protocol.ThreadResumeInitialTurnsPageParams
+	// DynamicTools (fork, experimental) replace the tools recorded at thread start for
+	// the session this resume loads. Empty keeps the recorded tools. The replacement is
+	// not written to thread metadata: a later cold resume without it, daemon recovery and
+	// thread/fork use the recorded tools. A loaded thread treats a different list as a
+	// resume override: an idle thread without subscribers is rebuilt with it, otherwise
+	// it is ignored, so unsubscribe first to replace the tools of an observed thread.
+	DynamicTools []protocol.DynamicToolSpec
 }
 
 type ThreadForkOptions struct {
@@ -628,6 +635,9 @@ func threadResumeParams(opts ThreadResumeOptions) protocol.ThreadResumeParams {
 	}
 	if opts.InitialTurnsPage != nil {
 		params.InitialTurnsPage = protocol.Some(*opts.InitialTurnsPage)
+	}
+	if len(opts.DynamicTools) > 0 {
+		params.DynamicTools = protocol.Some(opts.DynamicTools)
 	}
 	return params
 }

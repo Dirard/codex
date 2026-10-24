@@ -119,6 +119,32 @@ struct ThreadRevertRuntimeSnapshot {
     client_mcp_extensions: ClientMcpExtensions,
 }
 
+/// Fork: a non-empty `thread/resume.dynamicTools` list that differs from the loaded
+/// thread's tools is a resume override; omitted or empty keeps the active tools.
+fn dynamic_tools_override_mismatch(
+    requested: Option<&[DynamicToolSpec]>,
+    active: &[DynamicToolSpec],
+) -> Option<String> {
+    let requested = requested.filter(|tools| !tools.is_empty())?;
+    let names = |tools: &[DynamicToolSpec]| {
+        tools
+            .iter()
+            .map(|tool| match tool {
+                DynamicToolSpec::Function(function) => function.name.as_str(),
+                DynamicToolSpec::Namespace(namespace) => namespace.name.as_str(),
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    (requested != active).then(|| {
+        format!(
+            "dynamic_tools requested=[{}] active=[{}]",
+            names(requested),
+            names(active)
+        )
+    })
+}
+
 fn collect_resume_override_mismatches(
     request: &ThreadResumeParams,
     config_snapshot: &ThreadConfigSnapshot,
@@ -3952,6 +3978,12 @@ impl ThreadRequestProcessor {
                 "`permissions` cannot be combined with `sandbox`",
             ));
         }
+        // Fork: validate replacement tools before a loaded thread can be rebuilt for them.
+        if let Some(dynamic_tools) = params.dynamic_tools.as_deref()
+            && !dynamic_tools.is_empty()
+        {
+            validate_dynamic_tools(dynamic_tools).map_err(invalid_request)?;
+        }
         let redact_resume_payloads =
             should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
@@ -4009,6 +4041,7 @@ impl ThreadRequestProcessor {
             personality,
             exclude_turns,
             initial_turns_page,
+            dynamic_tools,
         } = params.clone();
         let include_turns = !exclude_turns;
 
@@ -4335,6 +4368,8 @@ impl ThreadRequestProcessor {
                     ThreadResumeTarget::DaemonRecovery(_) => None,
                 },
                 client_mcp_extensions,
+                // Fork: empty keeps the tools recorded with the thread.
+                dynamic_tools: dynamic_tools.unwrap_or_default(),
                 ..StartThreadOptions::new(config)
             })
             .await
@@ -4690,11 +4725,23 @@ impl ThreadRequestProcessor {
             }
             let (config_snapshot, selected_service_tier) =
                 existing_thread.resume_config_snapshot().await;
-            let mismatch_details = collect_resume_override_mismatches(
+            let mut mismatch_details = collect_resume_override_mismatches(
                 params,
                 &config_snapshot,
                 selected_service_tier.as_deref(),
             );
+            // Fork: replacement dynamic tools follow the same rebuild-or-ignore policy.
+            if params
+                .dynamic_tools
+                .as_ref()
+                .is_some_and(|tools| !tools.is_empty())
+                && let Some(mismatch) = dynamic_tools_override_mismatch(
+                    params.dynamic_tools.as_deref(),
+                    &existing_thread.dynamic_tools().await,
+                )
+            {
+                mismatch_details.push(mismatch);
+            }
             if !mismatch_details.is_empty() {
                 let has_subscribers = !self
                     .thread_state_manager
