@@ -41,19 +41,24 @@ pub(super) async fn run_compaction(
         )
         .await?;
         if installed {
-            let status = crate::session::context_window::context_window_token_status(
-                sess,
-                &replacement_step_context.turn,
-            )
-            .await;
-            if compaction_candidate_overflow(
-                &status,
-                replacement_step_context
-                    .turn
-                    .config
-                    .model_auto_compact_token_limit_scope,
-            ) == 0
-            {
+            // Count the installed history once, as validation under the state lock did.
+            // Session usage was just recomputed from this history and would add the live
+            // suffix a second time.
+            let turn = &replacement_step_context.turn;
+            let scope = turn.config.model_auto_compact_token_limit_scope;
+            let base_instructions = sess.get_base_instructions().await;
+            let installed_tokens = crate::context_manager::estimate_history_token_count(
+                sess.clone_history().await.annotated_items(),
+                &base_instructions,
+            );
+            let status = crate::session::context_window::context_window_token_status_for_usage(
+                turn.config.as_ref(),
+                turn.model_info().as_ref(),
+                installed_tokens,
+                matches!(scope, AutoCompactTokenLimitScope::BodyAfterPrefix)
+                    .then_some(installed_tokens),
+            );
+            if compaction_candidate_overflow(&status, scope) == 0 {
                 return Ok(true);
             }
             // The live suffix can leave an adopted prefix over budget. Try the existing
@@ -248,10 +253,19 @@ async fn build_and_install_compaction(
                 return Err(CodexErr::ContextWindowExceeded);
             }
             attempts += 1;
+            // Shrink from what was actually retained; a larger budget rebuilds the same
+            // candidate.
+            let retained_tokens = compacted_history
+                .split_last()
+                .map_or(&[][..], |(_compaction_output, retained)| retained)
+                .iter()
+                .map(|envelope| estimate_item_token_count(&envelope.item))
+                .fold(0i64, i64::saturating_add);
             retained_message_token_budget = if attempts >= 3 {
                 0
             } else {
                 retained_message_token_budget
+                    .min(usize::try_from(retained_tokens).unwrap_or(0))
                     .saturating_sub(usize::try_from(overflow).unwrap_or(usize::MAX))
             };
             (compacted_history, retained_images) = build_v2_compacted_history(

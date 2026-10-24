@@ -178,3 +178,121 @@ async fn prepared_prefix_rejection_respects_caller_intent(
         }
     }
 }
+
+#[tokio::test]
+async fn prepared_prefix_with_live_suffix_stays_installed() {
+    let server = responses::start_mock_server().await;
+    let mut provider =
+        codex_model_provider_info::built_in_model_providers(/*openai_base_url*/ None)["openai"]
+            .clone();
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider.supports_websockets = false;
+    let server_uri = server.uri();
+    let (sess, turn, _events) =
+        crate::session::tests::make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            Vec::new(),
+            move |config| {
+                config.model = Some("gpt-5.2".to_string());
+                config.model_context_window = Some(200_000);
+                config.model_auto_compact_token_limit = Some(180_000);
+                config.model_provider = provider;
+                config.chatgpt_base_url = server_uri;
+                let _ = config.features.disable(Feature::TokenBudget);
+            },
+        )
+        .await;
+    let requests = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            serde_json::json!({"type":"response.output_item.done", "item": {
+                "type":"compaction", "encrypted_content":"fresh-summary"
+            }}),
+            serde_json::json!({"type":"response.completed", "response":{"id":"foreground"}}),
+        ]),
+    )
+    .await;
+    let step = sess
+        .capture_step_context(Arc::clone(&turn), &CancellationToken::new())
+        .await
+        .expect("capture step");
+    let original: ResponseItem = serde_json::from_value(serde_json::json!({
+        "type": "message", "role": "user",
+        "content": [{"type": "input_text", "text": "original turn"}]
+    }))
+    .expect("user message");
+    sess.replace_history(vec![original.clone()], /*reference_context_item*/ None)
+        .await;
+    let history = sess.clone_history().await;
+    let candidate = BackgroundCompactionCandidate {
+        prefix: CompactionPrefix {
+            generation: history.history_version(),
+            len: history.annotated_items().len(),
+            auth_owner_generation: sess.services.model_client.auth_owner_generation(),
+        },
+        model_info: Arc::clone(&step.settings.model_info),
+        cutoff_world_state: Arc::new(WorldState::default()),
+        attempt: RemoteCompactV2Attempt {
+            input_goal_ids: Default::default(),
+            trace_input_history: None,
+            prompt_input: vec![original],
+            prompt_input_metadata: vec![None],
+            compaction_output: ResponseItem::Compaction {
+                id: None,
+                encrypted_content: "prepared-summary".to_string(),
+                internal_chat_message_metadata_passthrough: None,
+            },
+            compaction_response_id: "prepared".to_string(),
+            token_usage: None,
+            owned_client_session: None,
+        },
+    };
+    // The live suffix fits once, but counting it twice would exceed the headroom target.
+    let live_suffix: ResponseItem = serde_json::from_value(serde_json::json!({
+        "type": "message", "role": "user",
+        "content": [{"type": "input_text", "text": "s".repeat(320_000)}]
+    }))
+    .expect("live suffix message");
+    sess.record_conversation_items(&turn, &step.settings.model_info, &[live_suffix])
+        .await;
+    assert_eq!(
+        sess.clone_history().await.history_version(),
+        candidate.prefix.generation
+    );
+
+    let mut analytics = CompactionAnalyticsDetails::default();
+    let installed = run_compaction(
+        &sess,
+        &step,
+        &step,
+        /*client_session*/ None,
+        &WorldState::default(),
+        CompactionTurnMetadata::new(
+            CompactionTrigger::Auto,
+            CompactionReason::ContextLimit,
+            CompactionImplementation::ResponsesCompactionV2,
+            CompactionPhase::MidTurn,
+        ),
+        &mut analytics,
+        /*started_item*/ None,
+        Some(candidate),
+        CompactionFallback::Foreground,
+    )
+    .await
+    .expect("prepared compaction should install");
+
+    assert!(installed);
+    assert_eq!(requests.requests().len(), 0);
+    let summaries = sess
+        .clone_history()
+        .await
+        .raw_items()
+        .filter_map(|item| match item {
+            ResponseItem::Compaction {
+                encrypted_content, ..
+            } => Some(encrypted_content.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(summaries, ["prepared-summary"]);
+}

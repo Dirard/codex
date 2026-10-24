@@ -1394,6 +1394,68 @@ async fn remote_compact_v2_rebuilds_candidate_until_headroom_is_available() -> R
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_rebuild_keeps_latest_user_message_when_retained_is_below_budget()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    // Both messages fit the 64k retained budget, so only shrinking from the retained
+    // total resolves the small overflow without discarding the latest request.
+    let old_user_text = format!("OLD_BELOW_BUDGET_MARKER{}", "o".repeat(96_000));
+    let latest_user_text = format!("LATEST_BELOW_BUDGET_MARKER{}", "n".repeat(80_000));
+    let harness = TestCodexHarness::with_builder(remote_v2_test_codex(
+        /*context_window*/ 60_000, /*effective_context_window_percent*/ 100,
+    ))
+    .await?;
+    let codex = harness.test().codex.clone();
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "SECOND_REPLY"),
+                responses::ev_completed("resp-2"),
+            ]),
+            remote_compaction_sse("resp-compact", "BELOW_BUDGET_COMPACTION_SUMMARY"),
+            responses::sse(vec![
+                responses::ev_assistant_message("m3", "AFTER_COMPACT"),
+                responses::ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    harness.test().submit_turn(&old_user_text).await?;
+    harness.test().submit_turn(&latest_user_text).await?;
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+    harness.test().submit_turn("after compact").await?;
+
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 4);
+    let follow_up = requests.last().expect("follow-up request missing");
+    let user_texts = follow_up.message_input_texts("user");
+    assert!(
+        user_texts
+            .iter()
+            .any(|text| text.contains("LATEST_BELOW_BUDGET_MARKER")),
+        "the latest user request must survive the headroom rebuild"
+    );
+    assert!(
+        follow_up
+            .body_json()
+            .to_string()
+            .contains("BELOW_BUDGET_COMPACTION_SUMMARY")
+    );
+
+    codex.submit(Op::Shutdown).await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::ShutdownComplete)).await;
+    Ok(())
+}
+
 #[derive(serde::Deserialize)]
 struct RolloutLineFixture {
     #[serde(flatten)]
