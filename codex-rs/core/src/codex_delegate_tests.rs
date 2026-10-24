@@ -452,6 +452,22 @@ async fn delegate_isolation_does_not_depend_on_attribution() {
 
 #[tokio::test]
 async fn run_codex_thread_interactive_inherits_parent_dynamic_tools() {
+    let (parent_tools, delegate_tools) =
+        delegate_dynamic_tools(SubAgentSource::Other("delegate".to_string())).await;
+    assert_eq!(delegate_tools, parent_tools);
+}
+
+#[tokio::test]
+async fn review_delegate_does_not_inherit_parent_dynamic_tools() {
+    // Review events are re-emitted as the parent's, so tool responses could not reach the delegate.
+    let (_parent_tools, delegate_tools) = delegate_dynamic_tools(SubAgentSource::Review).await;
+    assert_eq!(delegate_tools, Vec::new());
+}
+
+/// Starts a delegate from a parent with one dynamic tool and returns both tool lists.
+async fn delegate_dynamic_tools(
+    subagent_source: SubAgentSource,
+) -> (Vec<DynamicToolSpec>, Vec<DynamicToolSpec>) {
     let dynamic_tools = vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
         name: "read_parent_context".to_string(),
         description: "Read parent-provided context.".to_string(),
@@ -474,7 +490,7 @@ async fn run_codex_thread_interactive_inherits_parent_dynamic_tools() {
         Arc::clone(&parent_ctx),
         parent_ctx.initial_environments.clone(),
         CancellationToken::new(),
-        SubAgentSource::Review,
+        subagent_source,
         codex_extension_api::SessionIsolation::Inherit,
         /*initial_history*/ None,
         crate::session::GitEnrichmentPolicy::Fresh,
@@ -483,10 +499,11 @@ async fn run_codex_thread_interactive_inherits_parent_dynamic_tools() {
     .await
     .expect("delegate session should start");
 
-    assert_eq!(session.dynamic_tools().await, dynamic_tools);
+    let delegate_tools = session.dynamic_tools().await;
     io.shutdown_and_wait()
         .await
         .expect("delegate session should shut down");
+    (dynamic_tools, delegate_tools)
 }
 
 #[tokio::test]

@@ -145,7 +145,13 @@ pub(crate) async fn run_codex_thread_interactive(
             control: Arc::clone(&parent_session.services.agent_control),
             runtime,
         },
-        dynamic_tools: parent_session.dynamic_tools().await,
+        // Review events are re-emitted as the parent's, so a review delegate could never
+        // receive the client's dynamic tool responses.
+        dynamic_tools: if matches!(subagent_source, SubAgentSource::Review) {
+            Vec::new()
+        } else {
+            parent_session.dynamic_tools().await
+        },
         metrics_service_name: None,
         user_shell_override: None,
         inherited_environments: Some(parent_environments.clone()),
