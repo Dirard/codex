@@ -785,3 +785,33 @@ fn exec_command_tool_output_applies_line_limit_once_when_recorded() {
         Some("Wall time: 1.2500 seconds\nOutput:\nline1\n... 4 lines truncated ...\nline6\nline7")
     );
 }
+
+#[test]
+fn exec_command_code_mode_result_ignores_model_line_limit() {
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+    let raw_text = (1..=20)
+        .map(|line| format!("line{line}\n"))
+        .collect::<String>();
+    let output = ExecCommandToolOutput {
+        event_call_id: "call-42".to_string(),
+        chunk_id: String::new(),
+        wall_time: std::time::Duration::from_millis(1250),
+        raw_output: raw_text.clone().into_bytes(),
+        truncation: OutputTruncation::new(
+            TruncationPolicy::Bytes(100_000),
+            /*max_lines*/ Some(5),
+        ),
+        max_output_tokens: Some(10_000),
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: None,
+        output_omitted_bytes: None,
+        hook_command: None,
+    };
+
+    let result = output.code_mode_result(&payload);
+
+    assert_eq!(result["output"].as_str(), Some(raw_text.as_str()));
+}

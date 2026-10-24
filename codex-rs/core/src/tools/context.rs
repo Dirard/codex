@@ -578,11 +578,13 @@ impl ExecCommandToolOutput {
         }
     }
 
+    /// Truncates by tokens only: line limits apply to model-visible history, not tool data.
     pub(crate) fn truncated_output(&self, max_tokens: usize) -> String {
-        self.truncated_output_with_config(
-            self.truncation
-                .with_policy(TruncationPolicy::Tokens(max_tokens)),
-        )
+        self.truncated_output_with_config(OutputTruncation {
+            policy: TruncationPolicy::Tokens(max_tokens),
+            max_lines: None,
+            ..self.truncation
+        })
     }
 
     fn truncated_output_with_config(&self, truncation: OutputTruncation) -> String {
