@@ -23,9 +23,19 @@
 #   4. file(1) reports the expected format and architecture for every binary.
 #   5. SHA256SUMS lists every package: written when absent, compared when present.
 #   6. On an x86_64 Linux host: `codex --version` prints `codex-cli X.Y.Z`, and
-#      the Go SDK strict initialize handshake passes against that binary.
+#      the Go SDK strict initialize handshake passes against that binary: its
+#      output must show `--- PASS: TestRealAppServerInitializeStrictDigest`,
+#      because `go test -run` also exits 0 when no test matches.
 #
 # Prints VERIFY_OK on success. Appends a summary to $GITHUB_STEP_SUMMARY when set.
+# Requires Linux tools: bash >= 4.4, GNU-compatible coreutils (GNU or uutils:
+# stat -c) and findutils (GNU or bfs: find -printf).
+
+# Written for bash 3.2 too, so an old bash reaches this message.
+if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4))); then
+  printf '%s: requires bash >= 4.4 (running %s); run it on Linux\n' "${0##*/}" "${BASH_VERSION}" >&2
+  exit 1
+fi
 
 set -euo pipefail
 
@@ -57,6 +67,20 @@ die() {
 
 usage() {
   sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed -E 's/^# ?//'
+}
+
+strict_handshake_test=TestRealAppServerInitializeStrictDigest
+
+# Requires the GNU-compatible options used below; BSD and macOS tools lack them.
+require_tool_features() {
+  local probe
+  probe="$(mktemp -d "${TMPDIR:-/tmp}/verify-release-probe.XXXXXX")"
+  cleanup_paths+=("${probe}")
+  printf 'x' >"${probe}/f"
+  [[ "$(find "${probe}" -mindepth 1 -maxdepth 1 -name f -printf '%f\n' 2>/dev/null)" == f ]] ||
+    die "requires GNU-compatible findutils (find -printf): GNU findutils or bfs, as on Linux"
+  [[ "$(stat -c %s "${probe}/f" 2>/dev/null)" == 1 ]] ||
+    die "requires GNU-compatible coreutils (stat -c): GNU or uutils coreutils, as on Linux"
 }
 
 # Binaries packaged for a target; mirrors the "Package runtime" step of
@@ -178,6 +202,7 @@ main() {
   [[ -d "${dist}" ]] || die "missing dist directory ${dist}"
   dist="$(cd -- "${dist}" && pwd)"
   [[ ${#targets[@]} -gt 0 ]] || die "no targets given"
+  require_tool_features
 
   local target
   for target in "${targets[@]}"; do
@@ -248,9 +273,11 @@ ${actual_files}"
       GOCACHE="$(go env GOCACHE)" GOPATH="$(go env GOPATH)" GOMODCACHE="$(go env GOMODCACHE)" \
         HOME="${home}" XDG_CONFIG_HOME="${home}/.config" CODEX_HOME="${home}/codex-home" \
         CODEX_EXEC_PATH="${codex}" CODEX_GO_SDK_REQUIRE_REAL_APP_SERVER=1 \
-        go test . -run '^TestRealAppServerInitializeStrictDigest$' -count=1 -v
-    ) || die "strict initialize handshake failed"
-    runtime="codex --version and strict handshake passed"
+        go test . -run "^${strict_handshake_test}\$" -count=1 -v
+    ) 2>&1 | tee "${home}/go-test.log" || die "strict initialize handshake failed"
+    grep -qE "^--- PASS: ${strict_handshake_test} \\(" "${home}/go-test.log" ||
+      die "strict handshake did not run: go test printed no '--- PASS: ${strict_handshake_test}' (renamed, or moved out of the root package of ${go_sdk}?)"
+    runtime="codex --version and strict handshake (--- PASS: ${strict_handshake_test}) passed"
   fi
 
   log "packages"

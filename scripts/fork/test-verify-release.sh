@@ -10,6 +10,12 @@
 # --version` and the Go SDK strict handshake) run as well; the expected version
 # is then read from codex-rs/Cargo.toml.
 
+# Written for bash 3.2 too, so an old bash reaches this message.
+if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4))); then
+  printf '%s: requires bash >= 4.4 (running %s)\n' "${0##*/}" "${BASH_VERSION}" >&2
+  exit 1
+fi
+
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -26,6 +32,14 @@ done
 work="$(mktemp -d "${TMPDIR:-/tmp}/test-verify-release.XXXXXX")"
 trap 'rm -rf "${work}"' EXIT
 umask 022
+
+# The fixtures use GNU-compatible cp -al (GNU or uutils coreutils).
+mkdir -p "${work}/probe"
+if ! cp -al "${work}/probe" "${work}/probe-link" 2>/dev/null; then
+  echo "${0##*/}: requires GNU-compatible coreutils (cp -al): GNU or uutils, as on Linux" >&2
+  exit 1
+fi
+rm -rf "${work}/probe" "${work}/probe-link"
 
 runtime_args=(--skip-runtime)
 version="1.2.3"
@@ -293,6 +307,86 @@ if [[ -n "${codex}" ]]; then
   version="0.0.1"
   expect_fail wrong-version "want 'codex-cli 0.0.1'" "${dist}"
   version="${version_saved}"
+fi
+
+# GNU-compatible find -printf and stat -c are required; BSD-like tools that
+# reject those options are named up front instead of failing midway.
+bsd_tool() {
+  local tool="$1" option="$2" dir="$3" real
+  real="$(command -v "${tool}")"
+  mkdir -p "${dir}"
+  cat >"${dir}/${tool}" <<STUB
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  if [[ "\${arg}" == ${option} ]]; then echo "${tool}: illegal option -- ${option#-}" >&2; exit 1; fi
+done
+exec "${real}" "\$@"
+STUB
+  chmod 0755 "${dir}/${tool}"
+}
+bsd_tool find -printf "${work}/bsd-find"
+bsd_tool stat -c "${work}/bsd-stat"
+PATH="${work}/bsd-find:${PATH}" expect_fail requires-find-printf \
+  "requires GNU-compatible findutils (find -printf)" "${good}"
+PATH="${work}/bsd-stat:${PATH}" expect_fail requires-stat-c \
+  "requires GNU-compatible coreutils (stat -c)" "${good}"
+
+# Runtime branch without a real codex: a Go-built static x86-64 ELF that prints
+# the version, and fake Go SDK modules with and without the strict handshake
+# test. `go test -run` exits 0 with "no tests to run", so verify must look for
+# the PASS line itself.
+if [[ "$(uname -s)/$(uname -m)" == Linux/x86_64 ]] && command -v go >/dev/null 2>&1; then
+  fake="${work}/fake-runtime"
+  mkdir -p "${fake}/codex" "${fake}/sdk-strict" "${fake}/sdk-renamed"
+  printf 'module fakecodex\n\ngo 1.21\n' >"${fake}/codex/go.mod"
+  cat >"${fake}/codex/main.go" <<GO
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println("codex-cli ${version}")
+		return
+	}
+	os.Exit(2)
+}
+GO
+  (cd "${fake}/codex" && CGO_ENABLED=0 GOTOOLCHAIN=local GOWORK=off GOFLAGS=-buildvcs=false go build -o codex-bin .)
+  for variant in strict renamed; do
+    printf 'module example.com/fakesdk\n\ngo 1.21\n' >"${fake}/sdk-${variant}/go.mod"
+    name=TestRealAppServerInitializeStrictDigest
+    [[ "${variant}" == strict ]] || name=TestRealAppServerInitializeStrictDigestRenamed
+    cat >"${fake}/sdk-${variant}/handshake_test.go" <<GO
+package fakesdk
+
+import (
+	"os"
+	"testing"
+)
+
+func ${name}(t *testing.T) {
+	if os.Getenv("CODEX_EXEC_PATH") == "" || os.Getenv("CODEX_GO_SDK_REQUIRE_REAL_APP_SERVER") != "1" {
+		t.Fatal("the real-runtime environment is missing")
+	}
+}
+GO
+  done
+  hook_fake_codex() { cp "${fake}/codex/codex-bin" "$1/codex" && chmod 0755 "$1/codex"; }
+  dist="$(copy_dist fake-runtime)"
+  make_package x86_64-unknown-linux-gnu "${dist}" hook_fake_codex
+  runtime_saved=("${runtime_args[@]}")
+  runtime_args=()
+  GOTOOLCHAIN=local GOWORK=off expect_ok fake-runtime-strict-handshake "${dist}" --go-sdk "${fake}/sdk-strict"
+  rm -f "${dist}/SHA256SUMS"
+  GOTOOLCHAIN=local GOWORK=off expect_fail fake-runtime-handshake-not-run "strict handshake did not run" \
+    "${dist}" --go-sdk "${fake}/sdk-renamed"
+  runtime_args=("${runtime_saved[@]}")
+else
+  echo "skip fake-runtime cases: they need Linux x86_64 and go"
 fi
 
 leftovers="$(find "${verify_tmp}" -mindepth 1 -maxdepth 1)"
