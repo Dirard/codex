@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 430
 expression: "context_snapshot::format_request_history_snapshot(\"Astra plans a kickoff with local and plugin skills, remotely compacts, and checks an image brief.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Astra plans a kickoff with local and plugin skills, remotely compacts, and checks an image brief.
@@ -17,15 +16,15 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=cf476e530ee63f2e):
-        - namespace/functions; hash=fdbc7738b4ce2efd
+00:additional_tools/developer (3; hash=90f69d2850a35606):
+        - namespace/functions; hash=ed134e1e13386419
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=3ca69f03a8be8c30
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=db3ab187547b8354
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
@@ -56,17 +55,12 @@ Settings:
         A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
         ### Skill roots
         - `r0` = `<SKILLS_ROOT>`
-        - `r1` = `<SKILLS_ROOT>`
-        - `r2` = `<PLUGINS_CACHE>/test`
+        - `r1` = `<PLUGINS_CACHE>/test`
         ### Available skills
-        - calendar:agenda: Plan a team agenda (file: r2/calendar/local/skills/agenda/SKILL.md)
-        - code-logic-workflow-documentation: Use when: extracting an existing code path into a workflow-bearing ...(file: r1/code-logic-workflow-documentation/SKILL.md) [hash=e5adf281eca1ca29]
-        - connected-code-mapping: Use when: mapping a non-local code change from one anchor through connected ba...documents. (file: r1/connected-code-mapping/SKILL.md) [hash=149b2945ab5109b2]
+        - calendar:agenda: Plan a team agenda (file: r1/calendar/local/skills/agenda/SKILL.md)
         - final-check: Review a final brief (file: r0/final-check/SKILL.md)
-        - layered-workflow-planning: Use when: planning or refining a workflow-bearing solution slice, use-case ...ection. (file: r1/layered-workflow-planning/SKILL.md) [hash=6d995a70be9c4158]
-        - notes:summarize: Summarize team notes (file: r2/notes/local/skills/summarize/SKILL.md)
+        - notes:summarize: Summarize team notes (file: r1/notes/local/skills/summarize/SKILL.md)
         - outline: Draft a project outline (file: r0/outline/SKILL.md)
-        - spec-first-planning-loop: Use for non-trivial coding tasks that should be planned through repository t... change. (file: r1/spec-first-planning-loop/SKILL.md) [hash=96f4d28b7e4f8f86]
         </skills_instructions>
     [02] <permissions instructions>
         Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
@@ -194,15 +188,15 @@ Settings:
 ## Window 2 (after request 3: input diverged at item 02)
 Settings: same as window 1
 -- request 4 (turn) --
-00:additional_tools/developer (3; hash=cf476e530ee63f2e):
-        - namespace/functions; hash=fdbc7738b4ce2efd
+00:additional_tools/developer (3; hash=90f69d2850a35606):
+        - namespace/functions; hash=ed134e1e13386419
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=3ca69f03a8be8c30
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=db3ab187547b8354
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
@@ -235,17 +229,12 @@ Settings: same as window 1
         A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
         ### Skill roots
         - `r0` = `<SKILLS_ROOT>`
-        - `r1` = `<SKILLS_ROOT>`
-        - `r2` = `<PLUGINS_CACHE>/test`
+        - `r1` = `<PLUGINS_CACHE>/test`
         ### Available skills
-        - calendar:agenda: Plan a team agenda (file: r2/calendar/local/skills/agenda/SKILL.md)
-        - code-logic-workflow-documentation: Use when: extracting an existing code path into a workflow-bearing ...(file: r1/code-logic-workflow-documentation/SKILL.md) [hash=e5adf281eca1ca29]
-        - connected-code-mapping: Use when: mapping a non-local code change from one anchor through connected ba...documents. (file: r1/connected-code-mapping/SKILL.md) [hash=149b2945ab5109b2]
+        - calendar:agenda: Plan a team agenda (file: r1/calendar/local/skills/agenda/SKILL.md)
         - final-check: Review a final brief (file: r0/final-check/SKILL.md)
-        - layered-workflow-planning: Use when: planning or refining a workflow-bearing solution slice, use-case ...ection. (file: r1/layered-workflow-planning/SKILL.md) [hash=6d995a70be9c4158]
-        - notes:summarize: Summarize team notes (file: r2/notes/local/skills/summarize/SKILL.md)
+        - notes:summarize: Summarize team notes (file: r1/notes/local/skills/summarize/SKILL.md)
         - outline: Draft a project outline (file: r0/outline/SKILL.md)
-        - spec-first-planning-loop: Use for non-trivial coding tasks that should be planned through repository t... change. (file: r1/spec-first-planning-loop/SKILL.md) [hash=96f4d28b7e4f8f86]
         </skills_instructions>
     [02] <permissions instructions>
         Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]

@@ -79,8 +79,8 @@ Settings: relative to window 2
   text: {"format":{"name":"codex_output_schema","schema":{"additionalProperties":false,"properties":{"outcome":{"enum":["allow","deny"],"type":"string"},"rationale":{"type":"string"},"risk_level":{"enum":["low","medium","high","critical"],"type":"string"},"user_authorization":{"enum":["unknown","low","medium","high"],"type":"string"}},"required":["outcome"],"type":"object"},"strict":false,"type":"json_schema"},"verbosity":"low"}
 -- request 6 (turn) --
 00:compaction:encrypted=true; chars=39; hash=4010be12538dbedf
-01:additional_tools/developer (1; hash=65a86311792f6c71):
-        - namespace/functions; hash=dcfbcf0da1c2d607
+01:additional_tools/developer (1; hash=792bd693c344318b):
+        - namespace/functions; hash=3380b3e652f61533
           - custom/exec
           - function/wait
 02:message/developer:
@@ -232,8 +232,8 @@ Settings: same as window 2
 Settings: same as window 3
 -- request 10 (turn) --
 00:compaction:encrypted=true; chars=33; hash=5c07b4383c427607
-01:additional_tools/developer (1; hash=65a86311792f6c71):
-        - namespace/functions; hash=dcfbcf0da1c2d607
+01:additional_tools/developer (1; hash=792bd693c344318b):
+        - namespace/functions; hash=3380b3e652f61533
           - custom/exec
           - function/wait
 02:message/developer:

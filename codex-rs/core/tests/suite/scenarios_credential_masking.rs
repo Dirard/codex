@@ -27,6 +27,9 @@ async fn remote_credential_masking_request_history(
         eprintln!("skipping credential masking: this scenario requires a Bash or Zsh executor");
         return Ok(());
     }
+    if use_login_shell && shell.name() == "bash" {
+        core_test_support::skip_if_bash_login_profile_writes_journal!(Ok(()));
+    }
     let expect_masking = !use_login_shell && executor_startup_env.is_none();
     let use_zsh_snapshot = shell.name() == "zsh" && expect_masking;
     let home = Arc::new(TempDir::new()?);

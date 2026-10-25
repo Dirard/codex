@@ -24,7 +24,9 @@ async fn retained_tool_output_survives_compaction_and_resume() -> Result<()> {
                 .features
                 .set_enabled(Feature::RetainClientToolOutputs, enabled)
                 .unwrap();
-            config.model_context_window = Some(1_000);
+            // Fork: compaction must leave headroom, so the window fits the ~13k-token
+            // initial context while the compaction request still needs emergency trimming.
+            config.model_context_window = Some(30_000);
             config.model_auto_compact_token_limit = Some(i64::MAX);
             // Let this scenario exercise the compaction budget rather than ingestion truncation.
             config

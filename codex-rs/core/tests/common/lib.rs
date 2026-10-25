@@ -408,6 +408,74 @@ pub fn sandbox_network_env_var() -> &'static str {
     codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
 }
 
+/// Fork: reports whether Bash login startup on this host runs `systemd-cat`, as Ubuntu's
+/// im-config profile hook does. The sandbox seccomp policy denies its journal socket, so
+/// every call prints an error into the output of a sandboxed login shell. Remote executors
+/// do not use this host's profile.
+pub fn bash_login_profile_writes_journal() -> bool {
+    static WRITES_JOURNAL: OnceLock<bool> = OnceLock::new();
+    *WRITES_JOURNAL.get_or_init(|| {
+        !is_remote_test_environment()
+            && bash_login_trace().is_some_and(|trace| {
+                // Match executed commands only, not `[ -e /usr/bin/systemd-cat ]` or assignments.
+                trace.lines().any(|line| {
+                    line.starts_with('+')
+                        && line
+                            .trim_start_matches('+')
+                            .split_whitespace()
+                            .next()
+                            .filter(|program| !program.contains(['=', '\'', '"']))
+                            .and_then(|program| program.rsplit('/').next())
+                            == Some("systemd-cat")
+                })
+            })
+    })
+}
+
+/// Fork: turns off the login shell in `exec_command` arguments on a host whose Bash login
+/// profile writes to the journal, so scenarios that compare output exactly stay hermetic.
+/// Other hosts keep the default login path.
+pub fn avoid_noisy_login_shell(arguments: &mut serde_json::Value) {
+    if bash_login_profile_writes_journal() {
+        arguments["login"] = serde_json::Value::Bool(false);
+    }
+}
+
+/// Returns the `bash -lx` trace of an empty login shell, or `None` if it does not finish
+/// within a few seconds.
+fn bash_login_trace() -> Option<String> {
+    use std::io::Read as _;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    let mut child = std::process::Command::new("bash")
+        .args(["-lxc", "true"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+    let mut stderr = child.stderr.take()?;
+    let (trace_tx, trace_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut trace = String::new();
+        let _ = stderr.read_to_string(&mut trace);
+        let _ = trace_tx.send(trace);
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while child.try_wait().ok()?.is_none() {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    trace_rx
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .ok()
+}
+
 pub fn format_with_current_shell(command: &str) -> Vec<String> {
     codex_core::shell::default_user_shell().derive_exec_args(command, /*use_login_shell*/ true)
 }
@@ -618,6 +686,20 @@ macro_rules! skip_if_no_network {
             );
             return $return_value;
         }
+    }};
+}
+
+/// Fork: skips a test that compares sandboxed Bash login-shell output exactly on a host whose
+/// login profile writes to the journal.
+#[macro_export]
+macro_rules! skip_if_bash_login_profile_writes_journal {
+    ($return_value:expr $(,)?) => {{
+        $crate::skip_if_test_condition!(
+            $return_value,
+            $crate::bash_login_profile_writes_journal(),
+            "a host whose Bash login profile runs systemd-cat",
+            "the sandbox denies its journal socket and the errors reach command output",
+        );
     }};
 }
 

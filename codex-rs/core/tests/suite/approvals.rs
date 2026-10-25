@@ -368,6 +368,7 @@ fn exec_command_event(
     let mut args = json!({
         "cmd": cmd.to_string(),
     });
+    core_test_support::avoid_noisy_login_shell(&mut args);
     if let Some(yield_time_ms) = yield_time_ms {
         args["yield_time_ms"] = json!(yield_time_ms);
     }
@@ -2407,6 +2408,7 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
         SandboxPermissions::UseDefault,
     )
     .await?;
+    let first_event = without_noisy_login_shell(first_event);
     let expected_command =
         expected_command.expect("execpolicy amendment scenario should produce a shell command");
     let expected_execpolicy_amendment =
@@ -2502,6 +2504,7 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     )
     .await?;
     assert_eq!(second_command.as_deref(), Some(expected_command.as_str()));
+    let second_event = without_noisy_login_shell(second_event);
 
     let _ = mount_sse_once(
         &server,
@@ -3138,6 +3141,10 @@ async fn brokered_shell_snapshot_fallback(mode: &'static str) -> Result<()> {
     let snapshot_disabled = matches!(mode, "disabled" | "managed_disabled");
     let snapshot_failed = matches!(mode, "failed" | "managed_failed");
     let snapshot_unavailable = snapshot_disabled || snapshot_failed;
+    if snapshot_unavailable {
+        // The fallback runs the user's login startup, whose exact output is asserted.
+        core_test_support::skip_if_bash_login_profile_writes_journal!(Ok(()));
+    }
 
     const REAL_GITHUB_TOKEN: &str =
         "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -4748,4 +4755,15 @@ async fn compound_command_with_one_safe_command_still_requires_approval() -> Res
     wait_for_completion(&test).await;
 
     Ok(())
+}
+
+/// Fork: applies `avoid_noisy_login_shell` to a prepared `exec_command` event.
+fn without_noisy_login_shell(mut event: Value) -> Value {
+    let arguments = event["item"]["arguments"]
+        .as_str()
+        .expect("function arguments");
+    let mut arguments: Value = serde_json::from_str(arguments).expect("json arguments");
+    core_test_support::avoid_noisy_login_shell(&mut arguments);
+    event["item"]["arguments"] = json!(arguments.to_string());
+    event
 }

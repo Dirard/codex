@@ -62,6 +62,12 @@ filter = 'package(codex-exec) & test(worktree_start_and_fork_use_host_pool_and_p
 slow-timeout = { period = "30s", terminate-after = 4 }
 
 [[profile.default.overrides]]
+# Fork: each case starts 64 Codex sessions with an MCP server (~35s alone), so a
+# loaded full run crossed the 60s limit.
+filter = 'package(codex-core) & (test(=suite::code_mode::code_mode_excludes_mcp_servers_using_their_configured_identity) | test(=suite::code_mode::mcp_code_mode_exclusion_does_not_change_direct_mode_tool_exposure))'
+slow-timeout = { period = "1m", terminate-after = 3 }
+
+[[profile.default.overrides]]
 filter = 'test(approval_matrix_covers_all_modes)'
 slow-timeout = { period = "30s", terminate-after = 2 }
 

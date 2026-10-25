@@ -64,8 +64,8 @@ Settings: relative to window 1
     Continue with the same tools.
 06:message/developer:
     This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
-07:additional_tools/developer (1; hash=26cd263a29587cc7):
-        - namespace/functions; hash=771cad2ff250d2f3
+07:additional_tools/developer (1; hash=2eb59759583492a1):
+        - namespace/functions; hash=34d9243b919fb4d5
           - custom/exec
 08:message/developer:
     <model_instructions>
@@ -85,8 +85,8 @@ Settings: relative to window 1
 ## Window 3 (after request 5: input diverged at item 00)
 Settings: same as window 2
 -- request 6 (turn) --
-00:additional_tools/developer (2; hash=1322c3a339378659):
-        - namespace/functions; hash=9d5d7a0adab05fef
+00:additional_tools/developer (2; hash=f7fd7a52d6d214ab):
+        - namespace/functions; hash=05afe0f4870c07b5
           - custom/exec
           - function/wait
           - function/exec_command

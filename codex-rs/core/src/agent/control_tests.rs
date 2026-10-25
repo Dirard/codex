@@ -1161,6 +1161,10 @@ async fn ensure_v2_child_loaded_preserves_evicted_parent_authority() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test holds the thread registry to block reload publication while the sender is cancelled"
+)]
 async fn cancelled_v2_send_finishes_reload_registration() {
     let (home, mut config) = test_config().await;
     config.features.enable(Feature::MultiAgentV2).unwrap();
@@ -1213,31 +1217,32 @@ async fn cancelled_v2_send_finishes_reload_registration() {
     };
     let mut created = harness.manager.subscribe_thread_created();
     let state = control.runtime.upgrade().unwrap();
+    // The fork runs the whole cold reload, publication included, in a detached task. Hold a read
+    // guard on the thread map so that task blocks at its first thread-map write, then cancel the
+    // sender while it is blocked there.
+    let publication_blocker = state.threads.read().await;
     let mut send = control.send(followup_request("cancelled follow-up"));
-    let (reloaded, pin_blocker) = poll_fn(|cx| {
-        assert!(send.as_mut().poll(cx).is_pending());
-        let Ok(threads) = state.threads.try_read() else {
-            return Poll::Pending;
-        };
-        let Some(reloaded) = threads.get(&child_id).cloned() else {
-            return Poll::Pending;
-        };
-        // On this single-thread runtime, intercept publication before the detached
-        // registration task can acquire its residency pin.
-        let pin_blocker = Arc::clone(&reloaded.residency_gate)
-            .try_write_owned()
-            .expect("reload registration has not acquired its pin yet");
-        Poll::Ready((reloaded, pin_blocker))
-    })
-    .await;
+    timeout(
+        Duration::from_secs(5),
+        poll_fn(|cx| {
+            assert!(send.as_mut().poll(cx).is_pending());
+            // A queued writer takes the free permits, so try_read fails once publication waits.
+            if state.threads.try_read().is_err() {
+                return Poll::Ready(());
+            }
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }),
+    )
+    .await
+    .expect("detached reload should reach publication");
     tokio::task::yield_now().await;
     assert!(matches!(
         created.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
     ));
     drop(send);
-    drop(pin_blocker);
-
+    drop(publication_blocker);
     assert_eq!(
         timeout(Duration::from_secs(5), created.recv())
             .await
@@ -1245,6 +1250,7 @@ async fn cancelled_v2_send_finishes_reload_registration() {
             .unwrap(),
         child_id,
     );
+    let reloaded = harness.manager.get_thread(child_id).await.unwrap();
     assert!(
         control
             .runtime

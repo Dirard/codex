@@ -122,10 +122,11 @@ fn request_permissions_tool_event(
 }
 
 fn exec_command_event(call_id: &str, command: &str) -> Result<Value> {
-    let args = json!({
+    let mut args = json!({
         "cmd": command,
         "yield_time_ms": 10_000_u64,
     });
+    core_test_support::avoid_noisy_login_shell(&mut args);
     let args_str = serde_json::to_string(&args)?;
     Ok(ev_function_call(call_id, "exec_command", &args_str))
 }
@@ -135,12 +136,13 @@ fn exec_command_event_with_request_permissions<S: serde::Serialize>(
     command: &str,
     additional_permissions: &S,
 ) -> Result<Value> {
-    let args = json!({
+    let mut args = json!({
         "cmd": command,
         "yield_time_ms": 10_000_u64,
         "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
         "additional_permissions": additional_permissions,
     });
+    core_test_support::avoid_noisy_login_shell(&mut args);
     let args_str = serde_json::to_string(&args)?;
     Ok(ev_function_call(call_id, "exec_command", &args_str))
 }

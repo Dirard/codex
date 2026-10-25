@@ -10,6 +10,8 @@ async fn configured_and_effective_context_are_distinct_and_unset_is_explicit() {
     let mut config = crate::config::test_config().await;
     config.model_context_window = Some(872_000);
     let mut model = model_info_from_slug("test-model");
+    // Fork: only catalog metadata clamps an override to its maximum window.
+    model.used_fallback_model_metadata = false;
     model.context_window = Some(272_000);
     model.max_context_window = Some(400_000);
     model.effective_context_window_percent = 95;

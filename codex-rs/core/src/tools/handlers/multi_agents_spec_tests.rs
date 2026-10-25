@@ -112,7 +112,7 @@ fn spawn_agent_catalog_description_preserves_generated_context() {
 }
 
 #[test]
-fn spawn_agent_tool_v2_guides_self_contained_tasks_away_from_full_history() {
+fn spawn_agent_tool_v2_fork_turns_lists_supported_values() {
     let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = create_spawn_agent_tool_v2(
         SpawnAgentToolOptions {
             available_models: Vec::new(),
@@ -134,13 +134,9 @@ fn spawn_agent_tool_v2_guides_self_contained_tasks_away_from_full_history() {
         .and_then(|properties| properties.get("fork_turns"))
         .and_then(|schema| schema.description.as_deref())
         .expect("fork_turns description");
-    assert!(
-        fork_description.contains("Choose `none` or a positive integer for a self-contained task")
-    );
-    assert!(
-        fork_description
-            .contains("Use `all` only when the child depends on the full conversation history")
-    );
+    assert!(fork_description.contains("use `none` to start without parent history"));
+    assert!(fork_description.contains("Only `all` and `none` are supported"));
+    assert!(!fork_description.contains("positive integer"));
 }
 
 #[test]

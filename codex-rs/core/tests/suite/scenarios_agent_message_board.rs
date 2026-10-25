@@ -244,6 +244,52 @@ async fn board_post_and_reads_reach_model_context_without_self_notices(
     Ok(())
 }
 
+/// Fork: only agents of this tree can post to a tree-local board, so a wait without another
+/// active agent still ends immediately instead of running to its default deadline.
+#[test_case::test_case(false; "disk")]
+#[test_case::test_case(true; "in_memory")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tree_local_board_wait_without_active_agents_returns_immediately(
+    in_memory: bool,
+) -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let mock = responses::mount_sse_sequence(
+        &server,
+        vec![tool("idle-wait", "wait_agent", json!({})), done()],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(move |config| {
+            configure(config);
+            config.multi_agent_v2.message_board_in_memory = in_memory;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        test.submit_turn("Wait for the other agents."),
+    )
+    .await
+    .context("wait should not run to its default deadline")??;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    // The board is bound, so the wait is not the board-free short path.
+    assert!(
+        responses::namespace_child_tool(&requests[0].body_json(), "collaboration", "post")
+            .is_some()
+    );
+    let output: Value = serde_json::from_str(
+        &requests[1]
+            .function_call_output_text("idle-wait")
+            .context("wait output")?,
+    )?;
+    assert_eq!(
+        output,
+        json!({"message": "No active agents.", "timed_out": false})
+    );
+    Ok(())
+}
+
 #[test_case::test_case(false; "disk")]
 #[test_case::test_case(true; "in_memory")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
