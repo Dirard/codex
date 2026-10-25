@@ -3,6 +3,12 @@ name: fork-rust-release
 # Builds the fork runtime packages for one exact commit, verifies them, runs
 # fork-ci on the same commit, and stages a draft GitHub release. Tags and
 # publication stay manual: the draft job summary lists the commands.
+#
+# Dispatch from codex/fork; the commit must be on codex/fork and carry the same
+# workflows and scripts as its tip (scripts/fork/release.sh machinery):
+#   gh workflow run fork-rust-release.yml --ref codex/fork \
+#     -f release_version=X.Y.Z -f checkout_ref=<full SHA>
+# Re-running a failed draft job replaces the partial draft it left.
 on:
   workflow_dispatch:
     inputs:
@@ -48,14 +54,34 @@ jobs:
       targets: ${{ steps.validate.outputs.targets }}
       full_matrix: ${{ steps.validate.outputs.full_matrix }}
     steps:
-      - name: Require a full commit SHA
+      - name: Require a full commit SHA and a codex/fork dispatch
         env:
           CHECKOUT_REF: ${{ inputs.checkout_ref }}
+          DISPATCH_REF: ${{ github.ref }}
         run: |
           [[ "${CHECKOUT_REF}" =~ ^[0-9a-f]{40}$ ]] || {
             echo "::error::checkout_ref must be a full 40-character lowercase commit SHA"
             exit 1
           }
+          [[ "${DISPATCH_REF}" == refs/heads/codex/fork ]] || {
+            echo "::error::dispatch fork-rust-release from codex/fork (gh workflow run fork-rust-release.yml --ref codex/fork ...), not ${DISPATCH_REF}"
+            exit 1
+          }
+
+      # Trusted code first: the dispatched codex/fork commit checks where the
+      # release commit comes from before any code of that commit runs.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Require the release commit on codex/fork with this workflow's machinery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ inputs.checkout_ref }}
+          DISPATCHED: ${{ github.sha }}
+        run: scripts/fork/release.sh provenance --repo "${REPO}" --sha "${SHA}" --base "${DISPATCHED}"
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -74,9 +100,40 @@ jobs:
           scripts/fork/release.sh preflight --repo "${REPO}" --version "${VERSION}" \
             --sha "${SHA}" --matrix "${BUILD_MATRIX}" --output "${GITHUB_OUTPUT}"
 
+  # Drafts are visible only to a token with push access, so this job holds
+  # contents: write; it only reads releases. It always runs (its steps are
+  # conditional) so that build never turns skipped through a skipped need.
+  draft-precheck:
+    name: Check existing releases for the draft
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: No draft will be created
+        if: ${{ !(inputs.create_draft && needs.preflight.outputs.full_matrix == 'true') }}
+        run: echo "create_draft is false or the matrix is partial; existing drafts are not checked"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: inputs.create_draft && needs.preflight.outputs.full_matrix == 'true'
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/fork
+
+      - name: Fail early on a published release or a draft that is not resumable
+        if: inputs.create_draft && needs.preflight.outputs.full_matrix == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          SHA: ${{ needs.preflight.outputs.sha }}
+        run: scripts/fork/release.sh draft-check --repo "${REPO}" --version "${VERSION}" --sha "${SHA}"
+
   build:
     name: Build ${{ matrix.target }}
-    needs: preflight
+    needs: [preflight, draft-precheck]
     runs-on: ${{ matrix.runner }}
     # macOS arm64 took 201 minutes for 0.164.0; hosted jobs stop at 360.
     timeout-minutes: 330
@@ -214,7 +271,7 @@ jobs:
 
   ci:
     name: fork-ci
-    needs: preflight
+    needs: [preflight, draft-precheck]
     uses: ./.github/workflows/fork-ci.yml
     with:
       ref: ${{ needs.preflight.outputs.sha }}
@@ -230,7 +287,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: sdk/go/go.mod
           cache-dependency-path: sdk/go/go.mod
@@ -258,11 +315,13 @@ jobs:
           path: ${{ runner.temp }}/dist/SHA256SUMS
           if-no-files-found: error
 
+  # !cancelled(), not always(): a cancelled run must not start or keep a draft
+  # job. A failed ci still reaches this condition when require_ci is false.
   draft:
     name: Create draft release
     needs: [preflight, verify, ci]
     if: >-
-      always()
+      !cancelled()
       && inputs.create_draft
       && needs.preflight.outputs.full_matrix == 'true'
       && needs.verify.result == 'success'
