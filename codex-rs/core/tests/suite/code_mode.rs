@@ -140,9 +140,12 @@ use wiremock::matchers::path;
 use super::rmcp_client::remote_aware_environment_id;
 use super::rmcp_client::remote_aware_stdio_server_bin;
 
-const UNOBSERVED_NESTED_TOOL_OUTCOME_DIAGNOSTIC: &str = concat!(
-    "Code mode completed with 1 settled nested tool outcome not passed to an output helper after the last successful sink.\n",
-    "Pass needed values to an output helper (`text`, `image`, `audio`, `generatedImage`, or `notify`) or save them with `store`."
+/// Fork: polling loops settle a machine-dependent number of nested calls before a cell ends,
+/// so the diagnostic only has to report a positive count with the matching plural.
+const UNOBSERVED_NESTED_TOOL_OUTCOME_DIAGNOSTIC_PATTERN: &str = concat!(
+    r"\ACode mode completed with (?:1 settled nested tool outcome|(?:[2-9]|[1-9]\d+) settled nested tool outcomes) ",
+    r"not passed to an output helper after the last successful sink\.\n",
+    r"Pass needed values to an output helper \(`text`, `image`, `audio`, `generatedImage`, or `notify`\) or save them with `store`\.\z"
 );
 
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
@@ -5612,10 +5615,12 @@ text("phase 2");
     );
     match second_items.len() {
         1 => {}
-        2 => assert_eq!(
-            text_item(&second_items, /*index*/ 1),
-            UNOBSERVED_NESTED_TOOL_OUTCOME_DIAGNOSTIC
-        ),
+        2 => {
+            assert_regex_match(
+                UNOBSERVED_NESTED_TOOL_OUTCOME_DIAGNOSTIC_PATTERN,
+                text_item(&second_items, /*index*/ 1),
+            );
+        }
         other => panic!("unexpected number of content items: {other}"),
     }
 
@@ -5909,9 +5914,9 @@ text("session b done");
                 text_item(&fourth_items, /*index*/ 0),
             );
             assert_eq!(text_item(&fourth_items, /*index*/ 1), "session a done");
-            assert_eq!(
+            assert_regex_match(
+                UNOBSERVED_NESTED_TOOL_OUTCOME_DIAGNOSTIC_PATTERN,
                 text_item(&fourth_items, /*index*/ 2),
-                UNOBSERVED_NESTED_TOOL_OUTCOME_DIAGNOSTIC
             );
         }
         other => panic!("unexpected number of content items: {other}"),
