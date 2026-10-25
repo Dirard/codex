@@ -287,7 +287,12 @@ pub(crate) async fn prepare_agent_worktree(
         state: Mutex::default(),
     });
     let rebased = inherited_environments
-        .rebase_onto_worktree(&environment_id, &binding.source_root, &binding.root)
+        .rebase_onto_worktree(
+            &environment_id,
+            &binding.source_root,
+            &binding.root,
+            &binding.cwd,
+        )
         .and_then(|environments| {
             rebase_child_config(config, &binding)?;
             Ok(environments)
@@ -504,25 +509,6 @@ pub(crate) fn rebase_workspace_root_uris(
         .collect())
 }
 
-/// Moves a working directory inside the repository to the same place in the worktree.
-pub(crate) fn rebase_cwd(
-    cwd: &PathUri,
-    source_root: &AbsolutePathBuf,
-    worktree_root: &AbsolutePathBuf,
-) -> Result<PathUri, String> {
-    let path = cwd
-        .to_abs_path()
-        .map_err(|_| "worktree isolation requires a local working directory".to_string())?;
-    match rebase_path(&path, source_root, worktree_root) {
-        RebasedPath::Inside(path) => Ok(PathUri::from_abs_path(&path)),
-        RebasedPath::Outside | RebasedPath::ContainsRepository => Err(format!(
-            "working directory {} is outside the repository {}",
-            path.display(),
-            source_root.display()
-        )),
-    }
-}
-
 /// Moves absolute permission entries inside the repository onto the worktree.
 pub(crate) fn rebase_permission_profile(
     profile: &PermissionProfile,
@@ -707,6 +693,7 @@ pub(crate) fn prepare_reload(
                 &binding.environment_id,
                 &binding.source_root,
                 &binding.root,
+                &binding.cwd,
             )
         })
         .transpose()?;

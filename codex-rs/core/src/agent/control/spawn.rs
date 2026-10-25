@@ -719,6 +719,7 @@ impl LocalAgentControl {
                                         &binding.environment_id,
                                         &binding.source_root,
                                         &binding.root,
+                                        &binding.cwd,
                                     )
                                     .map_err(|err| {
                                         CodexErr::InvalidRequest(format!(
@@ -1601,6 +1602,21 @@ impl LocalAgentControl {
             forked_rollout_items.push(RolloutItem::ResponseItem(
                 subagent_usage_hint_message.into(),
             ));
+        }
+        // Fork: a reused parent context does not carry the child's developer instructions,
+        // so an isolated child would never learn about its worktree. Append the note once.
+        if preserve_context_baselines && let Some(worktree) = options.worktree.as_ref() {
+            let note =
+                crate::agent::worktree_isolation::isolation_developer_note(&worktree.binding);
+            let already_present = forked_rollout_items.iter().any(|item| {
+                matches!(item, RolloutItem::ResponseItem(envelope)
+                    if serde_json::to_string(&envelope.item)
+                        .is_ok_and(|text| text.contains(&note)))
+            });
+            if !already_present {
+                let note_message = ContextualUserFragment::into(DeveloperInstructions::new(note));
+                forked_rollout_items.push(RolloutItem::ResponseItem(note_message.into()));
+            }
         }
         Ok((
             InitialHistory::Forked(forked_rollout_items),

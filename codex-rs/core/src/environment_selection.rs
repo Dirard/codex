@@ -1422,8 +1422,9 @@ impl TurnEnvironmentSnapshot {
         self.single_local_environment()?.cwd().to_abs_path().ok()
     }
 
-    /// Fork: moves one ready environment's cwd, workspace roots and permissions from the
-    /// parent's repository into an agent worktree; other environments stay unchanged.
+    /// Fork: moves one ready environment onto an agent worktree: its cwd becomes `cwd`, and its
+    /// workspace roots and permissions inside the parent's repository move to the worktree.
+    /// Other environments stay unchanged.
     ///
     /// Spec `agent-worktree-isolation` UC3 step "rebase the environments onto the worktree".
     pub(crate) fn rebase_onto_worktree(
@@ -1431,8 +1432,8 @@ impl TurnEnvironmentSnapshot {
         environment_id: &str,
         source_root: &AbsolutePathBuf,
         worktree_root: &AbsolutePathBuf,
+        cwd: &AbsolutePathBuf,
     ) -> Result<Self, String> {
-        use crate::agent::worktree_isolation::rebase_cwd;
         use crate::agent::worktree_isolation::rebase_permission_snapshot;
         use crate::agent::worktree_isolation::rebase_workspace_root_uris;
 
@@ -1447,7 +1448,7 @@ impl TurnEnvironmentSnapshot {
                     found = true;
                     let mut ready = ready.clone();
                     let selection = &mut ready.selection;
-                    selection.cwd = rebase_cwd(&selection.cwd, source_root, worktree_root)?;
+                    selection.cwd = PathUri::from_abs_path(cwd);
                     selection.workspace_roots = rebase_workspace_root_uris(
                         &selection.workspace_roots,
                         source_root,

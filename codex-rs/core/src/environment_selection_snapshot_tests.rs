@@ -375,7 +375,12 @@ async fn rebase_onto_worktree_moves_cwd_and_roots_inside_the_repository() {
     let snapshot = environments.snapshot().await;
 
     let rebased = snapshot
-        .rebase_onto_worktree(LOCAL_ENVIRONMENT_ID, &source, &worktree)
+        .rebase_onto_worktree(
+            LOCAL_ENVIRONMENT_ID,
+            &source,
+            &worktree,
+            &worktree.join("sub"),
+        )
         .expect("rebase local environment");
 
     let environment = rebased.primary().expect("rebased environment");
@@ -401,7 +406,7 @@ async fn rebase_onto_worktree_moves_cwd_and_roots_inside_the_repository() {
     );
     assert!(
         snapshot
-            .rebase_onto_worktree("missing", &source, &worktree)
+            .rebase_onto_worktree("missing", &source, &worktree, &worktree)
             .is_err()
     );
 }
