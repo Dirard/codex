@@ -1016,6 +1016,8 @@ impl Session {
                 }
             }
         }
+        // Fork: workflow runs need the local backend to see their agents' outcomes.
+        let local_agent_backend = matches!(&agent_control, AgentControlInit::Local(_));
         let (agent_control, local_agent_runtime): (Arc<dyn AgentControl>, _) = match agent_control {
             AgentControlInit::Local(control) => {
                 let control = control.with_session_id(
@@ -1058,6 +1060,9 @@ impl Session {
         thread_extension_init.insert(codex_extension_api::ThreadOriginator(
             session_configuration.originator.clone(),
         ));
+        if local_agent_backend {
+            thread_extension_init.insert(crate::workflow::LocalAgentBackend);
+        }
         // Publish the already resolved model before extensions make startup decisions.
         // Turn construction refreshes this attachment when the selected model changes.
         thread_extension_init.insert(model_info);

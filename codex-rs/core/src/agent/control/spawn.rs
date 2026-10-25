@@ -974,12 +974,19 @@ impl LocalAgentControl {
                 .is_some_and(is_v2_resident_session_source);
         let (residency_slot, residency_reservation) = if spawn_uses_v2_residency {
             let residency_reservation_started_at = Instant::now();
+            // Fork: workflow children use their own residency pool (dynamic workflow, UC4).
+            let pool = if options.workflow_child.is_some() {
+                super::residency::ResidencyPool::Workflow
+            } else {
+                super::residency::ResidencyPool::Agents
+            };
             let residency_slot = self
-                .reserve_v2_residency_slot(
+                .reserve_v2_residency_slot_in(
                     &state,
                     &config,
                     &membership,
                     /*protected_thread_id*/ None,
+                    pool,
                 )
                 .await?;
             (
@@ -1200,6 +1207,10 @@ impl LocalAgentControl {
             turn_trigger: options.turn_trigger,
             root_turn_id: options.root_turn_id,
             cyber_access_program: options.cyber_access_program,
+            // Fork: a workflow child's first turn answers with the call's schema.
+            final_output_json_schema: options
+                .workflow_child
+                .and_then(|workflow| workflow.final_output_json_schema),
             ..Default::default()
         };
         let input_admission_started_at = Instant::now();

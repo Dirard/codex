@@ -3018,6 +3018,7 @@ dependencies = [
  "codex-web-search-extension",
  "codex-windows-sandbox",
  "codex-windows-sandbox-test-support",
+ "codex-workflow",
  "codex-worktree",
  "core_test_support",
  "ctor 0.6.3",

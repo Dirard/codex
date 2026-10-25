@@ -626,6 +626,89 @@ pub enum ThreadStoreConfig {
     InMemory { id: String },
 }
 
+/// Fork: whether a workflow run needs the user's approval before it starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkflowApproval {
+    /// Ask unless the approval policy is `never`.
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+/// Fork: resolved `[workflows]` limits (`specs/dynamic-workflow-2026-10-25.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkflowsConfig {
+    pub max_active_runs: usize,
+    pub max_concurrent_agents: usize,
+    pub max_agents_per_run: usize,
+    pub capacity_wait_ms: u64,
+    pub default_budget_tokens: Option<u64>,
+    pub notification_max_tokens: usize,
+    pub max_heap_bytes: usize,
+    pub exec_wait_timeout_ms: u64,
+    pub require_approval: WorkflowApproval,
+}
+
+impl WorkflowsConfig {
+    /// `min(16, max(1, available_parallelism - 2))`.
+    pub fn default_max_concurrent_agents() -> usize {
+        let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+        cpus.saturating_sub(2).clamp(1, 16)
+    }
+
+    fn from_toml(toml: Option<&codex_config::config_toml::WorkflowsToml>) -> Self {
+        use codex_config::config_toml::WorkflowApprovalToml;
+        let defaults = Self::default();
+        let Some(toml) = toml else {
+            return defaults;
+        };
+        Self {
+            max_active_runs: toml
+                .max_active_runs
+                .unwrap_or(defaults.max_active_runs)
+                .max(1),
+            max_concurrent_agents: toml
+                .max_concurrent_agents
+                .unwrap_or(defaults.max_concurrent_agents)
+                .max(1),
+            max_agents_per_run: toml
+                .max_agents_per_run
+                .unwrap_or(defaults.max_agents_per_run),
+            capacity_wait_ms: toml.capacity_wait_ms.unwrap_or(defaults.capacity_wait_ms),
+            default_budget_tokens: toml.default_budget_tokens,
+            notification_max_tokens: toml
+                .notification_max_tokens
+                .unwrap_or(defaults.notification_max_tokens),
+            max_heap_bytes: toml.max_heap_bytes.unwrap_or(defaults.max_heap_bytes),
+            exec_wait_timeout_ms: toml
+                .exec_wait_timeout_ms
+                .unwrap_or(defaults.exec_wait_timeout_ms),
+            require_approval: match toml.require_approval.unwrap_or_default() {
+                WorkflowApprovalToml::Auto => WorkflowApproval::Auto,
+                WorkflowApprovalToml::Always => WorkflowApproval::Always,
+                WorkflowApprovalToml::Never => WorkflowApproval::Never,
+            },
+        }
+    }
+}
+
+impl Default for WorkflowsConfig {
+    fn default() -> Self {
+        Self {
+            max_active_runs: 3,
+            max_concurrent_agents: Self::default_max_concurrent_agents(),
+            max_agents_per_run: 1000,
+            capacity_wait_ms: 600_000,
+            default_budget_tokens: None,
+            notification_max_tokens: 2000,
+            max_heap_bytes: 256 * 1024 * 1024,
+            exec_wait_timeout_ms: 7_200_000,
+            require_approval: WorkflowApproval::Auto,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct OutputTruncationConfig {
     pub max_bytes: Option<usize>,
@@ -981,6 +1064,9 @@ pub struct Config {
 
     /// Limits applied when formatting tool and command output for model and UI consumption.
     pub output_truncation: OutputTruncationConfig,
+
+    /// Fork: limits of background workflow runs (`[workflows]`).
+    pub workflows: WorkflowsConfig,
 
     /// Whether multi-agent tools are enabled through `[agents]`.
     pub agents_enabled: bool,
@@ -4762,6 +4848,7 @@ impl Config {
                     mcp_max_lines,
                 },
             ),
+            workflows: WorkflowsConfig::from_toml(cfg.workflows.as_ref()),
             agents_enabled,
             agent_max_threads,
             max_spawned_threads_per_turn,

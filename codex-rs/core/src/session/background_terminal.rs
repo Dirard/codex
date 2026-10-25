@@ -85,6 +85,22 @@ impl Session {
         })
     }
 
+    /// Fork: deliver the completion notification of a workflow run through the same queue
+    /// (`specs/dynamic-workflow-2026-10-25.md`, UC7, R7.2): a running turn samples it in its
+    /// next model request, an idle thread starts a turn, and a turn that already decided to
+    /// finish leaves it queued for the turn started after it. A shutting-down session drops it.
+    pub(crate) async fn deliver_workflow_notification(self: &Arc<Self>, body: String) {
+        if self.state.lock().await.shutting_down {
+            return;
+        }
+        self.input_queue
+            .enqueue_workflow_notification(ContextualUserFragment::into(
+                crate::context::WorkflowNotification::new(body),
+            ))
+            .await;
+        self.maybe_start_turn_for_pending_work().await;
+    }
+
     /// Whether this thread still expects or holds a background terminal notification.
     pub(crate) async fn has_pending_background_terminal_work(&self) -> bool {
         self.input_queue.has_background_notifications().await

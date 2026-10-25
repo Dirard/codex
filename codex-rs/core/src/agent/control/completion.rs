@@ -36,6 +36,14 @@ impl LocalAgentControl {
         else {
             return;
         };
+        // Fork: a workflow child reports to its run, never to the parent (dynamic workflow, UC3).
+        if self
+            .runtime
+            .workflow_children
+            .deliver(child_agent_path, &outcome)
+        {
+            return;
+        }
         let parent_thread_id = *parent_thread_id;
         // Fork: the parent receives at most the explorer profile's result limit.
         let status = match (outcome.status, outcome.result_max_tokens) {

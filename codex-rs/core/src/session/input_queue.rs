@@ -3,6 +3,7 @@ use crate::agent::types::TurnSpawnBudget;
 use crate::agent_communication::PENDING_MAILBOX_MESSAGES;
 use crate::context::BackgroundTerminalNotification;
 use crate::context::ContextualUserFragment;
+use crate::context::is_background_notification_item;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
 use crate::state::TurnState;
@@ -66,7 +67,7 @@ impl TurnInput {
                     ResponseItem::FunctionCallOutput { .. }
                         | ResponseItem::CustomToolCallOutput { .. }
                         | ResponseItem::ToolSearchOutput { .. }
-                ) || BackgroundTerminalNotification::is_notification_item(&envelope.item)
+                ) || is_background_notification_item(&envelope.item)
             }
             TurnInput::InterAgentCommunication(mail) => mail.trigger_turn,
         }
@@ -111,6 +112,8 @@ pub(crate) enum InputQueueActivity {
     Steer,
     /// Fork: a background terminal exit notification is waiting for the model.
     BackgroundTerminal,
+    /// Fork: a workflow run finished and its notification is waiting for the model.
+    Workflow,
 }
 
 /// Fork: queued notifications beyond this count omit their output tail.
@@ -304,7 +307,21 @@ impl InputQueue {
         let pending_activity = if let Some(activity) = turn_activity {
             Some(activity)
         } else if self.has_background_notifications().await {
-            Some(InputQueueActivity::BackgroundTerminal)
+            // Fork: a queued workflow notification names its own activity.
+            let workflow = self
+                .background_notifications
+                .lock()
+                .await
+                .items
+                .iter()
+                .any(|entry| {
+                    crate::context::WorkflowNotification::is_notification_item(&entry.item)
+                });
+            Some(if workflow {
+                InputQueueActivity::Workflow
+            } else {
+                InputQueueActivity::BackgroundTerminal
+            })
         } else if self.has_pending_mailbox_items().await {
             Some(InputQueueActivity::Mailbox)
         } else {
@@ -456,6 +473,22 @@ impl InputQueue {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Fork: queue the completion notification of a workflow run. It always asks for a turn
+    /// and is never dropped: a thread has few runs (dynamic workflow, UC7, R7.1).
+    pub(crate) async fn enqueue_workflow_notification(&self, item: ResponseItem) {
+        self.background_notifications
+            .lock()
+            .await
+            .items
+            .push_back(BackgroundNotificationEntry {
+                item,
+                wakes: true,
+                key: None,
+                on_sampled: None,
+            });
+        self.activity_tx.send_replace(InputQueueActivity::Workflow);
     }
 
     /// Fork: whether any background terminal notification is queued.
@@ -776,7 +809,15 @@ impl TurnInputQueue {
             matches!(
                 input,
                 TurnInput::ResponseItem(envelope)
-                    if BackgroundTerminalNotification::is_notification_item(&envelope.item)
+                    if crate::context::WorkflowNotification::is_notification_item(&envelope.item)
+            )
+        }) {
+            Some(InputQueueActivity::Workflow)
+        } else if self.items.iter().any(|input| {
+            matches!(
+                input,
+                TurnInput::ResponseItem(envelope)
+                    if is_background_notification_item(&envelope.item)
             )
         }) {
             Some(InputQueueActivity::BackgroundTerminal)

@@ -36,7 +36,13 @@ impl LocalAgentControl {
         multi_agent_version: MultiAgentVersion,
         session_source: &SessionSource,
     ) -> CodexResult<()> {
-        if !is_execution_limited(multi_agent_version, session_source) {
+        // Fork: a workflow run's semaphore bounds its agents (dynamic workflow, UC4).
+        if !is_execution_limited(multi_agent_version, session_source)
+            || self
+                .runtime
+                .workflow_children
+                .is_workflow_source(session_source)
+        {
             return Ok(());
         }
         let max_threads = self.runtime.agent_execution_limiter.max_threads();
@@ -55,8 +61,10 @@ impl LocalAgentControl {
         multi_agent_version: MultiAgentVersion,
         session_source: &SessionSource,
     ) -> Option<AgentExecutionGuard> {
-        is_execution_limited(multi_agent_version, session_source)
-            .then(|| Arc::clone(&self.runtime.agent_execution_limiter).guard())
+        (is_execution_limited(multi_agent_version, session_source)
+            // Fork: workflow agents are bounded by their run (dynamic workflow, UC4).
+            && !self.runtime.workflow_children.is_workflow_source(session_source))
+        .then(|| Arc::clone(&self.runtime.agent_execution_limiter).guard())
     }
 }
 

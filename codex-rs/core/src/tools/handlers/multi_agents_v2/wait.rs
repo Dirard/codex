@@ -145,6 +145,7 @@ impl Handler {
                 match outcome {
                     WaitOutcome::MailboxActivity => "mailbox",
                     WaitOutcome::BackgroundTerminal => "background_terminal",
+                    WaitOutcome::Workflow => "workflow",
                     WaitOutcome::Steered => "steered",
                     WaitOutcome::NoActiveAgents => "no_active_agents",
                     WaitOutcome::TimedOut(..) => "timed_out",
@@ -205,6 +206,10 @@ impl WaitAgentResult {
                 "Wait completed: a background terminal notification arrived.".to_string(),
                 false,
             ),
+            WaitOutcome::Workflow => (
+                "Wait completed: a workflow run finished; its notification follows.".to_string(),
+                false,
+            ),
             WaitOutcome::Steered => ("Wait interrupted by new input.".to_string(), false),
             WaitOutcome::NoActiveAgents => ("No active agents.".to_string(), false),
             WaitOutcome::TimedOut(snapshot, background_terminals) => {
@@ -260,6 +265,8 @@ enum WaitOutcome {
     MailboxActivity,
     /// Fork: a background terminal exit notification is waiting for the model.
     BackgroundTerminal,
+    /// Fork: a workflow run finished and its notification is waiting for the model.
+    Workflow,
     Steered,
     NoActiveAgents,
     /// Agent snapshot and the terminals whose exit will still be reported.
@@ -365,12 +372,22 @@ async fn active_agent_snapshot(
         .await
         .map_err(collab_spawn_error)?;
     let mut snapshot = ActiveAgentSnapshot::default();
+    let workflow_children = session.services.local_agent_runtime.workflow_children();
     for agent in agents {
         if agent
             .metadata
             .agent_path
             .as_deref()
             .is_some_and(|path| *path == *current_agent_path.as_str())
+        {
+            continue;
+        }
+        // Fork: workflow agents report to their run, not to this wait (dynamic workflow, R3.3).
+        if agent
+            .metadata
+            .agent_path
+            .as_ref()
+            .is_some_and(|path| workflow_children.owner(path.as_str()).is_some())
         {
             continue;
         }
@@ -453,6 +470,7 @@ fn wait_outcome_for_activity(activity: InputQueueActivity) -> WaitOutcome {
     match activity {
         InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
         InputQueueActivity::BackgroundTerminal => WaitOutcome::BackgroundTerminal,
+        InputQueueActivity::Workflow => WaitOutcome::Workflow,
         InputQueueActivity::Steer => WaitOutcome::Steered,
     }
 }

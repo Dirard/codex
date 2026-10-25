@@ -431,6 +431,10 @@ impl Session {
                     .as_ref(),
             ));
         }
+        // Fork: active workflow runs survive compaction (dynamic workflow, UC11).
+        if turn_context.config.features.enabled(Feature::Workflows) {
+            world_state.add_section(crate::workflow::WorkflowRunsState::for_session(self));
+        }
         Ok(world_state)
     }
 }

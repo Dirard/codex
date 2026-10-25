@@ -321,6 +321,10 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     // happened to its armed background terminals (background-exec-notifications R2.5).
     sess.record_background_terminals_at_shutdown(terminated)
         .await;
+    // Fork: interrupt workflow runs and their agents (dynamic workflow, R9.3).
+    if let Some(workflows) = crate::workflow::WorkflowRegistry::existing(sess) {
+        workflows.shutdown().await;
+    }
     if let Err(err) = sess.services.code_mode_service.shutdown().await {
         sess.services.local_agent_runtime.record_shutdown_failure(
             AgentTreeShutdownFailure::operation_failed(

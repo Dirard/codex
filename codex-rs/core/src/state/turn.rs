@@ -135,6 +135,12 @@ impl TurnState {
         self.pending_approvals.remove(key)
     }
 
+    /// Fork: whether the turn waits for an approval or a permission decision (dynamic
+    /// workflow, R10.2).
+    pub(crate) fn has_pending_approvals(&self) -> bool {
+        !self.pending_approvals.is_empty() || !self.pending_request_permissions.is_empty()
+    }
+
     pub(crate) fn clear_pending_waiters(&mut self) {
         self.pending_approvals.clear();
         self.pending_request_permissions.clear();

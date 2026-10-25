@@ -210,6 +210,8 @@ pub(crate) struct LocalAgentRuntime {
     shutdown_state: Arc<AgentTreeShutdownState>,
     /// Most recent detached legacy completion watcher for each child thread.
     pub(super) completion_watchers: Arc<Mutex<HashMap<ThreadId, CompletionWatcher>>>,
+    /// Fork: agents started by workflow runs of this tree.
+    pub(super) workflow_children: Arc<super::workflow_children::WorkflowChildren>,
 }
 
 impl LocalAgentRuntime {
@@ -232,6 +234,7 @@ impl LocalAgentRuntime {
             root_service_tier: Arc::new(ArcSwapOption::from(None)),
             shared_thread_instructions_provider: Arc::default(),
             completion_watchers: Arc::default(),
+            workflow_children: Arc::default(),
         };
         if let Some(rollout_budget) = rollout_budget {
             runtime.rollout_budget.configure(rollout_budget);

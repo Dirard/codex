@@ -342,9 +342,7 @@ impl Session {
             let (notifications, rest): (Vec<_>, Vec<_>) =
                 pending_items.into_iter().partition(|item| {
                     matches!(item, TurnInput::ResponseItem(envelope)
-                    if crate::context::BackgroundTerminalNotification::is_notification_item(
-                        &envelope.item
-                    ))
+                    if crate::context::is_background_notification_item(&envelope.item))
                 });
             pending_items = rest;
             input.splice(0..0, notifications);
@@ -539,13 +537,18 @@ impl Session {
                 .reference_context_item()
                 .await
                 .and_then(|context| context.cyber_access_program);
-            // Fork: name a wake by a background terminal exit (UC3, R3.1).
-            if input.iter().any(|item| {
-                matches!(item, TurnInput::ResponseItem(envelope)
-                if crate::context::BackgroundTerminalNotification::is_notification_item(
-                    &envelope.item
-                ))
-            }) {
+            // Fork: name a wake by a background terminal exit (UC3, R3.1) or by a finished
+            // workflow run (dynamic workflow, UC7).
+            let notified = |matches: fn(&codex_protocol::models::ResponseItem) -> bool| {
+                input.iter().any(|item| {
+                    matches!(item, TurnInput::ResponseItem(envelope) if matches(&envelope.item))
+                })
+            };
+            if notified(crate::context::WorkflowNotification::is_notification_item) {
+                start_options.turn_trigger =
+                    Some(crate::workflow::WORKFLOW_TURN_TRIGGER.to_string());
+            } else if notified(crate::context::BackgroundTerminalNotification::is_notification_item)
+            {
                 start_options.turn_trigger =
                     Some(crate::session::BACKGROUND_TERMINAL_TURN_TRIGGER.to_string());
             }

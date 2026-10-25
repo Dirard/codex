@@ -263,6 +263,8 @@ mod web_search;
 mod web_search_system_proxy;
 mod websocket_fallback;
 mod window_headers;
+// Fork: background workflow runs.
+mod workflow;
 mod workspace_roots;
 mod worktree_trust;
 

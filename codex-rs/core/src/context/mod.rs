@@ -5,6 +5,7 @@ mod approved_command_prefix_saved;
 mod apps_instructions;
 mod available_plugins_instructions;
 mod background_terminal_notification;
+// Fork: completion notices of workflow runs.
 mod base_instructions;
 mod compaction_summary;
 mod content_filter_guidance;
@@ -19,6 +20,7 @@ mod guardian_budget_omission;
 mod guardian_context_mode;
 mod guardian_conversation_history;
 mod user_goal;
+mod workflow_notification;
 pub use guardian_budget_omission::GuardianBudgetOmission;
 mod guardian_followup_review_reminder;
 mod guardian_node_repl_policy;
@@ -64,6 +66,14 @@ pub(crate) use approved_command_prefix_saved::ApprovedCommandPrefixSaved;
 pub(crate) use apps_instructions::AppsInstructions;
 pub(crate) use available_plugins_instructions::AvailablePluginsInstructions;
 pub(crate) use background_terminal_notification::BackgroundTerminalNotification;
+pub(crate) use workflow_notification::WorkflowNotification;
+
+/// Fork: whether an item is a notification of the background-notification queue: a
+/// background terminal exit or a finished workflow run.
+pub(crate) fn is_background_notification_item(item: &codex_protocol::models::ResponseItem) -> bool {
+    BackgroundTerminalNotification::is_notification_item(item)
+        || WorkflowNotification::is_notification_item(item)
+}
 pub(crate) use base_instructions::BaseInstructionsFragment;
 pub(crate) use codex_context_fragments::AdditionalContextDeveloperFragment;
 pub(crate) use codex_context_fragments::AdditionalContextUserFragment;

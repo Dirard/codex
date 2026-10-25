@@ -45,5 +45,8 @@ fn decodes_escapes() {
         parse_literal(r#"'\u0041\u{1F600}\x41\'\\'"#).expect("parse"),
         json!("A\u{1F600}A'\\")
     );
-    assert_eq!(parse_literal(r#""\uD83D\uDE00""#).expect("parse"), json!("\u{1F600}"));
+    assert_eq!(
+        parse_literal(r#""\uD83D\uDE00""#).expect("parse"),
+        json!("\u{1F600}")
+    );
 }

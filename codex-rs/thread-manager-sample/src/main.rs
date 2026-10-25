@@ -331,6 +331,7 @@ async fn new_config(
         project_doc_fallback_filenames: Vec::new(),
         tool_output_token_limit: None,
         output_truncation: Default::default(),
+        workflows: Default::default(),
         agents_enabled: true,
         agent_max_threads: Some(6),
         max_spawned_threads_per_turn: 16,

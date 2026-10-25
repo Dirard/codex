@@ -97,6 +97,8 @@ mod spawn_telemetry;
 mod target;
 mod user_authorization;
 mod watch;
+// Fork: agents started by workflow runs.
+pub(crate) mod workflow_children;
 
 enum CompletionWatcherStart {
     CurrentStatus,

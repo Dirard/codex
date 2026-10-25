@@ -152,8 +152,10 @@ mod event_mapping;
 pub use codex_prompts as review_prompts;
 mod thread_manager;
 mod thread_spawn;
+// Fork: background workflow runs (specs/dynamic-workflow-2026-10-25.md).
 pub(crate) mod web_search;
 pub(crate) mod windows_sandbox_read_grants;
+mod workflow;
 pub use agent::control::ThreadEvictionOutcome;
 pub use thread_manager::AgentTreeShutdown;
 pub use thread_manager::AgentTreeShutdownFailure;

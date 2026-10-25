@@ -138,6 +138,7 @@ async fn handle_spawn_agent(
                 turn_spawn_budget: Some(step_context.turn_spawn_budget.clone()),
                 // Fork: worktree isolation applies only to native MultiAgentV2 children (R1.4).
                 worktree: None,
+                workflow_child: None,
             },
         })
         .await

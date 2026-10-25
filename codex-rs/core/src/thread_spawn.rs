@@ -15,6 +15,8 @@ use crate::agent::types::LiveAgent;
 use crate::agent::types::MessageDeliveryMode;
 use crate::agent::types::SpawnAgentForkMode;
 use crate::agent::types::SpawnAgentOptions;
+use crate::agent::types::TurnSpawnBudget;
+use crate::agent::types::WorkflowChildSpawn;
 use crate::agent::worktree_isolation::AgentWorktreeBinding;
 use crate::agent::worktree_isolation::PreparedAgentWorktree;
 use crate::agent::worktree_isolation::prepare_agent_worktree;
@@ -55,6 +57,15 @@ pub(crate) struct ThreadSpawnResult {
     pub worktree: Option<Arc<AgentWorktreeBinding>>,
 }
 
+/// Fork: settings of a child started by a workflow run (dynamic workflow, UC3).
+pub(crate) struct WorkflowSpawnOptions {
+    /// The run's own spawn budget replaces the parent's per-input budget (UC4, R4.2).
+    pub run_spawn_budget: TurnSpawnBudget,
+    pub final_output_json_schema: Option<serde_json::Value>,
+    /// Appended to the child's developer instructions.
+    pub developer_instructions: String,
+}
+
 /// Separates preparation errors from backend failures to preserve native tool error reporting.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ThreadSpawnError {
@@ -72,6 +83,35 @@ pub(crate) async fn spawn(
     step_context: &Arc<StepContext>,
     call_id: &str,
     request: ThreadSpawnRequest,
+) -> Result<ThreadSpawnResult, ThreadSpawnError> {
+    spawn_with(
+        session,
+        step_context,
+        call_id,
+        request,
+        /*workflow*/ None,
+    )
+    .await
+}
+
+/// Fork: start a fresh child for a workflow run with collaboration tools disabled, the
+/// workflow agent instructions and the run's spawn budget (dynamic workflow, UC3, R3.1, R3.4).
+pub(crate) async fn spawn_workflow_child(
+    session: &Arc<Session>,
+    step_context: &Arc<StepContext>,
+    call_id: &str,
+    request: ThreadSpawnRequest,
+    workflow: WorkflowSpawnOptions,
+) -> Result<ThreadSpawnResult, ThreadSpawnError> {
+    spawn_with(session, step_context, call_id, request, Some(workflow)).await
+}
+
+async fn spawn_with(
+    session: &Arc<Session>,
+    step_context: &Arc<StepContext>,
+    call_id: &str,
+    request: ThreadSpawnRequest,
+    workflow: Option<WorkflowSpawnOptions>,
 ) -> Result<ThreadSpawnResult, ThreadSpawnError> {
     let turn = &step_context.turn;
     let ThreadSpawnRequest {
@@ -109,6 +149,16 @@ pub(crate) async fn spawn(
     .await
     .map_err(ThreadSpawnError::Preparation)?;
     let mut config = prepared.config;
+    if let Some(workflow) = &workflow {
+        // Fork: workflow agents answer their script and do not delegate (R3.4).
+        config.multi_agent_v2.disable_native_tools = true;
+        config.developer_instructions = Some(match config.developer_instructions.take() {
+            Some(existing) if !existing.trim().is_empty() => {
+                format!("{existing}\n\n{}", workflow.developer_instructions)
+            }
+            _ => workflow.developer_instructions.clone(),
+        });
+    }
     let task_name = turn
         .session_source
         .get_agent_path()
@@ -207,10 +257,16 @@ pub(crate) async fn spawn(
                 disabled_plugin_ids: Some(turn.disabled_plugin_ids.clone()),
                 multi_agent_v2_usage_hints,
                 cyber_access_program: turn.cyber_access_program,
-                turn_spawn_budget: Some(step_context.turn_spawn_budget.clone()),
+                turn_spawn_budget: Some(match &workflow {
+                    Some(workflow) => workflow.run_spawn_budget.clone(),
+                    None => step_context.turn_spawn_budget.clone(),
+                }),
                 worktree: prepared_worktree
                     .as_ref()
                     .map(PreparedAgentWorktree::spawn_worktree),
+                workflow_child: workflow.map(|workflow| WorkflowChildSpawn {
+                    final_output_json_schema: workflow.final_output_json_schema,
+                }),
             },
         })
         .await;

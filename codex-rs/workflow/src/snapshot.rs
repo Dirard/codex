@@ -317,6 +317,14 @@ impl RunTracker {
         } else {
             AgentState::Null
         };
+        // A call settles once; a late report after cancellation is ignored.
+        if self
+            .agents
+            .get(&seq)
+            .is_none_or(|entry| matches!(entry.state, AgentState::Completed | AgentState::Null))
+        {
+            return;
+        }
         let phase = self.agents.get(&seq).and_then(|entry| entry.phase.clone());
         if let Some(entry) = self.transition(seq, state) {
             entry.reason = reason.map(str::to_string);
@@ -336,6 +344,24 @@ impl RunTracker {
         self.snapshot.charged_tokens = self.snapshot.charged_tokens.saturating_add(tokens.charged);
         self.snapshot.cached_tokens = self.snapshot.cached_tokens.saturating_add(tokens.cached);
         self.bump();
+    }
+
+    /// UC9: resolve every call that is still queued or running to null with `reason`.
+    pub fn settle_open_calls(&mut self, reason: &str) {
+        let open: Vec<u64> = self
+            .agents
+            .values()
+            .filter(|entry| {
+                matches!(
+                    entry.state,
+                    AgentState::Queued | AgentState::Running | AgentState::AwaitingApproval
+                )
+            })
+            .map(|entry| entry.seq)
+            .collect();
+        for seq in open {
+            self.agent_finished(seq, false, Some(reason), TokenCharge::default());
+        }
     }
 
     pub fn finish(

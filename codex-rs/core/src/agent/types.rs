@@ -49,6 +49,15 @@ pub struct SpawnAgentOptions {
     /// Fork: managed worktree prepared for an isolated child. The local backend reserves the
     /// child's thread ID from it and registers the binding before the child starts.
     pub worktree: Option<crate::agent::worktree_isolation::SpawnWorktree>,
+    /// Fork: the child belongs to a workflow run (dynamic workflow, UC3).
+    pub workflow_child: Option<WorkflowChildSpawn>,
+}
+
+/// Fork: spawn settings of a workflow child.
+#[derive(Clone, Debug, Default)]
+pub struct WorkflowChildSpawn {
+    /// Structured-output schema of the child's first turn.
+    pub final_output_json_schema: Option<serde_json::Value>,
 }
 
 /// Cumulative spawn budget for the root user input that requested a delegation.
