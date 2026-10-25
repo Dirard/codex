@@ -444,11 +444,15 @@ fn worktree_field(output: &Value, field: &str) -> String {
 }
 
 fn mail_block(request: &ResponsesRequest) -> String {
-    let text = request.body_json().to_string();
-    // The newest block is the last one; earlier turns' mail stays in the history.
-    let start = text
-        .rfind("<agent_worktree>")
-        .unwrap_or_else(|| panic!("no worktree block in {text}"));
+    // Only child mail carries a block; tool descriptions also mention the tag. The newest
+    // mail is the last one because earlier turns' mail stays in the history.
+    let text = request
+        .inputs_of_type("agent_message")
+        .iter()
+        .map(Value::to_string)
+        .rfind(|item| item.contains("<agent_worktree>\\n"))
+        .unwrap_or_else(|| panic!("no worktree block in {}", request.body_json()));
+    let start = text.rfind("<agent_worktree>\\n").expect("block start");
     let end = text[start..]
         .find("</agent_worktree>")
         .map(|end| start + end + "</agent_worktree>".len())

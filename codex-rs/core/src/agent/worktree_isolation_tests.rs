@@ -124,14 +124,14 @@ fn absolute_permission_entries_follow_the_worktree() {
 #[test]
 fn branch_names_use_the_task_and_thread_prefix() {
     let thread_id =
-        ThreadId::from_string("01a1748c-1111-7222-8333-444455556666").expect("valid thread id");
+        ThreadId::from_string("01a1748c-1111-7222-8333-4444deadbeef").expect("valid thread id");
     let agent_path = AgentPath::root()
         .join("reviewer")
         .and_then(|path| path.join("probe"))
         .expect("agent path");
     assert_eq!(
         agent_branch_name(&agent_path, thread_id),
-        "codex/agents/probe-01a1748c"
+        "codex/agents/probe-deadbeef"
     );
 }
 
@@ -199,6 +199,7 @@ fn isolation_note_describes_the_worktree_and_protection() {
     assert!(protected.contains("snapshot of the parent working tree (378e730aa1b2)"));
     assert!(protected.contains("parent checkout /work/demo, which is read-only for you"));
     assert!(protected.contains("branch codex/agents/probe-01a1748c"));
+    assert!(protected.contains("do not write that block yourself"));
     let unprotected = isolation_developer_note(&binding(false));
     assert!(unprotected.contains("which is still writable (the sandbox does not protect it)"));
 }

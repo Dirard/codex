@@ -410,15 +410,20 @@ async fn discard_worktree(binding: &AgentWorktreeBinding) {
     }
 }
 
-/// `codex/agents/<last agent path segment>-<first 8 hex digits of the thread ID>`.
+/// `codex/agents/<last agent path segment>-<last 8 hex digits of the thread ID>`.
+///
+/// Thread IDs are UUIDv7: their leading digits are a millisecond timestamp shared by agents
+/// spawned within about a minute, while the trailing digits are random.
 pub(crate) fn agent_branch_name(agent_path: &AgentPath, thread_id: ThreadId) -> String {
-    let thread_id = thread_id.to_string();
-    let prefix = thread_id
+    let digits = thread_id
+        .to_string()
         .chars()
         .filter(char::is_ascii_hexdigit)
-        .take(8)
+        .collect::<Vec<_>>();
+    let suffix = digits[digits.len().saturating_sub(8)..]
+        .iter()
         .collect::<String>();
-    format!("codex/agents/{}-{prefix}", agent_path.name())
+    format!("codex/agents/{}-{suffix}", agent_path.name())
 }
 
 /// Shares Desktop's managed root (`$CODEX_HOME/worktrees` or `desktop.git-worktree-root`).
@@ -654,7 +659,7 @@ pub(crate) fn isolation_developer_note(binding: &AgentWorktreeBinding) -> String
         "still writable (the sandbox does not protect it)"
     };
     format!(
-        "You are working in an isolated git worktree at {cwd}. It was created from the {base_description} ({base_short}) of the parent checkout {source_root}, which is {protection} for you. Keep all edits inside your working directory and prefer relative paths. Do not run git commands that write repository metadata (add, commit, switch, stash, merge): they fail in the sandbox. Do not request escalated permissions to edit the parent checkout. When you finish, Codex records your changes on branch {branch} and reports them to the parent.",
+        "You are working in an isolated git worktree at {cwd}. It was created from the {base_description} ({base_short}) of the parent checkout {source_root}, which is {protection} for you. Keep all edits inside your working directory and prefer relative paths. Do not run git commands that write repository metadata (add, commit, switch, stash, merge): they fail in the sandbox. Do not request escalated permissions to edit the parent checkout. When you finish, Codex records your changes on branch {branch} and appends an <agent_worktree> block with the merge command to your result; do not write that block yourself.",
         cwd = binding.cwd.display(),
         base_description = binding.metadata.base_kind.description(),
         base_short = short_sha(&binding.metadata.base_sha),
