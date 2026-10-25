@@ -14,17 +14,25 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tracing_test::internal::MockWriter;
 
-/// The capacity floor only raises the provider default; explicit budgets, including zero,
-/// stay as configured after per-request caps.
+/// Explicit budgets below the capacity floor, including zero, stay as configured; any other
+/// budget is raised to the floor after per-request caps, so an explicit value never yields
+/// fewer overload retries than a smaller one or than the unset default.
 #[test]
-fn server_overloaded_floor_applies_only_to_default() {
+fn server_overloaded_floor_never_lowers_larger_budgets() {
     for (max_retries, configured, expected) in [
         (5, None, 5),
         (2, None, 3),
         (0, None, 3),
         (0, Some(0), 0),
-        (2, Some(4), 2),
+        (1, Some(1), 1),
+        (2, Some(2), 2),
+        // Remote compaction caps stream retries at two; an explicit default stays at the floor.
+        (2, Some(3), 3),
+        (2, Some(4), 3),
+        (2, Some(5), 3),
+        (2, Some(8), 3),
         (4, Some(4), 4),
+        (5, Some(5), 5),
     ] {
         assert_eq!(
             server_overloaded_max_retries(max_retries, configured),
@@ -32,6 +40,21 @@ fn server_overloaded_floor_applies_only_to_default() {
             "max_retries={max_retries} configured={configured:?}"
         );
     }
+    // Monotonic in the configured budget under the remote compaction cap.
+    let remote_cap = 2;
+    let budgets = (0..=8)
+        .map(|configured: u64| {
+            server_overloaded_max_retries(configured.min(remote_cap), Some(configured))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        budgets.windows(2).all(|pair| pair[0] <= pair[1]),
+        "{budgets:?}"
+    );
+    assert_eq!(
+        server_overloaded_max_retries(5_u64.min(remote_cap), Some(5)),
+        server_overloaded_max_retries(5_u64.min(remote_cap), None)
+    );
 }
 
 #[tokio::test]

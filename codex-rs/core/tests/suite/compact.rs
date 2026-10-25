@@ -3560,21 +3560,28 @@ async fn manual_remote_compact_advice_respects_retry_limit(max_retries: u64) {
     assert_eq!(models, vec!["gpt-5.4"; (max_retries + 1) as usize]);
 }
 
-/// Fork: an unset stream budget keeps the capacity floor for headerless overloads even
-/// though remote V2 caps stream retries at two; explicit budgets are covered above.
+/// Fork: headerless overloads retry with backoff within the overload budget. Remote V2 caps
+/// stream retries at two, and the capacity floor raises an unset budget, or an explicit one at
+/// least as large as the floor (the default five included), to three; a smaller explicit
+/// budget is honored exactly.
+#[test_case::test_case(None, 3; "unset_uses_floor")]
+#[test_case::test_case(Some(5), 3; "explicit_default_uses_floor")]
+#[test_case::test_case(Some(2), 2; "explicit_two_retries")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn manual_remote_compact_overload_floor_applies_only_to_default_retries() {
+async fn manual_remote_compact_headerless_overload_retry_budget(
+    stream_max_retries: Option<u64>,
+    floor_retries: u64,
+) {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
     let overload = wiremock::ResponseTemplate::new(/*s*/ 503)
         .set_body_json(json!({ "error": { "code": "server_is_overloaded" } }));
-    let floor_retries = 3_u64;
     let request_log =
         mount_response_sequence(&server, vec![overload; (floor_retries + 1) as usize]).await;
     let mut model_provider = openai_model_provider(&server);
     model_provider.request_max_retries = Some(0);
-    model_provider.stream_max_retries = None;
+    model_provider.stream_max_retries = stream_max_retries;
     let test = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model("gpt-5.4")
@@ -4506,11 +4513,21 @@ async fn manual_compact_retries_after_context_window_error() {
     }
 }
 
+/// Fork: headerless overloads in local compaction retry with backoff exactly as often as an
+/// explicit stream budget below the capacity floor allows; upstream fails on the first one,
+/// and the floor would allow a third retry.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn manual_compact_retries_server_overloaded_with_default_retries() -> Result<()> {
+async fn manual_compact_server_overloaded_retries_exactly_explicit_budget() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
+    let overloaded = |id: &str| {
+        sse_failed(
+            id,
+            "server_is_overloaded",
+            "Selected model is at capacity. Please try different model.",
+        )
+    };
     let request_log = mount_sse_sequence(
         &server,
         vec![
@@ -4518,37 +4535,17 @@ async fn manual_compact_retries_server_overloaded_with_default_retries() -> Resu
                 ev_assistant_message("m1", FIRST_REPLY),
                 ev_completed("r1"),
             ]),
-            sse_failed(
-                "compact-overloaded-1",
-                "server_is_overloaded",
-                "Selected model is at capacity. Please try different model.",
-            ),
-            sse_failed(
-                "compact-overloaded-2",
-                "server_is_overloaded",
-                "Selected model is at capacity. Please try different model.",
-            ),
-            sse_failed(
-                "compact-overloaded-3",
-                "server_is_overloaded",
-                "Selected model is at capacity. Please try different model.",
-            ),
-            sse(vec![
-                ev_assistant_message("m2", SUMMARY_TEXT),
-                ev_completed("r2"),
-            ]),
-            sse(vec![
-                ev_assistant_message("m3", FINAL_REPLY),
-                ev_completed("r3"),
-            ]),
+            overloaded("compact-overloaded-1"),
+            overloaded("compact-overloaded-2"),
+            // The capacity floor would allow a third retry, an extra request.
+            overloaded("compact-overloaded-3"),
         ],
     )
     .await;
 
     let mut model_provider = non_openai_model_provider(&server);
     model_provider.request_max_retries = Some(0);
-    // Fork: the capacity floor protects the default stream budget.
-    model_provider.stream_max_retries = None;
+    model_provider.stream_max_retries = Some(2);
     let test = test_codex()
         .with_config(move |config| {
             config.model_provider = model_provider;
@@ -4560,22 +4557,30 @@ async fn manual_compact_retries_server_overloaded_with_default_retries() -> Resu
 
     test.submit_turn("seed history for compaction").await?;
     test.codex.submit(Op::Compact).await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-    test.submit_turn("continue after compaction").await?;
+    let mut errors = Vec::new();
+    let mut reconnect_messages = Vec::new();
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::Error(error) => errors.push(error.codex_error_info),
+            EventMsg::StreamError(error) => reconnect_messages.push(error.message),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
 
+    assert_eq!(errors, vec![Some(CodexErrorInfo::ServerOverloaded)]);
+    assert_eq!(
+        reconnect_messages,
+        vec!["Reconnecting... 1/2", "Reconnecting... 2/2"]
+    );
     let requests = request_log.requests();
-    assert_eq!(requests.len(), 6);
-    assert!(body_contains_text(
-        &requests[4].body_json().to_string(),
-        SUMMARIZATION_PROMPT,
-    ));
-    assert!(body_contains_text(
-        &requests[5].body_json().to_string(),
-        "continue after compaction",
-    ));
+    assert_eq!(requests.len(), 4);
+    assert!(
+        requests[1..].iter().all(|request| body_contains_text(
+            &request.body_json().to_string(),
+            SUMMARIZATION_PROMPT
+        ))
+    );
     Ok(())
 }
 

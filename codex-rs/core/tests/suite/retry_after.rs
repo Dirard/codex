@@ -937,6 +937,8 @@ async fn compact_v2_rate_limit_uses_server_advice(
 }
 
 /// Headerless remote compaction v2 overloads exhaust request retries before one terminal error.
+/// Fork: with an explicit zero stream budget; stream retries of headerless remote compaction
+/// overloads are covered by `suite::compact::manual_remote_compact_headerless_overload_retry_budget`.
 #[tokio::test(flavor = "current_thread")]
 async fn compact_v2_overload_without_retry_after_exhausts_request_retries() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1270,6 +1272,9 @@ async fn sse_failure_uses_server_advice(
 }
 
 /// A streamed backend overload remains terminal despite an enclosing retry header.
+/// Fork: only with an explicit zero stream budget, where it neither retries over HTTP nor maps
+/// to another error; `sse_overload_retries_with_backoff_within_explicit_stream_budget` covers
+/// a positive budget, where the header is still no retry advice.
 #[tokio::test(flavor = "current_thread")]
 async fn sse_overload_with_retry_after_is_terminal() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1344,6 +1349,8 @@ async fn sse_overload_with_retry_after_is_terminal() -> Result<()> {
 }
 
 /// A streamed backend overload without retry advice must complete with one terminal error.
+/// Fork: with an explicit zero stream budget; a positive budget retries with backoff first
+/// (`sse_overload_retries_with_backoff_within_explicit_stream_budget`).
 #[tokio::test(flavor = "current_thread")]
 async fn sse_overload_without_retry_after_is_terminal() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1408,6 +1415,103 @@ async fn sse_overload_without_retry_after_is_terminal() -> Result<()> {
         .filter(|request| request.url.path() == "/v1/responses")
         .count();
     assert_eq!(request_count, 1, "headerless SSE overload must not retry");
+    assert_eq!(
+        telemetry.events.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    );
+
+    Ok(())
+}
+
+/// Fork: within an explicit stream budget a streamed overload retries with local backoff,
+/// where upstream treats it as terminal. An enclosing HTTP `Retry-After` header is no advice
+/// for the streamed error, and the exhausted budget ends with one terminal error.
+#[test_case::test_case(None; "headerless")]
+#[test_case::test_case(Some("1"); "enclosing_retry_after_header")]
+#[tokio::test(flavor = "current_thread")]
+async fn sse_overload_retries_with_backoff_within_explicit_stream_budget(
+    enclosing_retry_after: Option<&str>,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut telemetry = RetryTelemetryCapture::install();
+    let server = responses::start_mock_server().await;
+    let mut overload = responses::sse_response(responses::sse_failed(
+        "disabled-model",
+        "server_is_overloaded",
+        "This model is disabled.",
+    ));
+    if let Some(retry_after) = enclosing_retry_after {
+        overload = overload.insert_header("Retry-After", retry_after);
+    }
+    let response_mock = responses::mount_response_sequence(&server, vec![overload; 3]).await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_provider.request_max_retries = Some(2);
+            config.model_provider.stream_max_retries = Some(2);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    submit_user_input(&test, "retry the streamed overload with backoff").await?;
+    for (attempt, delays) in [
+        (1, FIRST_RETRY_MIN_DELAY..FIRST_RETRY_MAX_DELAY),
+        (2, SECOND_RETRY_MIN_DELAY..SECOND_RETRY_MAX_DELAY),
+    ] {
+        let retry = telemetry.next_retry().await;
+        assert!(delays.contains(&retry.delay), "{retry:?}");
+        assert_eq!(
+            retry,
+            RetryTelemetryEvent {
+                attempt,
+                delay: retry.delay,
+                layer: "stream".into(),
+                operation: "sampling".into(),
+            }
+        );
+        wait_for_retry(&mut telemetry, &retry).await;
+    }
+
+    let mut error_events = 0;
+    let mut reconnect_messages = Vec::new();
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::Error(error) => {
+                error_events += 1;
+                assert_eq!(
+                    error.codex_error_info,
+                    Some(CodexErrorInfo::ServerOverloaded)
+                );
+            }
+            EventMsg::StreamError(error) => reconnect_messages.push(error.message),
+            EventMsg::TurnComplete(event) => {
+                assert_eq!(
+                    event.error.and_then(|error| error.codex_error_info),
+                    Some(CodexErrorInfo::ServerOverloaded)
+                );
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    assert_eq!(error_events, 1);
+    assert_eq!(
+        reconnect_messages,
+        vec!["Reconnecting... 1/2", "Reconnecting... 2/2"]
+    );
+    assert_eq!(response_mock.requests().len(), 3);
+    let request_count = server
+        .received_requests()
+        .await
+        .expect("mock server should record requests")
+        .into_iter()
+        .filter(|request| request.url.path() == "/v1/responses")
+        .count();
+    assert_eq!(
+        request_count, 3,
+        "streamed overloads must not retry over HTTP"
+    );
     assert_eq!(
         telemetry.events.try_recv(),
         Err(mpsc::error::TryRecvError::Empty)
@@ -2143,6 +2247,9 @@ async fn websocket_overload_retries_only_while_it_has_retry_after() -> Result<()
 }
 
 /// Headerless websocket overloads must neither reconnect nor fall back to HTTP.
+/// Fork: with an explicit zero stream budget, which would otherwise switch transport for any
+/// other exhausted error; a positive budget reconnects with backoff first
+/// (`websocket_overload_without_retry_after_retries_within_explicit_budget`).
 #[tokio::test(flavor = "current_thread")]
 async fn websocket_overload_without_retry_after_is_terminal() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -2222,6 +2329,112 @@ async fn websocket_overload_without_retry_after_is_terminal() -> Result<()> {
     );
     let request_count: usize = server.connections().iter().map(Vec::len).sum();
     assert_eq!(request_count, 2, "expected only prewarm and terminal error");
+    assert_eq!(
+        telemetry.events.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    );
+    server.shutdown().await;
+
+    Ok(())
+}
+
+/// Fork: within an explicit stream budget a headerless websocket overload reconnects with
+/// local backoff, where upstream treats it as terminal, and the exhausted budget still never
+/// falls back to HTTP.
+#[tokio::test(flavor = "current_thread")]
+async fn websocket_overload_without_retry_after_retries_within_explicit_budget() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut telemetry = RetryTelemetryCapture::install();
+    let overload = || {
+        vec![json!({
+            "type": "error",
+            "status": 503,
+            "error": {
+                "code": "server_is_overloaded",
+                "message": "This model is disabled."
+            }
+        })]
+    };
+    let server = responses::start_websocket_server(vec![
+        vec![
+            vec![
+                responses::ev_response_created("prewarm"),
+                responses::ev_completed("prewarm"),
+            ],
+            overload(),
+        ],
+        vec![overload()],
+        vec![overload()],
+    ])
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            // Capture inference retries without unrelated startup model-discovery retries.
+            config.model_catalog =
+                Some(bundled_models_response().expect("bundled models.json should parse"));
+            config.model_provider.request_max_retries = Some(2);
+            config.model_provider.stream_max_retries = Some(2);
+        })
+        .build_with_websocket_server(&server)
+        .await?;
+
+    let warmup = server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await;
+    assert_eq!(warmup.body_json()["generate"].as_bool(), Some(false));
+    submit_user_input(&test, "retry the headerless websocket overload").await?;
+    for (attempt, delays) in [
+        (1, FIRST_RETRY_MIN_DELAY..FIRST_RETRY_MAX_DELAY),
+        (2, SECOND_RETRY_MIN_DELAY..SECOND_RETRY_MAX_DELAY),
+    ] {
+        let retry = telemetry.next_retry().await;
+        assert_eq!(retry.attempt, attempt);
+        assert!(delays.contains(&retry.delay), "{retry:?}");
+        wait_for_retry(&mut telemetry, &retry).await;
+    }
+
+    let mut error_events = 0;
+    let mut stream_error_events = 0;
+    let mut fallback_warning_events = 0;
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::Error(error) => {
+                error_events += 1;
+                assert_eq!(
+                    error.codex_error_info,
+                    Some(CodexErrorInfo::ServerOverloaded)
+                );
+            }
+            EventMsg::StreamError(_) => stream_error_events += 1,
+            EventMsg::Warning(warning)
+                if warning.message.contains("Falling back from WebSockets") =>
+            {
+                fallback_warning_events += 1;
+            }
+            EventMsg::TurnComplete(event) => {
+                assert_eq!(
+                    event.error.and_then(|error| error.codex_error_info),
+                    Some(CodexErrorInfo::ServerOverloaded)
+                );
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    assert_eq!(error_events, 1);
+    // Release builds hide the first websocket reconnect notice.
+    assert_eq!(stream_error_events, 1 + usize::from(cfg!(debug_assertions)));
+    assert_eq!(
+        fallback_warning_events, 0,
+        "websocket must not fall back to HTTP"
+    );
+    let request_count: usize = server.connections().iter().map(Vec::len).sum();
+    assert_eq!(
+        request_count, 4,
+        "expected prewarm, the overload, and two websocket retries"
+    );
     assert_eq!(
         telemetry.events.try_recv(),
         Err(mpsc::error::TryRecvError::Empty)

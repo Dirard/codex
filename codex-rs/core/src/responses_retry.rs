@@ -22,18 +22,18 @@ use tracing::warn;
 
 const INITIAL_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(5);
 const MAX_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(60);
-/// Fork capacity floor for `ServerOverloaded` when the provider keeps its default retries.
+/// Fork capacity floor for `ServerOverloaded` unless an explicit stream budget is smaller.
 const SERVER_OVERLOADED_RETRY_FLOOR: u64 = 3;
 
-/// Retries allowed for `ServerOverloaded` on its independent counter. Only the provider
-/// default is raised to the fork floor; an explicit `stream_max_retries` is honored as
-/// configured (after per-request caps), so an explicit zero fails fast.
+/// Retries allowed for `ServerOverloaded` on its independent counter, raised after per-request
+/// caps to the fork floor. An explicit `stream_max_retries` below the floor is honored exactly,
+/// so an explicit zero fails fast; an explicit value at or above it, such as the default five,
+/// gets the floor like the unset default, so asking for more never yields fewer retries.
 fn server_overloaded_max_retries(max_retries: u64, configured_stream_retries: Option<u64>) -> u64 {
-    if configured_stream_retries.is_some() {
-        max_retries
-    } else {
-        max_retries.max(SERVER_OVERLOADED_RETRY_FLOOR)
-    }
+    let floor = configured_stream_retries.map_or(SERVER_OVERLOADED_RETRY_FLOOR, |configured| {
+        configured.min(SERVER_OVERLOADED_RETRY_FLOOR)
+    });
+    max_retries.max(floor)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -145,8 +145,8 @@ pub(crate) async fn handle_response_stream_error(
         return Ok(());
     }
 
-    // Unadvised overloads only retry because of the fork's capacity retry floor; once
-    // exhausted they are terminal, as upstream, and must not switch transport.
+    // Fork: unadvised overloads retry with backoff within the overload budget, where upstream
+    // treats them as terminal; once exhausted they are terminal and must not switch transport.
     if *retries >= max_retries
         && !(matches!(err.details(), CodexErrorDetails::ServerOverloaded) && retry_after.is_none())
         && client_session.try_switch_fallback_transport(
