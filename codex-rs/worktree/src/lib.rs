@@ -1,7 +1,29 @@
+// Fork: host-side Git operations for MultiAgentV2 worktree isolation.
+mod agent;
 mod git;
 mod metadata;
 mod paths;
 mod settings;
+
+pub use agent::AGENT_COMMIT_AUTHOR_EMAIL;
+pub use agent::AGENT_COMMIT_AUTHOR_NAME;
+pub use agent::AgentWorktreeBaseKind;
+pub use agent::AgentWorktreeMetadata;
+pub use agent::BranchChanges;
+pub use agent::ChangedPath;
+pub use agent::CheckpointOutcome;
+pub use agent::CheckpointRequest;
+pub use agent::KeptReason;
+pub use agent::MAX_LISTED_CHANGED_PATHS;
+pub use agent::RemoveOutcome;
+pub use agent::branch_changes;
+pub use agent::checkpoint;
+pub use agent::discard_agent_worktree;
+pub use agent::read_agent_metadata;
+pub use agent::remove_if_unchanged;
+pub use agent::resolve_head_commit;
+pub use agent::snapshot_working_tree;
+pub use agent::write_agent_metadata;
 
 use crate::git::GitOperation;
 use crate::git::git_output;
@@ -279,6 +301,24 @@ impl WorktreeManager {
     pub fn owner(&self, checkout: &Path) -> Result<Option<String>> {
         let checkout = self.managed_checkout(checkout)?;
         metadata::owner(&checkout)
+    }
+
+    /// Returns the managed checkout root that contains `path`, using only path components.
+    ///
+    /// Fork: agent worktree discovery uses this cheap check before reading the owner record.
+    pub fn managed_checkout_root(&self, path: &Path) -> Option<PathBuf> {
+        let managed_root =
+            dunce::canonicalize(&self.settings.root).unwrap_or_else(|_| self.settings.root.clone());
+        let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let relative = path.strip_prefix(&managed_root).ok()?;
+        let mut components = relative.components();
+        let (Some(Component::Normal(bucket)), Some(Component::Normal(name))) =
+            (components.next(), components.next())
+        else {
+            return None;
+        };
+        let checkout = managed_root.join(bucket).join(name);
+        has_managed_layout(&managed_root, &checkout).then_some(checkout)
     }
 
     /// Remove a currently registered checkout from this repository, refusing local changes.

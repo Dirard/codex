@@ -37,6 +37,17 @@ pub(crate) fn git_output(
     operation: GitOperation,
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
 ) -> Result<Output> {
+    let mut command = git_command(cwd, operation)?;
+    let output = command.args(args).output().context("failed to start git")?;
+    ensure_git_success(&output)?;
+    Ok(output)
+}
+
+/// Builds an isolated Git command for callers that add their own arguments and environment.
+///
+/// Environment set on the returned command after this call is kept, so callers can select
+/// an index file or a commit identity without reintroducing inherited selectors.
+pub(crate) fn git_command(cwd: &Path, operation: GitOperation) -> Result<Command> {
     let mut command = base_git_command(cwd);
     if matches!(operation, GitOperation::WorkingTree) {
         command.envs(git_config_override_env(
@@ -50,7 +61,19 @@ pub(crate) fn git_output(
             }),
         ));
     }
-    let output = command.args(args).output().context("failed to start git")?;
+    Ok(command)
+}
+
+/// Runs a prepared command and accepts the listed non-zero exit codes as successful results.
+pub(crate) fn run_git_command(command: &mut Command, accepted_codes: &[i32]) -> Result<Output> {
+    let output = command.output().context("failed to start git")?;
+    if output
+        .status
+        .code()
+        .is_some_and(|code| accepted_codes.contains(&code))
+    {
+        return Ok(output);
+    }
     ensure_git_success(&output)?;
     Ok(output)
 }
@@ -175,6 +198,9 @@ fn base_git_command(cwd: &Path) -> Command {
         .arg("attr.tree=")
         .arg("-c")
         .arg("core.attributesFile=")
+        // Fork: host-side commits of agent worktrees must not prompt for or require a signature.
+        .arg("-c")
+        .arg("commit.gpgSign=false")
         .env("GIT_LFS_SKIP_SMUDGE", "1")
         .env("GIT_TERMINAL_PROMPT", "0");
     scrub_non_inheritable_env_vars(&mut command);
