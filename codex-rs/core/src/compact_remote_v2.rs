@@ -172,13 +172,14 @@ pub(crate) fn estimate_candidate_request_tokens(
 }
 
 /// Soft headroom: a summary-only candidate that misses the headroom target is still better
-/// than failing the turn when it fits the full context window and shrinks the context.
+/// than failing the turn when it stays below the auto-compaction trigger of its scope (and so
+/// the full context window) and shrinks the context. At or above the trigger the next step
+/// would compact again, so such a candidate is rejected as before.
 pub(crate) fn soft_headroom_accepts(
     status: &crate::session::context_window::ContextWindowTokenStatus,
     current_context_tokens: i64,
 ) -> bool {
-    !status.full_context_window_limit_reached
-        && status.active_context_tokens < current_context_tokens
+    !status.token_limit_reached && status.active_context_tokens < current_context_tokens
 }
 
 /// Fail-fast lower bound before paying for a foreground compaction: every candidate carries
@@ -971,37 +972,46 @@ mod tests {
 
     fn token_status(
         active_context_tokens: i64,
+        auto_compact_scope_limit: Option<i64>,
         full_context_window_limit: Option<i64>,
     ) -> crate::session::context_window::ContextWindowTokenStatus {
         let full_context_window_limit_reached =
             full_context_window_limit.is_some_and(|limit| active_context_tokens >= limit);
+        let token_limit_reached = full_context_window_limit_reached
+            || auto_compact_scope_limit.is_some_and(|limit| active_context_tokens >= limit);
         crate::session::context_window::ContextWindowTokenStatus {
             active_context_tokens,
             auto_compact_scope_tokens: active_context_tokens,
-            auto_compact_scope_limit: None,
+            auto_compact_scope_limit,
             full_context_window_limit,
             base_window_tokens_remaining: None,
             auto_compact_window_prefill_tokens: None,
             full_context_window_limit_reached,
-            token_limit_reached: full_context_window_limit_reached,
+            token_limit_reached,
             turn_end_compaction_threshold_reached: false,
         }
     }
 
     #[test]
-    fn soft_headroom_accepts_only_full_window_candidates_that_shrink_context() {
-        for (candidate, window, current, accepted) in [
-            (85_000, Some(100_000), 105_000, true),
-            (85_000, None, 105_000, true),
-            (100_000, Some(100_000), 105_000, false),
-            (120_000, Some(100_000), 130_000, false),
-            (85_000, Some(100_000), 85_000, false),
-            (85_000, Some(100_000), 60_000, false),
+    fn soft_headroom_accepts_only_candidates_below_the_compaction_trigger_that_shrink_context() {
+        for (candidate, auto_limit, window, current, accepted) in [
+            (85_000, Some(90_000), Some(100_000), 105_000, true),
+            (89_999, Some(90_000), Some(100_000), 105_000, true),
+            (85_000, None, None, 105_000, true),
+            // At or above the auto-compaction trigger the next step would compact again.
+            (90_000, Some(90_000), Some(100_000), 105_000, false),
+            (95_000, Some(90_000), Some(100_000), 105_000, false),
+            (100_000, None, Some(100_000), 105_000, false),
+            (120_000, Some(90_000), Some(100_000), 130_000, false),
+            // The candidate must shrink the context it replaces.
+            (85_000, Some(90_000), Some(100_000), 85_000, false),
+            (85_000, Some(90_000), Some(100_000), 60_000, false),
         ] {
             assert_eq!(
-                soft_headroom_accepts(&token_status(candidate, window), current),
+                soft_headroom_accepts(&token_status(candidate, auto_limit, window), current),
                 accepted,
-                "candidate={candidate} window={window:?} current={current}"
+                "candidate={candidate} auto_limit={auto_limit:?} window={window:?} \
+                 current={current}"
             );
         }
     }

@@ -1557,12 +1557,19 @@ async fn request_overhead(builder: TestCodexBuilder) -> Result<RequestOverhead> 
     })
 }
 
-/// Sizes a summary-only candidate between the 67.5k headroom target, which it misses even
-/// without tool declarations, and the 100k window, which it fits with them. The user turn is
-/// larger than the summary, so installing the candidate shrinks the context.
-fn soft_headroom_fixture(overhead: &RequestOverhead, marker: &str) -> (String, String) {
-    let candidate_without_tools = (67_500 + 100_000 - overhead.tool_tokens) / 2;
-    let summary_tokens = candidate_without_tools - overhead.context_tokens;
+/// A soft-headroom candidate of about 84k tokens: above the 67.5k headroom target but below
+/// the 90k auto-compaction trigger of the 100k window.
+const SOFT_HEADROOM_CANDIDATE_TOKENS: usize = 84_000;
+
+/// Sizes a summary-only candidate whose request estimate, tool declarations included, is
+/// about `candidate_tokens`. The user turn is larger than the summary, so installing the
+/// candidate shrinks the context.
+fn soft_headroom_fixture(
+    overhead: &RequestOverhead,
+    marker: &str,
+    candidate_tokens: usize,
+) -> (String, String) {
+    let summary_tokens = candidate_tokens - overhead.tool_tokens - overhead.context_tokens;
     // Codex estimates encrypted compaction content at one token per twelve bytes.
     let summary = format!("{marker}_SUMMARY{}", "s".repeat(summary_tokens * 12));
     let user_text = format!("{marker}_USER{}", "u".repeat((summary_tokens + 20_000) * 4));
@@ -1574,7 +1581,8 @@ async fn remote_compact_v2_installs_summary_only_candidate_within_full_window() 
     skip_if_no_network!(Ok(()));
 
     let overhead = request_overhead(soft_headroom_test_codex()).await?;
-    let (summary, user_text) = soft_headroom_fixture(&overhead, "SOFT_HEADROOM");
+    let (summary, user_text) =
+        soft_headroom_fixture(&overhead, "SOFT_HEADROOM", SOFT_HEADROOM_CANDIDATE_TOKENS);
     let harness = TestCodexHarness::with_builder(soft_headroom_test_codex()).await?;
     let codex = harness.test().codex.clone();
     let responses_mock = responses::mount_sse_sequence(
@@ -1623,12 +1631,66 @@ async fn remote_compact_v2_installs_summary_only_candidate_within_full_window() 
     Ok(())
 }
 
+/// Soft headroom only applies below the auto-compaction trigger: a candidate above it but
+/// inside the 100k window would make the next step compact again, so it is still rejected.
+#[test_case(SOFT_HEADROOM_CANDIDATE_TOKENS, true; "below_auto_compact_limit_installs")]
+#[test_case(95_000, false; "above_auto_compact_limit_fails")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_soft_headroom_stops_at_auto_compact_limit(
+    candidate_tokens: usize,
+    installs: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let overhead = request_overhead(soft_headroom_test_codex()).await?;
+    let (summary, user_text) = soft_headroom_fixture(&overhead, "SOFT_LIMIT", candidate_tokens);
+    let harness = TestCodexHarness::with_builder(soft_headroom_test_codex()).await?;
+    let codex = harness.test().codex.clone();
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            remote_compaction_sse("resp-compact", &summary),
+        ],
+    )
+    .await;
+
+    harness.test().submit_turn(&user_text).await?;
+    codex.submit(Op::Compact).await?;
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+    loop {
+        match wait_for_event(&codex, |_| true).await {
+            EventMsg::Warning(warning) if warning.message.contains("headroom") => {
+                warnings.push(warning.message);
+            }
+            EventMsg::Error(error) => errors.push(error.codex_error_info),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(responses_mock.requests().len(), 2);
+    if installs {
+        assert_eq!(errors, Vec::new());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+    } else {
+        assert_eq!(errors, vec![Some(CodexErrorInfo::ContextWindowExceeded)]);
+        assert_eq!(warnings, Vec::<String>::new());
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_v2_soft_headroom_without_progress_stops_the_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let overhead = request_overhead(soft_headroom_test_codex()).await?;
-    let (summary, user_text) = soft_headroom_fixture(&overhead, "SOFT_LOOP");
+    let (summary, user_text) =
+        soft_headroom_fixture(&overhead, "SOFT_LOOP", SOFT_HEADROOM_CANDIDATE_TOKENS);
     let harness = TestCodexHarness::with_builder(soft_headroom_test_codex()).await?;
     let codex = harness.test().codex.clone();
     let at_limit = |id: &str| {
