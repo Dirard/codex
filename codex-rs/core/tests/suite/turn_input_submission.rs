@@ -736,6 +736,19 @@ enum RecoveryPause {
     LegacyRollout,
 }
 
+/// Fork: waits until `response` has recorded exactly the request it matched.
+async fn wait_for_recorded_request(
+    response: &responses::ResponseMock,
+) -> anyhow::Result<responses::ResponsesRequest> {
+    timeout(Duration::from_secs(/*secs*/ 10), async {
+        while response.requests().is_empty() {
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
+        }
+    })
+    .await?;
+    Ok(response.single_request())
+}
+
 /// Cold recovery preserves attribution across repeated restarts, leaves unknown
 /// triggers absent, and starts new turns with fresh attribution.
 #[test_case(Some("automation"), RecoveryPause::AfterContext; "automation")]
@@ -918,12 +931,10 @@ async fn recovery_preserves_durable_turn_attribution(
                 initiating_agent_path: initiating_agent_path.clone(),
             }),
         );
-        timeout(
-            Duration::from_secs(/*secs*/ 10),
-            request_received.notified(),
-        )
-        .await?;
-        let request = response.single_request();
+        // Fork: wait for this attempt's mock to record its request. The shared notifier can
+        // keep a permit from an earlier request, and it fires in a matcher that runs before
+        // `ResponseMock`, the next matcher in the chain, records the request.
+        let request = wait_for_recorded_request(&response).await?;
         let metadata: Value = serde_json::from_str(
             &request
                 .header("x-codex-turn-metadata")
