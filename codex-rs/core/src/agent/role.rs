@@ -313,6 +313,27 @@ pub(crate) mod spawn_tool_spec {
         build_from_configs(built_in_roles, user_defined_agent_roles)
     }
 
+    /// Fork: same as [`build`], with the `explorer` entry describing the explorer profile.
+    pub(crate) fn build_with_explorer_profile(
+        user_defined_agent_roles: &BTreeMap<String, AgentRoleConfig>,
+        profile: &crate::config::ExplorerProfileConfig,
+    ) -> String {
+        let explorer = crate::agent::explorer_profile::EXPLORER_ROLE_NAME;
+        let mut built_in_roles = built_in::configs().clone();
+        if let Some(role) = built_in_roles.get_mut(explorer) {
+            role.description = Some(crate::agent::explorer_profile::role_description(profile));
+        }
+        let mut user_defined_roles = user_defined_agent_roles.clone();
+        if let Some(role) = user_defined_roles.get_mut(explorer) {
+            let summary = crate::agent::explorer_profile::role_profile_summary(profile);
+            role.description = Some(match role.description.take() {
+                Some(description) => format!("{description}\n{summary}"),
+                None => summary,
+            });
+        }
+        build_from_configs(&built_in_roles, &user_defined_roles)
+    }
+
     // This function is not inlined for testing purpose.
     fn build_from_configs(
         built_in_roles: &BTreeMap<String, AgentRoleConfig>,

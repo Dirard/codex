@@ -753,6 +753,23 @@ impl LocalAgentControl {
                 else {
                     return;
                 };
+                // Fork: the parent receives at most the explorer profile's result limit.
+                let status = match (status, child_thread.as_ref()) {
+                    (AgentStatus::Completed(Some(message)), Some(child_thread)) => {
+                        let child_config = child_thread.config().await;
+                        let child_source = child_thread.config_snapshot().await.session_source;
+                        match crate::agent::explorer_profile::result_max_tokens(
+                            &child_config,
+                            &child_source,
+                        ) {
+                            Some(max_tokens) => AgentStatus::Completed(Some(
+                                crate::agent::explorer_profile::cap_result(&message, max_tokens),
+                            )),
+                            None => AgentStatus::Completed(Some(message)),
+                        }
+                    }
+                    (status, _) => status,
+                };
                 let Some(message) = format_inter_agent_completion_message(
                     parent_agent_path.clone(),
                     child_agent_path.clone(),

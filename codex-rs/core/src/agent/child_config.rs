@@ -3,6 +3,7 @@
 //! Spawn and reload share live runtime policy; role and model precedence, full-history
 //! inheritance, and validation messages remain the same for each multi-agent version.
 
+use crate::agent::explorer_profile;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
 use crate::config::Config;
@@ -66,6 +67,7 @@ pub(crate) async fn prepare_agent_spawn_config(
         &mut config,
         options.model,
         options.reasoning_effort,
+        explorer_profile::applies_to_role(&turn.config, options.role_name),
     )
     .await?;
     if !options.full_history_fork
@@ -201,18 +203,32 @@ fn apply_spawn_agent_runtime_overrides(
     Ok(())
 }
 
+/// Selects the child's model and effort: explicit arguments, then (for a profiled explorer)
+/// `features.explorer_profile`, then `[agents] default_subagent_*`, then the parent's settings.
 async fn apply_requested_spawn_agent_model_overrides(
     session: &Session,
     step_context: &StepContext,
     config: &mut Config,
     requested_model: Option<&str>,
     requested_reasoning_effort: Option<ReasoningEffort>,
+    explorer: bool,
 ) -> Result<(), String> {
     let turn = step_context.turn.as_ref();
-    let requested_model = requested_model.or(turn.config.agent_default_subagent_model.as_deref());
+    let explorer_profile = explorer.then_some(&turn.config.explorer_profile);
+    // Fork: a configured explorer model is a user setting, so name it in errors.
+    let explorer_model_configured = requested_model.is_none()
+        && explorer_profile.is_some_and(|profile| profile.model.is_some());
+    let requested_model = requested_model
+        .or_else(|| explorer_profile.and_then(|profile| profile.model.as_deref()))
+        .or(turn.config.agent_default_subagent_model.as_deref());
     let requested_reasoning_effort = requested_reasoning_effort
-        .or_else(|| turn.config.agent_default_subagent_reasoning_effort.clone());
-    if requested_model.is_none() && requested_reasoning_effort.is_none() {
+        .or_else(|| explorer_profile.and_then(|profile| profile.reasoning_effort.clone()))
+        .or_else(|| {
+            (!explorer)
+                .then(|| turn.config.agent_default_subagent_reasoning_effort.clone())
+                .flatten()
+        });
+    if requested_model.is_none() && requested_reasoning_effort.is_none() && !explorer {
         return Ok(());
     }
 
@@ -226,7 +242,14 @@ async fn apply_requested_spawn_agent_model_overrides(
             &available_models,
             requested_model,
             turn.multi_agent_version,
-        )?;
+        )
+        .map_err(|err| {
+            if explorer_model_configured {
+                format!("{err} (configured by features.explorer_profile.model)")
+            } else {
+                err
+            }
+        })?;
         let selected_model_info = session
             .services
             .models_manager
@@ -241,10 +264,24 @@ async fn apply_requested_spawn_agent_model_overrides(
                 &reasoning_effort,
             )?;
             config.model_reasoning_effort = Some(reasoning_effort);
+        } else if explorer {
+            config.model_reasoning_effort = explorer_profile::cheapest_reasoning_effort(
+                &selected_model_info.supported_reasoning_levels,
+            )
+            .or(selected_model_info.default_reasoning_level);
         } else {
             config.model_reasoning_effort = selected_model_info.default_reasoning_level;
         }
 
+        return Ok(());
+    }
+
+    if explorer && requested_reasoning_effort.is_none() {
+        if let Some(reasoning_effort) = explorer_profile::cheapest_reasoning_effort(
+            &step_context.settings.model_info.supported_reasoning_levels,
+        ) {
+            config.model_reasoning_effort = Some(reasoning_effort);
+        }
         return Ok(());
     }
 

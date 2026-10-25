@@ -295,6 +295,18 @@ impl Session {
         source: ConfigUpdateSource,
     ) -> CodexResult<()> {
         let mut state = self.state.lock().await;
+        // Fork: explorer sessions never accept an environment wider than read-only.
+        let result = result.map(|mut config| {
+            if crate::agent::explorer_profile::applies_to_source(
+                &state.session_configuration.original_config_do_not_use,
+                &state.session_configuration.session_source,
+            ) {
+                crate::agent::explorer_profile::clamp_environment_permission_profile(
+                    &mut config.permission_profile,
+                );
+            }
+            config
+        });
         let mut current = self.services.turn_environments.selections();
         let mut future = state.session_configuration.environments.clone();
         let inherited = matches!(source, ConfigUpdateSource::Inherited);

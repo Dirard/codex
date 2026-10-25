@@ -863,8 +863,14 @@ fn agent_type_description(
     turn_context: &TurnContext,
     default_agent_type_description: &str,
 ) -> String {
-    let agent_type_description =
-        crate::agent::role::spawn_tool_spec::build(&turn_context.config.agent_roles);
+    let agent_type_description = if crate::agent::explorer_profile::enabled(&turn_context.config) {
+        crate::agent::role::spawn_tool_spec::build_with_explorer_profile(
+            &turn_context.config.agent_roles,
+            &turn_context.config.explorer_profile,
+        )
+    } else {
+        crate::agent::role::spawn_tool_spec::build(&turn_context.config.agent_roles)
+    };
     if agent_type_description.is_empty() {
         default_agent_type_description.to_string()
     } else {
@@ -1540,7 +1546,10 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                                 .features
                                 .enabled(Feature::ModelCatalogInContext),
                             agent_type_description,
-                            expose_agent_type: !turn_context.config.agent_roles.is_empty(),
+                            // Fork: the explorer profile needs `agent_type` even without
+                            // user-defined roles.
+                            expose_agent_type: !turn_context.config.agent_roles.is_empty()
+                                || crate::agent::explorer_profile::enabled(&turn_context.config),
                             hide_agent_type_model_reasoning: hide_spawn_agent_metadata,
                             expose_spawn_agent_model_overrides: turn_context
                                 .config
@@ -1551,6 +1560,9 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                                 .multi_agent_v2
                                 .usage_hint_text
                                 .clone(),
+                            explorer_profile: crate::agent::explorer_profile::enabled(
+                                &turn_context.config,
+                            ),
                         },
                         spawn_agent_description.map(str::to_owned),
                     ),
@@ -1637,10 +1649,13 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                         .features
                         .enabled(Feature::ModelCatalogInContext),
                     agent_type_description,
-                    expose_agent_type: !turn_context.config.agent_roles.is_empty(),
+                    // Fork: the explorer profile needs `agent_type` even without user roles.
+                    expose_agent_type: !turn_context.config.agent_roles.is_empty()
+                        || crate::agent::explorer_profile::enabled(&turn_context.config),
                     hide_agent_type_model_reasoning: false,
                     expose_spawn_agent_model_overrides: true,
                     usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
+                    explorer_profile: false,
                 }),
                 exposure,
             );

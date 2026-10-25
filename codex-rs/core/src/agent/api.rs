@@ -244,6 +244,8 @@ pub struct AgentTurnOutcome {
     pub status: AgentStatus,
     /// Typed reason used to choose guidance in the parent notification.
     pub error_info: Option<CodexErrorInfo>,
+    /// Fork: largest final answer, in tokens, delivered to the parent (explorer profile).
+    pub result_max_tokens: Option<usize>,
 }
 
 /// Settings shared by the tree. A service tier of `None` restores the default tier.

@@ -85,6 +85,8 @@ mod direct_tool_metadata;
 mod dynamic_tool_cancellation;
 mod exec;
 mod exec_policy;
+// Fork: explorer profile (specs/explorer-and-questions-2026-10-25.md).
+mod explorer_profile;
 #[cfg(not(target_os = "windows"))]
 mod extension_sandbox;
 mod external_auth;

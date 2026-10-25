@@ -37,7 +37,15 @@ impl LocalAgentControl {
             return;
         };
         let parent_thread_id = *parent_thread_id;
-        let status = outcome.status;
+        // Fork: the parent receives at most the explorer profile's result limit.
+        let status = match (outcome.status, outcome.result_max_tokens) {
+            (AgentStatus::Completed(Some(message)), Some(max_tokens)) => {
+                AgentStatus::Completed(Some(crate::agent::explorer_profile::cap_result(
+                    &message, max_tokens,
+                )))
+            }
+            (status, _) => status,
+        };
         let Some(parent_agent_path) = child_agent_path
             .as_str()
             .rsplit_once('/')

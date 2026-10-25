@@ -123,6 +123,7 @@ fn spawn_agent_tool_v2_fork_turns_lists_supported_values() {
             multi_agent_version: MultiAgentVersion::V2,
             model_catalog_in_context: false,
             usage_hint_text: None,
+            explorer_profile: false,
         },
         /*description_override*/ None,
     ) else {

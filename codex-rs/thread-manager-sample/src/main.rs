@@ -384,6 +384,7 @@ async fn new_config(
         thread_unload_delay: std::time::Duration::from_secs(/*secs*/ 1800),
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),
+        explorer_profile: Default::default(),
         max_goal_token_budget: None,
         token_budget: None,
         token_budget_startup_config: None,

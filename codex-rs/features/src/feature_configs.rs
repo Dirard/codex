@@ -381,6 +381,31 @@ impl FeatureConfig for MultiAgentV2ConfigToml {
     }
 }
 
+/// Fork: settings for `explorer` children (read-only, cheaper, capped result).
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExplorerProfileConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Model for explorer children. Defaults to the parent's model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Reasoning effort for explorer children. Defaults to the cheapest effort, not below
+    /// `low`, that the selected model supports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// Largest explorer final answer, in tokens, delivered to the parent. Defaults to 2000.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 200))]
+    pub max_result_tokens: Option<usize>,
+}
+
+impl FeatureConfig for ExplorerProfileConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContextManagementConfigToml {

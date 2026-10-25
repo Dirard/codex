@@ -691,10 +691,19 @@ impl Session {
                     roots
                 }
             };
-        let environment_selections = environment_requests
+        let mut environment_selections = environment_requests
             .into_iter()
             .map(|request| TurnEnvironmentSelection::new(request, &selected_capability_roots))
             .collect::<Vec<_>>();
+        // Fork: explorer sessions run read-only without escalation on every start path
+        // (spawn, reload, cold resume); see specs/explorer-and-questions-2026-10-25.md.
+        let mut config = config;
+        if crate::agent::explorer_profile::applies_to_source(&config, &session_source) {
+            crate::agent::explorer_profile::enforce_read_only_session_config(&mut config)?;
+            environment_selections
+                .iter_mut()
+                .for_each(crate::agent::explorer_profile::clamp_environment_selection);
+        }
         // Enforce snapshot-only instructions for both managed and inline isolated sessions.
         let instructions = if isolation == codex_extension_api::SessionIsolation::Isolated {
             SessionInstructions {
@@ -2727,6 +2736,10 @@ impl Session {
                         .cloned(),
                     status: status.clone(),
                     error_info,
+                    result_max_tokens: crate::agent::explorer_profile::result_max_tokens(
+                        &turn_context.config,
+                        &turn_context.session_source,
+                    ),
                 },
                 &self.services.rollout_thread_trace,
             )

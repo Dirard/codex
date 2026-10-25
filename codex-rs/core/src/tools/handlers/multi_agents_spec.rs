@@ -33,6 +33,8 @@ pub struct SpawnAgentToolOptions {
     pub multi_agent_version: MultiAgentVersion,
     pub model_catalog_in_context: bool,
     pub usage_hint_text: Option<String>,
+    /// Fork: `explorer_profile` is enabled, so explorers default to `fork_turns = "none"`.
+    pub explorer_profile: bool,
 }
 
 impl Default for SpawnAgentToolOptions {
@@ -46,6 +48,7 @@ impl Default for SpawnAgentToolOptions {
             multi_agent_version: MultiAgentVersion::Disabled,
             model_catalog_in_context: false,
             usage_hint_text: None,
+            explorer_profile: false,
         }
     }
 }
@@ -132,6 +135,14 @@ pub fn create_spawn_agent_tool_v2(
     if !options.expose_spawn_agent_model_overrides {
         properties.remove("model");
         properties.remove("reasoning_effort");
+    }
+    if options.explorer_profile {
+        properties.insert(
+            "fork_turns".to_string(),
+            JsonSchema::string(Some(
+                "Parent history to inherit. Defaults to `all` (`none` for `explorer` agents); use `none` to start without parent history. Only `all` and `none` are supported.".to_string(),
+            )),
+        );
     }
     properties.insert(
         "task_name".to_string(),

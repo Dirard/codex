@@ -1160,6 +1160,9 @@ pub struct Config {
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
 
+    /// Fork: settings applied to `explorer` children while `explorer_profile` is enabled.
+    pub explorer_profile: ExplorerProfileConfig,
+
     /// Context-window token budget configuration, when enabled.
     pub token_budget: Option<TokenBudgetConfig>,
     /// Runtime snapshot of configured token-budget preferences before startup activation.
@@ -1388,6 +1391,30 @@ impl Default for CurrentTimeReminderConfig {
             clock_source: CurrentTimeSource::System,
             delivery_mode: CurrentTimeReminderDeliveryMode::AnyInference,
             sleep_tool: false,
+        }
+    }
+}
+
+/// Fork: resolved `[features.explorer_profile]` settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExplorerProfileConfig {
+    /// Model for explorer children; `None` keeps the parent's model.
+    pub model: Option<String>,
+    /// Reasoning effort for explorer children; `None` selects the cheapest supported effort.
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// Largest explorer final answer, in tokens, delivered to the parent.
+    pub max_result_tokens: usize,
+}
+
+pub const DEFAULT_EXPLORER_PROFILE_MAX_RESULT_TOKENS: usize = 2_000;
+pub const MIN_EXPLORER_PROFILE_MAX_RESULT_TOKENS: usize = 200;
+
+impl Default for ExplorerProfileConfig {
+    fn default() -> Self {
+        Self {
+            model: None,
+            reasoning_effort: None,
+            max_result_tokens: DEFAULT_EXPLORER_PROFILE_MAX_RESULT_TOKENS,
         }
     }
 }
@@ -3110,6 +3137,45 @@ fn code_mode_toml_config(features: Option<&FeaturesToml>) -> Option<&CodeModeCon
     }
 }
 
+fn explorer_profile_toml_config(
+    features: Option<&FeaturesToml>,
+) -> Option<&codex_features::ExplorerProfileConfigToml> {
+    match features?.explorer_profile.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
+fn resolve_explorer_profile_config(
+    config_toml: &ConfigToml,
+) -> std::io::Result<ExplorerProfileConfig> {
+    let Some(base) = explorer_profile_toml_config(config_toml.features.as_ref()) else {
+        return Ok(ExplorerProfileConfig::default());
+    };
+    let max_result_tokens = base
+        .max_result_tokens
+        .unwrap_or(DEFAULT_EXPLORER_PROFILE_MAX_RESULT_TOKENS);
+    if max_result_tokens < MIN_EXPLORER_PROFILE_MAX_RESULT_TOKENS {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "features.explorer_profile.max_result_tokens must be at least {MIN_EXPLORER_PROFILE_MAX_RESULT_TOKENS}"
+            ),
+        ));
+    }
+    let model = base
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_owned);
+    Ok(ExplorerProfileConfig {
+        model,
+        reasoning_effort: base.reasoning_effort.clone(),
+        max_result_tokens,
+    })
+}
+
 fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiAgentV2ConfigToml> {
     match features?.multi_agent_v2.as_ref()? {
         FeatureToml::Enabled(_) => None,
@@ -3993,6 +4059,7 @@ impl Config {
         };
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
+        let explorer_profile = resolve_explorer_profile_config(&cfg)?;
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
         let rollout_budget = resolve_rollout_budget_config(&cfg, &features)?;
         let current_time_reminder = resolve_current_time_reminder_config(&cfg, &features)?;
@@ -4739,6 +4806,7 @@ impl Config {
             thread_unload_delay,
             ghost_snapshot,
             multi_agent_v2,
+            explorer_profile,
             token_budget,
             token_budget_startup_config: None,
             rollout_budget,

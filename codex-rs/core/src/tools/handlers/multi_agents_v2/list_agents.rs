@@ -65,7 +65,21 @@ impl Handler {
                     .as_ref()
                     .map(ToString::to_string)
                     .unwrap_or_else(|| agent.thread_id.to_string()),
-                agent_status: agent.status,
+                // Fork: an explorer's final answer is capped like its completion mail.
+                agent_status: match (
+                    agent.status,
+                    crate::agent::explorer_profile::result_max_tokens_for_role(
+                        &turn.config,
+                        agent.metadata.agent_role.as_deref(),
+                    ),
+                ) {
+                    (AgentStatus::Completed(Some(message)), Some(max_tokens)) => {
+                        AgentStatus::Completed(Some(crate::agent::explorer_profile::cap_result(
+                            &message, max_tokens,
+                        )))
+                    }
+                    (status, _) => status,
+                },
             })
             .collect();
         Ok(boxed_tool_output(ListAgentsResult { agents }))

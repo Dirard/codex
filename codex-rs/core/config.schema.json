@@ -952,6 +952,9 @@
             "experimental_windows_sandbox": {
               "type": "boolean"
             },
+            "explorer_profile": {
+              "$ref": "#/definitions/FeatureToml_for_ExplorerProfileConfigToml"
+            },
             "external_agent_memory_import": {
               "type": "boolean"
             },
@@ -1603,6 +1606,34 @@
       },
       "type": "object"
     },
+    "ExplorerProfileConfigToml": {
+      "additionalProperties": false,
+      "description": "Fork: settings for `explorer` children (read-only, cheaper, capped result).",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "max_result_tokens": {
+          "description": "Largest explorer final answer, in tokens, delivered to the parent. Defaults to 2000.",
+          "format": "uint",
+          "minimum": 200.0,
+          "type": "integer"
+        },
+        "model": {
+          "description": "Model for explorer children. Defaults to the parent's model.",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Reasoning effort for explorer children. Defaults to the cheapest effort, not below `low`, that the selected model supports."
+        }
+      },
+      "type": "object"
+    },
     "ExternalConfigMigrationPrompts": {
       "additionalProperties": false,
       "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
@@ -1693,6 +1724,16 @@
         },
         {
           "$ref": "#/definitions/CurrentTimeReminderConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_ExplorerProfileConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/ExplorerProfileConfigToml"
         }
       ]
     },
@@ -7547,6 +7588,9 @@
         },
         "experimental_windows_sandbox": {
           "type": "boolean"
+        },
+        "explorer_profile": {
+          "$ref": "#/definitions/FeatureToml_for_ExplorerProfileConfigToml"
         },
         "external_agent_memory_import": {
           "type": "boolean"
