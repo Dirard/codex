@@ -1516,6 +1516,177 @@ async fn remote_compact_v2_rejects_summary_only_candidate_without_headroom() -> 
     Ok(())
 }
 
+/// A 100k window whose headroom target (auto limit 90k minus a quarter) is 67.5k tokens.
+fn soft_headroom_test_codex() -> TestCodexBuilder {
+    remote_v2_test_codex(
+        /*context_window*/ 100_000, /*effective_context_window_percent*/ 100,
+    )
+}
+
+/// Request overhead of a fresh session, estimated the way Codex does (serialized bytes / 4).
+struct RequestOverhead {
+    /// Instructions and initial context.
+    context_tokens: usize,
+    /// Top-level tool declarations.
+    tool_tokens: usize,
+}
+
+/// Measures a fresh session's first request so fixtures can size summaries around the
+/// headroom target as prompts and tool descriptions change.
+async fn request_overhead(builder: TestCodexBuilder) -> Result<RequestOverhead> {
+    let harness = TestCodexHarness::with_builder(builder).await?;
+    let probe = responses::mount_sse_once(
+        harness.server(),
+        responses::sse(vec![
+            responses::ev_response_created("probe"),
+            responses::ev_completed("probe"),
+        ]),
+    )
+    .await;
+    harness.test().submit_turn("probe").await?;
+    let body = probe.single_request().body_json();
+    let tool_tokens = body["tools"].to_string().len() / 4;
+    let context_tokens = (body.to_string().len() / 4).saturating_sub(tool_tokens);
+    assert!(
+        context_tokens < 40_000 && tool_tokens < 25_000,
+        "fixture overhead leaves no room for the summary: {context_tokens} + {tool_tokens}"
+    );
+    Ok(RequestOverhead {
+        context_tokens,
+        tool_tokens,
+    })
+}
+
+/// Sizes a summary-only candidate between the 67.5k headroom target, which it misses even
+/// without tool declarations, and the 100k window, which it fits with them. The user turn is
+/// larger than the summary, so installing the candidate shrinks the context.
+fn soft_headroom_fixture(overhead: &RequestOverhead, marker: &str) -> (String, String) {
+    let candidate_without_tools = (67_500 + 100_000 - overhead.tool_tokens) / 2;
+    let summary_tokens = candidate_without_tools - overhead.context_tokens;
+    // Codex estimates encrypted compaction content at one token per twelve bytes.
+    let summary = format!("{marker}_SUMMARY{}", "s".repeat(summary_tokens * 12));
+    let user_text = format!("{marker}_USER{}", "u".repeat((summary_tokens + 20_000) * 4));
+    (summary, user_text)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_installs_summary_only_candidate_within_full_window() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let overhead = request_overhead(soft_headroom_test_codex()).await?;
+    let (summary, user_text) = soft_headroom_fixture(&overhead, "SOFT_HEADROOM");
+    let harness = TestCodexHarness::with_builder(soft_headroom_test_codex()).await?;
+    let codex = harness.test().codex.clone();
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            remote_compaction_sse("resp-compact", &summary),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_COMPACT"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    harness.test().submit_turn(&user_text).await?;
+    codex.submit(Op::Compact).await?;
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+    loop {
+        match wait_for_event(&codex, |_| true).await {
+            EventMsg::Warning(warning) => warnings.push(warning.message),
+            EventMsg::Error(error) => errors.push(error.message),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+    harness.test().submit_turn("after compact").await?;
+
+    assert_eq!(errors, Vec::<String>::new());
+    assert!(
+        warnings.iter().any(|warning| warning.contains("headroom")),
+        "expected a soft-headroom warning, got {warnings:?}"
+    );
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let follow_up = requests[2].body_json().to_string();
+    assert!(follow_up.contains("SOFT_HEADROOM_SUMMARY"));
+    assert!(
+        !follow_up.contains("SOFT_HEADROOM_USER"),
+        "the summary-only candidate drops retained messages"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_soft_headroom_without_progress_stops_the_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let overhead = request_overhead(soft_headroom_test_codex()).await?;
+    let (summary, user_text) = soft_headroom_fixture(&overhead, "SOFT_LOOP");
+    let harness = TestCodexHarness::with_builder(soft_headroom_test_codex()).await?;
+    let codex = harness.test().codex.clone();
+    let at_limit = |id: &str| {
+        let mut completed = responses::ev_completed_with_tokens(id, /*total_tokens*/ 100_000);
+        completed["response"]["end_turn"] = json!(false);
+        responses::sse(vec![responses::ev_response_created(id), completed])
+    };
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            at_limit("sample-1"),
+            remote_compaction_sse("compact-1", &summary),
+            at_limit("sample-2"),
+            remote_compaction_sse("compact-2", &summary),
+        ],
+    )
+    .await;
+
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: user_text,
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+    loop {
+        match wait_for_event(&codex, |_| true).await {
+            EventMsg::Warning(warning) => warnings.push(warning.message),
+            EventMsg::Error(error) => errors.push(error.codex_error_info),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    // The soft install lets the next step run. Without progress the repeated summary-only
+    // candidate no longer shrinks the context, so the turn stops before a third sample.
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|warning| warning.contains("headroom"))
+            .count(),
+        1,
+        "{warnings:?}"
+    );
+    assert_eq!(errors, vec![Some(CodexErrorInfo::ContextWindowExceeded)]);
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| is_compact_request(request))
+            .count(),
+        2
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_without_progress_stops_after_two_retries() -> Result<()> {
     skip_if_no_network!(Ok(()));

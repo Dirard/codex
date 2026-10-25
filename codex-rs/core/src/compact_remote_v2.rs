@@ -171,6 +171,16 @@ pub(crate) fn estimate_candidate_request_tokens(
     }
 }
 
+/// Soft headroom: a summary-only candidate that misses the headroom target is still better
+/// than failing the turn when it fits the full context window and shrinks the context.
+pub(crate) fn soft_headroom_accepts(
+    status: &crate::session::context_window::ContextWindowTokenStatus,
+    current_context_tokens: i64,
+) -> bool {
+    !status.full_context_window_limit_reached
+        && status.active_context_tokens < current_context_tokens
+}
+
 pub(crate) fn compaction_candidate_overflow(
     status: &crate::session::context_window::ContextWindowTokenStatus,
     scope: AutoCompactTokenLimitScope,
@@ -931,6 +941,43 @@ mod tests {
                 enforces_compaction_headroom(&source),
                 enforced,
                 "{source:?}"
+            );
+        }
+    }
+
+    fn token_status(
+        active_context_tokens: i64,
+        full_context_window_limit: Option<i64>,
+    ) -> crate::session::context_window::ContextWindowTokenStatus {
+        let full_context_window_limit_reached =
+            full_context_window_limit.is_some_and(|limit| active_context_tokens >= limit);
+        crate::session::context_window::ContextWindowTokenStatus {
+            active_context_tokens,
+            auto_compact_scope_tokens: active_context_tokens,
+            auto_compact_scope_limit: None,
+            full_context_window_limit,
+            base_window_tokens_remaining: None,
+            auto_compact_window_prefill_tokens: None,
+            full_context_window_limit_reached,
+            token_limit_reached: full_context_window_limit_reached,
+            turn_end_compaction_threshold_reached: false,
+        }
+    }
+
+    #[test]
+    fn soft_headroom_accepts_only_full_window_candidates_that_shrink_context() {
+        for (candidate, window, current, accepted) in [
+            (85_000, Some(100_000), 105_000, true),
+            (85_000, None, 105_000, true),
+            (100_000, Some(100_000), 105_000, false),
+            (120_000, Some(100_000), 130_000, false),
+            (85_000, Some(100_000), 85_000, false),
+            (85_000, Some(100_000), 60_000, false),
+        ] {
+            assert_eq!(
+                soft_headroom_accepts(&token_status(candidate, window), current),
+                accepted,
+                "candidate={candidate} window={window:?} current={current}"
             );
         }
     }

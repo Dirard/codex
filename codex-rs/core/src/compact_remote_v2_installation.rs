@@ -1,6 +1,8 @@
 //! Materializes and installs foreground or prepared V2 compaction through a shared path.
 //! A rejected or still-over-budget prepared result may fall back to one foreground request.
 //! Prepared prefixes are validated by the history replacement primitive before mutation.
+//! A foreground summary-only candidate without headroom is installed with a warning when it
+//! fits the window and shrinks the context.
 
 use super::*;
 use crate::compact::assemble_compaction_history;
@@ -8,7 +10,9 @@ use crate::compact::build_compaction_context_for_window;
 use crate::context::world_state::split_prefix_updates;
 use crate::context_manager::updates::merge_world_state_updates;
 use crate::session::CompactedHistoryInstallation;
+use codex_protocol::protocol::WarningEvent;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
+use tracing::warn;
 
 #[cfg(test)]
 #[path = "compact_remote_v2_installation_tests.rs"]
@@ -89,6 +93,9 @@ pub(super) async fn run_compaction(
     .await
 }
 
+/// Builds the replacement candidate and installs it. Foreground candidates shrink retained
+/// messages until they leave the fork headroom; when even summary-only misses it, the step
+/// "install the candidate with the smallest headroom deficit" applies (soft headroom).
 #[allow(clippy::too_many_arguments)]
 async fn build_and_install_compaction(
     sess: &Arc<Session>,
@@ -223,6 +230,7 @@ async fn build_and_install_compaction(
         retained_message_token_budget,
         retained_image_budget,
     );
+    let mut soft_headroom = None;
     let complete_replacement = if prefix.is_none() {
         let prepared_window = sess.prepare_auto_compact_window().await;
         let (window_prefix, context, world_state_baseline) = build_compaction_context_for_window(
@@ -266,7 +274,23 @@ async fn build_and_install_compaction(
                 break new_history;
             }
             if retained_message_token_budget == 0 {
-                return Err(CodexErr::ContextWindowExceeded);
+                // Summary-only has the smallest headroom deficit of all candidates. Install it
+                // when it still fits the window and shrinks the context it replaces.
+                let current_tokens = estimate_candidate_request_tokens(
+                    sess.clone_history().await.annotated_items(),
+                    &base_instructions,
+                    replacement_model_info.as_ref(),
+                    tool_tokens,
+                );
+                if !soft_headroom_accepts(&status, current_tokens) {
+                    return Err(CodexErr::ContextWindowExceeded);
+                }
+                soft_headroom = Some(SoftHeadroomInstall {
+                    candidate_tokens,
+                    target_tokens: candidate_tokens.saturating_sub(overflow),
+                    context_window_tokens: status.full_context_window_limit,
+                });
+                break new_history;
             }
             attempts += 1;
             // Shrink from what was actually retained; a larger budget rebuilds the same
@@ -382,7 +406,45 @@ async fn build_and_install_compaction(
         .await;
     sess.emit_turn_item_completed(compaction_turn_context, compaction_item)
         .await;
+    if let Some(soft_headroom) = soft_headroom {
+        warn!(
+            turn_id = %turn_context.sub_id,
+            candidate_tokens = soft_headroom.candidate_tokens,
+            target_tokens = soft_headroom.target_tokens,
+            context_window_tokens = ?soft_headroom.context_window_tokens,
+            "installed a compaction candidate without the required headroom"
+        );
+        sess.send_event(
+            compaction_turn_context,
+            EventMsg::Warning(WarningEvent {
+                message: soft_headroom.warning_message(),
+            }),
+        )
+        .await;
+    }
     Ok(true)
+}
+
+/// A summary-only candidate installed although it misses the headroom target.
+struct SoftHeadroomInstall {
+    candidate_tokens: i64,
+    target_tokens: i64,
+    context_window_tokens: Option<i64>,
+}
+
+impl SoftHeadroomInstall {
+    fn warning_message(&self) -> String {
+        let window = self
+            .context_window_tokens
+            .map(|tokens| format!(" of a {tokens}-token window"))
+            .unwrap_or_default();
+        format!(
+            "Context compaction left less headroom than intended: the compacted context uses \
+             about {} tokens{window}, above the {}-token target, so it may compact again soon. \
+             Starting a new thread frees the most room.",
+            self.candidate_tokens, self.target_tokens
+        )
+    }
 }
 
 async fn reviewer_compaction_hash(sess: &Session, turn_context: &TurnContext) -> Option<String> {
