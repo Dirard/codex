@@ -20,6 +20,7 @@ use codex_history::RolloutItem;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::AgentPath;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::mcp::ClientMcpExtensions;
@@ -33,6 +34,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::Op;
@@ -3519,6 +3521,197 @@ async fn blocked_queued_prompt_after_final_answer_completes_turn(
             "blocked queued prompt".to_string(),
         ],
     );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+enum InputBesideBlockedPrompt {
+    ToolOutput,
+    TriggerTurnMail,
+    QueueOnlyMail,
+}
+
+/// Fork: input queued beside a blocked prompt keeps the turn sampling when it needs the model,
+/// like a standalone tool output or mail that asks for a turn; queue-only mail still waits.
+#[test_case::test_case(InputBesideBlockedPrompt::ToolOutput; "tool_output")]
+#[test_case::test_case(InputBesideBlockedPrompt::TriggerTurnMail; "trigger_turn_mail")]
+#[test_case::test_case(InputBesideBlockedPrompt::QueueOnlyMail; "queue_only_mail")]
+#[tokio::test]
+async fn blocked_queued_prompt_does_not_strand_turn_input_beside_it(
+    beside: InputBesideBlockedPrompt,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    const TOOL_OUTPUT: &str = "delegated work";
+    const MAIL: &str = "worker finished the audit";
+
+    let (gate_tx, gate_rx) = oneshot::channel();
+    let first_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_response_created("resp-1")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_message_item_added("msg-1", "")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_output_text_delta("first ")),
+        },
+        StreamingSseChunk {
+            gate: Some(gate_rx),
+            body: sse(vec![
+                ev_message_item_done("msg-1", "first response"),
+                ev_completed("resp-1"),
+            ]),
+        },
+    ];
+    let second_chunks = vec![StreamingSseChunk {
+        gate: None,
+        body: sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-2", "follow-up handled"),
+            ev_completed("resp-2"),
+        ]),
+    }];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_pre_build_hook(|home| {
+            write_user_prompt_submit_hook(home, "blocked queued prompt", BLOCKED_PROMPT_CONTEXT)
+                .expect("failed to write user prompt submit hook test fixture");
+        })
+        .with_config(move |config| {
+            trust_discovered_hooks(config);
+            // Queue the input behind the response, so the answer finishes before the hook runs.
+            config
+                .features
+                .disable(Feature::InstantInterrupt)
+                .expect("disable InstantInterrupt feature");
+        });
+    let test = builder.build_with_streaming_server(&server).await?;
+    let user_input = |text: &str| {
+        TurnInputRequest::user_input(vec![UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }])
+    };
+
+    test.codex
+        .start_or_steer_turn(user_input("initial prompt"))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::AgentMessageContentDelta(_))
+    })
+    .await;
+    test.codex
+        .start_or_steer_turn(user_input("blocked queued prompt"))
+        .await?;
+    match beside {
+        InputBesideBlockedPrompt::ToolOutput => {
+            let output = serde_json::from_value(json!({
+                "type": "function_call_output",
+                "name": "send_message_to_thread",
+                "namespace": "codex_app",
+                "output": TOOL_OUTPUT,
+            }))?;
+            test.codex
+                .start_or_steer_turn(TurnInputRequest::new(TurnInput::ResponseItem(output)))
+                .await?;
+        }
+        InputBesideBlockedPrompt::TriggerTurnMail | InputBesideBlockedPrompt::QueueOnlyMail => {
+            test.codex
+                .submit(Op::InterAgentCommunication {
+                    communication: InterAgentCommunication::new(
+                        AgentPath::try_from("/root/worker").expect("worker path should parse"),
+                        AgentPath::root(),
+                        Vec::new(),
+                        MAIL.to_string(),
+                        matches!(beside, InputBesideBlockedPrompt::TriggerTurnMail),
+                    ),
+                    start_options: Default::default(),
+                })
+                .await?;
+            // Ops run in order, so this reply means the mail is already queued.
+            test.codex
+                .submit(Op::RealtimeConversationListVoices)
+                .await?;
+            wait_for_event(&test.codex, |event| {
+                matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
+            })
+            .await;
+        }
+    }
+    let _ = gate_tx.send(());
+    let EventMsg::TurnComplete(turn_complete) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await
+    else {
+        unreachable!("wait_for_event returns the matched event");
+    };
+
+    let requests = server.requests().await;
+    let rollout = fs::read_to_string(test.codex.rollout_path().expect("rollout path"))?;
+    assert!(!rollout.contains("blocked queued prompt"));
+    match beside {
+        InputBesideBlockedPrompt::ToolOutput | InputBesideBlockedPrompt::TriggerTurnMail => {
+            assert_eq!(
+                requests.len(),
+                2,
+                "{beside:?} beside the blocked prompt should keep the turn sampling",
+            );
+            let follow_up: Value = serde_json::from_slice(&requests[1])?;
+            if matches!(beside, InputBesideBlockedPrompt::ToolOutput) {
+                assert!(
+                    follow_up["input"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|item| item["type"] == "function_call_output"
+                            && item["output"] == TOOL_OUTPUT),
+                    "the follow-up request should carry the tool output",
+                );
+            } else {
+                assert!(
+                    follow_up.to_string().contains(MAIL),
+                    "the follow-up request should carry the mail",
+                );
+            }
+            assert!(
+                request_message_input_texts(&requests[1], "developer")
+                    .contains(&BLOCKED_PROMPT_CONTEXT.to_string()),
+                "the follow-up request should include the blocked prompt's hook context",
+            );
+            assert!(
+                !request_message_input_texts(&requests[1], "user")
+                    .contains(&"blocked queued prompt".to_string())
+            );
+            assert_eq!(
+                turn_complete.last_agent_message.as_deref(),
+                Some("follow-up handled"),
+            );
+        }
+        InputBesideBlockedPrompt::QueueOnlyMail => {
+            assert_eq!(
+                requests.len(),
+                1,
+                "queue-only mail should not extend the finished answer",
+            );
+            assert_eq!(
+                turn_complete.last_agent_message.as_deref(),
+                Some("first response"),
+            );
+            assert!(
+                rollout.contains(MAIL),
+                "the drained mail should join the next request"
+            );
+        }
+    }
 
     server.shutdown().await;
     Ok(())

@@ -1017,7 +1017,7 @@ pub(crate) async fn run_hooks_and_record_inputs(
         return false;
     }
     let mut blocked_input = false;
-    let mut accepted_user_input = false;
+    let mut accepted_turn_input = false;
     for input_item in input {
         let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
         if hook_outcome.should_stop {
@@ -1028,8 +1028,16 @@ pub(crate) async fn run_hooks_and_record_inputs(
                 // Prompt telemetry can contain the full text, so emit it only after hooks accept it.
                 turn_context.session_telemetry.user_prompt(content);
             }
-            if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty()) {
-                accepted_user_input = true;
+            // Fork: a standalone tool output or mail that asks for a turn needs the model as
+            // much as a prompt does. Additional context and queue-only mail join the next
+            // request instead, so beside a blocked prompt they do not keep the turn going.
+            if match input_item {
+                TurnInput::UserInput { content, .. } => !content.is_empty(),
+                TurnInput::FunctionCallOutput(_) => true,
+                TurnInput::InterAgentCommunication(mail) => mail.trigger_turn,
+                TurnInput::ResponseItem(_) => false,
+            } {
+                accepted_turn_input = true;
             }
             // Tool outputs retain their durability barrier, including in mixed input batches.
             let input_persist_context = if persist_context == PersistContext::SteeredUserInput
@@ -1050,7 +1058,7 @@ pub(crate) async fn run_hooks_and_record_inputs(
             .await;
         }
     }
-    blocked_input && !accepted_user_input
+    blocked_input && !accepted_turn_input
 }
 
 fn turn_user_input(input: &[TurnInput]) -> Vec<UserInput> {
