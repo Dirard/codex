@@ -539,6 +539,52 @@ func TestGeneratedObjectStructRejectsTopLevelNull(t *testing.T) {
 	}
 }
 
+// Option<serde_json::Value> fields have an unconstrained schema, and the
+// app-server serializes None as null.
+func TestGeneratedUnconstrainedFieldsAcceptNull(t *testing.T) {
+	var status ListMcpServerStatusResponse
+	payload := `{"data":[{"name":"not-ready","runtimeStatus":null,"pluginId":null,"httpOrigin":null,` +
+		`"serverInfo":null,"serverCapabilities":null,"toolListMeta":null,"tools":{},"toolsError":null,` +
+		`"resources":[],"resourceTemplates":[],"authStatus":"unknown"}],"nextCursor":null}`
+	if err := json.Unmarshal([]byte(payload), &status); err != nil {
+		t.Fatalf("mcpServerStatus/list response with null capabilities: %v", err)
+	}
+	if got := string(status.Data[0].ServerCapabilities); got != "null" {
+		t.Fatalf("serverCapabilities = %q, want the null it was sent", got)
+	}
+
+	var limits GetAccountRateLimitsResponse
+	if err := json.Unmarshal([]byte(`{"rateLimits":{},"rateLimitUpsell":null}`), &limits); err != nil {
+		t.Fatalf("account/rateLimits/read response with a null upsell: %v", err)
+	}
+	encoded, err := json.Marshal(limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"rateLimitUpsell":null`) {
+		t.Fatalf("re-encoded response lost the null upsell: %s", encoded)
+	}
+
+	limits = GetAccountRateLimitsResponse{}
+	if err := json.Unmarshal([]byte(`{"rateLimits":{}}`), &limits); err != nil {
+		t.Fatal(err)
+	}
+	if encoded, err = json.Marshal(limits); err != nil {
+		t.Fatal(err)
+	}
+	if limits.RateLimitUpsell != nil || strings.Contains(string(encoded), "rateLimitUpsell") {
+		t.Fatalf("absent upsell = %q, encoded as %s; want it absent", limits.RateLimitUpsell, encoded)
+	}
+
+	encoded, err = json.Marshal(ThreadApproveGuardianDeniedActionParams{ThreadID: "thread-1", Event: json.RawMessage("null")})
+	if err != nil {
+		t.Fatalf("required unconstrained field set to null: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"event":null`) {
+		t.Fatalf("encoded params = %s, want a null event", encoded)
+	}
+}
+
 func TestGeneratedClientNotificationInitializedWireShape(t *testing.T) {
 	encoded, err := json.Marshal(NewInitializedNotification())
 	if err != nil {

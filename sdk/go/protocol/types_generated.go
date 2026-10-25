@@ -6348,16 +6348,10 @@ type McpServerElicitationRequestResponse struct {
 
 func (v McpServerElicitationRequestResponse) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
-	if bytes.Equal(v.Meta, []byte("null")) {
-		return nil, DecodeError{Field: "_meta", Reason: "cannot be null"}
-	}
 	if len(v.Meta) > 0 {
 		out["_meta"] = v.Meta
 	}
 	out["action"] = v.Action
-	if bytes.Equal(v.Content, []byte("null")) {
-		return nil, DecodeError{Field: "content", Reason: "cannot be null"}
-	}
 	if len(v.Content) > 0 {
 		out["content"] = v.Content
 	}
@@ -6375,9 +6369,6 @@ func (v *McpServerElicitationRequestResponse) UnmarshalJSON(data []byte) error {
 	}
 	rawMeta, ok := raw["_meta"]
 	if ok {
-		if bytes.Equal(rawMeta, []byte("null")) {
-			return DecodeError{Field: "_meta", Reason: "cannot be null"}
-		}
 		if err := json.Unmarshal(rawMeta, &v.Meta); err != nil {
 			return fmt.Errorf("field _meta: %w", err)
 		}
@@ -6394,9 +6385,6 @@ func (v *McpServerElicitationRequestResponse) UnmarshalJSON(data []byte) error {
 	}
 	rawContent, ok := raw["content"]
 	if ok {
-		if bytes.Equal(rawContent, []byte("null")) {
-			return DecodeError{Field: "content", Reason: "cannot be null"}
-		}
 		if err := json.Unmarshal(rawContent, &v.Content); err != nil {
 			return fmt.Errorf("field content: %w", err)
 		}
@@ -20731,9 +20719,6 @@ func (v GetAccountRateLimitsResponse) MarshalJSON() ([]byte, error) {
 	if v.RateLimitResetCredits.IsSet() {
 		out["rateLimitResetCredits"] = v.RateLimitResetCredits
 	}
-	if bytes.Equal(v.RateLimitUpsell, []byte("null")) {
-		return nil, DecodeError{Field: "rateLimitUpsell", Reason: "cannot be null"}
-	}
 	if len(v.RateLimitUpsell) > 0 {
 		out["rateLimitUpsell"] = v.RateLimitUpsell
 	}
@@ -20773,9 +20758,6 @@ func (v *GetAccountRateLimitsResponse) UnmarshalJSON(data []byte) error {
 	}
 	rawRateLimitUpsell, ok := raw["rateLimitUpsell"]
 	if ok {
-		if bytes.Equal(rawRateLimitUpsell, []byte("null")) {
-			return DecodeError{Field: "rateLimitUpsell", Reason: "cannot be null"}
-		}
 		if err := json.Unmarshal(rawRateLimitUpsell, &v.RateLimitUpsell); err != nil {
 			return fmt.Errorf("field rateLimitUpsell: %w", err)
 		}
@@ -25505,17 +25487,11 @@ func (v McpServerStatus) MarshalJSON() ([]byte, error) {
 	if v.RuntimeStatus.IsSet() {
 		out["runtimeStatus"] = v.RuntimeStatus
 	}
-	if bytes.Equal(v.ServerCapabilities, []byte("null")) {
-		return nil, DecodeError{Field: "serverCapabilities", Reason: "cannot be null"}
-	}
 	if len(v.ServerCapabilities) > 0 {
 		out["serverCapabilities"] = v.ServerCapabilities
 	}
 	if v.ServerInfo.IsSet() {
 		out["serverInfo"] = v.ServerInfo
-	}
-	if bytes.Equal(v.ToolListMeta, []byte("null")) {
-		return nil, DecodeError{Field: "toolListMeta", Reason: "cannot be null"}
 	}
 	if len(v.ToolListMeta) > 0 {
 		out["toolListMeta"] = v.ToolListMeta
@@ -25596,9 +25572,6 @@ func (v *McpServerStatus) UnmarshalJSON(data []byte) error {
 	}
 	rawServerCapabilities, ok := raw["serverCapabilities"]
 	if ok {
-		if bytes.Equal(rawServerCapabilities, []byte("null")) {
-			return DecodeError{Field: "serverCapabilities", Reason: "cannot be null"}
-		}
 		if err := json.Unmarshal(rawServerCapabilities, &v.ServerCapabilities); err != nil {
 			return fmt.Errorf("field serverCapabilities: %w", err)
 		}
@@ -25611,9 +25584,6 @@ func (v *McpServerStatus) UnmarshalJSON(data []byte) error {
 	}
 	rawToolListMeta, ok := raw["toolListMeta"]
 	if ok {
-		if bytes.Equal(rawToolListMeta, []byte("null")) {
-			return DecodeError{Field: "toolListMeta", Reason: "cannot be null"}
-		}
 		if err := json.Unmarshal(rawToolListMeta, &v.ToolListMeta); err != nil {
 			return fmt.Errorf("field toolListMeta: %w", err)
 		}
@@ -38008,9 +37978,6 @@ type ThreadApproveGuardianDeniedActionParams struct {
 
 func (v ThreadApproveGuardianDeniedActionParams) MarshalJSON() ([]byte, error) {
 	out := map[string]any{}
-	if bytes.Equal(v.Event, []byte("null")) {
-		return nil, DecodeError{Field: "event", Reason: "cannot be null"}
-	}
 	out["event"] = v.Event
 	out["threadId"] = v.ThreadID
 	return json.Marshal(out)
@@ -38028,9 +37995,6 @@ func (v *ThreadApproveGuardianDeniedActionParams) UnmarshalJSON(data []byte) err
 	rawEvent, ok := raw["event"]
 	if !ok {
 		return DecodeError{Field: "event", Reason: "missing required field"}
-	}
-	if bytes.Equal(rawEvent, []byte("null")) {
-		return DecodeError{Field: "event", Reason: "cannot be null"}
 	}
 	if err := json.Unmarshal(rawEvent, &v.Event); err != nil {
 		return fmt.Errorf("field event: %w", err)
@@ -50620,9 +50584,6 @@ func (v TurnStartParams) MarshalJSON() ([]byte, error) {
 	if v.MultiAgentMode.IsSet() {
 		out["multiAgentMode"] = v.MultiAgentMode
 	}
-	if bytes.Equal(v.OutputSchema, []byte("null")) {
-		return nil, DecodeError{Field: "outputSchema", Reason: "cannot be null"}
-	}
 	if len(v.OutputSchema) > 0 {
 		out["outputSchema"] = v.OutputSchema
 	}
@@ -50762,9 +50723,6 @@ func (v *TurnStartParams) UnmarshalJSON(data []byte) error {
 	}
 	rawOutputSchema, ok := raw["outputSchema"]
 	if ok {
-		if bytes.Equal(rawOutputSchema, []byte("null")) {
-			return DecodeError{Field: "outputSchema", Reason: "cannot be null"}
-		}
 		if err := json.Unmarshal(rawOutputSchema, &v.OutputSchema); err != nil {
 			return fmt.Errorf("field outputSchema: %w", err)
 		}

@@ -61,6 +61,52 @@ func TestRenderAnyOfOpenStringObjectUnionPreservesRawFallback(t *testing.T) {
 	}
 }
 
+func TestRenderUnconstrainedPropertiesAcceptNull(t *testing.T) {
+	schema := Schema{
+		Type:     "object",
+		Required: []string{"event", "settings"},
+		Properties: map[string]Schema{
+			"banner":   {Description: "Optional backend-owned value."},
+			"event":    {},
+			"settings": {Type: "object"},
+		},
+	}
+	rendered := renderDefinitionType("Sample", "Sample", schema, map[string]string{}, nil, nil, nil)
+	for _, field := range []string{"banner", "event"} {
+		if strings.Contains(rendered, `DecodeError{Field: "`+field+`", Reason: "cannot be null"}`) {
+			t.Fatalf("unconstrained property %q rejects null\n%s", field, rendered)
+		}
+	}
+	if !strings.Contains(rendered, `DecodeError{Field: "settings", Reason: "cannot be null"}`) {
+		t.Fatalf("object property lost its null check\n%s", rendered)
+	}
+}
+
+func TestSchemaIsUnconstrained(t *testing.T) {
+	falseSchema := false
+	minimum := json.Number("0")
+	for _, tc := range []struct {
+		name   string
+		schema Schema
+		want   bool
+	}{
+		{name: "empty", schema: Schema{}, want: true},
+		{name: "annotations only", schema: Schema{Title: "T", Description: "D"}, want: true},
+		{name: "boolean", schema: Schema{BooleanSchema: &falseSchema}},
+		{name: "ref", schema: Schema{Ref: "#/definitions/X"}},
+		{name: "type", schema: Schema{Type: "string", Types: []string{"string"}}},
+		{name: "format", schema: Schema{Format: "int64"}},
+		{name: "enum", schema: Schema{Enum: []json.RawMessage{json.RawMessage(`"a"`)}}},
+		{name: "anyOf", schema: Schema{AnyOf: []Schema{{Type: "string"}}}},
+		{name: "items", schema: Schema{Items: &Schema{}}},
+		{name: "minimum", schema: Schema{Minimum: &minimum}},
+	} {
+		if got := schemaIsUnconstrained(tc.schema); got != tc.want {
+			t.Errorf("%s: schemaIsUnconstrained = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestRenderTaggedObjectUnionRequiresOnlyTheDiscriminatorGlobally(t *testing.T) {
 	schema := Schema{OneOf: []Schema{
 		{

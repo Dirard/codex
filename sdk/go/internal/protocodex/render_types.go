@@ -1705,7 +1705,30 @@ func schemaAllowsJSONNull(schema Schema) bool {
 	if _, ok := schema.NullableRef(); ok {
 		return true
 	}
-	return false
+	// An unconstrained schema accepts any value, null included: Rust
+	// Option<serde_json::Value> fields serialize None as null.
+	return schemaIsUnconstrained(schema)
+}
+
+// schemaIsUnconstrained reports whether schema constrains nothing, such as {}
+// or a schema with only a title or description.
+func schemaIsUnconstrained(schema Schema) bool {
+	return schema.BooleanSchema == nil &&
+		schema.Ref == "" &&
+		schema.Type == "" &&
+		len(schema.Types) == 0 &&
+		schema.Format == "" &&
+		len(schema.Properties) == 0 &&
+		len(schema.Required) == 0 &&
+		schema.Items == nil &&
+		schema.AdditionalProperties == nil &&
+		schema.AllowsAdditionalProperties == nil &&
+		len(schema.AllOf) == 0 &&
+		len(schema.AnyOf) == 0 &&
+		len(schema.OneOf) == 0 &&
+		len(schema.Enum) == 0 &&
+		schema.Minimum == nil &&
+		schema.Maximum == nil
 }
 
 func nonNullType(types []string) string {
