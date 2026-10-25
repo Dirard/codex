@@ -83,6 +83,11 @@ default_test_packages=(
 # executables (codex_utils_cargo_bin::cargo_bin falls back to target/debug).
 test_helper_bins=(codex codex-code-mode-host test_stdio_server)
 
+# Scratch directories removed on exit, whatever the outcome. Isolated HOMEs
+# are not listed: run_isolated keeps a failed one for inspection.
+cleanup_paths=()
+trap 'rm -rf -- "${cleanup_paths[@]}"' EXIT
+
 go_manifest_rel="internal/protocodex/manifest/app_server_protocol_manifest.json"
 go_experimental_schema_rel="internal/protocodex/schema-experimental"
 
@@ -280,6 +285,7 @@ cmd_go_generators() {
   # directory to also catch a stale experimental schema copy.
   local scratch
   scratch="$(mktemp -d "${TMPDIR:-/tmp}/fork-ci-go-manifest.XXXXXX")"
+  cleanup_paths+=("${scratch}")
   log "regenerate manifest and experimental schema into ${scratch}"
   cargo_rs "${writer[@]}" --output "${scratch}/manifest.json" \
     --experimental-schema-output "${scratch}/schema-experimental"
@@ -291,7 +297,6 @@ cmd_go_generators() {
     printf '%s\n' "${drift}" | head -n 50 >&2
     die "experimental schema drift in sdk/go/${go_experimental_schema_rel}; ${regen_hint}"
   fi
-  rm -rf "${scratch}"
 
   log "protocodex --check --mode both"
   (

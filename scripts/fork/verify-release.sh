@@ -9,7 +9,8 @@
 #
 # Options:
 #   --targets "T ..."   targets that must be present (default: all five)
-#   --work-dir DIR      extraction directory (default: a fresh temporary one)
+#   --work-dir DIR      empty extraction directory to keep (default: a temporary
+#                       one, removed on exit)
 #   --go-sdk DIR        Go SDK module for the strict handshake (default: sdk/go of
 #                       this checkout; it must come from the release commit)
 #   --skip-runtime      do not run the Linux x86_64 package
@@ -29,6 +30,16 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# Temporary directories removed on exit, whatever the outcome. A broken archive
+# can extract directories without search permission, so restore it first.
+cleanup_paths=()
+cleanup() {
+  [[ ${#cleanup_paths[@]} -gt 0 ]] || return 0
+  chmod -R u+rwx -- "${cleanup_paths[@]}" 2>/dev/null || true
+  rm -rf -- "${cleanup_paths[@]}"
+}
+trap cleanup EXIT
 
 all_targets=(
   aarch64-apple-darwin
@@ -188,7 +199,9 @@ ${actual_files}"
   done <<<"${expected_files}"
 
   if [[ -z "${work_dir}" ]]; then
+    # Extracted binaries are large; pass --work-dir to keep them for inspection.
     work_dir="$(mktemp -d "${TMPDIR:-/tmp}/verify-release.XXXXXX")"
+    cleanup_paths+=("${work_dir}")
   else
     mkdir -p "${work_dir}"
     work_dir="$(cd -- "${work_dir}" && pwd)"
@@ -227,6 +240,7 @@ ${actual_files}"
     [[ -f "${go_sdk}/go.mod" ]] || die "missing Go SDK at ${go_sdk}"
     local home
     home="$(mktemp -d "${TMPDIR:-/tmp}/verify-release-home.XXXXXX")"
+    cleanup_paths+=("${home}")
     mkdir -p "${home}/.config" "${home}/codex-home"
     log "strict initialize handshake (Go SDK ${go_sdk})"
     (
@@ -236,7 +250,6 @@ ${actual_files}"
         CODEX_EXEC_PATH="${codex}" CODEX_GO_SDK_REQUIRE_REAL_APP_SERVER=1 \
         go test . -run '^TestRealAppServerInitializeStrictDigest$' -count=1 -v
     ) || die "strict initialize handshake failed"
-    rm -rf "${home}"
     runtime="codex --version and strict handshake passed"
   fi
 

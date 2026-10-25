@@ -156,12 +156,16 @@ make_package() {
 passed=0
 failures=0
 
+# verify-release.sh must remove its own temporary directories in every case.
+verify_tmp="${work}/verify-tmp"
+mkdir -p "${verify_tmp}"
+
 # run_verify NAME DIST [verify args...]: stores output in ${work}/NAME.log.
 run_verify() {
   local name="$1" dist="$2"
   shift 2
   local status=0
-  "${verify}" --version "${version}" --dist "${dist}" "${runtime_args[@]}" "$@" \
+  TMPDIR="${verify_tmp}" "${verify}" --version "${version}" --dist "${dist}" "${runtime_args[@]}" "$@" \
     >"${work}/${name}.log" 2>&1 || status=$?
   return "${status}"
 }
@@ -289,6 +293,15 @@ if [[ -n "${codex}" ]]; then
   version="0.0.1"
   expect_fail wrong-version "want 'codex-cli 0.0.1'" "${dist}"
   version="${version_saved}"
+fi
+
+leftovers="$(find "${verify_tmp}" -mindepth 1 -maxdepth 1)"
+if [[ -z "${leftovers}" ]]; then
+  echo "ok   temp-dirs-removed"
+  passed=$((passed + 1))
+else
+  echo "FAIL temp-dirs-removed: ${leftovers}" >&2
+  failures=$((failures + 1))
 fi
 
 echo "verify-release self-test: ${passed} passed, ${failures} failed (runtime checks: $([[ -n "${codex}" ]] && echo on || echo off))"
