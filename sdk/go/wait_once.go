@@ -7,9 +7,9 @@ import (
 )
 
 // memoWait gives a handle's Wait one outcome. One call waits at a time while the others
-// wait for its outcome or their turn; an error caused by the end of the caller's ctx, or one
-// run marks with retryable, is not an outcome, so the next call resumes the wait. Every
-// call after the outcome returns it.
+// wait for its outcome or their turn. An error caused by the end of the caller's ctx, or one
+// that run wraps in *retryableError, is not an outcome, so the next call resumes the wait.
+// Every call after the outcome returns it.
 type memoWait[T any] struct {
 	mu    sync.Mutex
 	slot  chan struct{}
