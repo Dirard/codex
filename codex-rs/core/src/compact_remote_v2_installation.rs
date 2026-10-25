@@ -2,8 +2,8 @@
 //! A rejected or still-over-budget prepared result may fall back to one foreground request.
 //! Prepared prefixes are validated by the history replacement primitive before mutation.
 //! A foreground summary-only candidate without headroom is installed with a warning when it
-//! stays below the auto-compaction trigger and shrinks the context; a hopeless automatic
-//! request is never sent.
+//! keeps a quarter of the headroom target below its limits and shrinks the context; a
+//! hopeless automatic request is never sent.
 
 use super::*;
 use crate::compact::assemble_compaction_history;
@@ -291,14 +291,15 @@ async fn build_and_install_compaction(
             }
             if retained_message_token_budget == 0 {
                 // Summary-only has the smallest headroom deficit of all candidates. Install it
-                // when it stays below the compaction trigger and shrinks the context it replaces.
+                // when it keeps a quarter of the headroom below its limits and shrinks the
+                // context it replaces.
                 let current_tokens = estimate_candidate_request_tokens(
                     sess.clone_history().await.annotated_items(),
                     &base_instructions,
                     replacement_model_info.as_ref(),
                     tool_tokens,
                 );
-                if !soft_headroom_accepts(&status, current_tokens) {
+                if !soft_headroom_accepts(&status, scope, current_tokens) {
                     return Err(CodexErr::ContextWindowExceeded);
                 }
                 soft_headroom = Some(SoftHeadroomInstall {

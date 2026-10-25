@@ -121,9 +121,15 @@ fn required_headroom(limit: i64) -> i64 {
         .unwrap_or(i64::MAX)
 }
 
-fn overflow(used: i64, limit: Option<i64>) -> i64 {
+/// The part of the headroom target that a soft install must still leave below each limit,
+/// so the next step does not compact again at once.
+fn soft_headroom(limit: i64) -> i64 {
+    required_headroom(limit) / 4
+}
+
+fn overflow(used: i64, limit: Option<i64>, headroom: fn(i64) -> i64) -> i64 {
     limit.map_or(0, |limit| {
-        used.saturating_sub(limit.saturating_sub(required_headroom(limit)))
+        used.saturating_sub(limit.saturating_sub(headroom(limit)))
             .max(0)
     })
 }
@@ -172,14 +178,19 @@ pub(crate) fn estimate_candidate_request_tokens(
 }
 
 /// Soft headroom: a summary-only candidate that misses the headroom target is still better
-/// than failing the turn when it stays below the auto-compaction trigger of its scope (and so
-/// the full context window) and shrinks the context. At or above the trigger the next step
-/// would compact again, so such a candidate is rejected as before.
+/// than failing the turn when it shrinks the context and leaves a quarter of the target below
+/// every limit its own size counts against: the unbuffered auto-compaction limit for `Total`,
+/// and the full context window for both scopes (`BodyAfterPrefix` restarts its body count
+/// from the candidate). Closer to a limit the next step would compact again at once, so such
+/// a candidate is rejected as before.
 pub(crate) fn soft_headroom_accepts(
     status: &crate::session::context_window::ContextWindowTokenStatus,
+    scope: AutoCompactTokenLimitScope,
     current_context_tokens: i64,
 ) -> bool {
-    !status.token_limit_reached && status.active_context_tokens < current_context_tokens
+    !status.token_limit_reached
+        && candidate_overflow(status, scope, soft_headroom) == 0
+        && status.active_context_tokens < current_context_tokens
 }
 
 /// Fail-fast lower bound before paying for a foreground compaction: every candidate carries
@@ -210,19 +221,27 @@ pub(crate) fn compaction_candidate_overflow(
     status: &crate::session::context_window::ContextWindowTokenStatus,
     scope: AutoCompactTokenLimitScope,
 ) -> i64 {
+    candidate_overflow(status, scope, required_headroom)
+}
+
+fn candidate_overflow(
+    status: &crate::session::context_window::ContextWindowTokenStatus,
+    scope: AutoCompactTokenLimitScope,
+    headroom: fn(i64) -> i64,
+) -> i64 {
+    let full_window_overflow = overflow(
+        status.active_context_tokens,
+        status.full_context_window_limit,
+        headroom,
+    );
     match scope {
         AutoCompactTokenLimitScope::Total => overflow(
             status.auto_compact_scope_tokens,
             status.auto_compact_scope_limit,
+            headroom,
         )
-        .max(overflow(
-            status.active_context_tokens,
-            status.full_context_window_limit,
-        )),
-        AutoCompactTokenLimitScope::BodyAfterPrefix => overflow(
-            status.active_context_tokens,
-            status.full_context_window_limit,
-        ),
+        .max(full_window_overflow),
+        AutoCompactTokenLimitScope::BodyAfterPrefix => full_window_overflow,
     }
 }
 
@@ -975,10 +994,26 @@ mod tests {
         auto_compact_scope_limit: Option<i64>,
         full_context_window_limit: Option<i64>,
     ) -> crate::session::context_window::ContextWindowTokenStatus {
+        buffered_token_status(
+            active_context_tokens,
+            auto_compact_scope_limit,
+            /*fallback_buffer_tokens*/ 0,
+            full_context_window_limit,
+        )
+    }
+
+    /// A `Total` status whose trigger includes a token-budget fallback buffer.
+    fn buffered_token_status(
+        active_context_tokens: i64,
+        auto_compact_scope_limit: Option<i64>,
+        fallback_buffer_tokens: i64,
+        full_context_window_limit: Option<i64>,
+    ) -> crate::session::context_window::ContextWindowTokenStatus {
         let full_context_window_limit_reached =
             full_context_window_limit.is_some_and(|limit| active_context_tokens >= limit);
         let token_limit_reached = full_context_window_limit_reached
-            || auto_compact_scope_limit.is_some_and(|limit| active_context_tokens >= limit);
+            || auto_compact_scope_limit
+                .is_some_and(|limit| active_context_tokens >= limit + fallback_buffer_tokens);
         crate::session::context_window::ContextWindowTokenStatus {
             active_context_tokens,
             auto_compact_scope_tokens: active_context_tokens,
@@ -992,26 +1027,102 @@ mod tests {
         }
     }
 
+    /// A `BodyAfterPrefix` status of a candidate that becomes its window's prefill.
+    fn body_after_prefix_status(
+        active_context_tokens: i64,
+        full_context_window_limit: Option<i64>,
+    ) -> crate::session::context_window::ContextWindowTokenStatus {
+        let full_context_window_limit_reached =
+            full_context_window_limit.is_some_and(|limit| active_context_tokens >= limit);
+        crate::session::context_window::ContextWindowTokenStatus {
+            active_context_tokens,
+            auto_compact_scope_tokens: 0,
+            auto_compact_scope_limit: Some(90_000),
+            full_context_window_limit,
+            base_window_tokens_remaining: None,
+            auto_compact_window_prefill_tokens: Some(active_context_tokens),
+            full_context_window_limit_reached,
+            token_limit_reached: full_context_window_limit_reached,
+            turn_end_compaction_threshold_reached: false,
+        }
+    }
+
     #[test]
-    fn soft_headroom_accepts_only_candidates_below_the_compaction_trigger_that_shrink_context() {
+    fn soft_headroom_keeps_a_quarter_of_the_headroom_below_the_compaction_trigger() {
+        // Auto limit 90k: headroom 22.5k, soft margin 5_625, ceiling 84_375. Window 100k:
+        // headroom 25k, soft margin 6_250, ceiling 93_750.
         for (candidate, auto_limit, window, current, accepted) in [
-            (85_000, Some(90_000), Some(100_000), 105_000, true),
-            (89_999, Some(90_000), Some(100_000), 105_000, true),
+            (80_000, Some(90_000), Some(100_000), 105_000, true),
+            (84_375, Some(90_000), Some(100_000), 105_000, true),
             (85_000, None, None, 105_000, true),
-            // At or above the auto-compaction trigger the next step would compact again.
+            (93_750, None, Some(100_000), 105_000, true),
+            // Just below the trigger the next step would compact again at once.
+            (84_376, Some(90_000), Some(100_000), 105_000, false),
+            (89_999, Some(90_000), Some(100_000), 105_000, false),
+            (93_751, None, Some(100_000), 105_000, false),
+            // At or above the trigger, as before.
             (90_000, Some(90_000), Some(100_000), 105_000, false),
             (95_000, Some(90_000), Some(100_000), 105_000, false),
             (100_000, None, Some(100_000), 105_000, false),
             (120_000, Some(90_000), Some(100_000), 130_000, false),
             // The candidate must shrink the context it replaces.
-            (85_000, Some(90_000), Some(100_000), 85_000, false),
-            (85_000, Some(90_000), Some(100_000), 60_000, false),
+            (80_000, Some(90_000), Some(100_000), 80_000, false),
+            (80_000, Some(90_000), Some(100_000), 60_000, false),
         ] {
             assert_eq!(
-                soft_headroom_accepts(&token_status(candidate, auto_limit, window), current),
+                soft_headroom_accepts(
+                    &token_status(candidate, auto_limit, window),
+                    AutoCompactTokenLimitScope::Total,
+                    current,
+                ),
                 accepted,
                 "candidate={candidate} auto_limit={auto_limit:?} window={window:?} \
                  current={current}"
+            );
+        }
+    }
+
+    /// A token-budget fallback buffer moves the trigger, not the soft ceiling: a candidate in
+    /// the buffer would start the window with no base-window tokens left.
+    #[test]
+    fn soft_headroom_ignores_the_fallback_buffer() {
+        for (candidate, accepted) in [(84_375, true), (88_000, false), (94_999, false)] {
+            let status = buffered_token_status(
+                candidate,
+                Some(90_000),
+                /*fallback_buffer_tokens*/ 5_000,
+                Some(100_000),
+            );
+            assert!(!status.token_limit_reached, "candidate={candidate}");
+            assert_eq!(
+                soft_headroom_accepts(&status, AutoCompactTokenLimitScope::Total, 105_000),
+                accepted,
+                "candidate={candidate}"
+            );
+        }
+    }
+
+    /// `BodyAfterPrefix` restarts the body count from the candidate, so only the full window
+    /// bounds it; the soft install still leaves a quarter of that window's headroom.
+    #[test]
+    fn body_after_prefix_soft_headroom_keeps_a_quarter_of_the_window_headroom() {
+        for (candidate, window, current, accepted) in [
+            (85_000, Some(100_000), 105_000, true),
+            (93_750, Some(100_000), 105_000, true),
+            (85_000, None, 105_000, true),
+            (93_751, Some(100_000), 105_000, false),
+            (99_999, Some(100_000), 105_000, false),
+            (100_000, Some(100_000), 105_000, false),
+            (85_000, Some(100_000), 85_000, false),
+        ] {
+            assert_eq!(
+                soft_headroom_accepts(
+                    &body_after_prefix_status(candidate, window),
+                    AutoCompactTokenLimitScope::BodyAfterPrefix,
+                    current,
+                ),
+                accepted,
+                "candidate={candidate} window={window:?} current={current}"
             );
         }
     }

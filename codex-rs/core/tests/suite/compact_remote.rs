@@ -22,6 +22,7 @@ use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::GCP_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::AgentPath;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageReference;
@@ -1516,7 +1517,8 @@ async fn remote_compact_v2_rejects_summary_only_candidate_without_headroom() -> 
     Ok(())
 }
 
-/// A 100k window whose headroom target (auto limit 90k minus a quarter) is 67.5k tokens.
+/// A 100k window whose headroom target (auto limit 90k minus a quarter) is 67.5k tokens. A
+/// soft install must keep a quarter of the 22.5k headroom below the limit: at most 84_375.
 fn soft_headroom_test_codex() -> TestCodexBuilder {
     remote_v2_test_codex(
         /*context_window*/ 100_000, /*effective_context_window_percent*/ 100,
@@ -1557,9 +1559,9 @@ async fn request_overhead(builder: TestCodexBuilder) -> Result<RequestOverhead> 
     })
 }
 
-/// A soft-headroom candidate of about 84k tokens: above the 67.5k headroom target but below
-/// the 90k auto-compaction trigger of the 100k window.
-const SOFT_HEADROOM_CANDIDATE_TOKENS: usize = 84_000;
+/// A soft-headroom candidate of about 78k tokens: above the 67.5k headroom target but below
+/// the 84_375-token soft ceiling of the 100k window.
+const SOFT_HEADROOM_CANDIDATE_TOKENS: usize = 78_000;
 
 /// Sizes a summary-only candidate whose request estimate, tool declarations included, is
 /// about `candidate_tokens`. The user turn is larger than the summary, so installing the
@@ -1577,7 +1579,7 @@ fn soft_headroom_fixture(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_compact_v2_installs_summary_only_candidate_within_full_window() -> Result<()> {
+async fn remote_compact_v2_installs_summary_only_candidate_below_soft_ceiling() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let overhead = request_overhead(soft_headroom_test_codex()).await?;
@@ -1631,20 +1633,32 @@ async fn remote_compact_v2_installs_summary_only_candidate_within_full_window() 
     Ok(())
 }
 
-/// Soft headroom only applies below the auto-compaction trigger: a candidate above it but
-/// inside the 100k window would make the next step compact again, so it is still rejected.
-#[test_case(SOFT_HEADROOM_CANDIDATE_TOKENS, true; "below_auto_compact_limit_installs")]
-#[test_case(95_000, false; "above_auto_compact_limit_fails")]
+/// Soft headroom keeps a quarter of the headroom target below the auto-compaction trigger
+/// (ceiling 84_375 for `Total`): a candidate above that, even inside the 100k window, would
+/// make the next step compact again, so it is still rejected. `BodyAfterPrefix` restarts its
+/// body count from the candidate, so only the 100k window bounds it there: a quarter of its
+/// 25k headroom gives a 93_750-token ceiling.
+#[test_case(AutoCompactTokenLimitScope::Total, SOFT_HEADROOM_CANDIDATE_TOKENS, true; "below_auto_compact_limit_installs")]
+#[test_case(AutoCompactTokenLimitScope::Total, 87_500, false; "margin_below_auto_compact_limit_fails")]
+#[test_case(AutoCompactTokenLimitScope::Total, 95_000, false; "above_auto_compact_limit_fails")]
+#[test_case(AutoCompactTokenLimitScope::BodyAfterPrefix, 85_000, true; "body_after_prefix_below_ceiling_installs")]
+#[test_case(AutoCompactTokenLimitScope::BodyAfterPrefix, 97_000, false; "body_after_prefix_margin_below_full_window_fails")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_v2_soft_headroom_stops_at_auto_compact_limit(
+    scope: AutoCompactTokenLimitScope,
     candidate_tokens: usize,
     installs: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let overhead = request_overhead(soft_headroom_test_codex()).await?;
+    let builder = || {
+        soft_headroom_test_codex().with_config(move |config| {
+            config.model_auto_compact_token_limit_scope = scope;
+        })
+    };
+    let overhead = request_overhead(builder()).await?;
     let (summary, user_text) = soft_headroom_fixture(&overhead, "SOFT_LIMIT", candidate_tokens);
-    let harness = TestCodexHarness::with_builder(soft_headroom_test_codex()).await?;
+    let harness = TestCodexHarness::with_builder(builder()).await?;
     let codex = harness.test().codex.clone();
     let responses_mock = responses::mount_sse_sequence(
         harness.server(),
@@ -1691,6 +1705,13 @@ async fn remote_compact_v2_soft_headroom_without_progress_stops_the_turn() -> Re
     let overhead = request_overhead(soft_headroom_test_codex()).await?;
     let (summary, user_text) =
         soft_headroom_fixture(&overhead, "SOFT_LOOP", SOFT_HEADROOM_CANDIDATE_TOKENS);
+    // A shorter second summary still misses the headroom target but shrinks the context, so
+    // only the no-progress guard can stop a second soft install from compacting again.
+    let (shorter_summary, _) = soft_headroom_fixture(
+        &overhead,
+        "SOFT_LOOP_SHORTER",
+        SOFT_HEADROOM_CANDIDATE_TOKENS - 4_000,
+    );
     let harness = TestCodexHarness::with_builder(soft_headroom_test_codex()).await?;
     let codex = harness.test().codex.clone();
     let at_limit = |id: &str| {
@@ -1704,7 +1725,9 @@ async fn remote_compact_v2_soft_headroom_without_progress_stops_the_turn() -> Re
             at_limit("sample-1"),
             remote_compaction_sse("compact-1", &summary),
             at_limit("sample-2"),
-            remote_compaction_sse("compact-2", &summary),
+            remote_compaction_sse("compact-2", &shorter_summary),
+            // Without the guard a third compaction request would follow.
+            at_limit("sample-3"),
         ],
     )
     .await;
@@ -1726,25 +1749,31 @@ async fn remote_compact_v2_soft_headroom_without_progress_stops_the_turn() -> Re
         }
     }
 
-    // The soft install lets the next step run. Without progress the repeated summary-only
-    // candidate no longer shrinks the context, so the turn stops before a third sample.
+    // Both soft installs count as compactions without progress, so the guard stops the turn
+    // at the third sample instead of paying for a third compaction.
     assert_eq!(
         warnings
             .iter()
             .filter(|warning| warning.contains("headroom"))
             .count(),
-        1,
+        2,
         "{warnings:?}"
     );
     assert_eq!(errors, vec![Some(CodexErrorInfo::ContextWindowExceeded)]);
     let requests = responses_mock.requests();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
     assert_eq!(
         requests
             .iter()
             .filter(|request| is_compact_request(request))
             .count(),
         2
+    );
+    assert!(
+        requests[4]
+            .body_json()
+            .to_string()
+            .contains("SOFT_LOOP_SHORTER_SUMMARY")
     );
     Ok(())
 }
