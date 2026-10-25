@@ -139,6 +139,12 @@ impl<C> BoardExtension<C> {
     }
 }
 
+/// Reports whether thread start bound a message board to this thread. Board posts can
+/// then arrive as mail from agents outside the caller's own agent tree.
+pub fn is_bound(thread_store: &ExtensionData) -> bool {
+    thread_store.get::<Binding>().is_some()
+}
+
 /// Installs message-board lifecycle and tool contributions. The factory selects
 /// a local or remote backend, or returns None when disabled. Configuration is
 /// read at runtime startup, including resume; no board is created by installation.

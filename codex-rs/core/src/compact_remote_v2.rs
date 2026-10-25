@@ -57,6 +57,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_rollout_trace::InferenceTraceContext;
@@ -123,6 +124,13 @@ fn overflow(used: i64, limit: Option<i64>) -> i64 {
         used.saturating_sub(limit.saturating_sub(required_headroom(limit)))
             .max(0)
     })
+}
+
+/// Guardian reviewers budget each complete request themselves and compact at most once
+/// per step, so the fork headroom target must not reject their summaries. They keep the
+/// upstream token-limit check, and Guardian fails closed with its own input-budget reason.
+pub(crate) fn enforces_compaction_headroom(session_source: &SessionSource) -> bool {
+    !crate::guardian::is_basic_session_source(session_source)
 }
 
 pub(crate) fn compaction_candidate_overflow(
@@ -856,6 +864,36 @@ mod tests {
             }],
             phase,
             internal_chat_message_metadata_passthrough: None,
+        }
+    }
+
+    #[test]
+    fn compaction_headroom_applies_to_all_but_guardian_reviewers() {
+        use codex_protocol::protocol::InternalSessionSource;
+        use codex_protocol::protocol::SubAgentSource;
+        for (source, enforced) in [
+            (SessionSource::Cli, true),
+            (SessionSource::SubAgent(SubAgentSource::Review), true),
+            (
+                SessionSource::SubAgent(SubAgentSource::Other("worker".to_string())),
+                true,
+            ),
+            (
+                SessionSource::SubAgent(SubAgentSource::Other(
+                    crate::guardian::GUARDIAN_REVIEWER_NAME.to_string(),
+                )),
+                false,
+            ),
+            (
+                SessionSource::Internal(InternalSessionSource::Guardian),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                enforces_compaction_headroom(&source),
+                enforced,
+                "{source:?}"
+            );
         }
     }
 

@@ -58,7 +58,12 @@ pub(super) async fn run_compaction(
                 matches!(scope, AutoCompactTokenLimitScope::BodyAfterPrefix)
                     .then_some(installed_tokens),
             );
-            if compaction_candidate_overflow(&status, scope) == 0 {
+            let fits = if enforces_compaction_headroom(&turn.session_source) {
+                compaction_candidate_overflow(&status, scope) == 0
+            } else {
+                !status.token_limit_reached
+            };
+            if fits {
                 return Ok(true);
             }
             // The live suffix can leave an adopted prefix over budget. Try the existing
@@ -245,7 +250,12 @@ async fn build_and_install_compaction(
                 matches!(scope, AutoCompactTokenLimitScope::BodyAfterPrefix)
                     .then_some(candidate_tokens),
             );
-            let overflow = compaction_candidate_overflow(&status, scope);
+            let overflow =
+                if enforces_compaction_headroom(&replacement_step_context.turn.session_source) {
+                    compaction_candidate_overflow(&status, scope)
+                } else {
+                    0
+                };
             if overflow == 0 {
                 break new_history;
             }
@@ -308,8 +318,12 @@ async fn build_and_install_compaction(
         )
         .await
     } else {
-        let (new_history, world_state_baseline, prepared_window) =
-            complete_replacement.expect("foreground compaction must have a validated history");
+        let Some((new_history, world_state_baseline, prepared_window)) = complete_replacement
+        else {
+            return Err(CodexErr::Fatal(
+                "foreground compaction must have a validated history".to_string(),
+            ));
+        };
         if !sess
             .commit_prepared_auto_compact_window(prepared_window)
             .await

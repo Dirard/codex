@@ -8177,7 +8177,6 @@ async fn submit_with_trace_captures_current_span_trace_context() {
             /*parent_turn_id*/ None,
             /*root_turn_id*/ None,
             /*residency_guard*/ None,
-            /*turn_spawn_budget*/ None,
             /*message_delivery*/ None,
         )
         .await
@@ -12386,13 +12385,13 @@ async fn private_event_delivery_preserves_observer_order_and_host_status(
             duration_ms: None,
         }),
     ] {
-        let expected_status = supplied_status.clone().unwrap_or_else(|| {
+        let expected_status = supplied_status.clone().unwrap_or(
             if derive_status && matches!(msg, EventMsg::TurnAborted(_)) {
                 AgentStatus::Interrupted
             } else {
                 AgentStatus::Running
-            }
-        });
+            },
+        );
         private.agent_status.send_replace(AgentStatus::Running);
         let event = Event {
             id: "private-turn".to_string(),

@@ -14,6 +14,7 @@ use chrono::Utc;
 use codex_agent_message_board_client::AccessToken;
 use codex_agent_message_board_client::RemoteAgentMessageBoard;
 use codex_agent_message_board_extension::local_board_options;
+use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadStartInput;
 use codex_features::Feature;
@@ -35,6 +36,30 @@ use codex_protocol::protocol::InterAgentCommunication;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::sync::Weak;
+
+/// Fork: who can post to the message board bound to a thread.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BoardAudience {
+    /// No board is bound to the thread.
+    None,
+    /// A local or in-memory board, which only agents of this session tree can post to.
+    Tree,
+    /// A remote or host-connected board, whose authors can be outside this runtime.
+    External,
+}
+
+/// Fork: classifies the board bound to a thread by the store its factory filled.
+pub(crate) fn board_audience(thread_store: &ExtensionData) -> BoardAudience {
+    if !codex_agent_message_board_extension::is_bound(thread_store) {
+        BoardAudience::None
+    } else if thread_store.get::<RemoteAgentMessageBoard>().is_some()
+        || thread_store.get::<LocalBoardConnection>().is_some()
+    {
+        BoardAudience::External
+    } else {
+        BoardAudience::Tree
+    }
+}
 
 /// Registers the configured board for opted-in MAv2 runtimes.
 /// Training can share an in-memory board per tree, including ephemeral sessions.

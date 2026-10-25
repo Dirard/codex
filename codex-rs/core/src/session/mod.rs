@@ -1074,8 +1074,7 @@ impl SessionIo {
     ) -> CodexResult<String> {
         self.submit_with_trace(
             op, /*trace*/ None, /*parent_turn_id*/ None, /*root_turn_id*/ None,
-            /*residency_guard*/ None, /*turn_spawn_budget*/ None,
-            /*message_delivery*/ None,
+            /*residency_guard*/ None, /*message_delivery*/ None,
         )
         .await
     }
@@ -1087,7 +1086,6 @@ impl SessionIo {
         parent_turn_id: Option<String>,
         root_turn_id: Option<String>,
         residency_guard: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
-        turn_spawn_budget: Option<TurnSpawnBudget>,
         message_delivery: Option<crate::agent_communication::MessageDelivery>,
     ) -> CodexResult<String> {
         let id = new_submission_id();
@@ -1102,11 +1100,42 @@ impl SessionIo {
             trace,
             parent_turn_id,
             root_turn_id,
-            turn_spawn_budget,
+            turn_spawn_budget: None,
             residency_guard,
             message_delivery,
         };
         self.submit_with_id(sub).await?;
+        Ok(id)
+    }
+
+    /// Fork: submits `op` like `submit_with_trace`, and the turn it starts inherits the
+    /// caller's cumulative spawn budget.
+    pub(crate) async fn submit_with_spawn_budget(
+        &self,
+        op: impl Into<WithTurnExtensionData<Op>>,
+        parent_turn_id: Option<String>,
+        root_turn_id: Option<String>,
+        residency_guard: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
+        message_delivery: Option<crate::agent_communication::MessageDelivery>,
+    ) -> CodexResult<String> {
+        let id = new_submission_id();
+        let WithTurnExtensionData {
+            request: op,
+            turn_extension_init,
+        } = op.into();
+        self.submit_with_id(Submission {
+            id: id.clone(),
+            op,
+            turn_extension_init,
+            trace: None,
+            parent_turn_id,
+            root_turn_id,
+            turn_spawn_budget,
+            residency_guard,
+            message_delivery,
+        })
+        .await?;
         Ok(id)
     }
 
@@ -4518,7 +4547,11 @@ impl Session {
                             matches!(scope, AutoCompactTokenLimitScope::BodyAfterPrefix)
                                 .then_some(candidate_tokens),
                         );
-                    if crate::compact_remote_v2::compaction_candidate_overflow(&status, scope) > 0 {
+                    if crate::compact_remote_v2::enforces_compaction_headroom(
+                        &turn_context.session_source,
+                    ) && crate::compact_remote_v2::compaction_candidate_overflow(&status, scope)
+                        > 0
+                    {
                         return false;
                     }
                     // The unchanged suffix already contains updates through this baseline.

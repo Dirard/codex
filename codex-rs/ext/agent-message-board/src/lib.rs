@@ -4,6 +4,7 @@
 mod extension;
 
 pub use extension::install;
+pub use extension::is_bound;
 
 /// Storage selected by the agent consumer for opening, setup and permanent deletion.
 pub fn local_board_options() -> codex_message_board::LocalBoardOptions {

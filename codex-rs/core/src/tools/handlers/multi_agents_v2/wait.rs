@@ -100,7 +100,9 @@ impl Handler {
             outcome
         } else {
             let snapshot = active_descendant_snapshot(session.as_ref(), turn.as_ref()).await?;
-            if snapshot == ActiveAgentSnapshot::default() {
+            if snapshot == ActiveAgentSnapshot::default()
+                && !board_posts_may_arrive(session.as_ref(), turn.as_ref()).await?
+            {
                 recheck_activity(session.as_ref(), turn_state.as_deref())
                     .await
                     .unwrap_or(WaitOutcome::NoActiveAgents)
@@ -232,6 +234,24 @@ enum WaitOutcome {
     TimedOut(ActiveAgentSnapshot),
 }
 
+/// A bound board delivers posts from agents outside the caller's subtree. Remote and
+/// host-connected boards have authors outside this runtime; a tree-local board can only
+/// receive posts from the other agents of this tree.
+async fn board_posts_may_arrive(
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
+) -> Result<bool, FunctionCallError> {
+    use crate::agent_message_board::BoardAudience;
+    match crate::agent_message_board::board_audience(&session.services.thread_extension_data) {
+        BoardAudience::None => Ok(false),
+        BoardAudience::External => Ok(true),
+        BoardAudience::Tree => Ok(
+            active_agent_snapshot(session, turn, &AgentPath::root()).await?
+                != ActiveAgentSnapshot::default(),
+        ),
+    }
+}
+
 async fn active_descendant_snapshot(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
@@ -240,7 +260,20 @@ async fn active_descendant_snapshot(
         .session_source
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
-    let current_agent_name = current_agent_path.to_string();
+    active_agent_snapshot(session, turn, &current_agent_path).await
+}
+
+/// Counts active agents under `prefix`, excluding the caller.
+async fn active_agent_snapshot(
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
+    prefix: &AgentPath,
+) -> Result<ActiveAgentSnapshot, FunctionCallError> {
+    let current_agent_path = turn
+        .session_source
+        .get_agent_path()
+        .unwrap_or_else(AgentPath::root);
+    let prefix = prefix.to_string();
     let agents = session
         .services
         .agent_control
@@ -248,7 +281,7 @@ async fn active_descendant_snapshot(
             session.thread_id,
             turn.parent_thread_id,
             &turn.session_source,
-            Some(&current_agent_name),
+            Some(&prefix),
         )
         .await
         .map_err(collab_spawn_error)?;

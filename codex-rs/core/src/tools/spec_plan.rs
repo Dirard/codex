@@ -1063,7 +1063,6 @@ fn register_code_mode_executors(
         {
             continue;
         }
-        code_mode_tool_names.insert(name, tool_name);
         let exposure = tool.exposure;
         if exposure == ToolExposure::DirectModelOnly {
             direct_tool_stubs.extend(
@@ -1085,6 +1084,8 @@ fn register_code_mode_executors(
             );
             continue;
         }
+        // Direct-only stubs are not nested tools; keep them out of code-mode routing metadata.
+        code_mode_tool_names.insert(name, tool_name);
         let cached_runtime = tool.cached_runtime().cloned();
 
         if exposure == ToolExposure::Deferred {

@@ -404,8 +404,7 @@ impl CodexThread {
         self.io
             .submit_with_trace(
                 op, trace, /*parent_turn_id*/ None, /*root_turn_id*/ None,
-                /*residency_guard*/ None, /*turn_spawn_budget*/ None,
-                /*message_delivery*/ None,
+                /*residency_guard*/ None, /*message_delivery*/ None,
             )
             .await
     }

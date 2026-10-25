@@ -1900,9 +1900,8 @@ impl ThreadManagerState {
         }
         thread
             .io
-            .submit_with_trace(
+            .submit_with_spawn_budget(
                 op,
-                /*trace*/ None,
                 parent_turn_id,
                 root_turn_id,
                 residency_guard,
