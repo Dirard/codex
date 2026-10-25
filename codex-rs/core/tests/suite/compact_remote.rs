@@ -39,6 +39,7 @@ use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::user_input::UserInput;
 use core_test_support::ThreadIdle;
+use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
@@ -1783,10 +1784,15 @@ async fn remote_auto_compact_v2_fails_fast_when_tools_exceed_context_window() ->
     skip_if_no_network!(Ok(()));
 
     // Base instructions and tool declarations alone exceed this window, so no candidate can
-    // ever fit and an automatic compaction request would be paid for nothing.
-    let harness = TestCodexHarness::with_builder(remote_v2_test_codex(
-        /*context_window*/ 1_000, /*effective_context_window_percent*/ 100,
-    ))
+    // ever fit and an automatic compaction request would be paid for nothing. Its hooks must
+    // not run either.
+    let harness = TestCodexHarness::with_builder(
+        remote_v2_test_codex(
+            /*context_window*/ 1_000, /*effective_context_window_percent*/ 100,
+        )
+        .with_pre_build_hook(write_pre_compact_logging_hook)
+        .with_config(trust_discovered_hooks),
+    )
     .await?;
     let codex = harness.test().codex.clone();
     let mut at_limit = responses::ev_completed_with_tokens("sample-1", /*total_tokens*/ 1_000);
@@ -1806,18 +1812,71 @@ async fn remote_auto_compact_v2_fails_fast_when_tools_exceed_context_window() ->
             text_elements: Vec::new(),
         }]))
         .await?;
-    let error = wait_for_event_match(&codex, |event| match event {
-        EventMsg::Error(error) => Some(error.codex_error_info.clone()),
-        _ => None,
-    })
-    .await;
-    wait_for_turn_complete(&codex).await;
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+    loop {
+        match wait_for_event(&codex, |_| true).await {
+            EventMsg::Warning(warning) => warnings.push(warning.message),
+            EventMsg::Error(error) => errors.push(error.codex_error_info),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
 
-    assert_eq!(error, Some(CodexErrorInfo::ContextWindowExceeded));
+    assert_eq!(errors, vec![Some(CodexErrorInfo::ContextWindowExceeded)]);
+    // The generic context-window error cannot say that only fewer tools or a larger window
+    // help, so a warning explains the skipped compaction.
+    assert!(
+        warnings.iter().any(|warning| {
+            warning.contains("Automatic context compaction was skipped")
+                && warning.contains("1000-token context window")
+                && warning.contains("MCP servers")
+        }),
+        "{warnings:?}"
+    );
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 1);
     assert!(!is_compact_request(&requests[0]));
+    assert!(
+        !harness
+            .test()
+            .codex_home_path()
+            .join(PRE_COMPACT_HOOK_LOG)
+            .exists(),
+        "PreCompact hooks ran for a compaction that was never sent"
+    );
     Ok(())
+}
+
+const PRE_COMPACT_HOOK_LOG: &str = "pre_compact_hook_log.jsonl";
+
+/// Logs every PreCompact hook run to `PRE_COMPACT_HOOK_LOG` in the Codex home.
+fn write_pre_compact_logging_hook(home: &Path) {
+    let script_path = home.join("pre_compact_log.py");
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+"#,
+        log_path = home.join(PRE_COMPACT_HOOK_LOG).display(),
+    );
+    let hooks = json!({
+        "hooks": {
+            "PreCompact": [{
+                "matcher": "auto",
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 \"{}\"", script_path.display()),
+                }]
+            }]
+        }
+    });
+    fs::write(&script_path, script).expect("write pre compact hook script");
+    fs::write(home.join("hooks.json"), hooks.to_string()).expect("write hooks.json");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -151,21 +151,14 @@ async fn build_and_install_compaction(
             )),
         )
     } else {
-        // Automatic compaction retries every turn, so it must not pay for a request that
-        // cannot fit. An explicit `/compact` still sends it, as upstream.
-        let base_instructions = sess.get_base_instructions().await;
-        if matches!(compaction_metadata.trigger(), CompactionTrigger::Auto)
-            && let Some(mandatory_tokens) =
-                mandatory_request_overflows_window(replacement_step_context, &base_instructions)
-        {
-            warn!(
-                turn_id = %turn_context.sub_id,
-                mandatory_tokens,
-                "instructions and tool declarations alone exceed the context window; \
-                 skipping a compaction that cannot fit"
-            );
-            return Err(CodexErr::ContextWindowExceeded);
-        }
+        // A prepared candidate that was declined falls back here after its hooks ran.
+        reject_hopeless_auto_compaction(
+            sess,
+            turn_context,
+            replacement_step_context,
+            compaction_metadata.trigger(),
+        )
+        .await?;
         let attempt = run_remote_compact_v2_attempt(
             sess,
             step_context,
@@ -440,6 +433,41 @@ async fn build_and_install_compaction(
         .await;
     }
     Ok(true)
+}
+
+/// Automatic compaction retries every turn, so it must not pay for a request that cannot fit:
+/// fail before the request, and tell the user why. An explicit `/compact` still sends it, as
+/// upstream.
+pub(super) async fn reject_hopeless_auto_compaction(
+    sess: &Session,
+    turn_context: &TurnContext,
+    replacement_step_context: &StepContext,
+    trigger: CompactionTrigger,
+) -> CodexResult<()> {
+    if !matches!(trigger, CompactionTrigger::Auto) {
+        return Ok(());
+    }
+    let base_instructions = sess.get_prompt_base_instructions().await;
+    let Some(overflow) =
+        mandatory_request_overflows_window(replacement_step_context, &base_instructions)
+    else {
+        return Ok(());
+    };
+    warn!(
+        turn_id = %turn_context.sub_id,
+        mandatory_tokens = overflow.mandatory_tokens,
+        context_window_tokens = ?overflow.context_window_tokens,
+        "instructions and tool declarations alone exceed the context window; \
+         skipping a compaction that cannot fit"
+    );
+    sess.send_event(
+        turn_context,
+        EventMsg::Warning(WarningEvent {
+            message: overflow.warning_message(),
+        }),
+    )
+    .await;
+    Err(CodexErr::ContextWindowExceeded)
 }
 
 /// A summary-only candidate installed although it misses the headroom target.

@@ -193,13 +193,39 @@ pub(crate) fn soft_headroom_accepts(
         && status.active_context_tokens < current_context_tokens
 }
 
+/// The request part every compaction candidate carries, when it alone fills the window.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct MandatoryRequestOverflow {
+    /// Base instructions and tool declarations.
+    pub(crate) mandatory_tokens: i64,
+    pub(crate) context_window_tokens: Option<i64>,
+}
+
+impl MandatoryRequestOverflow {
+    /// Tells the user why automatic compaction cannot help; starting a new thread would not
+    /// either, because the same instructions and tools open every window.
+    pub(crate) fn warning_message(&self) -> String {
+        let window = self
+            .context_window_tokens
+            .map(|tokens| format!(" of the {tokens}-token context window"))
+            .unwrap_or_default();
+        format!(
+            "Automatic context compaction was skipped: the instructions and tool declarations \
+             alone use about {} tokens{window}, so no summary can fit. Disable some MCP servers \
+             or tools, or switch to a model with a larger context window.",
+            self.mandatory_tokens
+        )
+    }
+}
+
 /// Fail-fast lower bound before paying for a foreground compaction: every candidate carries
 /// the base instructions and the tool declarations, so when they alone reach the full context
 /// window no summary can be installed. Returns that lower bound when it does.
+/// `base_instructions` must be the copy the request sends, so the bound never overestimates.
 pub(crate) fn mandatory_request_overflows_window(
     step_context: &StepContext,
     base_instructions: &BaseInstructions,
-) -> Option<i64> {
+) -> Option<MandatoryRequestOverflow> {
     if !enforces_compaction_headroom(&step_context.turn.session_source) {
         return None;
     }
@@ -207,14 +233,18 @@ pub(crate) fn mandatory_request_overflows_window(
         .unwrap_or(i64::MAX)
         .saturating_add(tool_declaration_tokens(step_context));
     let turn = &step_context.turn;
-    context_window_token_status_for_usage(
+    let status = context_window_token_status_for_usage(
         turn.config.as_ref(),
         turn.model_info().as_ref(),
         mandatory_tokens,
         /*auto_compact_window_prefill_tokens*/ None,
-    )
-    .full_context_window_limit_reached
-    .then_some(mandatory_tokens)
+    );
+    status
+        .full_context_window_limit_reached
+        .then_some(MandatoryRequestOverflow {
+            mandatory_tokens,
+            context_window_tokens: status.full_context_window_limit,
+        })
 }
 
 pub(crate) fn compaction_candidate_overflow(
@@ -330,7 +360,24 @@ async fn run_remote_compact_task_inner(
         phase,
     )
     .await;
-    let pre_compact_outcome = run_pre_compact_hooks(sess, turn_context, trigger).await;
+    // Fork: a hopeless automatic compaction fails before its hooks run or a request is sent.
+    let hopeless = if candidate.is_none() {
+        installation::reject_hopeless_auto_compaction(
+            sess,
+            turn_context,
+            replacement_step_context,
+            trigger,
+        )
+        .await
+        .err()
+    } else {
+        None
+    };
+    let pre_compact_outcome = if hopeless.is_some() {
+        PreCompactHookOutcome::Continue
+    } else {
+        run_pre_compact_hooks(sess, turn_context, trigger).await
+    };
     match pre_compact_outcome {
         PreCompactHookOutcome::Continue => {}
         PreCompactHookOutcome::Stopped => {
@@ -346,32 +393,40 @@ async fn run_remote_compact_task_inner(
             return Err(error);
         }
     }
-    let started_item = if candidate.is_none() {
+    let started_item = if candidate.is_none() && hopeless.is_none() {
         let item = TurnItem::ContextCompaction(ContextCompactionItem::new());
         sess.emit_turn_item_started(turn_context, &item).await;
         Some(item)
     } else {
         None
     };
-    let candidate = if candidate.is_none() && fallback == CompactionFallback::Foreground {
+    let candidate = if candidate.is_none()
+        && fallback == CompactionFallback::Foreground
+        && hopeless.is_none()
+    {
         crate::session::async_compaction::wait_for_pending(sess, step_context).await
     } else {
         candidate
     };
     // Box the combined request/install future to keep it off the turn stack.
-    let result = Box::pin(run_compaction(
-        sess,
-        step_context,
-        replacement_step_context,
-        client_session,
-        &world_state,
-        compaction_metadata,
-        &mut analytics_details,
-        started_item.as_ref(),
-        candidate.map(|candidate| *candidate),
-        fallback,
-    ))
-    .await;
+    let result = match hopeless {
+        Some(error) => Err(error),
+        None => {
+            Box::pin(run_compaction(
+                sess,
+                step_context,
+                replacement_step_context,
+                client_session,
+                &world_state,
+                compaction_metadata,
+                &mut analytics_details,
+                started_item.as_ref(),
+                candidate.map(|candidate| *candidate),
+                fallback,
+            ))
+            .await
+        }
+    };
     if matches!(result, Ok(false)) {
         if let Some(item) = started_item {
             sess.emit_turn_item_completed(turn_context, item).await;
