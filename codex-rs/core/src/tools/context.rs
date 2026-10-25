@@ -553,6 +553,9 @@ impl ToolOutput for ExecCommandToolOutput {
             session_id: Option<i32>,
             #[serde(skip_serializing_if = "Option::is_none")]
             original_token_count: Option<usize>,
+            /// Fork: the exit of this running session will be reported to the thread.
+            #[serde(skip_serializing_if = "std::ops::Not::not")]
+            exit_notification: bool,
             output: String,
         }
 
@@ -562,6 +565,7 @@ impl ToolOutput for ExecCommandToolOutput {
             exit_code: self.exit_code,
             session_id: self.process_id,
             original_token_count: self.original_token_count,
+            exit_notification: self.process_id.is_some() && self.exit_notification_armed,
             output: match self.max_output_tokens {
                 Some(max_tokens) => self.truncated_output(max_tokens),
                 None => String::from_utf8_lossy(&self.raw_output).to_string(),

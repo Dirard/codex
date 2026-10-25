@@ -96,15 +96,6 @@ fn plain_tool(request: &ResponsesRequest, name: &str) -> Value {
         .unwrap_or_else(|| panic!("tool {name} missing"))
 }
 
-async fn wait_for_turn_complete(test: &TestCodex) {
-    wait_for_event_with_timeout(
-        &test.codex,
-        |event| matches!(event, EventMsg::TurnComplete(_)),
-        EVENT_TIMEOUT,
-    )
-    .await;
-}
-
 /// Counts turns that start and complete until `completions` turns completed.
 async fn count_turns_until_completed(test: &TestCodex, completions: usize) -> usize {
     let mut started = 0;

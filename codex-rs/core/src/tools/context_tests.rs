@@ -820,3 +820,51 @@ fn exec_command_code_mode_result_ignores_model_line_limit() {
 
     assert_eq!(result["output"].as_str(), Some(raw_text.as_str()));
 }
+
+/// Fork: an armed exit notification is visible in the header and the Code Mode result.
+#[test]
+fn exec_command_output_reports_armed_exit_notification() {
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+    let output = |exit_notification_armed| ExecCommandToolOutput {
+        event_call_id: "call-43".to_string(),
+        chunk_id: String::new(),
+        wall_time: std::time::Duration::from_millis(250),
+        raw_output: b"started\n".to_vec(),
+        truncation: OutputTruncation::new(TruncationPolicy::Bytes(10_000), /*max_lines*/ None),
+        max_output_tokens: None,
+        process_id: Some(1000),
+        exit_code: None,
+        original_token_count: None,
+        output_omitted_bytes: None,
+        hook_command: None,
+        exit_notification_armed,
+    };
+
+    let armed = output(/*exit_notification_armed*/ true);
+    assert!(
+        armed.response_text().contains(&format!(
+            "Process running with session ID 1000\n{EXIT_NOTIFICATION_ARMED_LINE}\n"
+        )),
+        "{}",
+        armed.response_text()
+    );
+    assert_eq!(
+        armed.code_mode_result(&payload)["exit_notification"],
+        serde_json::json!(true)
+    );
+
+    let unarmed = output(/*exit_notification_armed*/ false);
+    assert!(
+        !unarmed
+            .response_text()
+            .contains(EXIT_NOTIFICATION_ARMED_LINE)
+    );
+    assert!(
+        unarmed
+            .code_mode_result(&payload)
+            .get("exit_notification")
+            .is_none()
+    );
+}
