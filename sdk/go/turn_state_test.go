@@ -148,6 +148,22 @@ func TestRunReleasesSubscriptionWhenContextEnds(t *testing.T) {
 	if streams != 0 {
 		t.Fatalf("router still has %d keyed subscriptions after Run returned", streams)
 	}
+	transport.deliverNotification("item/agentMessage/delta", mustJSON(t, protocol.AgentMessageDeltaNotification{
+		ThreadID: "thread-1", TurnID: "turn-1", ItemID: "item-1", Delta: "late",
+	}), nil)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		client.router.mu.Lock()
+		buffered := len(client.router.pending[routerKey{domain: "item", identity: "turn-1"}])
+		client.router.mu.Unlock()
+		if buffered == 1 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a late event of the cancelled turn was not buffered for nobody")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // R1.4: a login Wait cancelled while it confirms the account resumes there instead of

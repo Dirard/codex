@@ -16,8 +16,12 @@ const interruptOnCancelTimeout = 5 * time.Second
 
 // turnState is the lifecycle of one turn as its handle observes it. The first Stream or
 // Wait opens the handle's only router subscription; a pump goroutine folds its events into
-// the run result and hands them to every stream of the handle. The outcome is recorded
+// the run result and hands them to every open stream of the handle. The outcome is recorded
 // once, so repeated or concurrent calls return it instead of subscribing again.
+//
+// Once the handle had a stream, events that arrive while none is open are kept in a
+// bounded journal and handed to the next stream first, as the router's pending buffer did
+// when every Stream call subscribed on its own.
 //
 // States: idle (no subscription) -> observing (pump running) -> finished (subscription
 // closed). The result may be known before finished when it exceeds the result limits.
@@ -27,16 +31,24 @@ type turnState struct {
 	turnID            string
 	interruptOnCancel bool
 
-	mu        sync.Mutex
-	source    *NotificationStream
-	streams   map[*NotificationStream]struct{}
-	collector runResultCollector
-	ready     chan struct{}
-	resultSet bool
-	result    *RunResult
-	err       error
-	finished  bool
-	finishErr error
+	// deliverMu orders deliveries to streams: the pump holds it while it hands out an
+	// event, and a new stream holds it while it replays the journal. Take it before mu.
+	deliverMu sync.Mutex
+
+	mu           sync.Mutex
+	source       *NotificationStream
+	streams      map[*NotificationStream]struct{}
+	collector    runResultCollector
+	ready        chan struct{}
+	resultSet    bool
+	result       *RunResult
+	err          error
+	finished     bool
+	finishErr    error
+	journalOn    bool
+	journal      []Notification
+	journalBytes int64
+	journalLost  bool
 
 	interruptOnce sync.Once
 	interruptErr  error
@@ -77,6 +89,8 @@ func (s *turnState) pump(source *NotificationStream) {
 }
 
 func (s *turnState) observe(notification Notification) {
+	s.deliverMu.Lock()
+	defer s.deliverMu.Unlock()
 	s.mu.Lock()
 	if !s.resultSet {
 		if err := s.collector.observe(notification); err != nil {
@@ -84,17 +98,40 @@ func (s *turnState) observe(notification Notification) {
 			s.setResultLocked(nil, err)
 		}
 	}
+	if len(s.streams) == 0 {
+		if s.journalOn {
+			s.journalLocked(notification)
+		}
+		s.mu.Unlock()
+		return
+	}
 	streams := make([]*NotificationStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
 	}
 	s.mu.Unlock()
 	for _, stream := range streams {
-		stream.send(notification)
+		stream.sendAccepted(notification)
+	}
+}
+
+// journalLocked keeps an event for the next stream, within PendingTurnQueue events and the
+// byte budget of one stream; older events give way.
+func (s *turnState) journalLocked(notification Notification) {
+	limits := s.client.limits
+	s.journal = append(s.journal, notification)
+	s.journalBytes += notificationRetainedBytes(notification)
+	for len(s.journal) > 0 && (len(s.journal) > limits.PendingTurnQueue || s.journalBytes > limits.ResourceStreamQueueBytes) {
+		s.journalBytes -= notificationRetainedBytes(s.journal[0])
+		s.journal[0] = Notification{}
+		s.journal = s.journal[1:]
+		s.journalLost = true
 	}
 }
 
 func (s *turnState) finish(err error) {
+	s.deliverMu.Lock()
+	defer s.deliverMu.Unlock()
 	s.mu.Lock()
 	if s.finished {
 		s.mu.Unlock()
@@ -126,25 +163,42 @@ func (s *turnState) setResultLocked(result *RunResult, err error) {
 	close(s.ready)
 }
 
-// stream hands out a stream of the turn's events from now on. After the turn finished it
-// returns a stream already closed with the turn's terminal error.
+// stream hands out a stream of the turn's events: first the events kept while no stream
+// of the handle was open, then live ones. After the turn finished, the stream closes with
+// the turn's terminal error once it got the kept events; if kept events were dropped, it
+// closes with *OverflowError instead.
 func (s *turnState) stream(ctx context.Context) *NotificationStream {
 	limits := s.client.limits
 	var stream *NotificationStream
 	stream = newNotificationStream(limits.ResourceStreamQueue, limits.ResourceStreamQueueBytes, func() {
 		s.removeStream(stream)
 	})
+	s.deliverMu.Lock()
 	s.mu.Lock()
-	if s.finished {
-		err := s.finishErr
-		s.mu.Unlock()
-		stream.closeWithError(err)
-		return stream
+	journal, lost := s.journal, s.journalLost
+	s.journal, s.journalBytes, s.journalLost = nil, 0, false
+	s.journalOn = true
+	finished, finishErr := s.finished, s.finishErr
+	if !finished {
+		s.streams[stream] = struct{}{}
+		s.startLocked()
 	}
-	s.streams[stream] = struct{}{}
-	s.startLocked()
 	s.mu.Unlock()
-	s.watchStreamContext(ctx, stream)
+	for _, notification := range journal {
+		if !stream.sendAccepted(notification) {
+			break
+		}
+	}
+	switch {
+	case lost:
+		stream.closeWithError(&OverflowError{Reason: "turn events kept while no stream was open exceeded the pending limits"})
+	case finished:
+		stream.closeWithError(finishErr)
+	}
+	s.deliverMu.Unlock()
+	if !finished {
+		s.watchStreamContext(ctx, stream)
+	}
 	return stream
 }
 

@@ -209,9 +209,19 @@ func (t *StdioTransport) Send(ctx context.Context, frame json.RawMessage) error 
 // runtime to exit, keeps draining its stdout, waits up to the shutdown grace period for
 // the exit and only then kills the runtime. Close returns once the runtime exited.
 func (t *StdioTransport) Close() error {
+	return t.close(t.shutdownGrace)
+}
+
+// CloseNow kills a runtime that is still running without the grace period, for a
+// connection that already failed or never finished starting.
+func (t *StdioTransport) CloseNow() error {
+	return t.close(0)
+}
+
+func (t *StdioTransport) close(grace time.Duration) error {
 	t.closeOnce.Do(func() {
 		t.closeErr = t.transport.Close()
-		if t.cmd.Process != nil && !t.exitedWithin(t.shutdownGrace) {
+		if t.cmd.Process != nil && !t.exitedWithin(grace) {
 			t.killedByClose.Store(true)
 			_ = t.cmd.Process.Kill()
 		}

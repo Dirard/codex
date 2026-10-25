@@ -101,7 +101,7 @@ func newClient(ctx context.Context, cfg ClientConfig) (*Client, error) {
 	})
 	client.rpc = rpc
 	if err := client.initialize(ctx, normalized, source); err != nil {
-		_ = rpc.Close()
+		_ = rpc.Abort()
 		return nil, err
 	}
 	raw := protocol.NewRawClient(client)

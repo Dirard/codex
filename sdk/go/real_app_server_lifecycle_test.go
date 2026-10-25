@@ -126,4 +126,5 @@ func TestRealAppServerRunInterruptOnCancel(t *testing.T) {
 		}
 		return
 	}
+	t.Fatalf("notifications ended without turn/completed: %v", notifications.Err())
 }

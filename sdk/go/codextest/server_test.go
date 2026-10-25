@@ -179,6 +179,22 @@ func TestServerRecordsHandshakeViolations(t *testing.T) {
 		!strings.Contains(violations.Error(), "initialized before initialize") {
 		t.Fatalf("violations = %v", violations)
 	}
+
+	// After initialize, the next message must be initialized.
+	early := codextest.NewServer()
+	defer early.Close()
+	if err := early.Send(ctx, json.RawMessage(`{"id":1,"method":"initialize","params":{"clientInfo":{"name":"t","version":"0"}}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := early.Receive(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := early.Send(ctx, json.RawMessage(`{"method":"thread/heartbeat"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := early.Err(); err == nil || !strings.Contains(err.Error(), "thread/heartbeat before the initialized notification") {
+		t.Fatalf("violations = %v", err)
+	}
 }
 
 // R5.4: a server request reaches the client's handler and its answer comes back.

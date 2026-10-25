@@ -2,7 +2,6 @@ package codex
 
 import (
 	"context"
-	"sync"
 
 	"github.com/openai/codex/sdk/go/protocol"
 )
@@ -10,13 +9,19 @@ import (
 // TurnHandle follows one turn. Its first Stream or Wait subscribes to the turn's events;
 // the outcome is recorded once, so repeated and concurrent calls return the same result.
 type TurnHandle struct {
-	client            *Client
-	threadID          string
-	id                string
-	interruptOnCancel bool
+	client   *Client
+	threadID string
+	id       string
+	state    *turnState
+}
 
-	stateMu sync.Mutex
-	state   *turnState
+func newTurnHandle(client *Client, threadID string, turnID string, interruptOnCancel bool) *TurnHandle {
+	return &TurnHandle{
+		client:   client,
+		threadID: threadID,
+		id:       turnID,
+		state:    newTurnState(client, threadID, turnID, interruptOnCancel),
+	}
 }
 
 type RunResult struct {
@@ -40,41 +45,34 @@ func (h *TurnHandle) ID() string {
 	return h.id
 }
 
-// Stream returns the turn's events from now on; the first Stream or Wait of the handle
-// also gets the events buffered since the turn started. ctx bounds the stream's lifetime.
-// After the turn finished, Stream returns a stream that is already closed with the turn's
-// terminal error, which is nil after turn/completed.
+// Stream returns the turn's events. The handle's first Stream or Wait also gets the events
+// buffered since the turn started, and a Stream opened after the handle's earlier streams
+// closed first gets the events that arrived meanwhile (up to PendingTurnQueue). ctx bounds
+// the stream's lifetime. After the turn finished, the stream closes with the turn's
+// terminal error, which is nil after turn/completed, once it delivered those events.
 func (h *TurnHandle) Stream(ctx context.Context) (*TurnStream, error) {
-	if h == nil || h.client == nil || h.client.router == nil {
+	if h == nil || h.client == nil || h.client.router == nil || h.state == nil {
 		return nil, &ClosedError{}
 	}
 	if err := h.client.ensureHighLevelEnabled("turn stream"); err != nil {
 		return nil, err
 	}
-	return h.turnState().stream(ctx), nil
+	return h.state.stream(ctx), nil
 }
 
 // Wait returns the turn's result once turn/completed arrives, even when a stream of the
-// handle already consumed its events. Every call gets the same result or error. When ctx
-// ends first, Wait returns its error and the handle keeps following the turn, so a later
-// Wait still returns the result.
+// handle already consumed its events. Every call gets the same result or error; each gets
+// its own Items slice, while values nested in the items are shared and must be treated as
+// read-only. When ctx ends first, Wait returns its error and the handle keeps following
+// the turn, so a later Wait still returns the result.
 func (h *TurnHandle) Wait(ctx context.Context) (*RunResult, error) {
-	if h == nil || h.client == nil || h.client.router == nil {
+	if h == nil || h.client == nil || h.client.router == nil || h.state == nil {
 		return nil, &ClosedError{}
 	}
 	if err := h.client.ensureHighLevelEnabled("turn wait"); err != nil {
 		return nil, err
 	}
-	return h.turnState().wait(ctx)
-}
-
-func (h *TurnHandle) turnState() *turnState {
-	h.stateMu.Lock()
-	defer h.stateMu.Unlock()
-	if h.state == nil {
-		h.state = newTurnState(h.client, h.threadID, h.id, h.interruptOnCancel)
-	}
-	return h.state
+	return h.state.wait(ctx)
 }
 
 func (h *TurnHandle) Steer(ctx context.Context, input Input, opts ...SteerOptions) error {
@@ -124,26 +122,6 @@ func (h *TurnHandle) UpdateSettings(ctx context.Context, params protocol.TurnSet
 	params.ThreadID = h.threadID
 	params.TurnID = h.id
 	return h.client.Raw().TurnSettingsUpdate(ctx, params)
-}
-
-func collectRunResult(ctx context.Context, turnID string, stream *NotificationStream, limits ClientLimits) (*RunResult, error) {
-	return collectRunResultForThread(ctx, "", turnID, stream, limits)
-}
-
-func collectRunResultForThread(ctx context.Context, threadID string, turnID string, stream *NotificationStream, limits ClientLimits) (*RunResult, error) {
-	collector := newRunResultCollector(threadID, turnID, limits)
-	for {
-		notification, ok := stream.Next(ctx)
-		if !ok {
-			if err := stream.Err(); err != nil {
-				return nil, err
-			}
-			return collector.finish()
-		}
-		if err := collector.observe(notification); err != nil {
-			return nil, err
-		}
-	}
 }
 
 // runResultCollector folds the notifications of one turn into its RunResult.

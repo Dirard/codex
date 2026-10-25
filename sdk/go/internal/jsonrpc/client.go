@@ -60,6 +60,7 @@ type terminationOrigin uint8
 const (
 	terminationExplicitClose terminationOrigin = iota
 	terminationUnexpected
+	terminationAbort
 )
 
 const minimumServerReplyQueue = 256
@@ -263,6 +264,21 @@ func (c *Client) Close() error {
 	return c.terminate(&ClosedError{}, terminationExplicitClose)
 }
 
+// Abort ends the connection like Close, but a transport that owns a runtime kills it at
+// once instead of waiting for it to shut down; for a client that never finished starting.
+func (c *Client) Abort() error {
+	return c.terminate(&ClosedError{}, terminationAbort)
+}
+
+// closeTransportNow closes a transport without the runtime shutdown grace period when the
+// transport offers one.
+func closeTransportNow(transport Transport) error {
+	if now, ok := transport.(interface{ CloseNow() error }); ok {
+		return now.CloseNow()
+	}
+	return transport.Close()
+}
+
 func (c *Client) terminate(waiterErr error, origin terminationOrigin) error {
 	c.closeMu.Lock()
 	if c.closed {
@@ -275,12 +291,20 @@ func (c *Client) terminate(waiterErr error, origin terminationOrigin) error {
 	c.cancel()
 	c.closeMu.Unlock()
 
-	if origin == terminationExplicitClose {
+	var closeErr error
+	switch origin {
+	case terminationExplicitClose:
 		// Pending calls end at once; closing the transport may wait for the runtime to
 		// shut down.
 		c.failAll(waiterErr)
+		closeErr = c.transport.Close()
+	case terminationAbort:
+		c.failAll(waiterErr)
+		closeErr = closeTransportNow(c.transport)
+	default:
+		// The connection failed: no shutdown grace, and waiters get the detailed error.
+		closeErr = closeTransportNow(c.transport)
 	}
-	closeErr := c.transport.Close()
 	if origin == terminationUnexpected && c.onTermination != nil {
 		if terminalErr := c.onTermination(waiterErr); terminalErr != nil {
 			waiterErr = terminalErr

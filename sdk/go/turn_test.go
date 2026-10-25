@@ -170,3 +170,25 @@ func assertRequestStringField(t *testing.T, params json.RawMessage, field string
 		t.Fatalf("%s = %#v, want %q; params = %s", field, raw[field], want, params)
 	}
 }
+
+// collectRunResult drains a stream into a run result, as Thread.Run did before turn
+// handles observed their turn themselves; it drives runResultCollector in these tests.
+func collectRunResult(ctx context.Context, turnID string, stream *NotificationStream, limits ClientLimits) (*RunResult, error) {
+	return collectRunResultForThread(ctx, "", turnID, stream, limits)
+}
+
+func collectRunResultForThread(ctx context.Context, threadID string, turnID string, stream *NotificationStream, limits ClientLimits) (*RunResult, error) {
+	collector := newRunResultCollector(threadID, turnID, limits)
+	for {
+		notification, ok := stream.Next(ctx)
+		if !ok {
+			if err := stream.Err(); err != nil {
+				return nil, err
+			}
+			return collector.finish()
+		}
+		if err := collector.observe(notification); err != nil {
+			return nil, err
+		}
+	}
+}

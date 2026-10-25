@@ -130,8 +130,9 @@ func TestInterruptOnCancelSkipsClosedStreamsAndFinishedTurns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := late.Next(context.Background()); ok {
-		t.Fatal("stream of a finished turn delivered an event")
+	// The events that arrived after the first stream closed are replayed, then it ends.
+	if methods := drainStream(t, late); len(methods) != 2 {
+		t.Fatalf("late stream = %v", methods)
 	}
 	time.Sleep(50 * time.Millisecond)
 	if methodWasSent(t, transport, "turn/interrupt") {

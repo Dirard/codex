@@ -480,11 +480,10 @@ func (t *Thread) Run(ctx context.Context, input Input, opts TurnOptions) (*RunRe
 	if handle.client.router == nil {
 		return nil, &ClosedError{}
 	}
-	state := handle.turnState()
-	result, err := state.wait(ctx)
-	if err != nil && ctx.Err() != nil {
+	result, err := handle.state.wait(ctx)
+	if err != nil {
 		// Nobody else holds this handle, so nobody can observe the turn any longer.
-		state.release()
+		handle.state.release()
 	}
 	return result, err
 }
@@ -516,7 +515,7 @@ func (t *Thread) Turn(ctx context.Context, input Input, opts TurnOptions) (*Turn
 	if err != nil {
 		return nil, err
 	}
-	return &TurnHandle{client: t.client, threadID: t.id, id: response.Turn.ID, interruptOnCancel: opts.InterruptOnCancel}, nil
+	return newTurnHandle(t.client, t.id, response.Turn.ID, opts.InterruptOnCancel), nil
 }
 
 func threadStartParams(opts ThreadStartOptions) protocol.ThreadStartParams {

@@ -217,22 +217,28 @@ func (s *Server) Request(ctx context.Context, method string, params any) (json.R
 	reply := make(chan serverReply, 1)
 	s.serverRequests[key] = reply
 	s.mu.Unlock()
+	forget := func() {
+		s.mu.Lock()
+		delete(s.serverRequests, key)
+		s.mu.Unlock()
+	}
 	frame, err := json.Marshal(jsonrpc.Envelope{ID: &id, Method: method, Params: data})
 	if err != nil {
+		forget()
 		return nil, err
 	}
 	if err := s.enqueue(frame); err != nil {
+		forget()
 		return nil, err
 	}
 	select {
 	case answer := <-reply:
 		return answer.result, answer.err
 	case <-ctx.Done():
-		s.mu.Lock()
-		delete(s.serverRequests, key)
-		s.mu.Unlock()
+		forget()
 		return nil, ctx.Err()
 	case <-s.ctx.Done():
+		forget()
 		return nil, ErrClosed
 	}
 }
@@ -303,8 +309,10 @@ func (s *Server) Unhandled() []string {
 	return append([]string(nil), s.unhandled...)
 }
 
-// Err reports protocol violations by the client, such as a request before initialize or a
-// missing initialized notification, or nil.
+// Err reports protocol violations by the client so far, or nil: a request before
+// initialize, initialize or initialized sent twice, initialized before initialize, or a
+// request or notification between initialize and initialized. A client that never sends
+// initialized and nothing else afterwards is not reported; use WaitInitialized for that.
 func (s *Server) Err() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -481,6 +489,9 @@ func (s *Server) handleNotification(notification Request) {
 	defer s.mu.Unlock()
 	s.notifications = append(s.notifications, notification)
 	if notification.Method != "initialized" {
+		if s.initializeSeen && !s.initialized {
+			s.violations = append(s.violations, fmt.Errorf("client sent %s before the initialized notification", notification.Method))
+		}
 		return
 	}
 	switch {

@@ -14,7 +14,7 @@ type LoginHandle struct {
 	verificationURL string
 	userCode        string
 
-	waiter memoWait[*LoginResult]
+	waiter *memoWait[*LoginResult]
 	// completion is the observed account/login/completed event; only the caller holding
 	// the waiter's slot reads or writes it.
 	completion *LoginResult
@@ -58,7 +58,7 @@ func (h *LoginHandle) UserCode() string {
 // successful login, the account is visible. Every call gets the same outcome; when ctx ends
 // first, Wait returns its error and a later Wait resumes where it stopped.
 func (h *LoginHandle) Wait(ctx context.Context) (*LoginResult, error) {
-	if h == nil || h.client == nil || h.client.router == nil {
+	if h == nil || h.client == nil || h.client.router == nil || h.waiter == nil {
 		return nil, &ClosedError{}
 	}
 	if err := h.client.ensureHighLevelEnabled("account login wait"); err != nil {
@@ -69,9 +69,6 @@ func (h *LoginHandle) Wait(ctx context.Context) (*LoginResult, error) {
 }
 
 func (h *LoginHandle) waitLogin(ctx context.Context) (*LoginResult, error) {
-	// Subscribe before reading the account so an update right after it is not missed.
-	accountUpdates := h.client.router.subscribeGlobal()
-	defer accountUpdates.Close()
 	if h.completion == nil {
 		completion, err := h.waitCompletion(ctx)
 		if err != nil {
@@ -83,6 +80,11 @@ func (h *LoginHandle) waitLogin(ctx context.Context) (*LoginResult, error) {
 	if !result.Success {
 		return result, nil
 	}
+	// Subscribe before reading the account so an update right after the read is not
+	// missed; an update before the subscription is already visible to the read. The
+	// global stream is open only for this short wait, not while the user signs in.
+	accountUpdates := h.client.router.subscribeGlobal()
+	defer accountUpdates.Close()
 	account, err := h.client.Accounts.Read(ctx, false)
 	if err != nil {
 		return nil, err

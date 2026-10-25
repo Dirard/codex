@@ -21,7 +21,7 @@ type MCPOAuthHandle struct {
 	loginID          string
 	authorizationURL string
 
-	waiter memoWait[*MCPOAuthResult]
+	waiter *memoWait[*MCPOAuthResult]
 }
 
 type MCPOAuthResult struct {
@@ -52,7 +52,7 @@ func (c *MCPClient) OAuthLogin(ctx context.Context, opts MCPOAuthLoginOptions) (
 		return nil, err
 	}
 	loginID, _ := response.LoginID.Value()
-	return &MCPOAuthHandle{client: c.client, name: opts.Name, threadID: opts.ThreadID, loginID: loginID, authorizationURL: response.AuthorizationURL}, nil
+	return &MCPOAuthHandle{client: c.client, name: opts.Name, threadID: opts.ThreadID, loginID: loginID, authorizationURL: response.AuthorizationURL, waiter: &memoWait[*MCPOAuthResult]{}}, nil
 }
 
 func (c *MCPClient) ListStatus(ctx context.Context, params protocol.ListMcpServerStatusParams) (protocol.ListMcpServerStatusResponse, error) {
@@ -86,7 +86,7 @@ func (h *MCPOAuthHandle) AuthorizationURL() string {
 // Wait returns the outcome of mcpServer/oauthLogin/completed. Every call gets the same
 // outcome; when ctx ends first, Wait returns its error and a later Wait keeps waiting.
 func (h *MCPOAuthHandle) Wait(ctx context.Context) (*MCPOAuthResult, error) {
-	if h == nil || h.client == nil || h.client.router == nil {
+	if h == nil || h.client == nil || h.client.router == nil || h.waiter == nil {
 		return nil, &ClosedError{}
 	}
 	if err := h.client.ensureHighLevelEnabled("mcp oauth wait"); err != nil {

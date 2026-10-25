@@ -313,6 +313,7 @@ func (c *AccountsClient) startLogin(ctx context.Context, params protocol.LoginAc
 		authURL:         authURL,
 		verificationURL: verificationURL,
 		userCode:        userCode,
+		waiter:          &memoWait[*LoginResult]{},
 	}, nil
 }
 
