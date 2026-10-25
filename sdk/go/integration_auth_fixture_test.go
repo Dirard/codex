@@ -301,10 +301,24 @@ wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 
+# A login starts a background clone of github.com/openai/plugins into CODEX_HOME
+# (--disable-plugin-startup-tasks-for-tests covers only startup). Tests must not
+# depend on the network, and the clone races with TempDir cleanup.
 [features]
 shell_snapshot = false
+plugins = false
 `, serverURL, serverURL+"/v1")
 	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(strings.TrimSpace(content)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Registered before the client, so it runs after Close and before TempDir removal.
+	t.Cleanup(func() {
+		matches, err := filepath.Glob(filepath.Join(codexHome, ".tmp", "plugins*"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(matches) > 0 {
+			t.Errorf("runtime synced plugins into the test CODEX_HOME: %v", matches)
+		}
+	})
 }
