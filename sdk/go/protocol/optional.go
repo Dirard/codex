@@ -3,6 +3,7 @@ package protocol
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -23,6 +24,9 @@ func Null[T any]() Optional[T] {
 func (o Optional[T]) IsSet() bool { return o.set }
 
 func (o Optional[T]) IsNull() bool { return o.set && o.null }
+
+// IsZero reports whether o is unset, so that a struct field tagged omitzero omits it.
+func (o Optional[T]) IsZero() bool { return !o.set }
 
 func (o Optional[T]) Value() (T, bool) {
 	return o.value, o.set && !o.null
@@ -47,7 +51,7 @@ func (o *Optional[T]) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	o.null = false
-	return json.Unmarshal(data, &o.value)
+	return unmarshalOptionalValue(data, &o.value)
 }
 
 type OptionalNonNull[T any] struct {
@@ -61,6 +65,9 @@ func SomeNonNull[T any](value T) OptionalNonNull[T] {
 
 func (o OptionalNonNull[T]) IsSet() bool { return o.set }
 
+// IsZero reports whether o is unset, so that a struct field tagged omitzero omits it.
+func (o OptionalNonNull[T]) IsZero() bool { return !o.set }
+
 func (o OptionalNonNull[T]) Value() (T, bool) { return o.value, o.set }
 
 func (o OptionalNonNull[T]) MarshalJSON() ([]byte, error) {
@@ -70,10 +77,66 @@ func (o OptionalNonNull[T]) MarshalJSON() ([]byte, error) {
 	return json.Marshal(o.value)
 }
 
+var errOptionalNonNullNull = errors.New("optional non-null field cannot be null")
+
 func (o *OptionalNonNull[T]) UnmarshalJSON(data []byte) error {
 	if bytes.Equal(data, []byte("null")) {
-		return fmt.Errorf("optional non-null field cannot be null")
+		return errOptionalNonNullNull
 	}
 	o.set = true
-	return json.Unmarshal(data, &o.value)
+	return unmarshalOptionalValue(data, &o.value)
+}
+
+// unmarshalOptionalValue decodes an optional value. A string literal without escapes is
+// copied directly: encoding/json has validated it already when it calls UnmarshalJSON,
+// and decoding it again would validate and scan it twice more.
+func unmarshalOptionalValue[T any](data []byte, value *T) error {
+	if text, ok := any(value).(*string); ok {
+		if decoded, ok := simpleJSONString(data); ok {
+			*text = decoded
+			return nil
+		}
+	}
+	return json.Unmarshal(data, value)
+}
+
+// The helpers below normalize a copy of a generated struct before it is marshaled, for
+// serde skip_serializing_if predicates that an omitzero tag alone cannot express.
+
+// withoutNull drops an explicit null (skip_serializing_if = "Option::is_none").
+func (o Optional[T]) withoutNull() Optional[T] {
+	if o.null {
+		return Optional[T]{}
+	}
+	return o
+}
+
+// optionalWithoutFalse drops false (skip_serializing_if = "std::ops::Not::not").
+func optionalWithoutFalse[B ~bool](o Optional[B]) Optional[B] {
+	if value, ok := o.Value(); ok && !bool(value) {
+		return Optional[B]{}
+	}
+	return o
+}
+
+func nonNullWithoutFalse[B ~bool](o OptionalNonNull[B]) OptionalNonNull[B] {
+	if value, ok := o.Value(); ok && !bool(value) {
+		return OptionalNonNull[B]{}
+	}
+	return o
+}
+
+// optionalWithoutEmpty drops an empty or null slice (skip_serializing_if = "Vec::is_empty").
+func optionalWithoutEmpty[S ~[]E, E any](o Optional[S]) Optional[S] {
+	if value, ok := o.Value(); !ok || len(value) == 0 {
+		return Optional[S]{}
+	}
+	return o
+}
+
+func nonNullWithoutEmpty[S ~[]E, E any](o OptionalNonNull[S]) OptionalNonNull[S] {
+	if value, ok := o.Value(); !ok || len(value) == 0 {
+		return OptionalNonNull[S]{}
+	}
+	return o
 }
