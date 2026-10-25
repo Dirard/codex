@@ -26,14 +26,19 @@ type StdioOptions struct {
 	Env           []string
 	MaxFrameBytes int64
 	StderrBytes   int
+	// ShutdownGrace is how long Close waits for the runtime to exit after closing its
+	// stdin before it kills the runtime. Zero kills it at once.
+	ShutdownGrace time.Duration
 }
 
 type StdioTransport struct {
 	transport *StreamTransport
 	cmd       *exec.Cmd
 	stderr    *Ring
+	stdout    *runtimeStdout
 	// exited is closed once cmd.Wait returned.
-	exited chan struct{}
+	exited        chan struct{}
+	shutdownGrace time.Duration
 	// killedByClose is set when Close sent a kill before observing the exit.
 	killedByClose atomic.Bool
 	closeOnce     sync.Once
@@ -94,6 +99,28 @@ func (r *runtimeStdout) signal() {
 	r.once.Do(func() { close(r.done) })
 }
 
+// pumpRuntimeStdout copies the runtime's stdout to the frame reader. Once the frame reader
+// is closed it keeps reading and discards the output, so a runtime that is shutting down
+// after Close never blocks on a full stdout pipe. The end of stdout reaches the frame
+// reader after every byte before it.
+func pumpRuntimeStdout(stdout *runtimeStdout, frames *io.PipeWriter) {
+	buf := make([]byte, 32*1024)
+	forward := true
+	for {
+		n, err := stdout.Read(buf)
+		if n > 0 && forward {
+			if _, writeErr := frames.Write(buf[:n]); writeErr != nil {
+				forward = false
+			}
+		}
+		if err != nil {
+			_ = frames.CloseWithError(err)
+			_ = stdout.Close()
+			return
+		}
+	}
+}
+
 // exitedPipeWriter tolerates a stdin pipe that cmd.Wait already closed after the runtime
 // exited.
 type exitedPipeWriter struct {
@@ -150,11 +177,17 @@ func StartStdio(ctx context.Context, opts StdioOptions) (*StdioTransport, error)
 	}
 	exited := make(chan struct{})
 	stdout := &runtimeStdout{file: stdoutRead, exited: exited, done: make(chan struct{})}
+	// Closing the frame reader unblocks Receive at once, while the pump keeps draining the
+	// runtime's stdout until the runtime exits.
+	frames, framesWriter := io.Pipe()
+	go pumpRuntimeStdout(stdout, framesWriter)
 	t := &StdioTransport{
-		transport: NewStreamTransport(stdout, exitedPipeWriter{stdin}, opts.MaxFrameBytes),
-		cmd:       cmd,
-		stderr:    stderr,
-		exited:    exited,
+		transport:     NewStreamTransport(frames, exitedPipeWriter{stdin}, opts.MaxFrameBytes),
+		cmd:           cmd,
+		stderr:        stderr,
+		stdout:        stdout,
+		exited:        exited,
+		shutdownGrace: opts.ShutdownGrace,
 	}
 	go func() {
 		_ = cmd.Wait()
@@ -172,22 +205,46 @@ func (t *StdioTransport) Send(ctx context.Context, frame json.RawMessage) error 
 	return t.transport.Send(ctx, frame)
 }
 
+// Close shuts the runtime down in order: it closes the runtime's stdin, which asks the
+// runtime to exit, keeps draining its stdout, waits up to the shutdown grace period for
+// the exit and only then kills the runtime. Close returns once the runtime exited.
 func (t *StdioTransport) Close() error {
 	t.closeOnce.Do(func() {
 		t.closeErr = t.transport.Close()
-		if t.cmd.Process != nil {
-			select {
-			case <-t.exited:
-			default:
-				t.killedByClose.Store(true)
-				_ = t.cmd.Process.Kill()
-			}
+		if t.cmd.Process != nil && !t.exitedWithin(t.shutdownGrace) {
+			t.killedByClose.Store(true)
+			_ = t.cmd.Process.Kill()
 		}
 		if t.exited != nil {
 			<-t.exited
 		}
+		if t.stdout != nil {
+			_ = t.stdout.Close()
+		}
 	})
 	return t.closeErr
+}
+
+func (t *StdioTransport) exitedWithin(grace time.Duration) bool {
+	if t.exited == nil {
+		return false
+	}
+	if grace <= 0 {
+		select {
+		case <-t.exited:
+			return true
+		default:
+			return false
+		}
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-t.exited:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 // TerminationDetails waits up to timeout for the runtime to exit and returns its exit

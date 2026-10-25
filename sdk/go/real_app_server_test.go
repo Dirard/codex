@@ -22,6 +22,9 @@ import (
 
 const realAppServerTimeout = 30 * time.Second
 
+// realHangingResponse makes the mock model stream that never completes.
+const realHangingResponse = "\x00hang"
+
 func TestRealAppServerLinuxUsesWorkspaceWriteSandbox(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux-only sandbox policy")
@@ -455,6 +458,18 @@ func (f *realResponsesFixture) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "text/event-stream")
+		if stream == realHangingResponse {
+			// A model that never finishes: the turn runs until it is interrupted.
+			_, _ = w.Write([]byte("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\"}}\n\n"))
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			select {
+			case <-r.Context().Done():
+			case <-time.After(realAppServerTimeout):
+			}
+			return
+		}
 		_, _ = w.Write([]byte(stream))
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/models":
 		w.Header().Set("Content-Type", "application/json")

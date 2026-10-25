@@ -109,13 +109,16 @@ func newClient(ctx context.Context, cfg ClientConfig) (*Client, error) {
 	return client, nil
 }
 
+// Close ends the connection. Pending calls, streams and handles fail with *ClosedError at
+// once. A runtime the SDK launched then gets its stdin closed and up to
+// ClientConfig.ShutdownGracePeriod to exit on its own before it is killed; Close returns
+// once the runtime exited.
 func (c *Client) Close() error {
 	if c == nil || c.rpc == nil {
 		return nil
 	}
-	err := c.rpc.Close()
 	c.closeResources(&ClosedError{})
-	return err
+	return c.rpc.Close()
 }
 
 func (c *Client) handleUnexpectedTermination(err error) error {

@@ -30,6 +30,8 @@ const (
 const (
 	DefaultHandlerTimeout             = 60 * time.Second
 	DefaultLifecycleInactivityTimeout = 5 * time.Minute
+	// DefaultShutdownGracePeriod is how long Close lets a launched runtime exit on its own.
+	DefaultShutdownGracePeriod = 5 * time.Second
 )
 
 func normalizeLimits(l ClientLimits) (ClientLimits, error) {

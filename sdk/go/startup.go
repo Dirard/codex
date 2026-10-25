@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/openai/codex/sdk/go/internal/jsonrpc"
 	"github.com/openai/codex/sdk/go/protocol"
@@ -105,7 +106,7 @@ func validateClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	}
 	if cfg.Transport != nil {
 		if cfg.CodexPath != "" || !reflect.ValueOf(cfg.Launch).IsZero() || cfg.CWD != "" ||
-			len(cfg.Env) > 0 || len(cfg.ConfigOverrides) > 0 {
+			len(cfg.Env) > 0 || len(cfg.ConfigOverrides) > 0 || cfg.ShutdownGracePeriod != 0 {
 			return cfg, &ConfigError{Reason: "Transport cannot be combined with process launch fields"}
 		}
 	}
@@ -280,7 +281,21 @@ func startRuntime(ctx context.Context, path string, cfg ClientConfig) (jsonrpc.T
 		Env:           env,
 		MaxFrameBytes: cfg.Limits.MaxFrameBytes,
 		StderrBytes:   cfg.Limits.StderrRingBytes,
+		ShutdownGrace: shutdownGrace(cfg.ShutdownGracePeriod),
 	})
+}
+
+// shutdownGrace resolves ClientConfig.ShutdownGracePeriod: zero is the default and a
+// negative value means no grace period.
+func shutdownGrace(configured time.Duration) time.Duration {
+	switch {
+	case configured == 0:
+		return DefaultShutdownGracePeriod
+	case configured < 0:
+		return 0
+	default:
+		return configured
+	}
 }
 
 func buildRuntimeArgs(cfg ClientConfig) []string {

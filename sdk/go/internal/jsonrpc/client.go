@@ -275,6 +275,11 @@ func (c *Client) terminate(waiterErr error, origin terminationOrigin) error {
 	c.cancel()
 	c.closeMu.Unlock()
 
+	if origin == terminationExplicitClose {
+		// Pending calls end at once; closing the transport may wait for the runtime to
+		// shut down.
+		c.failAll(waiterErr)
+	}
 	closeErr := c.transport.Close()
 	if origin == terminationUnexpected && c.onTermination != nil {
 		if terminalErr := c.onTermination(waiterErr); terminalErr != nil {

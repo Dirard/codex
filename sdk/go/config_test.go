@@ -525,7 +525,8 @@ IFS= read -r line || true
 if [ -n "${line:-}" ]; then
   printf '%%s\n' '{"id":"go-2","result":{}}'
 fi
-sleep 5
+# Like the real runtime, exit once the client closes stdin.
+cat > /dev/null
 `, recordDir, protocol.StableProtocolDigest, protocol.ExperimentalProtocolDigest, protocol.StableSchemaDigest, protocol.ExperimentalSchemaDigest, protocol.StableManifestDigest, protocol.ExperimentalManifestDigest)
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)

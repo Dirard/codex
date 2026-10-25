@@ -33,6 +33,11 @@ type ClientConfig struct {
 	Compatibility        CompatibilityPolicy
 	Transport            Transport
 	NotificationOptOuts  NotificationOptOuts
+	// ShutdownGracePeriod is how long Close waits for a runtime the SDK launched to exit
+	// after its stdin was closed, before it kills the runtime. Zero means
+	// DefaultShutdownGracePeriod; a negative value kills the runtime at once. It cannot be
+	// combined with Transport.
+	ShutdownGracePeriod time.Duration
 }
 
 // LaunchOptions is reserved for typed codex global launch knobs that may appear
