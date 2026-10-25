@@ -7,14 +7,14 @@ func ThreadStartResponse(threadID string) protocol.ThreadStartResponse {
 	return protocol.ThreadStartResponse{
 		ApprovalPolicy:    protocol.AskForApprovalNever,
 		ApprovalsReviewer: protocol.ApprovalsReviewerAutoReview,
-		Cwd:               protocol.AbsolutePathBuf("/tmp/codextest"),
+		Cwd:               protocol.AbsolutePathBuf(Home),
 		Model:             "codextest-model",
 		ModelProvider:     "codextest",
 		Sandbox:           protocol.SandboxPolicy{TypeValue: "dangerFullAccess"},
 		Thread: protocol.Thread{
 			CliVersion:    "0.0.0-dev",
 			CreatedAt:     1,
-			Cwd:           protocol.AbsolutePathBuf("/tmp/codextest"),
+			Cwd:           protocol.AbsolutePathBuf(Home),
 			ID:            threadID,
 			ModelProvider: "codextest",
 			ProjectID:     protocol.Null[string](),

@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -213,7 +217,7 @@ func TestServerRequestReachesClientHandler(t *testing.T) {
 	if err := srv.WaitInitialized(ctx); err != nil {
 		t.Fatal(err)
 	}
-	result, err := srv.Request(ctx, "currentTime/read", protocol.CurrentTimeReadParams{ThreadID: "thread-1"})
+	result, err := srv.SendRequest(ctx, "currentTime/read", protocol.CurrentTimeReadParams{ThreadID: "thread-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +225,7 @@ func TestServerRequestReachesClientHandler(t *testing.T) {
 	if err := json.Unmarshal(result, &response); err != nil || response.CurrentTimeAt != 42 {
 		t.Fatalf("response = %s, %v", result, err)
 	}
-	_, err = srv.Request(ctx, "currentTime/read", protocol.CurrentTimeReadParams{ThreadID: "other"})
+	_, err = srv.SendRequest(ctx, "currentTime/read", protocol.CurrentTimeReadParams{ThreadID: "other"})
 	var rpcErr *codextest.Error
 	if !errors.As(err, &rpcErr) {
 		t.Fatalf("err = %T %v, want *codextest.Error", err, err)
@@ -294,22 +298,149 @@ func TestServerHandlerMayBlock(t *testing.T) {
 	}
 }
 
-// R5.1: codextest must stay importable by the SDK's own tests.
+// R5.1: codextest must stay importable by the SDK's own tests, so neither it nor anything
+// it imports may depend on the root package.
 func TestCodextestDoesNotImportRootPackage(t *testing.T) {
-	files, err := filepath.Glob("*.go")
+	goTool := filepath.Join(runtime.GOROOT(), "bin", "go")
+	if _, err := os.Stat(goTool); err != nil {
+		if goTool, err = exec.LookPath("go"); err != nil {
+			t.Skip("go tool not found")
+		}
+	}
+	out, err := exec.Command(goTool, "list", "-deps", ".").CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list -deps: %v\n%s", err, out)
+	}
+	deps := strings.Fields(string(out))
+	if len(deps) == 0 || deps[len(deps)-1] != "github.com/openai/codex/sdk/go/codextest" {
+		t.Fatalf("go list -deps listed %v", deps)
+	}
+	for _, dep := range deps {
+		if dep == "github.com/openai/codex/sdk/go" {
+			t.Fatal("codextest depends on the root SDK package")
+		}
+	}
+}
+
+// R5.5: WaitForRequestN finds a later request of a method, also one that has not arrived.
+func TestServerWaitsForTheNthRequest(t *testing.T) {
+	srv := codextest.New(t)
+	srv.Respond("thread/start", codextest.ThreadStartResponse("thread-1"))
+	var turns atomic.Int32
+	srv.Handle("turn/start", func(_ context.Context, call *codextest.Call) (any, error) {
+		turnID := fmt.Sprintf("turn-%d", turns.Add(1))
+		_ = call.NotifyAfter("item/completed", codextest.AgentMessageCompleted("thread-1", turnID, "item-1", turnID))
+		_ = call.NotifyAfter("turn/completed", codextest.TurnCompleted("thread-1", turnID, protocol.TurnStatusCompleted))
+		return codextest.TurnStartResponse(turnID), nil
+	})
+	client := newClient(t, srv, codex.ClientConfig{})
+	ctx := testContext(t)
+	thread, err := client.Threads.Start(ctx, codex.ThreadStartOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range files {
-		if strings.HasSuffix(file, "_test.go") {
-			continue
-		}
-		data, err := os.ReadFile(file)
+	second := make(chan codextest.Message, 1)
+	go func() {
+		request, err := srv.WaitForRequestN(ctx, "turn/start", 2)
 		if err != nil {
+			t.Error(err)
+		}
+		second <- request
+	}()
+	for _, text := range []string{"first", "second"} {
+		if _, err := thread.Run(ctx, codex.Text(text), codex.TurnOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(string(data), `"github.com/openai/codex/sdk/go"`) {
-			t.Fatalf("%s imports the root SDK package", file)
-		}
+	}
+	request := <-second
+	if !strings.Contains(string(request.Params), `"second"`) || strings.Contains(string(request.Params), `"first"`) {
+		t.Fatalf("second turn/start params = %s", request.Params)
+	}
+	if _, err := srv.WaitForRequestN(ctx, "turn/start", 0); err == nil {
+		t.Fatal("WaitForRequestN accepted request number 0")
+	}
+}
+
+// recordingTB is a testing.TB that records failures instead of failing the real test.
+type recordingTB struct {
+	testing.TB
+	cleanups []func()
+	errors   []string
+}
+
+func (r *recordingTB) Helper()          {}
+func (r *recordingTB) Cleanup(f func()) { r.cleanups = append(r.cleanups, f) }
+func (r *recordingTB) Errorf(format string, args ...any) {
+	r.errors = append(r.errors, fmt.Sprintf(format, args...))
+}
+
+func (r *recordingTB) finish() {
+	for i := len(r.cleanups) - 1; i >= 0; i-- {
+		r.cleanups[i]()
+	}
+}
+
+// R5.6: New closes the server when the test ends and fails the test on unscripted methods
+// and protocol violations, and only then.
+func TestNewFailsTheTestOnUnscriptedMethodsAndViolations(t *testing.T) {
+	clean := &recordingTB{TB: t}
+	srv := codextest.New(clean)
+	srv.Respond("thread/start", codextest.ThreadStartResponse("thread-1"))
+	client := newClient(t, srv, codex.ClientConfig{})
+	if _, err := client.Threads.Start(testContext(t), codex.ThreadStartOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	clean.finish()
+	if len(clean.errors) != 0 {
+		t.Fatalf("a clean scenario failed the test: %v", clean.errors)
+	}
+	if err := srv.Notify("item/agentMessage/delta", nil); !errors.Is(err, codextest.ErrClosed) {
+		t.Fatalf("the server is open after the test ended: %v", err)
+	}
+
+	failing := &recordingTB{TB: t}
+	srv = codextest.New(failing)
+	client = newClient(t, srv, codex.ClientConfig{})
+	_, _ = client.Raw().MemoryReset(testContext(t))
+	if err := srv.Send(testContext(t), json.RawMessage(`{"method":"initialized"}`)); err != nil {
+		t.Fatal(err)
+	}
+	failing.finish()
+	report := strings.Join(failing.errors, "\n")
+	if !strings.Contains(report, "memory/reset") || !strings.Contains(report, "initialized twice") {
+		t.Fatalf("test failures = %q, want the unscripted method and the violation", report)
+	}
+}
+
+// R5.7: initialize reports the platform the test runs on.
+func TestServerReportsTheTestPlatform(t *testing.T) {
+	srv := codextest.New(t)
+	ctx := testContext(t)
+	if err := srv.Send(ctx, json.RawMessage(`{"id":1,"method":"initialize","params":{"clientInfo":{"name":"t","version":"0"}}}`)); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := srv.Receive(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply struct {
+		Result protocol.InitializeResponse `json:"result"`
+	}
+	if err := json.Unmarshal(frame, &reply); err != nil {
+		t.Fatal(err)
+	}
+	wantOS, wantFamily := runtime.GOOS, "unix"
+	switch runtime.GOOS {
+	case "darwin":
+		wantOS = "macos"
+	case "windows":
+		wantFamily = "windows"
+	}
+	result := reply.Result
+	if result.PlatformOs != wantOS || result.PlatformFamily != wantFamily || string(result.CodexHome) != codextest.Home || !filepath.IsAbs(codextest.Home) {
+		t.Fatalf("initialize = os %q, family %q, home %q", result.PlatformOs, result.PlatformFamily, result.CodexHome)
+	}
+	if err := srv.Send(ctx, json.RawMessage(`{"method":"initialized"}`)); err != nil {
+		t.Fatal(err)
 	}
 }

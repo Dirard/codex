@@ -6,10 +6,13 @@
 // this SDK build, answers requests from a per-method script, and lets the test send
 // notifications and server requests:
 //
-//	srv := codextest.NewServer()
-//	defer srv.Close()
+//	srv := codextest.New(t)
 //	srv.Respond("thread/start", codextest.ThreadStartResponse("thread-1"))
 //	client, err := codex.NewClient(ctx, codex.ClientConfig{Transport: srv})
+//
+// Two errors mean "closed": the Server's own methods return ErrClosed after Close or
+// Disconnect, while the client, which reads and writes through Receive and Send, gets the
+// SDK's *codex.ClosedError.
 //
 // The package does not import the root codex package, so the SDK's own tests can use it.
 package codextest
@@ -20,7 +23,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
+	"testing"
 
 	"github.com/openai/codex/sdk/go/internal/jsonrpc"
 	"github.com/openai/codex/sdk/go/protocol"
@@ -37,11 +44,16 @@ const (
 // of a dev runtime's userAgent.
 const DefaultUserAgent = "codex_app_server/0.0.0 (Linux 7.0; x86_64) codextest (codex_go_sdk; 0.0.0-dev)"
 
-// ErrClosed is returned by Server methods after Close or Disconnect.
+// ErrClosed is returned by Server methods after Close or Disconnect. The client side of the
+// transport gets *codex.ClosedError instead.
 var ErrClosed = errors.New("codextest: server closed")
 
+// Home is the codexHome the fake server reports and the directory its builders use as the
+// working directory: a path under the system temporary directory, which is not created.
+var Home = filepath.Join(os.TempDir(), "codextest")
+
 // Error is a JSON-RPC error. A HandlerFunc returns it to answer with a specific code;
-// Request returns it when the client answered a server request with an error.
+// SendRequest returns it when the client answered a server request with an error.
 type Error struct {
 	Code    int64
 	Message string
@@ -52,8 +64,8 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("codextest: JSON-RPC error %d: %s", e.Code, e.Message)
 }
 
-// Request is a JSON-RPC request or notification the client sent.
-type Request struct {
+// Message is a JSON-RPC request or notification the client sent.
+type Message struct {
 	// ID is the request id; it is zero for notifications.
 	ID     protocol.RequestID
 	Method string
@@ -61,17 +73,17 @@ type Request struct {
 	Trace  json.RawMessage
 }
 
-// Decode unmarshals the request params into v.
-func (r Request) Decode(v any) error {
-	if len(r.Params) == 0 {
+// Decode unmarshals the message params into v.
+func (m Message) Decode(v any) error {
+	if len(m.Params) == 0 {
 		return json.Unmarshal([]byte("null"), v)
 	}
-	return json.Unmarshal(r.Params, v)
+	return json.Unmarshal(m.Params, v)
 }
 
 // Call is a client request being answered by a HandlerFunc.
 type Call struct {
-	Request
+	Message
 	after []json.RawMessage
 }
 
@@ -119,8 +131,8 @@ type Server struct {
 	closed         bool
 	disconnected   error
 	script         map[string]scriptEntry
-	requests       []Request
-	notifications  []Request
+	requests       []Message
+	notifications  []Message
 	changed        chan struct{}
 	unhandled      []string
 	violations     []error
@@ -142,6 +154,25 @@ type scriptEntry struct {
 type serverReply struct {
 	result json.RawMessage
 	err    error
+}
+
+// New returns a fake app-server for the test t. The server closes when the test ends, and
+// the test fails if the client violated the protocol (Err) or called a method without a
+// scripted answer (Unhandled). Use NewServer to check those yourself, for example in a test
+// of unscripted methods.
+func New(t testing.TB, opts ...Option) *Server {
+	t.Helper()
+	s := NewServer(opts...)
+	t.Cleanup(func() {
+		_ = s.Close()
+		if err := s.Err(); err != nil {
+			t.Errorf("codextest: protocol violations: %v", err)
+		}
+		if unhandled := s.Unhandled(); len(unhandled) > 0 {
+			t.Errorf("codextest: methods without a scripted answer: %v", unhandled)
+		}
+	})
+	return s
 }
 
 // NewServer returns a fake app-server with an empty script.
@@ -199,9 +230,9 @@ func (s *Server) Notify(method string, params any) error {
 	return s.enqueue(frame)
 }
 
-// Request sends a server request, such as an approval, and returns the client's result.
-// A client error response is returned as *Error.
-func (s *Server) Request(ctx context.Context, method string, params any) (json.RawMessage, error) {
+// SendRequest sends a server request, such as an approval, and returns the client's
+// result. A client error response is returned as *Error.
+func (s *Server) SendRequest(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	data, err := encodeParams(params)
 	if err != nil {
 		return nil, err
@@ -244,25 +275,38 @@ func (s *Server) Request(ctx context.Context, method string, params any) (json.R
 }
 
 // Requests returns the client requests received so far, initialize included, in order.
-func (s *Server) Requests() []Request {
+func (s *Server) Requests() []Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]Request(nil), s.requests...)
+	return append([]Message(nil), s.requests...)
 }
 
 // Notifications returns the client notifications received so far, such as initialized.
-func (s *Server) Notifications() []Request {
+func (s *Server) Notifications() []Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]Request(nil), s.notifications...)
+	return append([]Message(nil), s.notifications...)
 }
 
 // WaitForRequest returns the first request with method, waiting until it arrives.
-func (s *Server) WaitForRequest(ctx context.Context, method string) (Request, error) {
+func (s *Server) WaitForRequest(ctx context.Context, method string) (Message, error) {
+	return s.WaitForRequestN(ctx, method, 1)
+}
+
+// WaitForRequestN returns the n-th request with method, counting from 1 and from the start
+// of the connection, waiting until it arrives.
+func (s *Server) WaitForRequestN(ctx context.Context, method string, n int) (Message, error) {
+	if n < 1 {
+		return Message{}, fmt.Errorf("codextest: request number %d, want 1 or more", n)
+	}
 	for {
 		s.mu.Lock()
+		seen := 0
 		for _, request := range s.requests {
-			if request.Method == method {
+			if request.Method != method {
+				continue
+			}
+			if seen++; seen == n {
 				s.mu.Unlock()
 				return request, nil
 			}
@@ -272,9 +316,9 @@ func (s *Server) WaitForRequest(ctx context.Context, method string) (Request, er
 		select {
 		case <-changed:
 		case <-ctx.Done():
-			return Request{}, ctx.Err()
+			return Message{}, ctx.Err()
 		case <-s.ctx.Done():
-			return Request{}, ErrClosed
+			return Message{}, ErrClosed
 		}
 	}
 }
@@ -390,18 +434,18 @@ func (s *Server) Send(_ context.Context, frame json.RawMessage) error {
 	s.mu.Unlock()
 	switch {
 	case env.ID != nil && env.Method != "":
-		s.handleRequest(Request{ID: *env.ID, Method: env.Method, Params: clone(env.Params), Trace: clone(env.Trace)})
+		s.handleRequest(Message{ID: *env.ID, Method: env.Method, Params: clone(env.Params), Trace: clone(env.Trace)})
 	case env.ID != nil:
 		s.handleReply(*env.ID, env)
 	case env.Method != "":
-		s.handleNotification(Request{Method: env.Method, Params: clone(env.Params), Trace: clone(env.Trace)})
+		s.handleNotification(Message{Method: env.Method, Params: clone(env.Params), Trace: clone(env.Trace)})
 	default:
 		s.violation(fmt.Errorf("client sent a frame that is neither request, response nor notification"))
 	}
 	return nil
 }
 
-func (s *Server) handleRequest(request Request) {
+func (s *Server) handleRequest(request Message) {
 	s.mu.Lock()
 	s.requests = append(s.requests, request)
 	close(s.changed)
@@ -427,7 +471,7 @@ func (s *Server) handleRequest(request Request) {
 		return
 	}
 	s.mu.Unlock()
-	call := &Call{Request: request}
+	call := &Call{Message: request}
 	if entry.inline {
 		result, err := entry.handler(s.ctx, call)
 		s.reply(request.ID, result, err, call.after)
@@ -439,7 +483,7 @@ func (s *Server) handleRequest(request Request) {
 	}()
 }
 
-func (s *Server) answerInitialize(request Request) {
+func (s *Server) answerInitialize(request Message) {
 	var params protocol.InitializeParams
 	paramsErr := request.Decode(&params)
 	s.mu.Lock()
@@ -460,8 +504,8 @@ func (s *Server) answerInitialize(request Request) {
 	s.reply(request.ID, response, nil, nil)
 }
 
-// defaultInitializeResponse matches this SDK build and the mode the client asked for, as
-// the runtime of the same build would.
+// defaultInitializeResponse matches this SDK build, the mode the client asked for and the
+// platform the test runs on, as the runtime of the same build would.
 func (s *Server) defaultInitializeResponse(params protocol.InitializeParams) protocol.InitializeResponse {
 	mode := protocol.ActiveProtocolModeStable
 	if capabilities, ok := params.Capabilities.Value(); ok {
@@ -471,9 +515,9 @@ func (s *Server) defaultInitializeResponse(params protocol.InitializeParams) pro
 	}
 	return protocol.InitializeResponse{
 		ActiveProtocolMode:         mode,
-		CodexHome:                  "/tmp/codextest",
-		PlatformFamily:             "unix",
-		PlatformOs:                 "linux",
+		CodexHome:                  protocol.AbsolutePathBuf(Home),
+		PlatformFamily:             platformFamily(runtime.GOOS),
+		PlatformOs:                 platformOS(runtime.GOOS),
 		UserAgent:                  s.userAgent,
 		StableProtocolDigest:       protocol.StableProtocolDigest,
 		ExperimentalProtocolDigest: protocol.ExperimentalProtocolDigest,
@@ -484,7 +528,23 @@ func (s *Server) defaultInitializeResponse(params protocol.InitializeParams) pro
 	}
 }
 
-func (s *Server) handleNotification(notification Request) {
+// platformOS names an operating system the way the runtime reports it.
+func platformOS(goos string) string {
+	if goos == "darwin" {
+		return "macos"
+	}
+	return goos
+}
+
+// platformFamily is the runtime's platform family for an operating system.
+func platformFamily(goos string) string {
+	if goos == "windows" {
+		return "windows"
+	}
+	return "unix"
+}
+
+func (s *Server) handleNotification(notification Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.notifications = append(s.notifications, notification)

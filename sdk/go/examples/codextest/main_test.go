@@ -14,8 +14,9 @@ func TestAnswer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	srv := codextest.NewServer()
-	defer srv.Close()
+	// New closes the server when the test ends and fails the test on protocol
+	// violations and on methods the script does not answer.
+	srv := codextest.New(t)
 	srv.Respond("thread/start", codextest.ThreadStartResponse("thread-1"))
 	srv.Handle("turn/start", func(ctx context.Context, call *codextest.Call) (any, error) {
 		var params protocol.TurnStartParams
@@ -41,32 +42,39 @@ func TestAnswer(t *testing.T) {
 	if answer != "4" {
 		t.Fatalf("answer = %q, want 4", answer)
 	}
-	if err := srv.Err(); err != nil {
-		t.Fatalf("protocol violations: %v", err)
-	}
 }
 
 func TestAnswerInterruptsTheTurnWhenCancelled(t *testing.T) {
-	srv := codextest.NewServer()
-	defer srv.Close()
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelWait()
+
+	srv := codextest.New(t)
 	srv.Respond("thread/start", codextest.ThreadStartResponse("thread-1"))
 	// The turn starts but never completes.
 	srv.Respond("turn/start", codextest.TurnStartResponse("turn-1"))
 	srv.Respond("turn/interrupt", protocol.TurnInterruptResponse{})
 
-	client, err := codex.NewClient(context.Background(), codex.ClientConfig{Transport: srv})
+	client, err := codex.NewClient(waitCtx, codex.ClientConfig{Transport: srv})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if _, err := Answer(ctx, client, "Take your time"); err == nil {
+	answered := make(chan error, 1)
+	go func() {
+		_, err := Answer(ctx, client, "Take your time")
+		answered <- err
+	}()
+	// Cancel once the turn is running, not after a fixed delay.
+	if _, err := srv.WaitForRequest(waitCtx, "turn/start"); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := <-answered; err == nil {
 		t.Fatal("Answer returned without an answer")
 	}
-	waitCtx, cancelWait := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelWait()
 	interrupt, err := srv.WaitForRequest(waitCtx, "turn/interrupt")
 	if err != nil {
 		t.Fatal(err)
