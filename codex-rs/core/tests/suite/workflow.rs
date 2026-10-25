@@ -975,11 +975,11 @@ async fn status_waits_for_the_run_and_the_notification_joins_the_active_turn() -
     assert_eq!(status["result"], "\"the answer\"", "{status}");
     // The notification was sampled in the same turn.
     assert_eq!(turns_started, 1);
-    let notified: Vec<&String> = after_status
+    let notified = after_status
         .iter()
         .filter(|body| body.contains(NOTIFICATION_MARKER))
-        .collect();
-    assert_eq!(notified.len(), 1, "{after_status:?}");
+        .count();
+    assert_eq!(notified, 1, "{after_status:?}");
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(responses.served("unmatched").is_empty());
     Ok(())

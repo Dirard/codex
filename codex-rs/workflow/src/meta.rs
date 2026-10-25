@@ -285,7 +285,7 @@ fn check_tokens(tokens: &[Token<'_>]) -> Result<(), ScriptError> {
             continue;
         }
         let previous = index.checked_sub(1).map(|index| code[index]);
-        if previous.is_some_and(|previous| previous.is_member_access()) {
+        if previous.is_some_and(Token::is_member_access) {
             continue;
         }
         let next = code.get(index + 1).copied();

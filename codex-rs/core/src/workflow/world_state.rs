@@ -70,7 +70,10 @@ impl WorkflowRunsState {
             "Active workflow runs (each sends a workflow notification when it ends; do not poll):",
         );
         for run in &self.runs {
-            text.push_str(&format!("\n- {} \"{}\": {}", run.run_id, run.name, run.status));
+            text.push_str(&format!(
+                "\n- {} \"{}\": {}",
+                run.run_id, run.name, run.status
+            ));
             if let Some(phase) = &run.phase {
                 text.push_str(&format!(", phase {phase}"));
             }

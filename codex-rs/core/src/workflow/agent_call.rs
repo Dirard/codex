@@ -602,7 +602,11 @@ impl AgentCall<'_> {
                 CallOutcome::Value(_) => "ok",
                 CallOutcome::Null { reason, .. } => reason,
             };
-            let _ = metrics.counter("codex.workflow.agents", /*inc*/ 1, &[("outcome", reason)]);
+            let _ = metrics.counter(
+                "codex.workflow.agents",
+                /*inc*/ 1,
+                &[("outcome", reason)],
+            );
         }
         match outcome {
             CallOutcome::Value(value) => {
