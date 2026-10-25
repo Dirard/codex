@@ -96,12 +96,14 @@ fork_clippy_packages=(
   codex-tools
   codex-tui
   codex-utils-output-truncation
+  codex-worktree
 )
 
 default_test_packages=(
   codex-core
   codex-linux-sandbox
   codex-app-server-protocol
+  codex-worktree
 )
 
 # Binaries that codex-core integration tests locate next to their test

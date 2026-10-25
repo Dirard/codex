@@ -12,8 +12,12 @@ use codex_features::AgentWorktreeBase;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_thread_store::ReadThreadParams;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
@@ -1726,5 +1730,99 @@ async fn a_full_history_fork_still_receives_the_isolation_note() -> Result<()> {
         "You are working in an isolated git worktree at {root}."
     )));
     assert!(request.body_contains_text(&format!("<cwd>{root}</cwd>")));
+    Ok(())
+}
+
+/// Sets the root's local environment to owner-provided configuration with `profile`.
+async fn set_owner_environment(test: &TestCodex, profile: PermissionProfile) -> Result<()> {
+    let cwd = test.config.cwd.clone();
+    let mut selection = core_test_support::test_codex::local(cwd.clone());
+    let mut config =
+        core_test_support::test_codex::environment_config_for_selection(&test.config, &selection);
+    config.permission_profile = PermissionProfileSnapshot::legacy(profile);
+    selection.config = EnvironmentConfigState::Ready(config);
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            environments: Some(TurnEnvironmentRequests::new(
+                cwd,
+                vec![selection.into_request()],
+            )),
+            ..Default::default()
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_owner_configured_child_is_bounded_by_the_parent_after_reload() -> Result<()> {
+    const TASK: &str = "write with owner permissions";
+    const FOLLOWUP: &str = "write after the owner narrowed";
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    set_owner_environment(&test, workspace_only_profile()).await?;
+    let spawn = mount_root_call(
+        &server,
+        ROOT_PROMPT,
+        "spawn-worker",
+        "spawn_agent",
+        spawn_arguments(TASK, "worker", Some("worktree")),
+    )
+    .await;
+    let first = mount_child(
+        &server,
+        TASK,
+        &[("owner-before", "printf before > before.txt".to_string())],
+    )
+    .await;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    test.submit_text_turn(ROOT_PROMPT).await?;
+    let child = next_child(&mut created, &test).await?;
+    wait_turn_complete(&child).await;
+    let root = PathBuf::from(worktree_field(
+        &spawn_output(&spawn, "spawn-worker"),
+        "path",
+    ));
+    let child_id = child.id;
+    let before = output_of(&first, "owner-before");
+    assert!(before.contains("exited with code 0"), "{before}");
+    assert!(root.join("before.txt").exists());
+    evict(&test, child).await?;
+
+    // The owner narrows the parent's environment while the child is unloaded, then reloads the
+    // child through its parent, as a host does before attaching to it.
+    set_owner_environment(&test, PermissionProfile::read_only()).await?;
+    test.thread_manager
+        .ensure_multi_agent_v2_child_loaded(child_id)
+        .await?;
+    assert!(test.thread_manager.get_thread(child_id).await.is_ok());
+    mount_root_call(
+        &server,
+        "follow up after the owner narrowed",
+        "followup-owner",
+        "followup_task",
+        followup_arguments(FOLLOWUP),
+    )
+    .await;
+    let reloaded = mount_child(
+        &server,
+        FOLLOWUP,
+        &[("owner-after", "printf after > after.txt".to_string())],
+    )
+    .await;
+    test.submit_text_turn("follow up after the owner narrowed")
+        .await?;
+    let child = Child {
+        id: child_id,
+        thread: test.thread_manager.get_thread(child_id).await?,
+    };
+    wait_turn_complete(&child).await;
+
+    // R5.5: the parent's environment, moved onto the worktree, still bounds the child.
+    let after = output_of(&reloaded, "owner-after");
+    assert!(after.contains("Read-only file system"), "{after}");
+    assert!(!root.join("after.txt").exists());
     Ok(())
 }
