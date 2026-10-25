@@ -588,12 +588,13 @@ func routeNotificationForTest(router *notificationRouter, ctx context.Context, m
 			Trace:  append([]byte(nil), trace...),
 		}
 	}
-	keys := routingKeys(metadata, params)
-	pendingKeys := pendingRoutingKeys(metadata, params)
-	realtimeKeys := realtimeRoutingKeys(method, params)
+	index := newParamIndex(params)
+	keys := routingKeys(metadata, index)
+	pendingKeys := pendingRoutingKeys(metadata, index)
+	realtimeKeys := realtimeRoutingKeys(method, index)
 	keys = append(keys, realtimeKeys...)
 	pendingKeys = append(pendingKeys, realtimeKeys...)
-	router.deliver(ctx, notification, keys, pendingKeys, true)
+	router.deliver(ctx, notification, index, keys, pendingKeys, true)
 }
 
 // Evicting buffered keys releases exactly their retained bytes.

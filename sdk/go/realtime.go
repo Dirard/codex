@@ -101,7 +101,7 @@ func (s *RealtimeSession) Stream(ctx context.Context) (*RealtimeStream, error) {
 				s.client.Realtime.unregisterSessionStream(s.threadID, s.id, stream)
 			}
 		},
-		realtimeThreadFilter(s.threadID),
+		plainFilter(realtimeThreadFilter(s.threadID)),
 	)
 	if err := s.client.Realtime.registerSessionStream(s.threadID, s.id, stream); err != nil {
 		_ = stream.Close()

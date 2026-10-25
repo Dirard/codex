@@ -42,6 +42,7 @@ type overflowSentinel struct {
 type pendingNotification struct {
 	seq           uint64
 	notification  Notification
+	params        *paramIndex
 	retainedBytes int64
 }
 
@@ -68,23 +69,23 @@ func (r *notificationRouter) subscribe(domain string, identities ...string) *Not
 }
 
 func (r *notificationRouter) subscribeTurn(threadID string, turnID string) *NotificationStream {
-	return r.subscribeKeys(turnScopedRouterKeys(turnID), notificationTurnFilter(threadID, turnID))
+	return r.subscribeKeysWithOnClose(turnScopedRouterKeys(turnID), nil, indexedTurnFilter(threadID, turnID))
 }
 
 func (r *notificationRouter) subscribeKeys(keys []routerKey, filter ...func(Notification) bool) *NotificationStream {
-	return r.subscribeKeysWithOnClose(keys, nil, filter...)
+	var streamFilter func(Notification, *paramIndex) bool
+	if len(filter) > 0 {
+		streamFilter = plainFilter(filter[0])
+	}
+	return r.subscribeKeysWithOnClose(keys, nil, streamFilter)
 }
 
 func (r *notificationRouter) subscribeKeysWithOnClose(
 	keys []routerKey,
 	onClose func(*NotificationStream),
-	filter ...func(Notification) bool,
+	streamFilter func(Notification, *paramIndex) bool,
 ) *NotificationStream {
 	keys = dedupeRouterKeys(keys)
-	var streamFilter func(Notification) bool
-	if len(filter) > 0 {
-		streamFilter = filter[0]
-	}
 	var stream *NotificationStream
 	stream = newFilteredNotificationStream(
 		r.limits.ResourceStreamQueue,
@@ -121,7 +122,7 @@ func (r *notificationRouter) subscribeKeysWithOnClose(
 				continue
 			}
 			observedSequences[candidate.seq] = struct{}{}
-			if stream.accepts(candidate.notification) {
+			if stream.accepts(candidate.notification, candidate.params) {
 				acceptedSequences[candidate.seq] = struct{}{}
 			}
 		}
@@ -185,11 +186,9 @@ func (r *notificationRouter) subscribeKeysWithOnClose(
 				continue
 			}
 			seenPending[pendingNotification.seq] = struct{}{}
+			// Every replayed notification passed the filter when it was collected.
 			notification := pendingNotification.notification
-			if !stream.accepts(notification) {
-				continue
-			}
-			if !stream.send(notification) {
+			if !stream.sendAccepted(notification) {
 				return stream
 			}
 			if isTerminalForAnyKey(notification, keys) {
@@ -293,12 +292,13 @@ func (r *notificationRouter) route(ctx context.Context, method string, params js
 			Trace:  append([]byte(nil), trace...),
 		}
 	}
-	keys := routingKeys(metadata, params)
-	pendingKeys := pendingRoutingKeys(metadata, params)
-	realtimeKeys := realtimeRoutingKeys(method, params)
+	index := newParamIndex(notification.RawParams)
+	keys := routingKeys(metadata, index)
+	pendingKeys := pendingRoutingKeys(metadata, index)
+	realtimeKeys := realtimeRoutingKeys(method, index)
 	keys = append(keys, realtimeKeys...)
 	pendingKeys = append(pendingKeys, realtimeKeys...)
-	r.deliver(ctx, notification, keys, pendingKeys, true)
+	r.deliver(ctx, notification, index, keys, pendingKeys, true)
 	return nil
 }
 
@@ -310,9 +310,10 @@ func (r *notificationRouter) routeMalformed(
 	metadata protocol.ServerNotificationRoutingMetadata,
 	decodeErr *DecodeError,
 ) {
-	keys := routingKeys(metadata, notification.RawParams)
-	keys = append(keys, pendingRoutingKeys(metadata, notification.RawParams)...)
-	keys = append(keys, realtimeRoutingKeys(notification.Method, notification.RawParams)...)
+	index := newParamIndex(notification.RawParams)
+	keys := routingKeys(metadata, index)
+	keys = append(keys, pendingRoutingKeys(metadata, index)...)
+	keys = append(keys, realtimeRoutingKeys(notification.Method, index)...)
 	keys = dedupeRouterKeys(keys)
 	r.closeKeys(keys, decodeErr)
 	// A late subscriber would wait forever for a terminal event that never decoded, so it
@@ -332,7 +333,7 @@ func (r *notificationRouter) routeMalformed(
 		Trace:  notification.Trace,
 		Err:    decodeErr,
 	}
-	r.deliver(ctx, notification, nil, nil, true)
+	r.deliver(ctx, notification, index, nil, nil, true)
 }
 
 func (r *notificationRouter) close() {
@@ -375,7 +376,10 @@ func (r *notificationRouter) closeWithError(err error) {
 	}
 }
 
-func (r *notificationRouter) deliver(_ context.Context, notification Notification, keys []routerKey, pendingKeys []routerKey, global bool) {
+// deliver hands a notification to the global streams and the streams of its keys, or
+// buffers it under its pending keys when no keyed stream takes it. params indexes the
+// notification's params for the stream filters.
+func (r *notificationRouter) deliver(_ context.Context, notification Notification, params *paramIndex, keys []routerKey, pendingKeys []routerKey, global bool) {
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
@@ -387,7 +391,7 @@ func (r *notificationRouter) deliver(_ context.Context, notification Notificatio
 	deliveredByRoute := false
 	if global {
 		for stream := range r.global {
-			if !stream.accepts(notification) {
+			if !stream.accepts(notification, params) {
 				continue
 			}
 			seen[stream] = struct{}{}
@@ -397,7 +401,7 @@ func (r *notificationRouter) deliver(_ context.Context, notification Notificatio
 	for _, key := range keys {
 		keyStreams := r.streams[key]
 		for stream := range keyStreams {
-			if !stream.accepts(notification) {
+			if !stream.accepts(notification, params) {
 				continue
 			}
 			deliveredByRoute = true
@@ -416,6 +420,7 @@ func (r *notificationRouter) deliver(_ context.Context, notification Notificatio
 		pending := pendingNotification{
 			seq:           r.nextPendingSeq,
 			notification:  notification,
+			params:        params,
 			retainedBytes: notificationRetainedBytes(notification),
 		}
 		for _, key := range dedupeRouterKeys(pendingKeys) {
@@ -425,7 +430,7 @@ func (r *notificationRouter) deliver(_ context.Context, notification Notificatio
 	r.mu.Unlock()
 
 	for _, stream := range streams {
-		stream.send(notification)
+		stream.sendAccepted(notification)
 	}
 	for stream := range terminalStreams {
 		stream.closeWithError(nil)
@@ -646,19 +651,15 @@ func (r *notificationRouter) unsubscribeGlobal(stream *NotificationStream) {
 	delete(r.global, stream)
 }
 
-func routingKeys(metadata protocol.ServerNotificationRoutingMetadata, params json.RawMessage) []routerKey {
+func routingKeys(metadata protocol.ServerNotificationRoutingMetadata, params *paramIndex) []routerKey {
 	if metadata.Method == "" {
 		return nil
-	}
-	var raw map[string]any
-	if len(params) > 0 {
-		_ = json.Unmarshal(params, &raw)
 	}
 	keys := make([]routerKey, 0, len(metadata.Routes))
 	seen := map[routerKey]struct{}{}
 	for _, route := range metadata.Routes {
 		for _, extractor := range route.IdentityExtractors {
-			value, ok := stringAtJSONPath(raw, extractor.FieldPath)
+			value, ok := params.stringAt(extractor.FieldPath)
 			if !ok {
 				value = ""
 			}
@@ -673,13 +674,9 @@ func routingKeys(metadata protocol.ServerNotificationRoutingMetadata, params jso
 	return keys
 }
 
-func pendingRoutingKeys(metadata protocol.ServerNotificationRoutingMetadata, params json.RawMessage) []routerKey {
+func pendingRoutingKeys(metadata protocol.ServerNotificationRoutingMetadata, params *paramIndex) []routerKey {
 	if metadata.Method == "" {
 		return nil
-	}
-	var raw map[string]any
-	if len(params) > 0 {
-		_ = json.Unmarshal(params, &raw)
 	}
 	var keys []routerKey
 	for _, route := range metadata.Routes {
@@ -687,7 +684,7 @@ func pendingRoutingKeys(metadata protocol.ServerNotificationRoutingMetadata, par
 			if !claimablePendingIdentity(metadata.Method, route.ResourceDomain, extractor.FieldPath) {
 				continue
 			}
-			value, ok := stringAtJSONPath(raw, extractor.FieldPath)
+			value, ok := params.stringAt(extractor.FieldPath)
 			if !ok {
 				if route.ResourceDomain == "account" && extractor.FieldPath == "loginId" && extractor.Optional {
 					value = ""
@@ -720,76 +717,43 @@ func claimablePendingIdentity(method string, domain string, fieldPath string) bo
 	}
 }
 
-func realtimeRoutingKeys(method string, params json.RawMessage) []routerKey {
+func realtimeRoutingKeys(method string, params *paramIndex) []routerKey {
 	if !strings.HasPrefix(method, "thread/realtime/") {
 		return nil
 	}
-	var raw map[string]any
-	if len(params) > 0 {
-		_ = json.Unmarshal(params, &raw)
-	}
-	threadID, ok := stringAtJSONPath(raw, "threadId")
+	threadID, ok := params.stringAt("threadId")
 	if !ok || threadID == "" {
 		return nil
 	}
 	return []routerKey{{domain: realtimeRouterDomain, identity: threadID}}
 }
 
+// notificationTurnFilter keeps the notifications of one turn of one thread.
 func notificationTurnFilter(threadID string, turnID string) func(Notification) bool {
-	return func(notification Notification) bool {
-		var raw map[string]any
-		if len(notification.RawParams) > 0 {
-			_ = json.Unmarshal(notification.RawParams, &raw)
-		}
+	filter := indexedTurnFilter(threadID, turnID)
+	return func(notification Notification) bool { return filter(notification, nil) }
+}
+
+func indexedTurnFilter(threadID string, turnID string) func(Notification, *paramIndex) bool {
+	return func(notification Notification, params *paramIndex) bool {
+		params = paramIndexFor(params, notification)
 		if turnID != "" {
-			value, ok := stringAtJSONPath(raw, "turnId")
+			value, ok := params.stringAt("turnId")
 			if !ok {
-				value, ok = stringAtJSONPath(raw, "turn.id")
+				value, ok = params.stringAt("turn.id")
 			}
 			if !ok || value != turnID {
 				return false
 			}
 		}
 		if threadID != "" {
-			value, ok := stringAtJSONPath(raw, "threadId")
+			value, ok := params.stringAt("threadId")
 			if !ok || value != threadID {
 				return false
 			}
 		}
 		return true
 	}
-}
-
-func stringAtJSONPath(raw map[string]any, path string) (string, bool) {
-	if len(raw) == 0 || path == "" {
-		return "", false
-	}
-	var current any = raw
-	for _, part := range splitPath(path) {
-		object, ok := current.(map[string]any)
-		if !ok {
-			return "", false
-		}
-		current, ok = object[part]
-		if !ok {
-			return "", false
-		}
-	}
-	value, ok := current.(string)
-	return value, ok
-}
-
-func splitPath(path string) []string {
-	var parts []string
-	start := 0
-	for i := 0; i < len(path); i++ {
-		if path[i] == '.' {
-			parts = append(parts, path[start:i])
-			start = i + 1
-		}
-	}
-	parts = append(parts, path[start:])
-	return parts
 }
 
 func isTerminalNotification(method string, domain string) bool {

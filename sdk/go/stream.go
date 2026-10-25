@@ -40,7 +40,7 @@ type NotificationStream struct {
 	errMu          sync.Mutex
 	err            error
 	onClose        func()
-	filter         func(Notification) bool
+	filter         func(Notification, *paramIndex) bool
 }
 
 func newNotificationStream(size int, maxQueuedBytes int64, onClose func()) *NotificationStream {
@@ -58,7 +58,7 @@ func newNotificationStream(size int, maxQueuedBytes int64, onClose func()) *Noti
 	}
 }
 
-func newFilteredNotificationStream(size int, maxQueuedBytes int64, onClose func(), filter func(Notification) bool) *NotificationStream {
+func newFilteredNotificationStream(size int, maxQueuedBytes int64, onClose func(), filter func(Notification, *paramIndex) bool) *NotificationStream {
 	stream := newNotificationStream(size, maxQueuedBytes, onClose)
 	stream.filter = filter
 	return stream
@@ -145,9 +145,14 @@ func (s *NotificationStream) Close() error {
 }
 
 func (s *NotificationStream) send(notification Notification) bool {
-	if !s.accepts(notification) {
+	if !s.accepts(notification, nil) {
 		return true
 	}
+	return s.sendAccepted(notification)
+}
+
+// sendAccepted queues a notification the caller already checked against the filter.
+func (s *NotificationStream) sendAccepted(notification Notification) bool {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -190,11 +195,21 @@ func (s *NotificationStream) reconcileQueuedBytesLocked() {
 	s.queuedSizes = s.queuedSizes[consumed:]
 }
 
-func (s *NotificationStream) accepts(notification Notification) bool {
+// accepts applies the stream's filter. params indexes the notification's params; nil
+// lets a filter that needs it build one.
+func (s *NotificationStream) accepts(notification Notification, params *paramIndex) bool {
 	if s == nil || s.filter == nil {
 		return true
 	}
-	return s.filter(notification)
+	return s.filter(notification, params)
+}
+
+// plainFilter adapts a filter that only looks at the notification itself.
+func plainFilter(filter func(Notification) bool) func(Notification, *paramIndex) bool {
+	if filter == nil {
+		return nil
+	}
+	return func(notification Notification, _ *paramIndex) bool { return filter(notification) }
 }
 
 func (s *NotificationStream) closeWithError(err error) {
