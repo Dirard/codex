@@ -218,7 +218,8 @@ enum ReviewerResponse {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(1, ReviewerResponse::Decision; "required_context_fails_closed")]
 // Fork: the Code Mode `exec` description carries ~100 extra tokens of batching guidance.
-// Measured 2026-10-25: windows 4_600 and 4_800 pass, 4_550 no longer fits the first review.
+// Measured 2026-10-25 with the 409-byte addition: windows 4_600 and 4_800 pass, 4_550 no
+// longer fits the first review.
 #[test_case(4_700, ReviewerResponse::ToolContinuation; "oversized_tool_continuation_compacts")]
 #[test_case(7_000, ReviewerResponse::CachedCompactionContinuation; "cached_compaction_fits_reviewer_budget")]
 #[test_case(4_700, ReviewerResponse::FileImageContinuation; "uploaded_original_image_history_compacts")]

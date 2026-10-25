@@ -16,8 +16,8 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=dc54e7c24544538b):
-        - namespace/functions; hash=ac20bd1bd01bca4d
+00:additional_tools/developer (2; hash=c9ff3abdd9709db5):
+        - namespace/functions; hash=37504ddf53adce27
           - custom/exec
           - function/wait
           - function/exec_command
@@ -42,8 +42,8 @@ Settings:
 Settings: relative to window 1
   model: "updated-tools-model"
 -- request 3 (turn) --
-00:additional_tools/developer (2; hash=dc54e7c24544538b):
-        - namespace/functions; hash=ac20bd1bd01bca4d
+00:additional_tools/developer (2; hash=c9ff3abdd9709db5):
+        - namespace/functions; hash=37504ddf53adce27
           - custom/exec
           - function/wait
           - function/exec_command

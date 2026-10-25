@@ -50,8 +50,8 @@ Settings: relative to window 1
   reasoning: {"context":"all_turns","effort":"medium"}
   tools: <removed>
 -- request 4 (turn) --
-00:additional_tools/developer (1; hash=c44450a6803ef0f0):
-        - namespace/functions; hash=a28bb1f5b066c554
+00:additional_tools/developer (1; hash=d0197ab18d0fefea):
+        - namespace/functions; hash=43469c5bfd535682
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -79,8 +79,8 @@ Settings: relative to window 2
   text: {"format":{"name":"codex_output_schema","schema":{"additionalProperties":false,"properties":{"outcome":{"enum":["allow","deny"],"type":"string"},"rationale":{"type":"string"},"risk_level":{"enum":["low","medium","high","critical"],"type":"string"},"user_authorization":{"enum":["unknown","low","medium","high"],"type":"string"}},"required":["outcome"],"type":"object"},"strict":false,"type":"json_schema"},"verbosity":"low"}
 -- request 6 (turn) --
 00:compaction:encrypted=true; chars=39; hash=4010be12538dbedf
-01:additional_tools/developer (1; hash=b56001c633274740):
-        - namespace/functions; hash=5cfb570f7d4ca18e
+01:additional_tools/developer (1; hash=a8d4491aab796b3e):
+        - namespace/functions; hash=b9ac307378645f28
           - custom/exec
           - function/wait
 02:message/developer:
@@ -177,8 +177,8 @@ Settings: relative to window 2
 ## Window 4 (after request 6: input diverged at item 00)
 Settings: same as window 2
 -- request 7 (turn) --
-00:additional_tools/developer (1; hash=c44450a6803ef0f0):
-        - namespace/functions; hash=a28bb1f5b066c554
+00:additional_tools/developer (1; hash=d0197ab18d0fefea):
+        - namespace/functions; hash=43469c5bfd535682
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -205,8 +205,8 @@ Settings: same as window 2
 ## Window 5 (after request 8: input diverged at item 03)
 Settings: same as window 2
 -- request 9 (turn) --
-00:additional_tools/developer (1; hash=c44450a6803ef0f0):
-        - namespace/functions; hash=a28bb1f5b066c554
+00:additional_tools/developer (1; hash=d0197ab18d0fefea):
+        - namespace/functions; hash=43469c5bfd535682
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -232,8 +232,8 @@ Settings: same as window 2
 Settings: same as window 3
 -- request 10 (turn) --
 00:compaction:encrypted=true; chars=33; hash=5c07b4383c427607
-01:additional_tools/developer (1; hash=b56001c633274740):
-        - namespace/functions; hash=5cfb570f7d4ca18e
+01:additional_tools/developer (1; hash=a8d4491aab796b3e):
+        - namespace/functions; hash=b9ac307378645f28
           - custom/exec
           - function/wait
 02:message/developer:
@@ -329,8 +329,8 @@ Settings: same as window 3
 ## Window 7 (after request 10: input diverged at item 00)
 Settings: same as window 2
 -- request 11 (turn) --
-00:additional_tools/developer (1; hash=c44450a6803ef0f0):
-        - namespace/functions; hash=a28bb1f5b066c554
+00:additional_tools/developer (1; hash=d0197ab18d0fefea):
+        - namespace/functions; hash=43469c5bfd535682
           - custom/exec
           - function/wait
           - function/request_user_input

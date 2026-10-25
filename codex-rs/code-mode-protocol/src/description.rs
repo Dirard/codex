@@ -31,8 +31,8 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - `yield_time_ms` asks `exec` to yield early if the script is still running. Defaults to {{ default_exec_yield_time_ms }} ms.
 - `max_output_tokens` sets the token budget for direct `exec` results. Defaults to 10000 tokens.
 - When the JS code is fully evaluated, the isolate's lifetime ends and unawaited promises are silently discarded.
-- Batch only known independent calls in the smallest group; prefer `Promise.allSettled` (`Promise.all` fails fast without cancelling started calls). Keep discovery, approvals, waits and conflicting writes sequential.
-- Only values passed to `text`, `image`, `audio`, `generatedImage`, `notify`, or `store` survive the module; request narrow fields.
+- Batch only known independent calls in the smallest group; prefer `Promise.allSettled` (`Promise.all` fails fast without cancelling started calls). Keep discovery→follow-up chains, approvals, waits/resumes and conflicting writes sequential.
+- Only values passed to `text`, `image`, `audio`, `generatedImage`, `notify`, or `store` survive the module; request narrow fields and ranges.
 
 - Global helpers:
 - `exit()`: Immediately ends the current script successfully (like an early return from the top level).
@@ -45,7 +45,7 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - `notify(value: string | number | boolean | undefined | null)`: immediately injects an extra `custom_tool_call_output` for the current `exec` call. Values are stringified like `text(...)`.
 - `setTimeout(callback: () => void, delayMs?: number)`: schedules a callback to run later and returns a timeout id. Pending timeouts do not keep `exec` alive by themselves; await an explicit promise if you need to wait for one.
 - `clearTimeout(timeoutId?: number)`: cancels a timeout created by `setTimeout`.
-- `EXEC_TOOLS`: `{ name, description }` of tools exposed inside `exec`; call direct-only ones directly, not via `tools.*`.
+- `EXEC_TOOLS`: `{ name, description }` of tools in `exec`; call direct-only ones directly, not via `tools.*`.
 - `yield_control()`: yields the accumulated output to the model immediately while the script keeps running."#;
 const WAIT_DESCRIPTION_TEMPLATE: &str = r#"- Use `wait` only after `exec` returns `Script running with cell ID ...`.
 - `cell_id` identifies the running `exec` cell to resume.
@@ -802,9 +802,9 @@ bar"
             "Batch only known independent calls in the smallest group",
             "prefer `Promise.allSettled`",
             "`Promise.all` fails fast without cancelling started calls",
-            "Keep discovery, approvals, waits and conflicting writes sequential",
+            "Keep discovery→follow-up chains, approvals, waits/resumes and conflicting writes sequential",
             "Only values passed to `text`, `image`, `audio`, `generatedImage`, `notify`, or `store` survive the module",
-            "request narrow fields",
+            "request narrow fields and ranges",
             "call direct-only ones directly, not via `tools.*`",
         ] {
             assert!(
@@ -812,16 +812,29 @@ bar"
                 "missing batching guidance {expected:?}: {description}"
             );
         }
-        // The guidance is sent with every Code Mode request; keep it within half of the
-        // original fork addition (694 bytes).
-        let guidance_bytes = description
-            .lines()
-            .filter(|line| line.starts_with("- Batch only") || line.starts_with("- Only values"))
-            .map(str::len)
-            .sum::<usize>();
+        // Every Code Mode request carries the whole fork addition to the upstream template:
+        // both guidance lines and the longer `EXEC_TOOLS` line. It was 776 bytes before the
+        // guidance was condensed; keep it at the measured 409 bytes.
+        const UPSTREAM_TOOL_LIST_LINE: &str = "- `ALL_TOOLS`: metadata for the enabled nested tools as `{ name, description }` entries.";
+        let line_bytes = |prefix: &str| {
+            let lines = description
+                .lines()
+                .filter(|line| line.starts_with(prefix))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                lines.len(),
+                1,
+                "expected one {prefix:?} line: {description}"
+            );
+            lines[0].len() + "\n".len()
+        };
+        let fork_addition = line_bytes("- Batch only")
+            + line_bytes("- Only values")
+            + line_bytes("- `EXEC_TOOLS`:")
+            - (UPSTREAM_TOOL_LIST_LINE.len() + "\n".len());
         assert!(
-            guidance_bytes <= 347,
-            "batching guidance grew to {guidance_bytes} bytes"
+            fork_addition <= 409,
+            "the fork addition to the exec description grew to {fork_addition} bytes"
         );
     }
 
