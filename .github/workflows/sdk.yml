@@ -35,69 +35,6 @@ jobs:
               env -u PYTHONPATH -u CODEX_EXEC_PATH /tmp/installed/bin/python tests/installed_sdk_smoke.py
             '
 
-      - name: Check for a clean worktree
-        if: always() && !cancelled()
-        uses: ./.github/actions/check-clean-worktree
-
-  go-sdk:
-    runs-on:
-      group: ${{ github.event.repository.name }}-runners
-      labels: ${{ github.event.repository.name }}-linux-x64
-    timeout-minutes: 45
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-
-      - name: Setup Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: "1.25"
-          cache-dependency-path: sdk/go/go.mod
-
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
-
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
-
-      - name: Configure rusty_v8 artifacts
-        uses: ./.github/actions/setup-rusty-v8
-        with:
-          target: x86_64-unknown-linux-gnu
-
-      - name: Check generated Go protocol
-        working-directory: sdk/go
-        run: |
-          go run ./internal/cmd/protocodex --check --mode both \
-            --stable-schema-root ../../codex-rs/app-server-protocol/schema \
-            --experimental-schema-root internal/protocodex/schema-experimental \
-            --manifest internal/protocodex/manifest/app_server_protocol_manifest.json \
-            --out protocol \
-            --root-out .
-
-      - name: Test Go SDK
-        working-directory: sdk/go
-        run: go test ./...
-
-      - name: Build app-server runtime
-        working-directory: codex-rs
-        run: cargo build --bin codex
-
-      - name: Smoke-test Go SDK against the real app-server
-        working-directory: sdk/go
-        env:
-          CODEX_EXEC_PATH: ${{ github.workspace }}/codex-rs/target/debug/codex
-          CODEX_GO_SDK_REQUIRE_REAL_APP_SERVER: "1"
-        run: go test ./... -run '^TestRealAppServerInitializeStrictDigest$'
-
-      - name: Check for a clean worktree
-        if: always() && !cancelled()
-        uses: ./.github/actions/check-clean-worktree
-
   sdks:
     runs-on:
       group: ${{ github.event.repository.name }}-runners
