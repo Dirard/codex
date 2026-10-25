@@ -1,0 +1,63 @@
+name: fork-setup-rust
+description: Prepare an ubuntu-24.04 runner for fork-ci Rust jobs (packages, sandbox, toolchain, rusty_v8).
+inputs:
+  components:
+    description: Comma-separated rustup components to install with the pinned toolchain.
+    required: false
+    default: ""
+  free-disk:
+    description: Remove preinstalled SDKs fork-ci does not use, to make room for codex-rs/target.
+    required: false
+    default: "false"
+  sandbox:
+    description: Install bubblewrap and allow unprivileged user namespaces for sandboxed tests.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Free disk space
+      if: inputs.free-disk == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        df -h /
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+          /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift
+        df -h /
+
+    - name: Install Linux build dependencies
+      shell: bash
+      env:
+        SANDBOX: ${{ inputs.sandbox }}
+      run: |
+        set -euo pipefail
+        packages=(pkg-config libcap-dev libasound2-dev)
+        if [[ "${SANDBOX}" == "true" ]]; then
+          packages+=(bubblewrap)
+        fi
+        sudo apt-get update -y
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
+
+    # Same runner preparation as upstream .github/actions/setup-ci: Ubuntu 24.04
+    # restricts unprivileged user namespaces through AppArmor, and bubblewrap
+    # sandbox tests need them.
+    - name: Allow unprivileged user namespaces
+      if: inputs.sandbox == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo sysctl -w kernel.unprivileged_userns_clone=1
+        if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        fi
+
+    - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+      with:
+        components: ${{ inputs.components }}
+
+    - name: Configure rusty_v8 artifacts
+      uses: ./.github/actions/setup-rusty-v8
+      with:
+        target: x86_64-unknown-linux-gnu
