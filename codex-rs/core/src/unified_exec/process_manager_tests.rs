@@ -493,6 +493,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         additional_permissions_preapproved: false,
         justification: None,
         prefix_rule: None,
+        notify_on_exit: false,
     };
 
     let output_buffer = Arc::new(tokio::sync::Mutex::new(OutputBuffers::default()));
@@ -670,6 +671,7 @@ async fn pruning_does_not_evict_live_process_while_exited_process_is_finalizing(
                 } else {
                     now
                 },
+                exit_notifier: None,
             },
         );
     }

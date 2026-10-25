@@ -931,6 +931,9 @@
             "enable_request_compression": {
               "type": "boolean"
             },
+            "exec_exit_notifications": {
+              "type": "boolean"
+            },
             "exec_permission_approvals": {
               "type": "boolean"
             },
@@ -7522,6 +7525,9 @@
           "type": "boolean"
         },
         "enable_request_compression": {
+          "type": "boolean"
+        },
+        "exec_exit_notifications": {
           "type": "boolean"
         },
         "exec_permission_approvals": {

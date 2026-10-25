@@ -466,6 +466,10 @@ impl ToolOutput for AbortedToolOutput {
     }
 }
 
+/// Fork: header line telling the model that the exit will be reported without polling.
+pub(crate) const EXIT_NOTIFICATION_ARMED_LINE: &str =
+    "Exit notification: on (Codex will report when this process exits; do not poll for completion)";
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecCommandToolOutput {
     pub event_call_id: String,
@@ -481,6 +485,8 @@ pub struct ExecCommandToolOutput {
     /// Bytes omitted by the output collection cap before model-facing truncation.
     pub output_omitted_bytes: Option<NonZeroUsize>,
     pub hook_command: Option<String>,
+    /// Fork: the process outlived this call and will report its exit to the thread.
+    pub exit_notification_armed: bool,
 }
 
 impl ToolOutput for ExecCommandToolOutput {
@@ -632,6 +638,9 @@ impl ExecCommandToolOutput {
 
         if let Some(process_id) = &self.process_id {
             sections.push(format!("Process running with session ID {process_id}"));
+            if self.exit_notification_armed {
+                sections.push(EXIT_NOTIFICATION_ARMED_LINE.to_string());
+            }
         }
 
         if let Some(original_token_count) = self.original_token_count {

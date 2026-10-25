@@ -48,6 +48,10 @@ use codex_core_plugins::PluginMetricsSidecar;
 
 mod async_watcher;
 mod errors;
+mod exit_notification;
+pub(crate) use exit_notification::ExitNotifier;
+pub(crate) use exit_notification::PendingExitNotification;
+pub(crate) use exit_notification::TerminationCause;
 mod head_tail_buffer;
 mod oneshot;
 mod process;
@@ -124,6 +128,8 @@ pub(crate) struct ExecCommandRequest {
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
     pub prefix_rule: Option<Vec<String>>,
+    /// Fork: arm an exit notification if the process outlives this call.
+    pub notify_on_exit: bool,
 }
 
 /// The process and environment behind a terminal session ID at the time of lookup.
@@ -206,6 +212,22 @@ struct ProcessEntry {
     network_approval: Option<DeferredNetworkApproval>,
     session: Weak<Session>,
     last_used: tokio::time::Instant,
+    /// Fork: present when `exec_command` asked for `notify_on_exit`.
+    exit_notifier: Option<Arc<ExitNotifier>>,
+}
+
+impl ProcessEntry {
+    /// Fork: tell a pending exit notification that Codex is stopping this process.
+    ///
+    /// A process that already exited on its own keeps its real exit status, except that
+    /// a shutdown suppresses every notification.
+    fn set_termination_cause(&self, cause: TerminationCause) {
+        if let Some(exit_notifier) = &self.exit_notifier
+            && (cause == TerminationCause::Shutdown || !self.process.has_exited())
+        {
+            exit_notifier.set_termination_cause(cause);
+        }
+    }
 }
 
 type SharedPluginMetricsSidecar = Arc<std::sync::Mutex<Option<PluginMetricsSidecar>>>;

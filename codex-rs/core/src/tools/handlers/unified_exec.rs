@@ -83,6 +83,9 @@ pub(crate) struct ExecCommandArgs {
     justification: Option<String>,
     #[serde(default)]
     prefix_rule: Option<Vec<String>>,
+    /// Fork: report the exit of a process that outlives this call.
+    #[serde(default)]
+    notify_on_exit: bool,
 }
 
 #[derive(Debug, Deserialize)]

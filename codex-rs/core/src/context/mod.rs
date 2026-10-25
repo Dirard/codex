@@ -4,6 +4,7 @@ mod agent_message_board_notification;
 mod approved_command_prefix_saved;
 mod apps_instructions;
 mod available_plugins_instructions;
+mod background_terminal_notification;
 mod base_instructions;
 mod compaction_summary;
 mod content_filter_guidance;
@@ -62,6 +63,7 @@ pub(crate) use approved_command_prefix_saved::APPROVED_COMMAND_PREFIX_SAVED_MESS
 pub(crate) use approved_command_prefix_saved::ApprovedCommandPrefixSaved;
 pub(crate) use apps_instructions::AppsInstructions;
 pub(crate) use available_plugins_instructions::AvailablePluginsInstructions;
+pub(crate) use background_terminal_notification::BackgroundTerminalNotification;
 pub(crate) use base_instructions::BaseInstructionsFragment;
 pub(crate) use codex_context_fragments::AdditionalContextDeveloperFragment;
 pub(crate) use codex_context_fragments::AdditionalContextUserFragment;

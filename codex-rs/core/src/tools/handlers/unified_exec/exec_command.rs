@@ -64,6 +64,8 @@ pub(crate) struct ExecCommandHandlerOptions {
     pub(crate) exec_permission_approvals_enabled: bool,
     pub(crate) include_environment_id: bool,
     pub(crate) include_windows_shell_guidance: bool,
+    /// Fork: offer `notify_on_exit` (feature `exec_exit_notifications`).
+    pub(crate) exit_notifications: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -86,6 +88,7 @@ impl Default for ExecCommandHandler {
                 exec_permission_approvals_enabled: false,
                 include_environment_id: false,
                 include_windows_shell_guidance: cfg!(windows),
+                exit_notifications: false,
             },
         }
     }
@@ -116,6 +119,8 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         let spec = create_exec_command_tool_with_environment_id(
             CommandToolOptions {
                 exec_permission_approvals_enabled: self.options.exec_permission_approvals_enabled,
+                exit_notifications: self.options.exit_notifications
+                    && matches!(self.lifetime, ExecCommandLifetime::Interactive),
             },
             self.options.include_environment_id,
             self.options.include_windows_shell_guidance,
@@ -289,8 +294,13 @@ impl ExecCommandHandler {
             additional_permissions,
             justification,
             prefix_rule,
+            notify_on_exit,
             ..
         } = args;
+        // Fork: the handler decides from live session state, not from the advertised schema.
+        let notify_on_exit = notify_on_exit
+            && matches!(self.lifetime, ExecCommandLifetime::Interactive)
+            && session.features().enabled(Feature::ExecExitNotifications);
         let completion_timeout = match self.lifetime {
             ExecCommandLifetime::Interactive => None,
             ExecCommandLifetime::OneShot => {
@@ -382,6 +392,7 @@ impl ExecCommandHandler {
                 original_token_count: None,
                 output_omitted_bytes: None,
                 hook_command: None,
+                exit_notification_armed: false,
             }));
         }
 
@@ -415,6 +426,7 @@ impl ExecCommandHandler {
                 .permissions_preapproved,
             justification,
             prefix_rule,
+            notify_on_exit,
         };
         let result = match completion_timeout {
             Some(timeout) => {
@@ -448,6 +460,7 @@ impl ExecCommandHandler {
                     original_token_count: Some(original_token_count),
                     output_omitted_bytes,
                     hook_command: Some(hook_command),
+                    exit_notification_armed: false,
                 }))
             }
             Err(err) => {
@@ -473,6 +486,7 @@ fn one_shot_exec_command_spec(spec: ToolSpec) -> ToolSpec {
     let properties = spec.parameters.properties.get_or_insert_default();
     properties.remove("tty");
     properties.remove("yield_time_ms");
+    properties.remove("notify_on_exit");
     properties.insert(
         "timeout_ms".to_string(),
         JsonSchema::number(Some(

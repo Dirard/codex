@@ -5,6 +5,7 @@ use codex_protocol::models::ResponseItem;
 
 use super::AdditionalContextUserFragment;
 use super::AgentMessageBoardNotification;
+use super::BackgroundTerminalNotification;
 use super::ContextualUserFragment;
 use super::GuardianRetainedInstructions;
 use super::InternalModelContextFragment;
@@ -30,6 +31,7 @@ const CONTEXTUAL_USER_FRAGMENT_MATCHERS: &[fn(&str) -> bool] = &[
     UserShellCommand::matches_text,
     TurnAborted::matches_text,
     SubagentNotification::matches_text,
+    BackgroundTerminalNotification::matches_text,
     InternalModelContextFragment::matches_text,
     // compatibility for user-role recommendation messages in existing rollouts
     RecommendedPluginsInstructions::matches_text,

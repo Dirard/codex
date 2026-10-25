@@ -8,7 +8,14 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommandToolOptions {
     pub exec_permission_approvals_enabled: bool,
+    /// Fork: advertise `notify_on_exit` (feature `exec_exit_notifications`).
+    pub exit_notifications: bool,
 }
+
+/// Fork: `exec_command` parameter description for exit notifications.
+pub(crate) const NOTIFY_ON_EXIT_DESCRIPTION: &str = "When true and the command is still running when this call returns, Codex notifies you once it exits (exit code or failure, duration and the tail of unread output), even after your turn has ended. Use it for builds, tests and other long commands, then continue other work or end your turn instead of polling write_stdin. Combine with a short yield_time_ms to background the command right away. Do not use it for servers or REPLs that are meant to keep running.";
+/// Fork: `write_stdin` description addition when exit notifications are enabled.
+pub(crate) const WRITE_STDIN_EXIT_NOTIFICATION_GUIDANCE: &str = " Sessions started with notify_on_exit report their exit automatically; do not poll them just to wait for completion.";
 
 #[cfg(test)]
 pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
@@ -84,6 +91,12 @@ pub(crate) fn create_exec_command_tool_with_environment_id(
     properties.extend(create_approval_parameters(
         options.exec_permission_approvals_enabled,
     ));
+    if options.exit_notifications {
+        properties.insert(
+            "notify_on_exit".to_string(),
+            JsonSchema::boolean(Some(NOTIFY_ON_EXIT_DESCRIPTION.to_string())),
+        );
+    }
 
     ToolSpec::Function(ResponsesApiTool {
         name: "exec_command".to_string(),
@@ -107,7 +120,7 @@ pub(crate) fn create_exec_command_tool_with_environment_id(
     })
 }
 
-pub fn create_write_stdin_tool() -> ToolSpec {
+pub fn create_write_stdin_tool(exit_notifications: bool) -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "session_id".to_string(),
@@ -137,9 +150,14 @@ pub fn create_write_stdin_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "write_stdin".to_string(),
-        description:
-            "Writes characters to an existing unified exec session and returns recent output."
-                .to_string(),
+        description: format!(
+            "Writes characters to an existing unified exec session and returns recent output.{}",
+            if exit_notifications {
+                WRITE_STDIN_EXIT_NOTIFICATION_GUIDANCE
+            } else {
+                ""
+            }
+        ),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(

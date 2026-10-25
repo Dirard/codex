@@ -7,8 +7,12 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::Sleep;
 
+use super::ExitNotifier;
 use super::SharedPluginMetricsSidecar;
 use super::UnifiedExecContext;
+use super::exit_notification::ExitOutcome;
+use super::exit_notification::ExitReport;
+use super::exit_notification::NOTIFICATION_TAIL_MAX_BYTES;
 use super::process::OutputBuffers;
 use super::process::OutputHandles;
 use super::process::UnifiedExecProcess;
@@ -166,6 +170,7 @@ pub(crate) fn spawn_exit_watcher(
     started_at: Instant,
     network_denial_monitor: Option<tokio::task::JoinHandle<()>>,
     plugin_metrics_sidecar: Option<SharedPluginMetricsSidecar>,
+    exit_notifier: Option<Arc<ExitNotifier>>,
 ) {
     let session_ref = Arc::clone(&context.session);
     let turn_ref = Arc::clone(&context.step_context.turn);
@@ -191,6 +196,13 @@ pub(crate) fn spawn_exit_watcher(
         let plugin_metrics_sidecar = plugin_metrics_sidecar
             .as_ref()
             .and_then(take_plugin_metrics_sidecar);
+        let notification_context = exit_notifier.map(|notifier| {
+            (
+                notifier,
+                Arc::clone(&session_ref),
+                Arc::clone(&output_buffer),
+            )
+        });
         if let Some(message) = process.failure_message() {
             drop(plugin_metrics_sidecar);
             emit_failed_exec_end_for_unified_exec(
@@ -239,7 +251,52 @@ pub(crate) fn spawn_exit_watcher(
             )
             .await;
         }
+        // Fork: still under the interaction lock, so a concurrent `write_stdin` either
+        // observed this exit already or runs after the notifier settled.
+        if let Some((exit_notifier, session, output_buffer)) = notification_context {
+            let report = exit_report(&process, &output_buffer, duration).await;
+            if let Some(pending) = exit_notifier.on_exit(report) {
+                tokio::spawn(async move {
+                    session
+                        .deliver_background_terminal_notification(pending)
+                        .await;
+                });
+            }
+        }
     });
+}
+
+/// Fork: describe the stopped process for its exit notification without draining output.
+async fn exit_report(
+    process: &UnifiedExecProcess,
+    output_buffer: &Mutex<OutputBuffers>,
+    duration: Duration,
+) -> ExitReport {
+    let (unread_tail, unread_earlier_bytes) = output_buffer
+        .lock()
+        .await
+        .pending
+        .last_bytes(NOTIFICATION_TAIL_MAX_BYTES);
+    let failure_message = process.failure_message();
+    let sandbox_denied = failure_message.is_none()
+        && !process.termination_requested.load(Ordering::Acquire)
+        && process
+            .check_for_sandbox_denial_with_text(&String::from_utf8_lossy(&unread_tail))
+            .await
+            .is_err();
+    let outcome = match failure_message {
+        Some(message) => ExitOutcome::Failed { message },
+        None => ExitOutcome::Exited {
+            exit_code: process.exit_code(),
+        },
+    };
+    ExitReport {
+        outcome,
+        duration,
+        unread_tail,
+        unread_earlier_bytes,
+        sandbox_denied,
+    }
 }
 
 impl<const MAX_BYTES: usize> Buffer<MAX_BYTES> {

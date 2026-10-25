@@ -74,7 +74,7 @@ impl Session {
                 return;
             };
             if !turn.turn_state.lock().await.pending_input.is_empty()
-                || self.input_queue.has_pending_mailbox_items().await
+                || self.input_queue.has_pending_queued_input().await
                 || reply.is_closed()
             {
                 let _ = reply.send(false);

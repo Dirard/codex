@@ -264,6 +264,9 @@ fn exec_stderr_env_filter() -> EnvFilter {
         .unwrap_or_else(|_| EnvFilter::new("error"))
 }
 
+/// Fork: config override that keeps exit notifications off in `codex exec`.
+const EXEC_EXIT_NOTIFICATIONS_DISABLED_OVERRIDE: &str = "features.exec_exit_notifications=false";
+
 pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
@@ -351,6 +354,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)
     };
 
+    // Fork: `codex exec` ends its session after the first turn, which kills background
+    // processes, so it never offers `exec_command` exit notifications that could not arrive.
+    config_overrides
+        .raw_overrides
+        .push(EXEC_EXIT_NOTIFICATIONS_DISABLED_OVERRIDE.to_string());
     // Parse `-c` overrides from the CLI.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
         Ok(v) => v,

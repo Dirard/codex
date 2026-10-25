@@ -50,6 +50,9 @@ impl Default for SpawnAgentToolOptions {
     }
 }
 
+/// Fork: `wait_agent` description addition when exit notifications are enabled.
+pub(crate) const WAIT_AGENT_EXIT_NOTIFICATION_GUIDANCE: &str = " It also returns when a background terminal started with exec_command notify_on_exit exits, and it keeps waiting while such a terminal is still running.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WaitAgentTimeoutOptions {
     pub default_timeout_ms: i64,
@@ -300,11 +303,18 @@ pub fn create_wait_agent_tool_v1(options: WaitAgentTimeoutOptions) -> ToolSpec {
     })
 }
 
-pub fn create_wait_agent_tool_v2(options: WaitAgentTimeoutOptions) -> ToolSpec {
+pub fn create_wait_agent_tool_v2(
+    options: WaitAgentTimeoutOptions,
+    exit_notifications: bool,
+) -> ToolSpec {
+    let mut description = "Wait for a mailbox update from any active descendant, including queued messages and completion or error notifications. For normal background work, omit `timeout_ms`. Passing `0` performs one immediate check. A positive value sets one absolute deadline; mailbox activity or steered user input can return earlier. Does not return the content; returns either a summary of which agents have updates (if any), an interruption summary for steered input, a no-active-agents summary, or one bounded timeout snapshot."
+        .to_string();
+    if exit_notifications {
+        description.push_str(WAIT_AGENT_EXIT_NOTIFICATION_GUIDANCE);
+    }
     ToolSpec::Function(ResponsesApiTool {
         name: "wait_agent".to_string(),
-        description: "Wait for a mailbox update from any active descendant, including queued messages and completion or error notifications. For normal background work, omit `timeout_ms`. Passing `0` performs one immediate check. A positive value sets one absolute deadline; mailbox activity or steered user input can return earlier. Does not return the content; returns either a summary of which agents have updates (if any), an interruption summary for steered input, a no-active-agents summary, or one bounded timeout snapshot."
-            .to_string(),
+        description,
         strict: false,
         defer_loading: None,
         parameters: wait_agent_tool_parameters_v2(options),

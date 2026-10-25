@@ -334,6 +334,8 @@ async fn is_unloadable(thread: &CodexThread) -> bool {
             .input_queue
             .has_trigger_turn_mailbox_items()
             .await
+        // Fork: unloading would kill the process or drop the notification it expects.
+        && !thread.session.has_pending_background_terminal_work().await
 }
 
 #[cfg(test)]

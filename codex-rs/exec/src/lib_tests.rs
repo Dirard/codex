@@ -909,3 +909,22 @@ fn sample_thread_start_response() -> ThreadStartResponse {
         multi_agent_mode: Default::default(),
     }
 }
+
+/// Fork: `codex exec` keeps exit notifications off because its session ends with the turn.
+#[test]
+fn exec_override_disables_exit_notifications() {
+    let overrides = codex_utils_cli::CliConfigOverrides {
+        raw_overrides: vec![EXEC_EXIT_NOTIFICATIONS_DISABLED_OVERRIDE.to_string()],
+    }
+    .parse_overrides()
+    .expect("parse override");
+    assert_eq!(overrides.len(), 1);
+    assert_eq!(
+        overrides[0].0,
+        format!(
+            "features.{}",
+            codex_features::Feature::ExecExitNotifications.key()
+        )
+    );
+    assert_eq!(overrides[0].1.as_bool(), Some(false));
+}

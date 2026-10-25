@@ -369,11 +369,14 @@ fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
         parameters,
         output_schema,
         ..
-    }) = create_wait_agent_tool_v2(WaitAgentTimeoutOptions {
-        default_timeout_ms: 1_800_000,
-        min_timeout_ms: 10_000,
-        max_timeout_ms: 3_600_000,
-    })
+    }) = create_wait_agent_tool_v2(
+        WaitAgentTimeoutOptions {
+            default_timeout_ms: 1_800_000,
+            min_timeout_ms: 10_000,
+            max_timeout_ms: 3_600_000,
+        },
+        /*exit_notifications*/ false,
+    )
     else {
         panic!("wait_agent should be a function tool");
     };

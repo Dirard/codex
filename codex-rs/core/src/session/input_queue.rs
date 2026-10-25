@@ -1,6 +1,8 @@
 use crate::agent::api::AgentControl;
 use crate::agent::types::TurnSpawnBudget;
 use crate::agent_communication::PENDING_MAILBOX_MESSAGES;
+use crate::context::BackgroundTerminalNotification;
+use crate::context::ContextualUserFragment;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
 use crate::state::TurnState;
@@ -51,18 +53,21 @@ pub enum TurnInput {
 impl TurnInput {
     /// Fork: whether this input needs a model step of its own, so that a prompt blocked beside
     /// it cannot end the turn. Tool output, including a late code-mode `notify` result, needs
-    /// one, and so does mail that asks for a turn. Messages such as additional context or hook
-    /// context and queue-only mail only join the next model request.
+    /// one, and so does mail that asks for a turn or a background terminal exit notification.
+    /// Messages such as additional context or hook context and queue-only mail only join the
+    /// next model request.
     pub(crate) fn needs_model_step(&self) -> bool {
         match self {
             TurnInput::UserInput { content, .. } => !content.is_empty(),
             TurnInput::FunctionCallOutput(_) => true,
-            TurnInput::ResponseItem(envelope) => matches!(
-                envelope.item,
-                ResponseItem::FunctionCallOutput { .. }
-                    | ResponseItem::CustomToolCallOutput { .. }
-                    | ResponseItem::ToolSearchOutput { .. }
-            ),
+            TurnInput::ResponseItem(envelope) => {
+                matches!(
+                    envelope.item,
+                    ResponseItem::FunctionCallOutput { .. }
+                        | ResponseItem::CustomToolCallOutput { .. }
+                        | ResponseItem::ToolSearchOutput { .. }
+                ) || BackgroundTerminalNotification::is_notification_item(&envelope.item)
+            }
             TurnInput::InterAgentCommunication(mail) => mail.trigger_turn,
         }
     }
@@ -104,6 +109,59 @@ mod turn_input_response_item {
 pub(crate) enum InputQueueActivity {
     Mailbox,
     Steer,
+    /// Fork: a background terminal exit notification is waiting for the model.
+    BackgroundTerminal,
+}
+
+/// Fork: queued notifications beyond this count omit their output tail.
+pub(crate) const DETAILED_PENDING_BACKGROUND_NOTIFICATIONS: usize = 8;
+/// Fork: queued notifications beyond this count collapse into one summary line.
+pub(crate) const MAX_PENDING_BACKGROUND_NOTIFICATIONS: usize = 32;
+
+/// Fork: background terminal exit notifications waiting for a model step.
+///
+/// They wait at thread level, like mail, so a turn that already decided to finish cannot
+/// record one without sampling it; the next turn drains them.
+#[derive(Default)]
+struct BackgroundNotificationQueue {
+    items: VecDeque<BackgroundNotificationEntry>,
+    dropped: usize,
+    dropped_wakes: bool,
+}
+
+struct BackgroundNotificationEntry {
+    item: ResponseItem,
+    wakes: bool,
+}
+
+impl BackgroundNotificationQueue {
+    fn is_empty(&self) -> bool {
+        self.items.is_empty() && self.dropped == 0
+    }
+
+    fn wakes(&self) -> bool {
+        self.dropped_wakes || self.items.iter().any(|entry| entry.wakes)
+    }
+
+    fn drain(&mut self) -> Vec<TurnInput> {
+        let mut items: Vec<TurnInput> = self
+            .items
+            .drain(..)
+            .map(|entry| TurnInput::ResponseItem(ResponseItemEnvelope::new(entry.item)))
+            .collect();
+        if self.dropped > 0 {
+            let summary = BackgroundTerminalNotification::new(format!(
+                "{} more background terminals stopped while too many notifications were pending; check their session IDs with write_stdin.",
+                self.dropped
+            ));
+            items.push(TurnInput::ResponseItem(ResponseItemEnvelope::new(
+                ContextualUserFragment::into(summary),
+            )));
+        }
+        self.dropped = 0;
+        self.dropped_wakes = false;
+        items
+    }
 }
 
 /// Turn-local pending input storage owned by the input queue flow.
@@ -119,6 +177,7 @@ pub(crate) struct InputQueue {
     activity_tx: watch::Sender<InputQueueActivity>,
     controller: Option<(ThreadId, Arc<dyn AgentControl>, watch::Receiver<bool>)>,
     mailbox_pending_mails: Mutex<VecDeque<PendingMailboxCommunication>>,
+    background_notifications: Mutex<BackgroundNotificationQueue>,
 }
 
 pub(crate) struct PendingMailboxCommunication {
@@ -135,6 +194,7 @@ impl InputQueue {
             activity_tx,
             controller: None,
             mailbox_pending_mails: Mutex::new(VecDeque::new()),
+            background_notifications: Mutex::new(BackgroundNotificationQueue::default()),
         }
     }
 
@@ -187,6 +247,8 @@ impl InputQueue {
         };
         let pending_activity = if let Some(activity) = turn_activity {
             Some(activity)
+        } else if self.has_background_notifications().await {
+            Some(InputQueueActivity::BackgroundTerminal)
         } else if self.has_pending_mailbox_items().await {
             Some(InputQueueActivity::Mailbox)
         } else {
@@ -253,6 +315,46 @@ impl InputQueue {
                 .is_some_and(|(_, _, updates)| *updates.borrow())
     }
 
+    /// Fork: queue a background terminal exit notification for the next model step.
+    ///
+    /// `render` receives whether the notification may include its output tail.
+    pub(crate) async fn enqueue_background_notification(
+        &self,
+        wakes: bool,
+        render: impl FnOnce(/*with_output*/ bool) -> ResponseItem,
+    ) {
+        {
+            let mut queue = self.background_notifications.lock().await;
+            if queue.items.len() >= MAX_PENDING_BACKGROUND_NOTIFICATIONS {
+                queue.dropped += 1;
+                queue.dropped_wakes |= wakes;
+            } else {
+                let with_output = queue.items.len() < DETAILED_PENDING_BACKGROUND_NOTIFICATIONS;
+                queue.items.push_back(BackgroundNotificationEntry {
+                    item: render(with_output),
+                    wakes,
+                });
+            }
+        }
+        self.activity_tx
+            .send_replace(InputQueueActivity::BackgroundTerminal);
+    }
+
+    /// Fork: whether any background terminal notification is queued.
+    pub(crate) async fn has_background_notifications(&self) -> bool {
+        !self.background_notifications.lock().await.is_empty()
+    }
+
+    /// Fork: whether a queued background terminal notification asks for a turn.
+    pub(crate) async fn has_waking_background_notifications(&self) -> bool {
+        self.background_notifications.lock().await.wakes()
+    }
+
+    /// Fork: mail or background terminal notifications wait for the next model step.
+    pub(crate) async fn has_pending_queued_input(&self) -> bool {
+        self.has_background_notifications().await || self.has_pending_mailbox_items().await
+    }
+
     pub(crate) async fn has_trigger_turn_mailbox_items(&self) -> bool {
         self.mailbox_pending_mails
             .lock()
@@ -301,10 +403,11 @@ impl InputQueue {
                     .filter(|id| !id.trim().is_empty())
             })
             .map(str::to_string);
-        let items = pending_mails
+        let mut items: Vec<TurnInput> = pending_mails
             .into_iter()
             .map(|mail| TurnInput::InterAgentCommunication(mail.communication))
             .collect();
+        items.extend(self.background_notifications.lock().await.drain());
         (items, start_options, turn_spawn_budget)
     }
 
@@ -496,7 +599,7 @@ impl InputQueue {
         if has_turn_pending_input {
             return true;
         }
-        self.has_pending_mailbox_items().await
+        self.has_pending_queued_input().await
     }
 }
 
@@ -521,6 +624,14 @@ impl TurnInputQueue {
             })
         {
             Some(InputQueueActivity::Steer)
+        } else if self.items.iter().any(|input| {
+            matches!(
+                input,
+                TurnInput::ResponseItem(envelope)
+                    if BackgroundTerminalNotification::is_notification_item(&envelope.item)
+            )
+        }) {
+            Some(InputQueueActivity::BackgroundTerminal)
         } else if self
             .items
             .iter()
@@ -970,5 +1081,130 @@ mod tests {
             )
             .await;
         assert!(input_queue.has_trigger_turn_mailbox_items().await);
+    }
+
+    fn background_notification(body: &str) -> ResponseItem {
+        ContextualUserFragment::into(BackgroundTerminalNotification::new(body))
+    }
+
+    /// Fork: background terminal notifications wait at thread level and wake waits.
+    #[tokio::test]
+    async fn background_notifications_queue_after_mail_and_report_activity() {
+        let input_queue = InputQueue::new();
+        let (mut activity_rx, pending_activity) =
+            input_queue.subscribe_activity(/*turn_state*/ None).await;
+        assert_eq!(pending_activity, None);
+        assert!(!input_queue.has_pending_queued_input().await);
+
+        let mail = make_mail(
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            AgentPath::root(),
+            "mail",
+            /*trigger_turn*/ false,
+        );
+        input_queue
+            .enqueue_background_notification(/*wakes*/ false, |with_output| {
+                assert!(with_output);
+                background_notification("passive")
+            })
+            .await;
+        input_queue
+            .enqueue_mailbox_communication(
+                mail.clone().into(),
+                Default::default(),
+                /*turn_spawn_budget*/ None,
+            )
+            .await;
+        activity_rx.changed().await.expect("activity");
+        assert!(input_queue.has_pending_queued_input().await);
+        assert!(!input_queue.has_waking_background_notifications().await);
+        assert!(!input_queue.has_trigger_turn_mailbox_items().await);
+        assert_eq!(
+            input_queue.subscribe_activity(/*turn_state*/ None).await.1,
+            Some(InputQueueActivity::BackgroundTerminal)
+        );
+
+        input_queue
+            .enqueue_background_notification(
+                /*wakes*/ true,
+                |_| background_notification("waking"),
+            )
+            .await;
+        assert!(input_queue.has_waking_background_notifications().await);
+
+        let (items, _, _) = input_queue.drain_mailbox_input_items().await;
+        assert_eq!(
+            items,
+            vec![
+                TurnInput::InterAgentCommunication(mail.into()),
+                TurnInput::ResponseItem(ResponseItemEnvelope::new(background_notification(
+                    "passive"
+                ))),
+                TurnInput::ResponseItem(ResponseItemEnvelope::new(background_notification(
+                    "waking"
+                ))),
+            ]
+        );
+        assert!(items[1].needs_model_step());
+        assert!(!input_queue.has_pending_queued_input().await);
+        assert!(!input_queue.has_waking_background_notifications().await);
+    }
+
+    /// Fork: many pending notifications drop their output, then collapse into a summary.
+    #[tokio::test]
+    async fn background_notifications_are_bounded() {
+        let input_queue = InputQueue::new();
+        let mut with_output_flags = Vec::new();
+        for index in 0..MAX_PENDING_BACKGROUND_NOTIFICATIONS + 2 {
+            input_queue
+                .enqueue_background_notification(
+                    /*wakes*/ index == MAX_PENDING_BACKGROUND_NOTIFICATIONS + 1,
+                    |with_output| {
+                        with_output_flags.push(with_output);
+                        background_notification(&format!("notification {index}"))
+                    },
+                )
+                .await;
+        }
+        assert_eq!(
+            with_output_flags.len(),
+            MAX_PENDING_BACKGROUND_NOTIFICATIONS
+        );
+        assert_eq!(
+            with_output_flags.iter().filter(|flag| **flag).count(),
+            DETAILED_PENDING_BACKGROUND_NOTIFICATIONS
+        );
+        // The dropped notification still asks for a turn.
+        assert!(input_queue.has_waking_background_notifications().await);
+
+        let (items, _, _) = input_queue.drain_mailbox_input_items().await;
+        assert_eq!(items.len(), MAX_PENDING_BACKGROUND_NOTIFICATIONS + 1);
+        assert_eq!(
+            items.last(),
+            Some(&TurnInput::ResponseItem(ResponseItemEnvelope::new(
+                background_notification(
+                    "2 more background terminals stopped while too many notifications were pending; check their session IDs with write_stdin."
+                )
+            )))
+        );
+        assert!(!input_queue.has_pending_queued_input().await);
+    }
+
+    #[tokio::test]
+    async fn turn_local_background_notification_reports_its_activity() {
+        let input_queue = InputQueue::new();
+        let turn_state = Mutex::new(TurnState::default());
+        input_queue
+            .extend_pending_input_for_turn_state(
+                &turn_state,
+                vec![TurnInput::ResponseItem(ResponseItemEnvelope::new(
+                    background_notification("exited"),
+                ))],
+            )
+            .await;
+        assert_eq!(
+            input_queue.subscribe_activity(Some(&turn_state)).await.1,
+            Some(InputQueueActivity::BackgroundTerminal)
+        );
     }
 }

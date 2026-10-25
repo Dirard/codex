@@ -42,7 +42,11 @@ impl WriteStdinArgs {
     }
 }
 
-pub struct WriteStdinHandler;
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WriteStdinHandler {
+    /// Fork: describe that `notify_on_exit` sessions need no polling.
+    pub(crate) exit_notifications: bool,
+}
 
 impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
     fn tool_name(&self) -> ToolName {
@@ -50,7 +54,7 @@ impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
     }
 
     fn spec(&self) -> ToolSpec {
-        create_write_stdin_tool()
+        create_write_stdin_tool(self.exit_notifications)
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {

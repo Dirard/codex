@@ -123,6 +123,25 @@ impl<const MAX_BYTES: usize> HeadTailBuffer<MAX_BYTES> {
         out
     }
 
+    /// Fork: returns up to `max_bytes` of the most recent contiguous output and the
+    /// number of observed bytes before it, without draining the buffer.
+    ///
+    /// After an omission only the tail is contiguous with the end of the output,
+    /// so the head is used only when nothing was omitted.
+    pub(crate) fn last_bytes(&self, max_bytes: usize) -> (Vec<u8>, usize) {
+        let tail_len = self.tail.len().min(max_bytes);
+        let head_len = if self.omitted_bytes == 0 {
+            (max_bytes - tail_len).min(self.head.len())
+        } else {
+            0
+        };
+        let mut out = Vec::with_capacity(head_len.saturating_add(tail_len));
+        out.extend_from_slice(&self.head[self.head.len() - head_len..]);
+        out.extend(self.tail.iter().skip(self.tail.len() - tail_len).copied());
+        let earlier = self.total_bytes().saturating_sub(out.len());
+        (out, earlier)
+    }
+
     /// Append a later buffer with the same budget. This preserves the summary
     /// of the original concatenated output, including its omission count.
     pub(crate) fn push_buffer(&mut self, buffer: Self) {

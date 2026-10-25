@@ -13,11 +13,16 @@ use tokio::time::timeout_at;
 #[derive(Default)]
 pub(crate) struct Handler {
     options: WaitAgentTimeoutOptions,
+    /// Fork: describe and wait for background terminal exit notifications.
+    exit_notifications: bool,
 }
 
 impl Handler {
-    pub(crate) fn new(options: WaitAgentTimeoutOptions) -> Self {
-        Self { options }
+    pub(crate) fn new(options: WaitAgentTimeoutOptions, exit_notifications: bool) -> Self {
+        Self {
+            options,
+            exit_notifications,
+        }
     }
 }
 
@@ -27,7 +32,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
     }
 
     fn spec(&self) -> ToolSpec {
-        create_wait_agent_tool_v2(self.options)
+        create_wait_agent_tool_v2(self.options, self.exit_notifications)
     }
 
     fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
@@ -102,6 +107,8 @@ impl Handler {
             let snapshot = active_descendant_snapshot(session.as_ref(), turn.as_ref()).await?;
             if snapshot == ActiveAgentSnapshot::default()
                 && !board_posts_may_arrive(session.as_ref(), turn.as_ref()).await?
+                // Fork: an expected background terminal notification is worth waiting for.
+                && !session.has_pending_background_terminal_work().await
             {
                 recheck_activity(session.as_ref(), turn_state.as_deref())
                     .await
@@ -125,6 +132,7 @@ impl Handler {
                 "outcome",
                 match outcome {
                     WaitOutcome::MailboxActivity => "mailbox",
+                    WaitOutcome::BackgroundTerminal => "background_terminal",
                     WaitOutcome::Steered => "steered",
                     WaitOutcome::NoActiveAgents => "no_active_agents",
                     WaitOutcome::TimedOut(_) => "timed_out",
@@ -181,6 +189,10 @@ impl WaitAgentResult {
     ) -> Self {
         let (message, timed_out) = match outcome {
             WaitOutcome::MailboxActivity => ("Wait completed.".to_string(), false),
+            WaitOutcome::BackgroundTerminal => (
+                "Wait completed: a background terminal notification arrived.".to_string(),
+                false,
+            ),
             WaitOutcome::Steered => ("Wait interrupted by new input.".to_string(), false),
             WaitOutcome::NoActiveAgents => ("No active agents.".to_string(), false),
             WaitOutcome::TimedOut(snapshot) => (
@@ -229,6 +241,8 @@ struct ActiveAgentSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WaitOutcome {
     MailboxActivity,
+    /// Fork: a background terminal exit notification is waiting for the model.
+    BackgroundTerminal,
     Steered,
     NoActiveAgents,
     TimedOut(ActiveAgentSnapshot),
@@ -358,6 +372,7 @@ async fn wait_for_activity(
 fn wait_outcome_for_activity(activity: InputQueueActivity) -> WaitOutcome {
     match activity {
         InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
+        InputQueueActivity::BackgroundTerminal => WaitOutcome::BackgroundTerminal,
         InputQueueActivity::Steer => WaitOutcome::Steered,
     }
 }

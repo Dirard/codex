@@ -162,6 +162,8 @@ pub enum Feature {
     UnifiedExec,
     /// Allow unified exec commands to allocate an interactive terminal.
     UnifiedExecTty,
+    /// Fork: let `exec_command` notify the thread when a background process exits.
+    ExecExitNotifications,
     /// Removed compatibility flag for the retired patched zsh backend.
     ShellZshFork,
     /// Removed compatibility flag for the retired patched zsh backend.
@@ -1136,6 +1138,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "unified_exec_tty",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ExecExitNotifications,
+        key: "exec_exit_notifications",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ShellZshFork,

@@ -325,7 +325,21 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
-        let (pending_items, _, _) = self.input_queue.drain_mailbox_input_items().await;
+        let (mut pending_items, _, _) = self.input_queue.drain_mailbox_input_items().await;
+        // Fork: background terminal notifications describe events that happened before this
+        // turn, so a regular turn samples them with its own input instead of one step later.
+        let mut input = input;
+        if task_kind == TaskKind::Regular && !input.is_empty() {
+            let (notifications, rest): (Vec<_>, Vec<_>) =
+                pending_items.into_iter().partition(|item| {
+                    matches!(item, TurnInput::ResponseItem(envelope)
+                    if crate::context::BackgroundTerminalNotification::is_notification_item(
+                        &envelope.item
+                    ))
+                });
+            pending_items = rest;
+            input.splice(0..0, notifications);
+        }
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             let turn = active.get_or_insert_with(ActiveTurn::default);
@@ -471,7 +485,7 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
-        if !self.input_queue.has_pending_mailbox_items().await {
+        if !self.input_queue.has_pending_queued_input().await {
             return;
         }
 
@@ -516,6 +530,16 @@ impl Session {
                 .reference_context_item()
                 .await
                 .and_then(|context| context.cyber_access_program);
+            // Fork: name a wake by a background terminal exit (UC3, R3.1).
+            if input.iter().any(|item| {
+                matches!(item, TurnInput::ResponseItem(envelope)
+                if crate::context::BackgroundTerminalNotification::is_notification_item(
+                    &envelope.item
+                ))
+            }) {
+                start_options.turn_trigger =
+                    Some(crate::session::BACKGROUND_TERMINAL_TURN_TRIGGER.to_string());
+            }
         }
         let options = NewTurnContextOptions {
             final_output_json_schema: start_options.final_output_json_schema,
@@ -953,7 +977,7 @@ impl Session {
     pub(crate) async fn close_unified_exec_processes(&self) {
         self.services
             .unified_exec_manager
-            .terminate_all_processes()
+            .terminate_all_processes(crate::unified_exec::TerminationCause::ClientRequest)
             .await;
     }
 

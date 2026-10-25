@@ -159,6 +159,7 @@ async fn exec_command_with_tty(
             network_approval: None,
             session: Arc::downgrade(session),
             last_used: started_at,
+            exit_notifier: None,
         };
         manager
             .process_store
@@ -215,6 +216,7 @@ async fn exec_command_with_tty(
         original_token_count: Some(original_token_count),
         output_omitted_bytes,
         hook_command: Some(cmd.to_string()),
+        exit_notification_armed: false,
     })
 }
 
@@ -626,6 +628,7 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
             ),
             network_approval: None,
             session: Arc::downgrade(&session),
+            exit_notifier: None,
             last_used: Instant::now(),
         },
     );
@@ -716,6 +719,7 @@ async fn terminating_during_stdin_poll_returns_exited_response(
             ),
             network_approval: None,
             session: Arc::downgrade(&session),
+            exit_notifier: None,
             last_used,
         },
     );

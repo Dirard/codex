@@ -10,6 +10,7 @@ fn windows_shell_guidance_description() -> String {
 fn exec_command_tool_matches_expected_spec() {
     let tool = create_exec_command_tool(CommandToolOptions {
         exec_permission_approvals_enabled: false,
+        exit_notifications: false,
     });
 
     let description = if cfg!(windows) {
@@ -92,7 +93,7 @@ fn exec_command_tool_matches_expected_spec() {
 
 #[test]
 fn write_stdin_tool_matches_expected_spec() {
-    let tool = create_write_stdin_tool();
+    let tool = create_write_stdin_tool(/*exit_notifications*/ false);
 
     let properties = BTreeMap::from([
         (

@@ -89,3 +89,22 @@ fn empty_and_tiny_chunks_have_bounded_metadata() {
     assert_eq!(buf.retained_bytes(), 10);
     assert_eq!(buf.omitted_bytes(), 2);
 }
+
+#[test]
+fn last_bytes_reads_recent_output_without_draining() {
+    let mut buf = HeadTailBuffer::<10>::default();
+    buf.push_chunk(b"0123");
+    assert_eq!(buf.last_bytes(2), (b"23".to_vec(), 2));
+    assert_eq!(buf.last_bytes(10), (b"0123".to_vec(), 0));
+
+    // Head "01234" and tail "56789" are contiguous while nothing was omitted.
+    buf.push_chunk(b"456789");
+    assert_eq!(buf.last_bytes(7), (b"3456789".to_vec(), 3));
+
+    // After an omission the head is no longer contiguous with the tail.
+    buf.push_chunk(b"ab");
+    assert_eq!(buf.omitted_bytes(), 2);
+    assert_eq!(buf.last_bytes(3), (b"9ab".to_vec(), 9));
+    assert_eq!(buf.last_bytes(8), (b"789ab".to_vec(), 7));
+    assert_eq!(buf.retained_bytes(), 10);
+}

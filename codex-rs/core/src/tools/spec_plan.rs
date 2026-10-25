@@ -837,6 +837,12 @@ fn image_generation_available(turn_context: &TurnContext, model_info: &ModelInfo
                 .is_some_and(AuthManager::current_auth_uses_codex_backend))
 }
 
+/// Fork: whether background `exec_command` processes can notify this thread on exit.
+fn exec_exit_notifications_enabled(turn_context: &TurnContext) -> bool {
+    let features = turn_context.config.features.get();
+    features.enabled(Feature::UnifiedExec) && features.enabled(Feature::ExecExitNotifications)
+}
+
 fn wait_agent_timeout_options(turn_context: &TurnContext) -> WaitAgentTimeoutOptions {
     if multi_agent_v2_enabled(turn_context) {
         return WaitAgentTimeoutOptions {
@@ -1306,15 +1312,17 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
     let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals)
         && context.tool_policy.expose_additional_permissions;
     let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
+    let exit_notifications = exec_exit_notifications_enabled(turn_context);
     let options = ExecCommandHandlerOptions {
         allow_tty: features.enabled(Feature::UnifiedExecTty),
         exec_permission_approvals_enabled,
         include_environment_id,
         include_windows_shell_guidance: should_include_windows_shell_guidance(context.environments),
+        exit_notifications,
     };
     if features.enabled(Feature::UnifiedExec) {
         registry.add(ExecCommandHandler::new(options));
-        registry.add(WriteStdinHandler);
+        registry.add(WriteStdinHandler { exit_notifications });
     } else {
         // Managed requirements are the only configuration path that can keep
         // unified exec disabled. Preserve command execution without exposing a
@@ -1580,7 +1588,10 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
             if turn_context.config.multi_agent_v2.wait_agent_enabled {
                 registry.register_trusted_with_exposure(
                     multi_agent_v2_handler(
-                        WaitAgentHandlerV2::new(context.wait_agent_timeouts),
+                        WaitAgentHandlerV2::new(
+                            context.wait_agent_timeouts,
+                            exec_exit_notifications_enabled(turn_context),
+                        ),
                         tool_namespace,
                         model_messages.multi_agent_tool_description_override("wait_agent"),
                         model_messages.multi_agent_tool_parameters_override("wait_agent"),
