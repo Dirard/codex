@@ -125,7 +125,11 @@ func renderServerRequestMetadata(manifest *Manifest) string {
 	return b.String()
 }
 
-func renderServerNotificationMetadata(manifest *Manifest) string {
+// renderServerNotificationMetadata renders the notification routing metadata and
+// DecodeServerNotificationPayload; payloads of the object types in objects are decoded by
+// calling their objectScan decoder directly (decodePayload in protocol/codec.go), which
+// skips the validate-and-skip passes encoding/json makes before calling UnmarshalJSON.
+func renderServerNotificationMetadata(manifest *Manifest, objects map[string]bool) string {
 	var b strings.Builder
 	b.WriteString("package protocol\n\n")
 	b.WriteString("import \"encoding/json\"\n\n")
@@ -164,7 +168,11 @@ func renderServerNotificationMetadata(manifest *Manifest) string {
 		}
 		b.WriteString(fmt.Sprintf("\tcase %q:\n", entry.Method))
 		b.WriteString(fmt.Sprintf("\t\tvar payload %s\n", entry.PayloadType))
-		b.WriteString("\t\tif err := json.Unmarshal(params, &payload); err != nil {\n")
+		if objects[entry.PayloadType] {
+			b.WriteString("\t\tif err := decodePayload(params, &payload); err != nil {\n")
+		} else {
+			b.WriteString("\t\tif err := json.Unmarshal(params, &payload); err != nil {\n")
+		}
 		b.WriteString("\t\t\treturn nil, err\n")
 		b.WriteString("\t\t}\n")
 		b.WriteString("\t\treturn payload, nil\n")

@@ -9,7 +9,9 @@ import (
 	"strings"
 )
 
-func renderTypes(bundle *SchemaBundle, manifest *Manifest) (string, error) {
+// renderTypes renders types_generated.go and returns the names of the object types whose
+// UnmarshalJSON is the objectScan decoder, which other files may call directly.
+func renderTypes(bundle *SchemaBundle, manifest *Manifest) (string, map[string]bool, error) {
 	var b strings.Builder
 	b.WriteString("package protocol\n\n")
 	b.WriteString("import (\n\t\"bytes\"\n\t\"encoding/json\"\n\t\"fmt\"\n)\n\n")
@@ -19,6 +21,7 @@ func renderTypes(bundle *SchemaBundle, manifest *Manifest) (string, error) {
 	names := definitionNameMap(bundle)
 	serdeShapes := mapSerdeShapes(manifest.Experimental.SerdeShapes)
 	written := map[string]bool{"ClientNotification": true, "RequestID": true}
+	objects := map[string]bool{}
 	skipped := publicDefinitionSkipSet(manifest)
 	for _, key := range keys {
 		name := names[key]
@@ -30,10 +33,17 @@ func renderTypes(bundle *SchemaBundle, manifest *Manifest) (string, error) {
 		}
 		written[name] = true
 		schema, _ := bundle.Definition(key)
-		b.WriteString(renderDefinitionType(name, key, schema, names, serdeShapes, manifest, bundle))
+		rendered, object, err := renderDefinitionType(name, key, schema, names, serdeShapes, manifest, bundle)
+		if err != nil {
+			return "", nil, err
+		}
+		if object {
+			objects[name] = true
+		}
+		b.WriteString(rendered)
 		b.WriteByte('\n')
 	}
-	return b.String(), nil
+	return b.String(), objects, nil
 }
 
 func publicDefinitionSkipSet(manifest *Manifest) map[string]bool {
@@ -102,44 +112,47 @@ func definitionNameMap(bundle *SchemaBundle) map[string]string {
 	return names
 }
 
-func renderDefinitionType(name, key string, schema Schema, names map[string]string, serdeShapes map[string]SerdeShape, manifest *Manifest, bundle *SchemaBundle) string {
+// renderDefinitionType renders one schema definition and reports whether it became an
+// object type with an objectScan decoder.
+func renderDefinitionType(name, key string, schema Schema, names map[string]string, serdeShapes map[string]SerdeShape, manifest *Manifest, bundle *SchemaBundle) (string, bool, error) {
 	if name == "JSONRPCMessage" {
-		return renderJSONRPCMessageUnion()
+		return renderJSONRPCMessageUnion(), false, nil
 	}
 	if isJSONRPCUnionName(name) {
-		return renderJSONRPCUnion(name, manifest)
+		return renderJSONRPCUnion(name, manifest), false, nil
 	}
 	if refs, ok := refUnionRefs(schema); ok {
 		if rendered, ok := renderRefUnion(name, refs, names, bundle); ok {
-			return rendered
+			return rendered, false, nil
 		}
 	}
 	if ref, ok := stringRefUnion(schema); ok {
-		return renderStringRefUnion(name, typeNameForRef(ref, names))
+		return renderStringRefUnion(name, typeNameForRef(ref, names)), false, nil
 	}
 	serdeShape := serdeShapeForType(name, key, serdeShapes)
 	if enumValues, ok := stringEnumValues(schema); ok {
-		return renderStringEnum(name, enumValues, serdeShape)
+		return renderStringEnum(name, enumValues, serdeShape), false, nil
 	}
 	if name == "MultiAgentMode" {
 		if rendered, ok := renderMultiAgentMode(schema); ok {
-			return rendered
+			return rendered, false, nil
 		}
 	}
 	if mapType, ok := namedObjectMapGoType(schema, names); ok {
-		return renderNamedMapType(name, mapType)
+		return renderNamedMapType(name, mapType), false, nil
 	}
 	if shouldRenderStruct(schema) {
-		return renderStruct(name, key, schema, names, serdeShapes, bundle)
+		rendered, err := renderStruct(name, key, schema, names, serdeShapes, bundle)
+		return rendered, err == nil, err
 	}
 	target := goTypeForSchema(schema, names, nil, true)
 	if target == "" {
 		target = "json.RawMessage"
 	}
 	if target == "json.RawMessage" || strings.HasPrefix(target, "Optional[") || strings.HasPrefix(target, "OptionalNonNull[") {
-		return fmt.Sprintf("type %s = %s\n", name, target)
+		return fmt.Sprintf("type %s = %s\n", name, target), false, nil
 	}
-	return fmt.Sprintf("type %s %s\n", name, target)
+	return fmt.Sprintf("type %s %s\n", name, target), false, nil
 }
 
 func isJSONRPCUnionName(name string) bool {
@@ -778,7 +791,7 @@ type renderedUntaggedUnionVariant struct {
 	NonNull     map[string]bool
 }
 
-func renderStruct(name, key string, schema Schema, names map[string]string, serdeShapes map[string]SerdeShape, bundle *SchemaBundle) string {
+func renderStruct(name, key string, schema Schema, names map[string]string, serdeShapes map[string]SerdeShape, bundle *SchemaBundle) (string, error) {
 	properties, required := collectStructProperties(schema)
 	serdeShape := serdeShapeForType(name, key, serdeShapes)
 	taggedUnion, hasTaggedUnion := taggedObjectUnion(schema)
@@ -845,7 +858,7 @@ func renderStruct(name, key string, schema Schema, names map[string]string, serd
 			}
 		}
 		fields = append(fields, field)
-		b.WriteString(fmt.Sprintf("\t%s %s `json:%q`\n", field.FieldName, field.Type, propertyName+",omitempty"))
+		b.WriteString(fmt.Sprintf("\t%s %s %s\n", field.FieldName, field.Type, wireTag(field)))
 	}
 	if hasTaggedUnion || hasUntaggedUnion || hasStringObjectUnion {
 		b.WriteString("\tRawJSON json.RawMessage `json:\"-\"`\n")
@@ -886,13 +899,31 @@ func renderStruct(name, key string, schema Schema, names map[string]string, serd
 	if !hasUntaggedUnion {
 		untaggedUnion = renderedUntaggedUnion{}
 	}
-	b.WriteString(renderStructMarshal(name, fields, taggedUnion, untaggedUnion, stringUnionValues))
+	codec := objectCodec{
+		name:              name,
+		fields:            fields,
+		taggedUnion:       taggedUnion,
+		untaggedUnion:     untaggedUnion,
+		stringUnionValues: stringUnionValues,
+	}
+	if err := validateObjectCodec(codec); err != nil {
+		return "", err
+	}
+	b.WriteString(renderObjectSpec(codec))
 	b.WriteByte('\n')
-	b.WriteString(renderStructUnmarshal(name, fields, taggedUnion, untaggedUnion, stringUnionValues))
-	return b.String()
+	if codec.marshalsThroughMap() {
+		b.WriteString(renderStructMarshalMap(name, fields, taggedUnion, untaggedUnion, stringUnionValues))
+	} else {
+		b.WriteString(renderObjectMarshal(codec))
+	}
+	b.WriteByte('\n')
+	b.WriteString(renderObjectUnmarshal(codec))
+	return b.String(), nil
 }
 
-func renderStructMarshal(name string, fields []renderedField, taggedUnion renderedTaggedUnion, untaggedUnion renderedUntaggedUnion, stringUnionValues []string) string {
+// renderStructMarshalMap marshals through a map[string]any, for the types whose marshal
+// checks read the map (see objectCodec.marshalsThroughMap).
+func renderStructMarshalMap(name string, fields []renderedField, taggedUnion renderedTaggedUnion, untaggedUnion renderedUntaggedUnion, stringUnionValues []string) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("func (v %s) MarshalJSON() ([]byte, error) {\n", name))
 	b.WriteString("\tout := map[string]any{}\n")
@@ -947,129 +978,6 @@ func renderStructMarshal(name string, fields []renderedField, taggedUnion render
 	b.WriteString(renderTaggedUnionMarshalValidation(taggedUnion, fields))
 	b.WriteString(renderUntaggedUnionMarshalValidation(name, untaggedUnion))
 	b.WriteString("\treturn json.Marshal(out)\n}\n")
-	return b.String()
-}
-
-func renderStructUnmarshal(name string, fields []renderedField, taggedUnion renderedTaggedUnion, untaggedUnion renderedUntaggedUnion, stringUnionValues []string) string {
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("func (v *%s) UnmarshalJSON(data []byte) error {\n", name))
-	b.WriteString("\ttrimmed := bytes.TrimSpace(data)\n")
-	b.WriteString("\tif bytes.Equal(trimmed, []byte(\"null\")) { return DecodeError{Field: \"\", Reason: \"cannot be null\"} }\n")
-	if len(stringUnionValues) > 0 {
-		b.WriteString("\tvar stringValue string\n")
-		b.WriteString("\tif err := json.Unmarshal(trimmed, &stringValue); err == nil {\n")
-		b.WriteString("\t\tswitch stringValue {\n")
-		b.WriteString(fmt.Sprintf("\t\tcase %s:\n", quotedStringCaseList(stringUnionValues)))
-		b.WriteString(fmt.Sprintf("\t\t\t*v = %s{StringValue: stringValue}\n", name))
-		b.WriteString("\t\tdefault:\n")
-		b.WriteString(fmt.Sprintf("\t\t\t*v = %s{RawJSON: append(json.RawMessage(nil), data...)}\n", name))
-		b.WriteString("\t\t}\n")
-		b.WriteString("\t\treturn nil\n")
-		b.WriteString("\t}\n")
-		b.WriteString("\tv.StringValue = \"\"\n")
-	}
-	b.WriteString("\tvar raw map[string]json.RawMessage\n")
-	b.WriteString("\tif err := json.Unmarshal(trimmed, &raw); err != nil { return err }\n")
-	b.WriteString(renderTaggedUnionUnknownPrecheck(taggedUnion, fields))
-	for _, field := range fields {
-		if field.Flattened {
-			continue
-		}
-		valueName := "raw" + field.FieldName
-		nestedAnyOfCondition := ""
-		variantCondition := ""
-		if len(field.NestedAnyOfTags) > 0 {
-			conditions := make([]string, 0, len(field.NestedAnyOfTags))
-			for _, tag := range field.NestedAnyOfTags {
-				tagJSON, _ := json.Marshal(tag)
-				conditions = append(conditions, fmt.Sprintf("bytes.Equal(bytes.TrimSpace(raw[%q]), []byte(%q))", taggedUnion.Discriminator, string(tagJSON)))
-			}
-			nestedAnyOfCondition = strings.Join(conditions, " || ")
-			b.WriteString(fmt.Sprintf("\tif %s { var zero %s; v.%s = zero }\n", nestedAnyOfCondition, field.Type, field.FieldName))
-		}
-		if len(field.VariantTags) > 0 {
-			conditions := make([]string, 0, len(field.VariantTags))
-			for _, tag := range field.VariantTags {
-				tagJSON, _ := json.Marshal(tag)
-				conditions = append(conditions, fmt.Sprintf("bytes.Equal(bytes.TrimSpace(raw[%q]), []byte(%q))", taggedUnion.Discriminator, string(tagJSON)))
-			}
-			variantCondition = strings.Join(conditions, " || ")
-		}
-		b.WriteString(fmt.Sprintf("\t%s, ok := raw[%q]\n", valueName, field.WireName))
-		for _, alias := range field.Aliases {
-			b.WriteString(fmt.Sprintf("\tif !ok { %s, ok = raw[%q] }\n", valueName, alias))
-		}
-		if field.DefaultJSON != "" {
-			if variantCondition == "" {
-				b.WriteString(fmt.Sprintf("\tif !ok { %s = []byte(%q); ok = true }\n", valueName, field.DefaultJSON))
-			} else {
-				b.WriteString(fmt.Sprintf("\tif !ok && (%s) { %s = []byte(%q); ok = true }\n", variantCondition, valueName, field.DefaultJSON))
-			}
-		}
-		if field.Required {
-			b.WriteString(fmt.Sprintf("\tif !ok { return DecodeError{Field: %q, Reason: \"missing required field\"} }\n", field.WireName))
-		} else {
-			b.WriteString("\tif ok {\n")
-		}
-		if field.RequiredNonNull {
-			b.WriteString(fmt.Sprintf("\tif bytes.Equal(%s, []byte(\"null\")) { return DecodeError{Field: %q, Reason: \"cannot be null\"} }\n", valueName, field.WireName))
-		}
-		for _, variantAlias := range field.VariantAliases {
-			if field.WireName != "kind" {
-				continue
-			}
-			for _, alias := range variantAlias.Aliases {
-				canonical, _ := json.Marshal(variantAlias.CanonicalWireValue)
-				aliasJSON, _ := json.Marshal(alias)
-				b.WriteString(fmt.Sprintf("\tif bytes.Equal(%s, []byte(%q)) { %s = []byte(%q) }\n", valueName, string(aliasJSON), valueName, string(canonical)))
-			}
-		}
-		if field.CustomDeserialize == dynamicToolSpecsDeserializeHook {
-			b.WriteString(renderDynamicToolSpecsUnmarshal(field, valueName))
-			if !field.Required {
-				b.WriteString("\t}\n")
-			}
-			continue
-		}
-		if nestedAnyOfCondition != "" {
-			b.WriteString(fmt.Sprintf("\tif %s {\n", nestedAnyOfCondition))
-			b.WriteString(fmt.Sprintf("\t\tvar decoded %s\n", field.Type))
-			b.WriteString(fmt.Sprintf("\t\tif err := json.Unmarshal(%s, &decoded); err == nil {\n", valueName))
-			b.WriteString(fmt.Sprintf("\t\t\tv.%s = decoded\n", field.FieldName))
-			b.WriteString(renderIntegerBoundsValidation(field))
-			b.WriteString("\t\t}\n")
-			b.WriteString("\t} else {\n")
-			b.WriteString(fmt.Sprintf("\t\tif err := json.Unmarshal(%s, &v.%s); err != nil { return fmt.Errorf(\"field %s: %%w\", err) }\n", valueName, field.FieldName, field.WireName))
-			b.WriteString(renderIntegerBoundsValidation(field))
-			b.WriteString("\t}\n")
-		} else {
-			b.WriteString(fmt.Sprintf("\tif err := json.Unmarshal(%s, &v.%s); err != nil { return fmt.Errorf(\"field %s: %%w\", err) }\n", valueName, field.FieldName, field.WireName))
-			b.WriteString(renderIntegerBoundsValidation(field))
-		}
-		if !field.Required {
-			b.WriteString("\t}\n")
-		}
-	}
-	for _, field := range fields {
-		if !field.Flattened {
-			continue
-		}
-		b.WriteString(fmt.Sprintf("\tv.%s = map[string]json.RawMessage{}\n", field.FieldName))
-		b.WriteString("\tfor key, value := range raw {\n")
-		b.WriteString("\t\tswitch key {\n")
-		for _, known := range knownJSONFieldNames(fields) {
-			b.WriteString(fmt.Sprintf("\t\tcase %q:\n\t\t\tcontinue\n", known))
-		}
-		b.WriteString("\t\t}\n")
-		b.WriteString(fmt.Sprintf("\t\tv.%s[key] = append(v.%s[key][:0], value...)\n", field.FieldName, field.FieldName))
-		b.WriteString("\t}\n")
-		if field.DefaultJSON != "" {
-			b.WriteString(fmt.Sprintf("\tif len(v.%s) == 0 { if err := json.Unmarshal([]byte(%q), &v.%s); err != nil { return fmt.Errorf(\"field %s: %%w\", err) } }\n", field.FieldName, field.DefaultJSON, field.FieldName, field.WireName))
-		}
-	}
-	b.WriteString(renderTaggedUnionValidation(taggedUnion, fields))
-	b.WriteString(renderUntaggedUnionValidation(untaggedUnion))
-	b.WriteString("\treturn nil\n}\n")
 	return b.String()
 }
 
@@ -1186,115 +1094,6 @@ func integerBoundLiteral(bound *json.Number) (string, bool) {
 	return value, true
 }
 
-func renderTaggedUnionUnknownPrecheck(union renderedTaggedUnion, fields []renderedField) string {
-	if union.Discriminator == "" {
-		return ""
-	}
-	field := renderedField{FieldName: goFieldName(union.Discriminator), WireName: union.Discriminator}
-	for _, candidate := range fields {
-		if candidate.WireName == union.Discriminator {
-			field = candidate
-			break
-		}
-	}
-	rawName := "raw" + field.FieldName + "Discriminator"
-	valueName := field.FieldName + "Discriminator"
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("\t%s, ok := raw[%q]\n", rawName, union.Discriminator))
-	b.WriteString(fmt.Sprintf("\tif !ok { return DecodeError{Field: %q, Reason: \"missing required field\"} }\n", union.Discriminator))
-	b.WriteString(fmt.Sprintf("\tif bytes.Equal(%s, []byte(\"null\")) { return DecodeError{Field: %q, Reason: \"cannot be null\"} }\n", rawName, union.Discriminator))
-	for _, variantAlias := range field.VariantAliases {
-		if field.WireName != "kind" {
-			continue
-		}
-		for _, alias := range variantAlias.Aliases {
-			canonical, _ := json.Marshal(variantAlias.CanonicalWireValue)
-			aliasJSON, _ := json.Marshal(alias)
-			b.WriteString(fmt.Sprintf("\tif bytes.Equal(%s, []byte(%q)) { %s = []byte(%q) }\n", rawName, string(aliasJSON), rawName, string(canonical)))
-		}
-	}
-	b.WriteString(fmt.Sprintf("\tvar %s string\n", valueName))
-	b.WriteString(fmt.Sprintf("\tif err := json.Unmarshal(%s, &%s); err != nil { return fmt.Errorf(\"field %s: %%w\", err) }\n", rawName, valueName, union.Discriminator))
-	b.WriteString(fmt.Sprintf("\tswitch %s {\n", valueName))
-	for _, variant := range union.Variants {
-		b.WriteString(fmt.Sprintf("\tcase %q:\n", variant.Tag))
-	}
-	b.WriteString("\tdefault:\n")
-	b.WriteString(fmt.Sprintf("\t\tv.%s = %s\n", field.FieldName, valueName))
-	b.WriteString("\t\tv.RawJSON = append(v.RawJSON[:0], data...)\n")
-	b.WriteString("\t\treturn nil\n")
-	b.WriteString("\t}\n")
-	return b.String()
-}
-
-func renderDynamicToolSpecsUnmarshal(field renderedField, valueName string) string {
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("\tif bytes.Equal(%s, []byte(\"null\")) {\n", valueName))
-	b.WriteString(fmt.Sprintf("\t\tv.%s = Null[[]DynamicToolSpec]()\n", field.FieldName))
-	b.WriteString("\t} else {\n")
-	b.WriteString(fmt.Sprintf("\t\t%sValue, err := normalizeDynamicToolSpecsJSON(%s)\n", field.FieldName, valueName))
-	b.WriteString(fmt.Sprintf("\t\tif err != nil { return fmt.Errorf(\"field %s: %%w\", err) }\n", field.WireName))
-	b.WriteString(fmt.Sprintf("\t\tv.%s = Some(%sValue)\n", field.FieldName, field.FieldName))
-	b.WriteString("\t}\n")
-	return b.String()
-}
-
-func renderTaggedUnionValidation(union renderedTaggedUnion, fields []renderedField) string {
-	if union.Discriminator == "" {
-		return ""
-	}
-	fieldsByWireName := map[string]renderedField{}
-	for _, field := range fields {
-		fieldsByWireName[field.WireName] = field
-	}
-	var b strings.Builder
-	fieldName := goFieldName(union.Discriminator)
-	b.WriteString("\tv.RawJSON = nil\n")
-	b.WriteString(fmt.Sprintf("\tswitch v.%s {\n", fieldName))
-	for variantIndex, variant := range union.Variants {
-		b.WriteString(fmt.Sprintf("\tcase %q:\n", variant.Tag))
-		for _, required := range variant.Required {
-			if required == union.Discriminator {
-				continue
-			}
-			reason := fmt.Sprintf("missing required field for %s %s", union.Discriminator, variant.Tag)
-			if variant.Nullable[required] {
-				b.WriteString(fmt.Sprintf("\t\tif _, ok := raw[%q]; !ok { return DecodeError{Field: %q, Reason: %q} }\n", required, required, reason))
-			} else {
-				b.WriteString(fmt.Sprintf("\t\tif rawValue, ok := raw[%q]; !ok { return DecodeError{Field: %q, Reason: %q} } else if bytes.Equal(rawValue, []byte(\"null\")) { return DecodeError{Field: %q, Reason: \"cannot be null\"} }\n", required, required, reason, required))
-			}
-		}
-		if len(variant.AnyOfAlternatives) > 0 {
-			matchName := fmt.Sprintf("taggedAnyOfVariant%dMatches", variantIndex)
-			b.WriteString(fmt.Sprintf("\t\t%s := false\n", matchName))
-			for alternativeIndex, alternative := range variant.AnyOfAlternatives {
-				alternativeName := fmt.Sprintf("taggedAnyOfVariant%dAlternative%dMatches", variantIndex, alternativeIndex)
-				b.WriteString(fmt.Sprintf("\t\t%s := true\n", alternativeName))
-				for _, required := range sortedStrings(alternative.Required) {
-					field, ok := fieldsByWireName[required]
-					if !ok {
-						continue
-					}
-					switch {
-					case strings.HasPrefix(field.Type, "Optional[") || strings.HasPrefix(field.Type, "OptionalNonNull["):
-						b.WriteString(fmt.Sprintf("\t\tif !v.%s.IsSet() { %s = false }\n", field.FieldName, alternativeName))
-					case alternative.Nullable[required]:
-						b.WriteString(fmt.Sprintf("\t\tif _, ok := raw[%q]; !ok { %s = false }\n", required, alternativeName))
-					default:
-						b.WriteString(fmt.Sprintf("\t\tif rawValue, ok := raw[%q]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte(\"null\")) { %s = false }\n", required, alternativeName))
-					}
-				}
-				b.WriteString(fmt.Sprintf("\t\tif %s { %s = true }\n", alternativeName, matchName))
-			}
-			b.WriteString(fmt.Sprintf("\t\tif !%s { return DecodeError{Field: \"\", Reason: %q} }\n", matchName, fmt.Sprintf("does not match any anyOf variant for %s %s", union.Discriminator, variant.Tag)))
-		}
-	}
-	b.WriteString("\tdefault:\n")
-	b.WriteString("\t\tv.RawJSON = append(v.RawJSON[:0], data...)\n")
-	b.WriteString("\t}\n")
-	return b.String()
-}
-
 func renderTaggedUnionMarshalValidation(union renderedTaggedUnion, fields []renderedField) string {
 	if union.Discriminator == "" {
 		return ""
@@ -1336,46 +1135,6 @@ func renderTaggedUnionMarshalValidation(union renderedTaggedUnion, fields []rend
 	b.WriteString("\t\tif len(v.RawJSON) > 0 { return append([]byte(nil), v.RawJSON...), nil }\n")
 	b.WriteString(fmt.Sprintf("\t\treturn nil, DecodeError{Field: %q, Reason: fmt.Sprintf(\"unsupported discriminator value %%q\", v.%s)}\n", union.Discriminator, discriminatorField))
 	b.WriteString("\t}\n")
-	return b.String()
-}
-
-func renderUntaggedUnionValidation(union renderedUntaggedUnion) string {
-	if len(union.Variants) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("\tuntaggedOneOfMatches := 0\n")
-	b.WriteString("\tuntaggedOneOfKnownVariantMatches := false\n")
-	for index, variant := range union.Variants {
-		matchName := fmt.Sprintf("untaggedOneOfVariant%dMatches", index)
-		constMatchName := fmt.Sprintf("untaggedOneOfVariant%dConstMatches", index)
-		b.WriteString(fmt.Sprintf("\t%s := true\n", matchName))
-		if len(variant.ConstFields) > 0 {
-			b.WriteString(fmt.Sprintf("\t%s := true\n", constMatchName))
-		}
-		for _, required := range sortedStrings(variant.Required) {
-			if variant.Nullable[required] {
-				b.WriteString(fmt.Sprintf("\tif _, ok := raw[%q]; !ok { %s = false }\n", required, matchName))
-			} else {
-				b.WriteString(fmt.Sprintf("\tif rawValue, ok := raw[%q]; !ok || bytes.Equal(bytes.TrimSpace(rawValue), []byte(\"null\")) { %s = false }\n", required, matchName))
-			}
-		}
-		for _, fieldName := range sortedMapKeys(variant.ConstFields) {
-			value := variant.ConstFields[fieldName]
-			encoded, _ := json.Marshal(value)
-			b.WriteString(fmt.Sprintf("\tif rawValue, ok := raw[%q]; !ok || !bytes.Equal(bytes.TrimSpace(rawValue), []byte(%q)) { %s = false; %s = false }\n", fieldName, string(encoded), matchName, constMatchName))
-		}
-		if len(variant.ConstFields) > 0 {
-			b.WriteString(fmt.Sprintf("\tif %s { untaggedOneOfKnownVariantMatches = true }\n", constMatchName))
-		}
-		b.WriteString(fmt.Sprintf("\tif %s { untaggedOneOfMatches++ }\n", matchName))
-	}
-	b.WriteString("\tif untaggedOneOfMatches == 0 {\n")
-	b.WriteString("\t\tif !untaggedOneOfKnownVariantMatches { v.RawJSON = append(v.RawJSON[:0], data...); return nil }\n")
-	b.WriteString("\t\treturn DecodeError{Field: \"\", Reason: \"does not match any oneOf variant\"}\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\tif untaggedOneOfMatches > 1 { return DecodeError{Field: \"\", Reason: \"matches multiple oneOf variants\"} }\n")
-	b.WriteString("\tv.RawJSON = nil\n")
 	return b.String()
 }
 
@@ -1445,19 +1204,6 @@ func flattenedFieldType(schema Schema, names map[string]string) string {
 		return "map[string]" + goTypeForSchema(*schema.AdditionalProperties, names, nil, true)
 	}
 	return "map[string]json.RawMessage"
-}
-
-func knownJSONFieldNames(fields []renderedField) []string {
-	var names []string
-	for _, field := range fields {
-		if field.Flattened {
-			continue
-		}
-		names = append(names, field.WireName)
-		names = append(names, field.Aliases...)
-	}
-	sort.Strings(names)
-	return names
 }
 
 func mapSerdeShapes(shapes []SerdeShape) map[string]SerdeShape {

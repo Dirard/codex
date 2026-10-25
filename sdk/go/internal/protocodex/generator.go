@@ -367,7 +367,7 @@ func rawJSONEmptyOrNull(raw json.RawMessage) bool {
 }
 
 func renderFiles(manifest *Manifest, schema *SchemaBundle) (map[string]string, error) {
-	types, err := renderTypes(schema, manifest)
+	types, objects, err := renderTypes(schema, manifest)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +381,7 @@ func renderFiles(manifest *Manifest, schema *SchemaBundle) (map[string]string, e
 		"metadata.go":                     renderMetadata(manifest),
 		"server_request_metadata.go":      renderServerRequestMetadata(manifest),
 		"client_notifications.go":         clientNotifications,
-		"server_notification_metadata.go": renderServerNotificationMetadata(manifest),
+		"server_notification_metadata.go": renderServerNotificationMetadata(manifest, objects),
 	}, nil
 }
 

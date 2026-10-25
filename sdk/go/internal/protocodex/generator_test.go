@@ -22,7 +22,7 @@ func TestRenderMixedStringObjectUnionPreservesBothWireShapes(t *testing.T) {
 			Properties: map[string]Schema{"granular": {Type: "object"}},
 		},
 	}}
-	rendered := renderDefinitionType("AskForApproval", "AskForApproval", schema, map[string]string{}, nil, nil, nil)
+	rendered := mustRenderDefinitionType(t, "AskForApproval", "AskForApproval", schema, map[string]string{}, nil, nil, nil)
 	for _, required := range []string{
 		"StringValue string",
 		`AskForApprovalNever = AskForApproval{StringValue: "never"}`,
@@ -45,7 +45,7 @@ func TestRenderAnyOfOpenStringObjectUnionPreservesRawFallback(t *testing.T) {
 		},
 		{Types: []string{"string", "object"}},
 	}}
-	rendered := renderDefinitionType("CodexErrorInfo", "CodexErrorInfo", schema, map[string]string{}, nil, nil, nil)
+	rendered := mustRenderDefinitionType(t, "CodexErrorInfo", "CodexErrorInfo", schema, map[string]string{}, nil, nil, nil)
 	for _, required := range []string{
 		"StringValue string",
 		"HttpConnectionFailed OptionalNonNull[map[string]json.RawMessage]",
@@ -71,15 +71,28 @@ func TestRenderUnconstrainedPropertiesAcceptNull(t *testing.T) {
 			"settings": {Type: "object"},
 		},
 	}
-	rendered := renderDefinitionType("Sample", "Sample", schema, map[string]string{}, nil, nil, nil)
+	rendered := mustRenderDefinitionType(t, "Sample", "Sample", schema, map[string]string{}, nil, nil, nil)
 	for _, field := range []string{"banner", "event"} {
+		if spec := objectSpecEntry(rendered, field); spec == "" || strings.Contains(spec, "fieldRejectNull") {
+			t.Fatalf("unconstrained property %q rejects null (objectSpec entry %q)\n%s", field, spec, rendered)
+		}
 		if strings.Contains(rendered, `DecodeError{Field: "`+field+`", Reason: "cannot be null"}`) {
-			t.Fatalf("unconstrained property %q rejects null\n%s", field, rendered)
+			t.Fatalf("unconstrained property %q rejects null when marshaled\n%s", field, rendered)
 		}
 	}
-	if !strings.Contains(rendered, `DecodeError{Field: "settings", Reason: "cannot be null"}`) {
-		t.Fatalf("object property lost its null check\n%s", rendered)
+	if spec := objectSpecEntry(rendered, "settings"); !strings.Contains(spec, "fieldRejectNull") {
+		t.Fatalf("object property lost its null check (objectSpec entry %q)\n%s", spec, rendered)
 	}
+}
+
+// objectSpecEntry returns the objectSpec line rendered for a wire field.
+func objectSpecEntry(rendered, wireName string) string {
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), `{name: "`+wireName+`"`) {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
 }
 
 func TestSchemaIsUnconstrained(t *testing.T) {
@@ -128,11 +141,11 @@ func TestRenderTaggedObjectUnionRequiresOnlyTheDiscriminatorGlobally(t *testing.
 			},
 		},
 	}}
-	rendered := renderDefinitionType("ThreadItem", "ThreadItem", schema, map[string]string{}, nil, nil, nil)
+	rendered := mustRenderDefinitionType(t, "ThreadItem", "ThreadItem", schema, map[string]string{}, nil, nil, nil)
 	if !strings.Contains(rendered, "Kind OptionalNonNull[string]") {
 		t.Fatalf("variant-only kind field must remain optional in the merged struct\n%s", rendered)
 	}
-	if strings.Contains(rendered, `if !ok { return DecodeError{Field: "kind", Reason: "missing required field"} }`) {
+	if strings.Contains(rendered, `{name: "kind", flags: fieldRequired`) {
 		t.Fatalf("variant-only kind field was required before discriminator dispatch\n%s", rendered)
 	}
 }
@@ -151,17 +164,27 @@ func TestRenderTaggedObjectUnionIncludesNestedAnyOfFields(t *testing.T) {
 			},
 		},
 	}}
-	rendered := renderDefinitionType("UserInput", "UserInput", schema, map[string]string{}, nil, nil, nil)
+	rendered := mustRenderDefinitionType(t, "UserInput", "UserInput", schema, map[string]string{}, nil, nil, nil)
 	for _, required := range []string{
 		"URL OptionalNonNull[string]",
 		"FileID OptionalNonNull[string]",
 		"taggedAnyOfVariant0Matches",
 		"does not match any anyOf variant for type image",
+		`{name: "fileId", flags: fieldNonNullOptional, anyOfTags: []string{"\"image\""}}`,
 	} {
 		if !strings.Contains(rendered, required) {
 			t.Fatalf("nested anyOf rendering missing %q\n%s", required, rendered)
 		}
 	}
+}
+
+func mustRenderDefinitionType(t *testing.T, name, key string, schema Schema, names map[string]string, serdeShapes map[string]SerdeShape, manifest *Manifest, bundle *SchemaBundle) string {
+	t.Helper()
+	rendered, _, err := renderDefinitionType(name, key, schema, names, serdeShapes, manifest, bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rendered
 }
 
 func TestGoFieldNameKeepsWordsStartingWithIdAndV2(t *testing.T) {
@@ -192,12 +215,12 @@ func TestRenderTaggedObjectUnionDisambiguatesCollidingFieldNames(t *testing.T) {
 			},
 		},
 	}}
-	rendered := renderDefinitionType("ThreadTimelineEntry", "v2/ThreadTimelineEntry", schema, map[string]string{}, nil, nil, nil)
+	rendered := mustRenderDefinitionType(t, "ThreadTimelineEntry", "v2/ThreadTimelineEntry", schema, map[string]string{}, nil, nil, nil)
 	for _, required := range []string{
 		"TurnID OptionalNonNull[string]",
 		"TurnIDSnakeCase OptionalNonNull[string]",
-		`json:"turnId,omitempty"`,
-		`json:"turn_id,omitempty"`,
+		`json:"turnId,omitzero"`,
+		`json:"turn_id,omitzero"`,
 	} {
 		if !strings.Contains(rendered, required) {
 			t.Fatalf("colliding fields were not rendered distinctly; missing %q\n%s", required, rendered)
@@ -493,7 +516,7 @@ func TestStableModeValidatesStableSchemaAgainstCanonicalManifest(t *testing.T) {
 		t.Fatalf("err = %v, want stable schema coverage drift rejection", err)
 	}
 
-	metadata := renderServerNotificationMetadata(manifest)
+	metadata := renderServerNotificationMetadata(manifest, nil)
 	processExited := generatedExcerpt(metadata, `"process/exited"`)
 	if !strings.Contains(processExited, "Experimental: false") {
 		t.Fatalf("process/exited metadata = %s, want stable schema notification", processExited)
@@ -644,7 +667,7 @@ func TestServerMetadataPreservesManifestProtocolRefs(t *testing.T) {
 		}
 	}
 
-	notifications := renderServerNotificationMetadata(manifest)
+	notifications := renderServerNotificationMetadata(manifest, nil)
 	threadStarted := generatedExcerpt(notifications, `"thread/started"`)
 	for _, required := range []string{
 		`PayloadType: "ThreadStartedNotification"`,
