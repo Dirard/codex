@@ -63,6 +63,9 @@ use tracing::error;
 pub use codex_prompts::SUMMARIZATION_PROMPT;
 pub use codex_prompts::SUMMARY_PREFIX;
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
+/// Fork: sent only on the single retry after a local compaction response called a tool.
+const LOCAL_COMPACTION_SUMMARY_REMINDER: &str =
+    "Reply with the handoff summary as plain text. Do not call tools.";
 
 /// Thread-local policy that preserves inherited context without changing model or skill budgets.
 /// Insert into `StartThreadOptions::thread_extension_init` to disable automatic compaction.
@@ -312,8 +315,17 @@ async fn run_compact_task_inner_impl(
         fallback_instructions.text.clear();
     }
 
+    // Fork: tools are sent for prompt-cache parity, but a Responses Lite window that already
+    // declares them in history sends none, exactly like the ordinary request in that window.
+    let tools =
+        if step_context.settings.model_info.use_responses_lite && history.has_tool_declarations() {
+            Arc::default()
+        } else {
+            step_context.tool_router.model_visible_specs()
+        };
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retry_state = ResponsesStreamRetryState::default();
+    let mut summary_reminder_sent = false;
     // Reuse one client session so turn-scoped state (sticky routing and websocket incremental
     // request tracking) survives retries within this compact turn.
     let mut client_session = sess.services.model_client.new_session();
@@ -339,7 +351,7 @@ async fn run_compact_task_inner_impl(
         };
         let prompt = Prompt {
             input: turn_input,
-            tools: step_context.tool_router.model_visible_specs(),
+            tools: Arc::clone(&tools),
             parallel_tool_calls: true,
             base_instructions,
             cyber_access_program: turn_context.cyber_access_program,
@@ -360,7 +372,23 @@ async fn run_compact_task_inner_impl(
 
         match attempt_result {
             Ok(response) => {
-                break response;
+                if !response.tool_call_without_summary {
+                    break response;
+                }
+                if summary_reminder_sent {
+                    return Err(CodexErr::Stream(
+                        "local compaction called a tool instead of summarizing".to_string(),
+                    ));
+                }
+                // The tool call was never run; ask once more, explicitly, instead of installing
+                // an earlier assistant reply as the summary.
+                summary_reminder_sent = true;
+                let reminder = ResponseInputItem::from(vec![UserInput::Text {
+                    text: LOCAL_COMPACTION_SUMMARY_REMINDER.to_string(),
+                    text_elements: Vec::new(),
+                }]);
+                history.record_items(&[reminder.into()], step_context.output_truncation());
+                continue;
             }
             Err(err)
                 if matches!(
@@ -836,6 +864,19 @@ fn build_compacted_history_with_limit(
 struct CompactionResponse {
     response_id: String,
     output: Vec<ResponseItem>,
+    /// Fork: the model called a tool instead of writing a summary.
+    tool_call_without_summary: bool,
+}
+
+/// Client-executed tool calls that a compaction response must not leave unanswered.
+fn is_tool_call(item: &ResponseItem) -> bool {
+    matches!(
+        item,
+        ResponseItem::FunctionCall { .. }
+            | ResponseItem::CustomToolCall { .. }
+            | ResponseItem::LocalShellCall { .. }
+            | ResponseItem::ToolSearchCall { .. }
+    )
 }
 
 async fn drain_to_completed(
@@ -889,7 +930,13 @@ async fn drain_to_completed(
                 usage_metadata,
                 ..
             }) => {
-                if !matches!(phase, CompactionPhase::PostTurn) {
+                // Fork: requests carry tools for prompt-cache parity, so a model may call one
+                // instead of summarizing. Such a response is no summary, and its calls were
+                // never run, so they are not recorded.
+                let tool_call_without_summary = output.iter().any(is_tool_call)
+                    && get_last_assistant_message_from_turn(output.iter())
+                        .is_none_or(|summary| summary.trim().is_empty());
+                if !tool_call_without_summary && !matches!(phase, CompactionPhase::PostTurn) {
                     for item in std::mem::take(&mut output) {
                         sess.record_annotated_conversation_items(
                             turn_context,
@@ -917,6 +964,7 @@ async fn drain_to_completed(
                 return Ok(CompactionResponse {
                     response_id,
                     output,
+                    tool_call_without_summary,
                 });
             }
             Ok(_) => continue,

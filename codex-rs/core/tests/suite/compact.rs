@@ -4632,6 +4632,193 @@ async fn manual_compact_server_overloaded_fails_fast_with_zero_configured_retrie
     Ok(())
 }
 
+/// Fork: local compaction sends tools for prompt-cache parity, so in a Responses Lite window
+/// it must leave them in history exactly like the ordinary request does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_compaction_in_incremental_window_sends_no_top_level_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", FIRST_REPLY),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", SUMMARY_TEXT),
+                ev_completed("r2"),
+            ]),
+        ],
+    )
+    .await;
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_model_info_override("gpt-5.5", |model| model.use_responses_lite = true)
+        .with_config(move |config| {
+            config.model = Some("gpt-5.5".to_string());
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("seed history for compaction").await?;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2);
+    let sampling = requests[0].body_json();
+    assert!(
+        sampling.get("tools").is_none(),
+        "the ordinary request should declare tools in history"
+    );
+    assert!(body_contains_text(
+        &requests[1].body_json().to_string(),
+        SUMMARIZATION_PROMPT,
+    ));
+    // Responses Lite turns request tools into an `additional_tools` prefix, so tools sent
+    // again with the compaction prompt would duplicate the declaration already in history.
+    assert_eq!(
+        requests[1].inputs_of_type("additional_tools").len(),
+        requests[0].inputs_of_type("additional_tools").len()
+    );
+    assert_eq!(requests[1].body_json().get("tools"), sampling.get("tools"));
+    Ok(())
+}
+
+/// Fork: local compaction exposes tools for prompt-cache parity. A response that calls one
+/// instead of summarizing gets a single corrective retry, never an older assistant reply.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_local_compaction_retries_tool_call_once_for_summary() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", FIRST_REPLY),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_function_call("call-compaction-tool", DUMMY_FUNCTION_NAME, "{}"),
+                ev_completed("r2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", SUMMARY_TEXT),
+                ev_completed("r3"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", FINAL_REPLY),
+                ev_completed("r4"),
+            ]),
+        ],
+    )
+    .await;
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("seed history for compaction").await?;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_turn("continue after compaction").await?;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 4);
+    let first_attempt = requests[1].body_json().to_string();
+    let retry = requests[2].body_json().to_string();
+    assert!(body_contains_text(&first_attempt, SUMMARIZATION_PROMPT));
+    assert!(!first_attempt.contains("Do not call tools"));
+    assert!(retry.contains("Do not call tools"));
+    assert!(!retry.contains("call-compaction-tool"));
+    let follow_up = requests[3].body_json().to_string();
+    assert!(body_contains_text(
+        &follow_up,
+        &summary_with_prefix(SUMMARY_TEXT)
+    ));
+    assert!(!body_contains_text(
+        &follow_up,
+        &summary_with_prefix(FIRST_REPLY)
+    ));
+    assert!(!follow_up.contains("call-compaction-tool"));
+    Ok(())
+}
+
+/// Fork: when the corrective retry still has no summary, compaction fails and keeps the
+/// history instead of installing an earlier assistant reply as the summary.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_compaction_without_summary_fails_without_stale_summary() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", FIRST_REPLY),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_function_call("call-compaction-tool-1", DUMMY_FUNCTION_NAME, "{}"),
+                ev_completed("r2"),
+            ]),
+            sse(vec![
+                ev_function_call("call-compaction-tool-2", DUMMY_FUNCTION_NAME, "{}"),
+                ev_completed("r3"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", FINAL_REPLY),
+                ev_completed("r4"),
+            ]),
+        ],
+    )
+    .await;
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("seed history for compaction").await?;
+    test.codex.submit(Op::Compact).await?;
+    let mut errors = Vec::new();
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::Error(error) => errors.push(error.message),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+    test.submit_turn("continue after compaction").await?;
+
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 4);
+    let follow_up = requests[3].body_json().to_string();
+    assert!(!body_contains_text(&follow_up, SUMMARY_PREFIX));
+    assert!(follow_up.contains(FIRST_REPLY));
+    assert!(!follow_up.contains("call-compaction-tool"));
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // TODO(ccunningham): Re-enable after the follow-up compaction behavior PR lands.
 // Current main behavior around non-context manual /compact failures is known-incorrect.
