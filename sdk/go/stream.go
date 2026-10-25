@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"iter"
 	"sync"
 )
 
@@ -69,6 +70,67 @@ func (s *NotificationStream) Events() <-chan Notification {
 
 func (s *NotificationStream) Next(ctx context.Context) (Notification, bool) {
 	return s.recv(ctx)
+}
+
+// All returns an iterator over the stream's notifications in delivery order. Each
+// notification comes with a nil error. If the stream closes with an error, including the
+// ctx error when ctx ends, the iterator yields that error once with a zero Notification
+// and stops; a clean close (for example after a turn completed) just ends the loop.
+// Breaking out of the loop leaves the stream open.
+//
+//	for notification, err := range stream.All(ctx) {
+//		if err != nil {
+//			return err
+//		}
+//		_ = notification
+//	}
+func (s *NotificationStream) All(ctx context.Context) iter.Seq2[Notification, error] {
+	return func(yield func(Notification, error) bool) {
+		if s == nil {
+			yield(Notification{}, &ClosedError{})
+			return
+		}
+		for {
+			notification, ok := s.Next(ctx)
+			if !ok {
+				if err := s.Err(); err != nil {
+					yield(Notification{}, err)
+				}
+				return
+			}
+			if !yield(notification, nil) {
+				return
+			}
+		}
+	}
+}
+
+// Payloads returns an iterator over the payloads of type T in stream, skipping other
+// notifications, with the error semantics of NotificationStream.All.
+//
+//	for delta, err := range codex.Payloads[protocol.AgentMessageDeltaNotification](ctx, stream) {
+//		if err != nil {
+//			return err
+//		}
+//		fmt.Print(delta.Delta)
+//	}
+func Payloads[T any](ctx context.Context, stream *NotificationStream) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		for notification, err := range stream.All(ctx) {
+			if err != nil {
+				var zero T
+				yield(zero, err)
+				return
+			}
+			payload, ok := notification.Payload.(T)
+			if !ok {
+				continue
+			}
+			if !yield(payload, nil) {
+				return
+			}
+		}
+	}
 }
 
 func (s *NotificationStream) Err() error {
