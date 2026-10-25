@@ -1,0 +1,137 @@
+//! Fork: pure logic of dynamic workflows (`specs/dynamic-workflow-2026-10-25.md`).
+//!
+//! The crate has no dependency on `codex-core`: it validates workflow scripts, generates
+//! the Code Mode cell that runs them, checks and validates JSON schemas of `agent()` calls,
+//! keys and journals calls, tracks run snapshots and renders the completion notification.
+
+mod journal;
+mod key;
+mod literal;
+mod meta;
+mod notification;
+mod prelude;
+mod scan;
+mod schema;
+mod snapshot;
+
+pub use journal::Journal;
+pub use journal::JournalEvent;
+pub use journal::JournalRecord;
+pub use journal::TokenCharge;
+pub use key::KEYED_OPTIONS;
+pub use key::call_key;
+pub use key::canonical_json;
+pub use key::sha256_hex;
+pub use meta::MAX_ARGS_BYTES;
+pub use meta::MAX_PHASES;
+pub use meta::MAX_SCRIPT_BYTES;
+pub use meta::ParsedScript;
+pub use meta::ScriptError;
+pub use meta::ScriptRule;
+pub use meta::WorkflowMeta;
+pub use meta::check_args_size;
+pub use meta::is_valid_name;
+pub use meta::parse_script;
+pub use notification::format_duration;
+pub use notification::render_notification;
+pub use prelude::HOST_TOOLS;
+pub use prelude::MAX_FAN_OUT;
+pub use prelude::MAX_RESULT_BYTES;
+pub use prelude::TOOL_AGENT;
+pub use prelude::TOOL_BUDGET;
+pub use prelude::TOOL_EVENT;
+pub use prelude::build_cell_source;
+pub use prelude::display_error;
+pub use schema::check_strict_compatible;
+pub use schema::parse_final_message;
+pub use schema::validate_value;
+pub use snapshot::AgentCounts;
+pub use snapshot::AgentEntry;
+pub use snapshot::AgentState;
+pub use snapshot::LOG_TAIL_LINES;
+pub use snapshot::MAX_LOG_CHARS;
+pub use snapshot::PhaseSnapshot;
+pub use snapshot::RunSnapshot;
+pub use snapshot::RunStatus;
+pub use snapshot::RunTracker;
+pub use snapshot::truncate_chars;
+
+/// Developer instruction given to every workflow agent (UC3, R3.4).
+pub const WORKFLOW_AGENT_INSTRUCTIONS: &str = "You are a workflow agent started by an orchestration script. Work autonomously: no user is available to answer questions. Your final message is returned verbatim to the script. When a JSON schema is required, your final message must be only that JSON object. Do not spawn other agents.";
+
+/// Why an `agent()` call resolved to null (UC3, R3.7).
+pub mod null_reason {
+    pub const SPAWN_FAILED: &str = "spawn_failed";
+    pub const ERRORED: &str = "errored";
+    pub const INTERRUPTED: &str = "interrupted";
+    pub const SHUTDOWN: &str = "shutdown";
+    pub const TIMEOUT: &str = "timeout";
+    pub const CANCELLED: &str = "cancelled";
+    pub const BUDGET_EXHAUSTED: &str = "budget_exhausted";
+    pub const AGENT_LIMIT: &str = "agent_limit";
+    pub const CAPACITY: &str = "capacity";
+    pub const SCHEMA_INVALID: &str = "schema_invalid";
+    pub const ISOLATION_UNAVAILABLE: &str = "isolation_unavailable";
+    pub const GUARDIAN_DENIED: &str = "guardian_denied";
+}
+
+/// Agent path segment of a workflow child: `wf_<run>_<seq>_<label>` with the label reduced
+/// to lowercase `[a-z0-9_]` and at most 24 characters (UC3, R3.9).
+pub fn child_agent_name(run_id: &str, seq: u64, label: Option<&str>) -> String {
+    let run = run_id
+        .strip_prefix("wf-")
+        .unwrap_or(run_id)
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let mut name = format!("wf_{run}_{seq}");
+    if let Some(label) = label {
+        let mut sanitized = String::new();
+        for ch in label.chars() {
+            let ch = if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            };
+            if !(ch == '_' && sanitized.ends_with('_')) {
+                sanitized.push(ch);
+            }
+        }
+        let sanitized: String = sanitized.trim_matches('_').chars().take(24).collect();
+        let sanitized = sanitized.trim_end_matches('_');
+        if !sanitized.is_empty() {
+            name.push('_');
+            name.push_str(sanitized);
+        }
+    }
+    name
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// R3.9: child names carry the run, the call number and a sanitized label.
+    #[test]
+    fn child_names_are_sanitized() {
+        assert_eq!(
+            child_agent_name("wf-1A2b3c4d", 7, Some("find src/a.py")),
+            "wf_1a2b3c4d_7_find_src_a_py"
+        );
+        assert_eq!(
+            child_agent_name(
+                "wf-1a2b3c4d",
+                1,
+                Some("  Verify   src/very/long/path/name.rs:42 ")
+            ),
+            "wf_1a2b3c4d_1_verify_src_very_long_pat"
+        );
+        assert_eq!(
+            child_agent_name("wf-1a2b3c4d", 2, Some("***")),
+            "wf_1a2b3c4d_2"
+        );
+        assert_eq!(child_agent_name("wf-1a2b3c4d", 3, None), "wf_1a2b3c4d_3");
+    }
+}

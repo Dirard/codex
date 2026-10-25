@@ -5524,6 +5524,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-workflow"
+version = "0.164.0"
+dependencies = [
+ "pretty_assertions",
+ "regex-lite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+]
+
+[[package]]
 name = "codex-workload-identity"
 version = "0.164.0"
 dependencies = [

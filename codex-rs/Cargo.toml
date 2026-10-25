@@ -120,6 +120,7 @@ members = [
     "websocket-client",
     "windows-sandbox-rs/tests/support",
     "windows-sandbox-service",
+    "workflow",
     "worktree",
     "workload-identity",
     "utils/absolute-path",
@@ -318,6 +319,7 @@ codex-utils-pty = { path = "utils/pty" }
 codex-utils-redacted-string = { path = "utils/redacted-string" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
+codex-workflow = { path = "workflow" }
 codex-worktree = { path = "worktree" }
 codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
 codex-utils-stream-parser = { path = "utils/stream-parser" }
