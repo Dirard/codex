@@ -11,6 +11,7 @@ use codex_core::StartThreadOptions;
 use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
+use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Constrained;
 use codex_core::config::ThreadStoreConfig;
 use codex_features::Feature;
@@ -19,6 +20,7 @@ use codex_history::RolloutItem;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::items::TurnItem;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::ContentItem;
@@ -32,6 +34,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::InternalSessionSource;
+use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -335,6 +338,24 @@ if payload.get("prompt") == {blocked_prompt_json}:
     });
 
     fs::write(&script_path, script).context("write user prompt submit hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+/// Fork: installs the blocking user prompt submit hook and a passing Stop hook together.
+fn write_user_prompt_submit_and_stop_hooks(
+    home: &Path,
+    blocked_prompt: &str,
+    additional_context: &str,
+) -> Result<()> {
+    let read_hooks = || -> Result<Value> {
+        let hooks = fs::read_to_string(home.join("hooks.json")).context("read hooks.json")?;
+        serde_json::from_str(&hooks).context("parse hooks.json")
+    };
+    write_user_prompt_submit_hook(home, blocked_prompt, additional_context)?;
+    let mut hooks = read_hooks()?;
+    write_stop_hook(home, /*block_prompts*/ &[])?;
+    hooks["hooks"]["Stop"] = read_hooks()?["hooks"]["Stop"].take();
     fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
     Ok(())
 }
@@ -3325,6 +3346,178 @@ async fn blocked_queued_prompt_does_not_strand_pending_tool_output() -> Result<(
     assert_eq!(
         turn_complete.last_agent_message.as_deref(),
         Some("plan recorded"),
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BlockedBatchCompaction {
+    PostTurn,
+    MidTurn,
+}
+
+/// Fork: when the hook blocks every prompt queued behind a finished answer, that answer
+/// completes the turn through the normal path: Stop hooks, compaction, and the last message.
+#[test_case::test_case(BlockedBatchCompaction::PostTurn; "post_turn_compaction")]
+#[test_case::test_case(BlockedBatchCompaction::MidTurn; "mid_turn_compaction")]
+#[tokio::test]
+async fn blocked_queued_prompt_after_final_answer_completes_turn(
+    compaction: BlockedBatchCompaction,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (gate_tx, gate_rx) = oneshot::channel();
+    let first_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_response_created("resp-1")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_message_item_added("msg-1", "")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_output_text_delta("first ")),
+        },
+        StreamingSseChunk {
+            gate: Some(gate_rx),
+            body: sse(vec![
+                ev_message_item_done("msg-1", "first response"),
+                // Above both the post-turn threshold (half of 12000) and the mid-turn limit.
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 7_000),
+            ]),
+        },
+    ];
+    let compaction_chunks = vec![StreamingSseChunk {
+        gate: None,
+        body: sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-2", "compacted summary"),
+            ev_completed_with_tokens("resp-2", /*total_tokens*/ 10),
+        ]),
+    }];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, compaction_chunks]).await;
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_pre_build_hook(|home| {
+            write_user_prompt_submit_and_stop_hooks(
+                home,
+                "blocked queued prompt",
+                BLOCKED_PROMPT_CONTEXT,
+            )
+            .expect("failed to write user prompt submit and stop hook test fixtures");
+        })
+        .with_config(move |config| {
+            trust_discovered_hooks(config);
+            // Without remote compaction, the summary request goes to the streaming server.
+            config.model_provider.name = "Local compaction test provider".to_string();
+            config.model_context_window = Some(12_000);
+            match compaction {
+                BlockedBatchCompaction::PostTurn => {
+                    config.model_auto_compact_token_limit = Some(100_000);
+                    config.model_post_turn_compact_threshold_percent = 50;
+                }
+                BlockedBatchCompaction::MidTurn => {
+                    config.model_auto_compact_token_limit = Some(6_000);
+                    config.model_post_turn_compact_threshold_percent = 0;
+                }
+            }
+            // Queue the prompt behind the response, so the answer finishes before the hook runs.
+            config
+                .features
+                .disable(Feature::InstantInterrupt)
+                .expect("disable InstantInterrupt feature");
+        });
+    let test = builder.build_with_streaming_server(&server).await?;
+    let user_input = |text: &str| {
+        TurnInputRequest::user_input(vec![UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }])
+    };
+
+    test.codex
+        .start_or_steer_turn(user_input("initial prompt"))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::AgentMessageContentDelta(_))
+    })
+    .await;
+    test.codex
+        .start_or_steer_turn(user_input("blocked queued prompt"))
+        .await?;
+    let _ = gate_tx.send(());
+    let mut compacted = false;
+    let EventMsg::TurnComplete(turn_complete) = wait_for_event(&test.codex, |event| {
+        compacted |= matches!(
+            event,
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::ContextCompaction(_),
+                ..
+            })
+        );
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await
+    else {
+        unreachable!("wait_for_event returns the matched event");
+    };
+
+    assert_eq!(
+        turn_complete.last_agent_message.as_deref(),
+        Some("first response"),
+        "the finished answer should complete the turn",
+    );
+    let stop_inputs = read_stop_hook_inputs(test.codex_home_path())?;
+    assert_eq!(stop_inputs.len(), 1, "the Stop hook should run once");
+    assert_eq!(stop_inputs[0]["last_assistant_message"], "first response");
+    assert_eq!(stop_inputs[0]["stop_hook_active"], false);
+    assert!(
+        compacted,
+        "{compaction:?} compaction should run in the turn"
+    );
+
+    let requests = server.requests().await;
+    assert_eq!(
+        requests.len(),
+        2,
+        "the turn should not sample the blocked prompt",
+    );
+    assert!(
+        request_message_input_texts(&requests[1], "user")
+            .iter()
+            .any(|text| text.contains(SUMMARIZATION_PROMPT)),
+        "the second request should be the compaction request",
+    );
+    for request in &requests {
+        assert!(
+            !request_message_input_texts(request, "user")
+                .contains(&"blocked queued prompt".to_string())
+        );
+    }
+    let rollout = fs::read_to_string(test.codex.rollout_path().expect("rollout path"))?;
+    assert!(!rollout.contains("blocked queued prompt"));
+
+    let hook_prompts = read_user_prompt_submit_hook_inputs(test.codex_home_path())?
+        .iter()
+        .map(|input| {
+            input["prompt"]
+                .as_str()
+                .expect("user prompt submit hook prompt")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        hook_prompts,
+        vec![
+            "initial prompt".to_string(),
+            "blocked queued prompt".to_string(),
+        ],
     );
 
     server.shutdown().await;

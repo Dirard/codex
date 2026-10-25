@@ -473,11 +473,15 @@ pub(crate) async fn run_turn(
     // Fork: whether the model still owes this turn a step: a preempted response, tool output,
     // or a Stop hook continuation. Blocked steered input must not end the turn before that.
     let mut model_follow_up_pending = false;
+    // Fork: steered input that the hooks already accepted and recorded behind a finished
+    // answer. The next step samples it; the drain and hooks at the loop top skip it.
+    let mut accepted_pending_input = None;
     loop {
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let pending_input = if can_drain_pending_input {
+        let accepted_input = accepted_pending_input.take();
+        let pending_input = if can_drain_pending_input && accepted_input.is_none() {
             sess.input_queue
                 .get_pending_input(&sess.active_turn)
                 .await
@@ -501,6 +505,7 @@ pub(crate) async fn run_turn(
         {
             break;
         }
+        let pending_input = accepted_input.unwrap_or(pending_input);
 
         // Input and turn-start injections are recorded before recovery can continue this turn.
         turn_context.extension_data.insert(RecordedTurnInput);
@@ -731,7 +736,10 @@ pub(crate) async fn run_turn(
                                     .preempt
                                     .as_ref()
                                     .is_some_and(CancellationToken::is_cancelled);
-                            continue;
+                            // Fork: input queued behind a finished answer is resolved below.
+                            if model_needs_follow_up {
+                                continue;
+                            }
                         }
                         Ok(false) => {}
                         Err(err) => {
@@ -750,6 +758,30 @@ pub(crate) async fn run_turn(
                     }
                 }
 
+                // Fork: only the hooks can tell whether input queued behind a finished answer
+                // continues the turn, so run them now. If they block all of it, nothing is left
+                // to sample and the answer completes the turn below like any other.
+                let needs_follow_up = if !model_needs_follow_up && has_pending_input {
+                    let pending_input = sess
+                        .input_queue
+                        .get_pending_input(&sess.active_turn)
+                        .await
+                        .0;
+                    let blocked = run_hooks_and_record_inputs(
+                        &sess,
+                        &turn_context,
+                        &turn_context.capture_current_model_info(),
+                        &pending_input,
+                        PersistContext::SteeredUserInput,
+                    )
+                    .await;
+                    if !blocked {
+                        accepted_pending_input = Some(pending_input);
+                    }
+                    !blocked
+                } else {
+                    needs_follow_up
+                };
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
                     let stop_outcome = run_turn_stop_hooks(
