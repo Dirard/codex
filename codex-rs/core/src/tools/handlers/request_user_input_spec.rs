@@ -1,4 +1,6 @@
+use codex_features::Features;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
@@ -7,6 +9,25 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 pub const REQUEST_USER_INPUT_TOOL_NAME: &str = "request_user_input";
+
+/// Fork: when to ask, added to the description whenever Default mode allows the tool.
+pub(crate) const DEFAULT_MODE_GUIDANCE: &str = "Ask only when the answer changes what you do next and you cannot determine it yourself: a real choice between materially different approaches, a missing requirement, or an irreversible or costly decision the user should own. Do not ask for permission to continue, to confirm a plan you can carry out, or for facts you can find in the codebase, the conversation, or with your tools. Ask at most once per decision. In Default mode the user may not respond. If no answer arrives, continue with your recommended option and state that assumption.";
+
+/// Fork: returned in Default mode when the request resolves without any answer.
+pub(crate) const DEFAULT_MODE_NO_ANSWER_MESSAGE: &str = "No answer was received: the user did not answer, or this client cannot show questions. Continue with your recommended option and state that assumption in your reply. Do not ask again for this decision.";
+
+/// Fork: modes in which this session may ask. Default mode (behind
+/// `default_mode_request_user_input`) is for root threads; sub-agents keep the Plan-only set
+/// and its description because only the root thread may ask the user.
+pub(crate) fn request_user_input_modes_for_session(
+    features: &Features,
+    session_source: &SessionSource,
+) -> Vec<ModeKind> {
+    codex_tools::request_user_input_available_modes(features)
+        .into_iter()
+        .filter(|mode| mode.allows_request_user_input() || !session_source.is_non_root_agent())
+        .collect()
+}
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub(crate) struct RequestUserInputToolArgs {
@@ -122,9 +143,14 @@ pub(crate) fn normalize_request_user_input_tool_args(
 
 pub fn request_user_input_tool_description(available_modes: &[ModeKind]) -> String {
     let allowed_modes = format_allowed_modes(available_modes);
-    format!(
+    let description = format!(
         "Request user input for one to three short questions and wait for the response. This tool is only available in {allowed_modes}."
-    )
+    );
+    if available_modes.contains(&ModeKind::Default) {
+        format!("{description}\n{DEFAULT_MODE_GUIDANCE}")
+    } else {
+        description
+    }
 }
 
 fn format_allowed_modes(available_modes: &[ModeKind]) -> String {

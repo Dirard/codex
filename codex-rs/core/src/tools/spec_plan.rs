@@ -92,7 +92,6 @@ use codex_tools::can_request_original_image_detail;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::default_namespace_description;
-use codex_tools::request_user_input_available_modes;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -1380,7 +1379,12 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     if turn_context.config.experimental_request_user_input_enabled {
         registry.add_with_exposure(
             RequestUserInputHandler {
-                available_modes: request_user_input_available_modes(features),
+                // Fork: Default mode only for interactive root threads.
+                available_modes:
+                    crate::tools::handlers::request_user_input_spec::request_user_input_modes_for_session(
+                        features,
+                        &turn_context.session_source,
+                    ),
             },
             ToolExposure::DirectModelOnly,
         );

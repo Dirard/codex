@@ -1910,10 +1910,15 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Removed,
         default_enabled: true,
     },
+    // Fork: experimental; specs/explorer-and-questions-2026-10-25.md.
     FeatureSpec {
         id: Feature::DefaultModeRequestUserInput,
         key: "default_mode_request_user_input",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Questions outside Plan mode",
+            menu_description: "Let Codex ask a few multiple-choice questions in Default mode when a decision is genuinely ambiguous.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {

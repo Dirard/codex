@@ -15,6 +15,8 @@ mod mcp_required_exit;
 mod originator;
 mod output_schema;
 mod prompt_stdin;
+// Fork: request_user_input in exec (specs/explorer-and-questions-2026-10-25.md).
+mod request_user_input;
 mod resume;
 mod sandbox;
 #[cfg(target_os = "macos")]

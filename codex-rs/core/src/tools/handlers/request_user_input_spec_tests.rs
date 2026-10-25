@@ -179,12 +179,59 @@ fn request_user_input_tool_description_mentions_available_modes() {
         request_user_input_tool_description(&default_available_modes()),
         "Request user input for one to three short questions and wait for the response. This tool is only available in Plan mode.".to_string()
     );
+    // Fork: Default mode adds guidance on when to ask (specs/explorer-and-questions-2026-10-25.md).
     assert_eq!(
         request_user_input_tool_description(&default_mode_enabled_available_modes()),
-        "Request user input for one to three short questions and wait for the response. This tool is only available in Default or Plan mode.".to_string()
+        format!(
+            "Request user input for one to three short questions and wait for the response. This tool is only available in Default or Plan mode.\n{DEFAULT_MODE_GUIDANCE}"
+        )
     );
     assert_eq!(
         request_user_input_tool_description(&[ModeKind::Default]),
-        "Request user input for one to three short questions and wait for the response. This tool is only available in Default mode.".to_string()
+        format!(
+            "Request user input for one to three short questions and wait for the response. This tool is only available in Default mode.\n{DEFAULT_MODE_GUIDANCE}"
+        )
+    );
+}
+
+#[test]
+fn default_mode_guidance_limits_questions_to_real_forks() {
+    assert!(DEFAULT_MODE_GUIDANCE.contains("Ask only when the answer changes what you do next"));
+    assert!(DEFAULT_MODE_GUIDANCE.contains("Do not ask for permission to continue"));
+    assert!(DEFAULT_MODE_GUIDANCE.contains("If no answer arrives"));
+}
+
+#[test]
+fn request_user_input_modes_for_session_require_interactive_root() {
+    use codex_protocol::ThreadId;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentSource;
+
+    let mut features = Features::with_defaults();
+    features.enable(Feature::DefaultModeRequestUserInput);
+    let subagent = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: ThreadId::new(),
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
+
+    assert_eq!(
+        request_user_input_modes_for_session(&features, &SessionSource::Cli),
+        default_mode_enabled_available_modes()
+    );
+    // `codex exec` turns the feature off for its own sessions instead.
+    assert_eq!(
+        request_user_input_modes_for_session(&features, &SessionSource::Exec),
+        default_mode_enabled_available_modes()
+    );
+    assert_eq!(
+        request_user_input_modes_for_session(&features, &subagent),
+        default_available_modes()
+    );
+    assert_eq!(
+        request_user_input_modes_for_session(&Features::with_defaults(), &SessionSource::Cli),
+        default_available_modes()
     );
 }

@@ -428,3 +428,155 @@ async fn request_user_input_rejected_in_default_mode_by_default() -> anyhow::Res
 async fn request_user_input_round_trip_in_default_mode_with_feature() -> anyhow::Result<()> {
     request_user_input_round_trip_for_mode(ModeKind::Default).await
 }
+
+/// Fork: resolves one request with `answers` and returns the tool output the model receives.
+async fn request_user_input_output_for_answers(
+    mode: ModeKind,
+    answers: HashMap<String, RequestUserInputAnswer>,
+) -> anyhow::Result<(String, Option<bool>)> {
+    let server = start_mock_server().await;
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::DefaultModeRequestUserInput)
+                .expect("test config should allow feature update");
+        })
+        .build(&server)
+        .await?;
+
+    let call_id = "user-input-no-answer";
+    let request_args = json!({
+        "questions": [{
+            "id": "storage",
+            "header": "Storage",
+            "question": "Which storage backend should the cache use?",
+            "options": [{
+                "label": "SQLite (Recommended)",
+                "description": "Persistent and already a dependency."
+            }, {
+                "label": "In memory",
+                "description": "Fast but lost on restart."
+            }]
+        }]
+    })
+    .to_string();
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "request_user_input", &request_args),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "continuing"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, cwd.path());
+    codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "add a cache".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                environments: Some(local_requests(cwd.abs())),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(CollaborationMode {
+                    mode,
+                    settings: Settings {
+                        model: session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    let request = wait_for_event_match(&codex, |event| match event {
+        EventMsg::RequestUserInput(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+    codex
+        .submit(Op::UserInputAnswer {
+            id: request.turn_id.clone(),
+            response: RequestUserInputResponse { answers },
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let req = second_mock.single_request();
+    Ok(call_output_content_and_success(&req, call_id))
+}
+
+#[test_case::test_case(HashMap::new(); "no answers")]
+#[test_case::test_case(HashMap::from([(
+    "storage".to_string(),
+    RequestUserInputAnswer { answers: vec!["  ".to_string()] },
+)]); "blank answer")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_default_mode_without_answer_tells_model_to_continue(
+    answers: HashMap<String, RequestUserInputAnswer>,
+) -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (output, _success) =
+        request_user_input_output_for_answers(ModeKind::Default, answers).await?;
+    assert!(
+        output.starts_with("No answer was received"),
+        "Default-mode output without an answer: {output}"
+    );
+    assert!(output.contains("recommended option"), "{output}");
+    assert!(output.contains("Do not ask again"), "{output}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_default_mode_answer_is_returned_as_json() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (output, _success) = request_user_input_output_for_answers(
+        ModeKind::Default,
+        HashMap::from([(
+            "storage".to_string(),
+            RequestUserInputAnswer {
+                answers: vec!["SQLite (Recommended)".to_string()],
+            },
+        )]),
+    )
+    .await?;
+    let output: Value = serde_json::from_str(&output)?;
+    assert_eq!(
+        output,
+        json!({"answers": {"storage": {"answers": ["SQLite (Recommended)"]}}})
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_plan_mode_empty_answers_stay_json() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (output, _success) =
+        request_user_input_output_for_answers(ModeKind::Plan, HashMap::new()).await?;
+    let output: Value = serde_json::from_str(&output)?;
+    assert_eq!(output, json!({"answers": {}}));
+    Ok(())
+}

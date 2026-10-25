@@ -360,7 +360,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .raw_overrides
         .push(EXEC_EXIT_NOTIFICATIONS_DISABLED_OVERRIDE.to_string());
     // Parse `-c` overrides from the CLI.
-    let cli_kv_overrides = match config_overrides.parse_overrides() {
+    let mut cli_kv_overrides = match config_overrides.parse_overrides() {
         Ok(v) => v,
         #[allow(clippy::print_stderr)]
         Err(e) => {
@@ -368,6 +368,12 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             std::process::exit(1);
         }
     };
+    // Fork: exec has no client that can answer questions, so Default mode never offers
+    // `request_user_input` here (specs/explorer-and-questions-2026-10-25.md).
+    cli_kv_overrides.push((
+        "features.default_mode_request_user_input".to_string(),
+        codex_config::TomlValue::Boolean(false),
+    ));
 
     let mut resolved_cwd = cwd.clone();
     let mut config_cwd = match resolved_cwd.as_deref() {

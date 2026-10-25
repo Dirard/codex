@@ -65,6 +65,97 @@ async fn request_user_input_default_mode_forwards_non_blocking() -> Result<()> {
     .await
 }
 
+/// Fork: a client that answers the request with an error leaves the model without an answer,
+/// and the model is told so instead of receiving empty answers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn request_user_input_default_mode_client_error_tells_model_no_answer() -> Result<()> {
+    let codex_home = tempfile::TempDir::new()?;
+    let responses = vec![
+        create_request_user_input_sse_response("call1")?,
+        create_final_assistant_message_sse_response("done")?,
+    ];
+    let server = create_mock_responses_server_sequence(responses).await;
+    MockResponsesConfig::new(&server.uri())
+        .with_approval_policy("on-request")
+        .write(codex_home.path())?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+
+    let ThreadStartResponse { thread, .. } = mcp
+        .start_thread(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            config: Some(std::collections::HashMap::from([(
+                "features.default_mode_request_user_input".to_string(),
+                json!(true),
+            )])),
+            ..Default::default()
+        })
+        .await?;
+
+    let _: TurnStartResponse = mcp
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                client_user_message_id: None,
+                input: vec![V2UserInput::Text {
+                    text: "ask something".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                model: Some("mock-model".to_string()),
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    settings: Settings {
+                        model: "mock-model".to_string(),
+                        reasoning_effort: Some(ReasoningEffort::Medium),
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let server_req = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::ToolRequestUserInput { request_id, params } = server_req else {
+        panic!("expected ToolRequestUserInput request, got: {server_req:?}");
+    };
+    assert!(!params.is_blocking);
+    mcp.send_error(
+        request_id,
+        codex_app_server_protocol::JSONRPCErrorError {
+            code: -32601,
+            message: "item/tool/requestUserInput is not supported by this client".to_string(),
+            data: None,
+        },
+    )
+    .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    let followup = requests
+        .iter()
+        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+        .find(|body| body.contains("function_call_output"))
+        .expect("the model receives the tool output");
+    assert!(
+        followup.contains("No answer was received"),
+        "follow-up request: {followup}"
+    );
+    Ok(())
+}
+
 async fn request_user_input_round_trip_for_mode(
     mode: ModeKind,
     enable_default_mode_feature: bool,
