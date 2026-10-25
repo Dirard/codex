@@ -115,13 +115,14 @@ func (s *turnState) observe(notification Notification) {
 	}
 }
 
-// journalLocked keeps an event for the next stream, within PendingTurnQueue events and the
-// byte budget of one stream; older events give way.
+// journalLocked keeps an event for the next stream, within what one stream can hold and
+// PendingTurnQueue events; older events give way.
 func (s *turnState) journalLocked(notification Notification) {
 	limits := s.client.limits
+	maxEvents := min(limits.PendingTurnQueue, limits.ResourceStreamQueue)
 	s.journal = append(s.journal, notification)
 	s.journalBytes += notificationRetainedBytes(notification)
-	for len(s.journal) > 0 && (len(s.journal) > limits.PendingTurnQueue || s.journalBytes > limits.ResourceStreamQueueBytes) {
+	for len(s.journal) > 0 && (len(s.journal) > maxEvents || s.journalBytes > limits.ResourceStreamQueueBytes) {
 		s.journalBytes -= notificationRetainedBytes(s.journal[0])
 		s.journal[0] = Notification{}
 		s.journal = s.journal[1:]

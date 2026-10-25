@@ -47,9 +47,11 @@ func (h *TurnHandle) ID() string {
 
 // Stream returns the turn's events. The handle's first Stream or Wait also gets the events
 // buffered since the turn started, and a Stream opened after the handle's earlier streams
-// closed first gets the events that arrived meanwhile (up to PendingTurnQueue). ctx bounds
-// the stream's lifetime. After the turn finished, the stream closes with the turn's
-// terminal error, which is nil after turn/completed, once it delivered those events.
+// closed first gets the events that arrived meanwhile (up to the smaller of
+// PendingTurnQueue and ResourceStreamQueue; beyond that the newest, then an
+// *OverflowError). ctx bounds the stream's lifetime. After the turn finished, the stream
+// closes with the turn's terminal error, which is nil after turn/completed, once it
+// delivered those events.
 func (h *TurnHandle) Stream(ctx context.Context) (*TurnStream, error) {
 	if h == nil || h.client == nil || h.client.router == nil || h.state == nil {
 		return nil, &ClosedError{}

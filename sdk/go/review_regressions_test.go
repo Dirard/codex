@@ -98,11 +98,21 @@ func TestTurnHandleReopenedStreamGetsEventsMissedWhileClosed(t *testing.T) {
 	}
 }
 
-// The events kept for the next stream are bounded like the pending buffer: the oldest
-// give way and the stream then reports the loss.
+// The events kept for the next stream are bounded by PendingTurnQueue and by what one
+// stream holds: the oldest give way, the stream gets all kept events and then reports the
+// loss.
 func TestTurnHandleKeptEventsAreBounded(t *testing.T) {
+	for name, limits := range map[string]ClientLimits{
+		"pending queue": {PendingTurnQueue: 2},
+		"stream queue":  {ResourceStreamQueue: 2},
+	} {
+		t.Run(name, func(t *testing.T) { testKeptEventsBound(t, limits) })
+	}
+}
+
+func testKeptEventsBound(t *testing.T, limits ClientLimits) {
 	transport := newScriptedInitializedTransport(t, nil)
-	client, err := NewClient(context.Background(), ClientConfig{Transport: transport, Limits: ClientLimits{PendingTurnQueue: 2}})
+	client, err := NewClient(context.Background(), ClientConfig{Transport: transport, Limits: limits})
 	if err != nil {
 		t.Fatal(err)
 	}
