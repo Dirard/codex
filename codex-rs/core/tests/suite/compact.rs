@@ -4683,12 +4683,10 @@ async fn local_compaction_in_incremental_window_sends_no_top_level_tools() -> Re
         SUMMARIZATION_PROMPT,
     ));
     // Responses Lite turns request tools into an `additional_tools` prefix, so tools sent
-    // again with the compaction prompt would duplicate the declaration already in history.
-    assert_eq!(
-        requests[1].inputs_of_type("additional_tools").len(),
-        requests[0].inputs_of_type("additional_tools").len()
-    );
-    assert_eq!(requests[1].body_json().get("tools"), sampling.get("tools"));
+    // again with the compaction prompt would add a second declaration to the one in history.
+    let declarations = requests[0].inputs_of_type("additional_tools");
+    assert_eq!(declarations.len(), 1);
+    assert_eq!(requests[1].inputs_of_type("additional_tools"), declarations);
     Ok(())
 }
 
@@ -4809,13 +4807,221 @@ async fn local_compaction_without_summary_fails_without_stale_summary() -> Resul
     }
     test.submit_turn("continue after compaction").await?;
 
+    // The failure is terminal and says what happened instead of looking like a dropped stream.
     assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].contains("called a tool instead of writing a summary")
+            && !errors[0].contains("stream disconnected"),
+        "{errors:?}"
+    );
     let requests = request_log.requests();
     assert_eq!(requests.len(), 4);
     let follow_up = requests[3].body_json().to_string();
     assert!(!body_contains_text(&follow_up, SUMMARY_PREFIX));
     assert!(follow_up.contains(FIRST_REPLY));
     assert!(!follow_up.contains("call-compaction-tool"));
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LocalCompactionRun {
+    /// `/compact`.
+    Standalone,
+    /// Automatic compaction between a tool call and its follow-up sample.
+    MidTurn,
+    /// Automatic compaction after a completed answer.
+    PostTurn,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ToolCallResponse {
+    ToolOnly,
+    CommentaryPreamble,
+    UntaggedPreamble,
+}
+
+/// Fork: a local compaction response that calls a tool is no summary, even when the model
+/// writes a preamble before the call, in every compaction phase: the preamble must not replace
+/// the history. The single corrective retry installs the real summary.
+#[test_case::test_case(LocalCompactionRun::Standalone, ToolCallResponse::CommentaryPreamble; "standalone_commentary_preamble")]
+#[test_case::test_case(LocalCompactionRun::Standalone, ToolCallResponse::UntaggedPreamble; "standalone_untagged_preamble")]
+#[test_case::test_case(LocalCompactionRun::MidTurn, ToolCallResponse::ToolOnly; "mid_turn_tool_only")]
+#[test_case::test_case(LocalCompactionRun::MidTurn, ToolCallResponse::CommentaryPreamble; "mid_turn_commentary_preamble")]
+#[test_case::test_case(LocalCompactionRun::PostTurn, ToolCallResponse::ToolOnly; "post_turn_tool_only")]
+#[test_case::test_case(LocalCompactionRun::PostTurn, ToolCallResponse::CommentaryPreamble; "post_turn_commentary_preamble")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_compaction_retries_tool_call_response_for_summary(
+    run: LocalCompactionRun,
+    response: ToolCallResponse,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const PREAMBLE: &str = "PREAMBLE_BEFORE_COMPACTION_TOOL_CALL";
+    let server = start_mock_server().await;
+    let mut tool_call_events = Vec::new();
+    match response {
+        ToolCallResponse::ToolOnly => {}
+        ToolCallResponse::CommentaryPreamble => {
+            let mut preamble = ev_assistant_message("m-preamble", PREAMBLE);
+            preamble["item"]["phase"] = json!("commentary");
+            tool_call_events.push(preamble);
+        }
+        ToolCallResponse::UntaggedPreamble => {
+            tool_call_events.push(ev_assistant_message("m-preamble", PREAMBLE));
+        }
+    }
+    tool_call_events.push(ev_function_call(
+        "call-compaction-tool",
+        DUMMY_FUNCTION_NAME,
+        "{}",
+    ));
+    tool_call_events.push(ev_completed_with_tokens(
+        "r-compaction-tool",
+        /*total_tokens*/ 10,
+    ));
+    let first_sample = match run {
+        LocalCompactionRun::MidTurn => sse(vec![
+            ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
+            ev_completed_with_tokens("r1", /*total_tokens*/ 96),
+        ]),
+        LocalCompactionRun::PostTurn => sse(vec![
+            ev_assistant_message("m1", FIRST_REPLY),
+            ev_completed_with_tokens("r1", /*total_tokens*/ 7_000),
+        ]),
+        LocalCompactionRun::Standalone => sse(vec![
+            ev_assistant_message("m1", FIRST_REPLY),
+            ev_completed("r1"),
+        ]),
+    };
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_sample,
+            sse(tool_call_events),
+            sse(vec![
+                ev_assistant_message("m2", SUMMARY_TEXT),
+                ev_completed_with_tokens("r-summary", /*total_tokens*/ 10),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", FINAL_REPLY),
+                ev_completed_with_tokens("r-final", /*total_tokens*/ 10),
+            ]),
+        ],
+    )
+    .await;
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            match run {
+                LocalCompactionRun::Standalone => {}
+                LocalCompactionRun::MidTurn => {
+                    config.model_context_window = Some(100);
+                    config.model_auto_compact_token_limit = Some(90);
+                }
+                LocalCompactionRun::PostTurn => {
+                    config.model_context_window = Some(12_000);
+                    config.model_auto_compact_token_limit = Some(100_000);
+                    config.model_post_turn_compact_threshold_percent = 50;
+                }
+            }
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    match run {
+        LocalCompactionRun::Standalone => {
+            test.submit_turn("seed history for compaction").await?;
+            test.codex.submit(Op::Compact).await?;
+            wait_for_event(&test.codex, |event| {
+                matches!(event, EventMsg::TurnComplete(_))
+            })
+            .await;
+            test.submit_turn("continue after compaction").await?;
+        }
+        LocalCompactionRun::MidTurn => test.submit_turn(FUNCTION_CALL_LIMIT_MSG).await?,
+        LocalCompactionRun::PostTurn => {
+            test.submit_turn("seed history for compaction").await?;
+            test.submit_turn("continue after compaction").await?;
+        }
+    }
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 4);
+    let first_attempt = requests[1].body_json().to_string();
+    let retry = requests[2].body_json().to_string();
+    assert!(body_contains_text(&first_attempt, SUMMARIZATION_PROMPT));
+    assert!(!first_attempt.contains("Do not call tools"));
+    assert!(retry.contains("Do not call tools"));
+    // Neither the unanswered call nor its preamble was recorded.
+    assert!(!retry.contains("call-compaction-tool"));
+    assert!(!retry.contains(PREAMBLE));
+    let follow_up = requests[3].body_json().to_string();
+    assert!(body_contains_text(
+        &follow_up,
+        &summary_with_prefix(SUMMARY_TEXT)
+    ));
+    assert!(!follow_up.contains(PREAMBLE));
+    assert!(!follow_up.contains("call-compaction-tool"));
+    Ok(())
+}
+
+/// Fork: trimming an incremental Responses Lite window may drop its tool declaration; the
+/// retry then declares the tools again instead of sending tool calls without a declaration.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_compaction_redeclares_tools_after_trimming_incremental_declaration() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", FIRST_REPLY),
+                ev_completed("r1"),
+            ]),
+            sse_failed(
+                "compact-too-large",
+                "context_length_exceeded",
+                CONTEXT_LIMIT_MESSAGE,
+            ),
+            sse(vec![
+                ev_assistant_message("m2", SUMMARY_TEXT),
+                ev_completed("r2"),
+            ]),
+        ],
+    )
+    .await;
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_model_info_override("gpt-5.5", |model| model.use_responses_lite = true)
+        .with_config(move |config| {
+            config.model = Some("gpt-5.5".to_string());
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("seed history for compaction").await?;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 3);
+    // The first attempt reuses the declaration that opens the incremental window.
+    assert_eq!(requests[1].input()[0]["type"], "additional_tools");
+    assert_eq!(requests[1].inputs_of_type("additional_tools").len(), 1);
+    // The retry trimmed it as the oldest item, so the tools are declared again.
+    assert!(
+        body_contains_text(&requests[2].body_json().to_string(), SUMMARIZATION_PROMPT),
+        "the retry must still be the compaction request"
+    );
+    assert_eq!(requests[2].inputs_of_type("additional_tools").len(), 1);
     Ok(())
 }
 

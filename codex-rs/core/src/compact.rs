@@ -28,6 +28,7 @@ use crate::session::step_context::StepContext;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
 use crate::state::AutoCompactWindowIds;
+use crate::stream_events_utils::last_assistant_message_from_item;
 use codex_analytics::CodexCompactionEvent;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
@@ -51,6 +52,7 @@ use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -66,6 +68,10 @@ const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 /// Fork: sent only on the single retry after a local compaction response called a tool.
 const LOCAL_COMPACTION_SUMMARY_REMINDER: &str =
     "Reply with the handoff summary as plain text. Do not call tools.";
+/// Fork: a terminal, non-network failure once the corrective retry called a tool again.
+const LOCAL_COMPACTION_TOOL_CALL_ERROR: &str = "Context compaction failed: the model called a \
+     tool instead of writing a summary, even after a reminder. The conversation history was \
+     left unchanged.";
 
 /// Thread-local policy that preserves inherited context without changing model or skill budgets.
 /// Insert into `StartThreadOptions::thread_extension_init` to disable automatic compaction.
@@ -315,14 +321,7 @@ async fn run_compact_task_inner_impl(
         fallback_instructions.text.clear();
     }
 
-    // Fork: tools are sent for prompt-cache parity, but a Responses Lite window that already
-    // declares them in history sends none, exactly like the ordinary request in that window.
-    let tools =
-        if step_context.settings.model_info.use_responses_lite && history.has_tool_declarations() {
-            Arc::default()
-        } else {
-            step_context.tool_router.model_visible_specs()
-        };
+    let visible_tools = step_context.tool_router.model_visible_specs();
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retry_state = ResponsesStreamRetryState::default();
     let mut summary_reminder_sent = false;
@@ -349,9 +348,21 @@ async fn run_compact_task_inner_impl(
         } else {
             fallback_instructions.clone()
         };
+        // Fork: tools are sent for prompt-cache parity, but a Responses Lite request whose
+        // input already declares them sends none, exactly like the ordinary request in that
+        // window. Decided per attempt: trimming may drop the declaration from the input.
+        let tools = if step_context.settings.model_info.use_responses_lite
+            && turn_input
+                .iter()
+                .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
+        {
+            Arc::default()
+        } else {
+            Arc::clone(&visible_tools)
+        };
         let prompt = Prompt {
             input: turn_input,
-            tools: Arc::clone(&tools),
+            tools,
             parallel_tool_calls: true,
             base_instructions,
             cyber_access_program: turn_context.cyber_access_program,
@@ -376,8 +387,8 @@ async fn run_compact_task_inner_impl(
                     break response;
                 }
                 if summary_reminder_sent {
-                    return Err(CodexErr::Stream(
-                        "local compaction called a tool instead of summarizing".to_string(),
+                    return Err(CodexErr::InvalidRequest(
+                        LOCAL_COMPACTION_TOOL_CALL_ERROR.to_string(),
                     ));
                 }
                 // The tool call was never run; ask once more, explicitly, instead of installing
@@ -879,6 +890,29 @@ fn is_tool_call(item: &ResponseItem) -> bool {
     )
 }
 
+/// Fork: requests carry tools for prompt-cache parity, so a model may call one instead of
+/// summarizing. When a response calls a tool, only its last visible assistant message can be
+/// the summary, and only if it follows the last call and is not commentary: a preamble before
+/// a call would otherwise replace the whole history.
+fn tool_call_without_summary(output: &[ResponseItem]) -> bool {
+    let Some(last_tool_call) = output.iter().rposition(is_tool_call) else {
+        return false;
+    };
+    let summary = output.iter().enumerate().rev().find(|(_, item)| {
+        last_assistant_message_from_item(item, /*plan_mode*/ false).is_some()
+    });
+    !summary.is_some_and(|(index, item)| {
+        index > last_tool_call
+            && !matches!(
+                item,
+                ResponseItem::Message {
+                    phase: Some(MessagePhase::Commentary),
+                    ..
+                }
+            )
+    })
+}
+
 async fn drain_to_completed(
     sess: &Session,
     turn_context: &TurnContext,
@@ -930,12 +964,9 @@ async fn drain_to_completed(
                 usage_metadata,
                 ..
             }) => {
-                // Fork: requests carry tools for prompt-cache parity, so a model may call one
-                // instead of summarizing. Such a response is no summary, and its calls were
-                // never run, so they are not recorded.
-                let tool_call_without_summary = output.iter().any(is_tool_call)
-                    && get_last_assistant_message_from_turn(output.iter())
-                        .is_none_or(|summary| summary.trim().is_empty());
+                // Fork: a response that calls a tool without a summary after it is no
+                // summary, and its calls were never run, so it is not recorded.
+                let tool_call_without_summary = tool_call_without_summary(&output);
                 if !tool_call_without_summary && !matches!(phase, CompactionPhase::PostTurn) {
                     for item in std::mem::take(&mut output) {
                         sess.record_annotated_conversation_items(
