@@ -35,6 +35,27 @@ async fn root_metadata_symlinks_cannot_reopen_approved_denials() {
     fs::write(private.join("sibling"), "sibling").unwrap();
     codex_utils_cargo_bin::copy_executable(&codex_linux_sandbox_exe(), &work.join("sandbox"))
         .unwrap();
+    // Fork: the approved command may replace `/usr` on the fixture's writable tmpfs root, so
+    // the launcher rightly rejects its system bwrap. Bundle one next to the copied launcher:
+    // Bazel's pinned build, or a link to the system bwrap, which keeps the AppArmor profile
+    // that some hosts require for user namespaces.
+    fs::create_dir(work.join("codex-resources")).unwrap();
+    let bundled_bwrap = work.join("codex-resources/bwrap");
+    match (
+        option_env!("BAZEL_PACKAGE"),
+        std::env::var("CARGO_BIN_EXE_bwrap"),
+        std::env::var_os("TEST_SRCDIR"),
+    ) {
+        (Some(_), Ok(runfile), Some(runfiles_dir)) => codex_utils_cargo_bin::copy_executable(
+            &std::path::PathBuf::from(runfiles_dir).join(runfile),
+            &bundled_bwrap,
+        )
+        .unwrap(),
+        _ if bwrap.starts_with("/usr") => {
+            std::os::unix::fs::symlink(&bwrap, &bundled_bwrap).unwrap();
+        }
+        _ => codex_utils_cargo_bin::copy_executable(&bwrap, &bundled_bwrap).unwrap(),
+    }
 
     let path_entry = |path: &str, access| {
         FileSystemSandboxEntry::new(
@@ -116,6 +137,12 @@ async fn root_metadata_symlinks_cannot_reopen_approved_denials() {
         || stderr.contains("setting up uid map")
     {
         eprintln!("skipping root metadata test: {stderr}");
+        return;
+    }
+    if output.status.code()
+        == Some(codex_linux_sandbox::BUNDLED_BWRAP_DIGEST_VERIFICATION_FAILURE_EXIT_CODE)
+    {
+        eprintln!("skipping root metadata test: this build pins a different bundled bwrap");
         return;
     }
     assert_eq!(output.status.code(), Some(0), "{output:?}");

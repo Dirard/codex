@@ -308,6 +308,61 @@ async fn namespace_reaper_collects_orphaned_descendants() {
     assert_eq!(output.stdout, b"orphan reaped\n");
 }
 
+/// Fork: on Ubuntu the AppArmor `bwrap` profile clears the parent-death signal that
+/// `--die-with-parent` arms, so the namespace init outlived a killed sandbox.
+#[tokio::test]
+async fn namespace_init_dies_with_killed_sandbox_launcher() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bubblewrap is unavailable");
+        return;
+    }
+
+    let mut env = create_env_from_core_vars();
+    strip_proxy_env(&mut env);
+    // A unique argv[0] lets the host find the sandboxed process after its launcher is gone.
+    let marker = format!("codex-pdeathsig-probe-{}", std::process::id());
+    let script = format!("exec -a {marker} sleep 30");
+    let mut command = linux_sandbox_command(
+        &["bash", "-c", &script],
+        &PermissionProfile::read_only(),
+        /*allow_network_for_proxy*/ false,
+        env,
+    );
+    command.process_group(0);
+    let mut child = command.spawn().expect("sandbox should start");
+    let deadline = Instant::now() + OPERATION_TIMEOUT;
+    while !process_with_argv0_exists(&marker) {
+        assert!(Instant::now() < deadline, "sandboxed command did not start");
+        tokio::time::sleep(Duration::from_millis(/*millis*/ 20)).await;
+    }
+
+    // Kill the launcher's process group as unified exec does on termination.
+    let pid = i32::try_from(child.id().expect("sandbox launcher pid")).unwrap();
+    // SAFETY: kill takes a process group id and a signal number.
+    assert_eq!(unsafe { libc::kill(-pid, libc::SIGKILL) }, 0);
+    let _ = child.wait().await;
+
+    let deadline = Instant::now() + OPERATION_TIMEOUT;
+    while process_with_argv0_exists(&marker) {
+        assert!(
+            Instant::now() < deadline,
+            "sandboxed process outlived its killed launcher"
+        );
+        tokio::time::sleep(Duration::from_millis(/*millis*/ 20)).await;
+    }
+}
+
+fn process_with_argv0_exists(argv0: &str) -> bool {
+    std::fs::read_dir("/proc")
+        .expect("procfs should be readable")
+        .flatten()
+        .any(|entry| {
+            std::fs::read(entry.path().join("cmdline")).is_ok_and(|cmdline| {
+                cmdline.split(|byte| *byte == 0).next() == Some(argv0.as_bytes())
+            })
+        })
+}
+
 #[tokio::test]
 async fn proc_mount_denial_preserves_legacy_fallback_and_explicit_pid_inheritance() {
     if should_skip_bwrap_tests().await {
