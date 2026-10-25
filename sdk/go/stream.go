@@ -41,6 +41,30 @@ type NotificationStream struct {
 	err            error
 	onClose        func()
 	filter         func(Notification, *paramIndex) bool
+	// sink, when set, takes the stream's notifications and its end in place of the queue.
+	sink notificationSink
+}
+
+// notificationSink takes the notifications of an internal subscription synchronously, in
+// delivery order, instead of a queue: a turn handle folds its turn's events this way, so it
+// needs no goroutine and no queue that could overflow.
+type notificationSink interface {
+	// deliver receives one notification. It runs in the goroutine that routes it and must
+	// not block.
+	deliver(Notification)
+	// end receives the error the subscription closed with, once.
+	end(error)
+}
+
+// newSinkNotificationStream returns a router subscription whose notifications go to sink.
+func newSinkNotificationStream(onClose func(), filter func(Notification, *paramIndex) bool, sink notificationSink) *NotificationStream {
+	return &NotificationStream{
+		ch:      make(chan Notification),
+		done:    make(chan struct{}),
+		onClose: onClose,
+		filter:  filter,
+		sink:    sink,
+	}
 }
 
 func newNotificationStream(size int, maxQueuedBytes int64, onClose func()) *NotificationStream {
@@ -151,8 +175,19 @@ func (s *NotificationStream) send(notification Notification) bool {
 	return s.sendAccepted(notification)
 }
 
-// sendAccepted queues a notification the caller already checked against the filter.
+// sendAccepted queues a notification the caller already checked against the filter, or
+// hands it to the stream's sink.
 func (s *NotificationStream) sendAccepted(notification Notification) bool {
+	if s.sink != nil {
+		s.mu.Lock()
+		closed := s.closed
+		s.mu.Unlock()
+		if !closed {
+			// The sink ignores a notification that races with the stream's end.
+			s.sink.deliver(notification)
+		}
+		return true
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -224,6 +259,9 @@ func (s *NotificationStream) closeWithError(err error) {
 		s.mu.Unlock()
 		if s.onClose != nil {
 			s.onClose()
+		}
+		if s.sink != nil {
+			s.sink.end(err)
 		}
 	})
 }

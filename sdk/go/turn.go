@@ -6,8 +6,9 @@ import (
 	"github.com/openai/codex/sdk/go/protocol"
 )
 
-// TurnHandle follows one turn. Its first Stream or Wait subscribes to the turn's events;
-// the outcome is recorded once, so repeated and concurrent calls return the same result.
+// TurnHandle follows one turn. Its first Stream or Wait subscribes to the turn's events
+// until the turn ends; the outcome is recorded once, so repeated and concurrent calls return
+// the same result. Release stops following the turn early.
 type TurnHandle struct {
 	client   *Client
 	threadID string
@@ -46,12 +47,16 @@ func (h *TurnHandle) ID() string {
 }
 
 // Stream returns the turn's events. The handle's first Stream or Wait also gets the events
-// buffered since the turn started, and a Stream opened after the handle's earlier streams
-// closed first gets the events that arrived meanwhile (up to the smaller of
-// PendingTurnQueue and ResourceStreamQueue; beyond that the newest, then an
-// *OverflowError). ctx bounds the stream's lifetime. After the turn finished, the stream
-// closes with the turn's terminal error, which is nil after turn/completed, once it
-// delivered those events.
+// buffered since the turn started. Once the handle had a stream, or a Wait of it returned
+// because its ctx ended, a Stream opened while no other stream of the handle is open first
+// gets the events that arrived meanwhile. The handle keeps at most the smaller of
+// PendingTurnQueue and ResourceStreamQueue of them, within ResourceStreamQueueBytes and the
+// client's PendingNotificationBytes budget, which the router's pending events share, and
+// for at most LifecycleInactivityTimeout; when it had to drop some, the stream gets the
+// newest kept events and then closes with *OverflowError. ctx bounds the stream's lifetime.
+// After the turn finished, the stream closes with the turn's terminal error, which is nil
+// after turn/completed, once it delivered those events. A stream that is not read fast
+// enough closes with *OverflowError on its own; the handle keeps following the turn.
 func (h *TurnHandle) Stream(ctx context.Context) (*TurnStream, error) {
 	if h == nil || h.client == nil || h.client.router == nil || h.state == nil {
 		return nil, &ClosedError{}
@@ -62,11 +67,24 @@ func (h *TurnHandle) Stream(ctx context.Context) (*TurnStream, error) {
 	return h.state.stream(ctx), nil
 }
 
+// Release stops following the turn locally: it drops the handle's subscription, the events
+// kept for a next stream and the recorded result, closes the handle's open streams and
+// makes pending and later Wait and Stream calls fail with *ClosedError. It does not
+// interrupt the turn on the runtime; use Interrupt for that. Release is safe to call more
+// than once.
+func (h *TurnHandle) Release() {
+	if h == nil || h.state == nil {
+		return
+	}
+	h.state.release()
+}
+
 // Wait returns the turn's result once turn/completed arrives, even when a stream of the
 // handle already consumed its events. Every call gets the same result or error; each gets
 // its own Items slice, while values nested in the items are shared and must be treated as
 // read-only. When ctx ends first, Wait returns its error and the handle keeps following
-// the turn, so a later Wait still returns the result.
+// the turn, so a later Wait still returns the result, and the events that arrive from then
+// on are kept for the handle's next Stream.
 func (h *TurnHandle) Wait(ctx context.Context) (*RunResult, error) {
 	if h == nil || h.client == nil || h.client.router == nil || h.state == nil {
 		return nil, &ClosedError{}
@@ -74,7 +92,7 @@ func (h *TurnHandle) Wait(ctx context.Context) (*RunResult, error) {
 	if err := h.client.ensureHighLevelEnabled("turn wait"); err != nil {
 		return nil, err
 	}
-	return h.state.wait(ctx)
+	return h.state.wait(ctx, true)
 }
 
 func (h *TurnHandle) Steer(ctx context.Context, input Input, opts ...SteerOptions) error {
@@ -111,6 +129,10 @@ func (h *TurnHandle) Interrupt(ctx context.Context) error {
 		ThreadID: h.threadID,
 		TurnID:   h.id,
 	})
+	if err == nil && h.state != nil {
+		// InterruptOnCancel does not interrupt the turn a second time.
+		h.state.markInterrupted()
+	}
 	return err
 }
 

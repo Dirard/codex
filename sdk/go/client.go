@@ -98,6 +98,7 @@ func newClient(ctx context.Context, cfg ClientConfig) (*Client, error) {
 		HandlerQueue:       normalized.Limits.HandlerQueue,
 		HandlerTimeout:     normalized.Limits.HandlerTimeout,
 		OnTermination:      client.handleUnexpectedTermination,
+		OnClose:            func() { client.closeResources(&ClosedError{}) },
 	})
 	client.rpc = rpc
 	if err := client.initialize(ctx, normalized, source); err != nil {
@@ -109,16 +110,28 @@ func newClient(ctx context.Context, cfg ClientConfig) (*Client, error) {
 	return client, nil
 }
 
-// Close ends the connection. Pending calls, streams and handles fail with *ClosedError at
-// once. A runtime the SDK launched then gets its stdin closed and up to
-// ClientConfig.ShutdownGracePeriod to exit on its own before it is killed; Close returns
-// once the runtime exited.
+// Close ends the connection. Pending calls, streams and handles, including the streams of
+// turn and review handles, fail with *ClosedError before Close returns or waits. A runtime
+// the SDK launched then gets its stdin closed and up to ClientConfig.ShutdownGracePeriod to
+// exit on its own before it is killed; Close returns once the runtime exited, so it may
+// block for that period. When the connection already failed or is failing, for example
+// because the runtime crashed, Close waits for that and everything keeps the
+// *TransportError with the runtime's exit code, signal and stderr tail.
 func (c *Client) Close() error {
 	if c == nil || c.rpc == nil {
 		return nil
 	}
-	c.closeResources(&ClosedError{})
 	return c.rpc.Close()
+}
+
+// CloseContext is Close with ctx bounding the wait for a launched runtime: when ctx ends
+// before the runtime exited, the runtime is killed at once and CloseContext returns
+// ctx.Err() after it exited. With an injected Transport it behaves like Close.
+func (c *Client) CloseContext(ctx context.Context) error {
+	if c == nil || c.rpc == nil {
+		return nil
+	}
+	return c.rpc.CloseContext(ctx)
 }
 
 func (c *Client) handleUnexpectedTermination(err error) error {

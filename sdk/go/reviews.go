@@ -12,7 +12,8 @@ type ReviewStartOptions struct {
 	Delivery ReviewDelivery
 	// InterruptOnCancel interrupts the review turn on the runtime when the ctx of
 	// Reviews.Start (after the request was sent), Wait or Events ends before the review
-	// finished. By default cancellation only stops the local wait.
+	// finished, with the semantics of TurnOptions.InterruptOnCancel. By default
+	// cancellation only stops the local wait.
 	InterruptOnCancel bool
 }
 
@@ -24,7 +25,8 @@ const (
 	ReviewDeliveryDetached ReviewDelivery = protocol.ReviewDeliveryDetached
 )
 
-// ReviewHandle follows one review turn; like TurnHandle, it records one outcome.
+// ReviewHandle follows one review turn; like TurnHandle, it records one outcome and can
+// be released early.
 type ReviewHandle struct {
 	client         *Client
 	reviewThreadID string
@@ -95,7 +97,16 @@ func (h *ReviewHandle) Wait(ctx context.Context) (*ReviewResult, error) {
 	if err := h.client.ensureHighLevelEnabled("review events"); err != nil {
 		return nil, err
 	}
-	return h.state.wait(ctx)
+	return h.state.wait(ctx, true)
+}
+
+// Release stops following the review turn locally, with the semantics of
+// TurnHandle.Release; the review keeps running on the runtime.
+func (h *ReviewHandle) Release() {
+	if h == nil || h.state == nil {
+		return
+	}
+	h.state.release()
 }
 
 func (h *ReviewHandle) ReviewThreadID() string {

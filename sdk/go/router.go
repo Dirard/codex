@@ -19,12 +19,15 @@ type routerKey struct {
 }
 
 type notificationRouter struct {
-	mu             sync.Mutex
-	limits         ClientLimits
-	streams        map[routerKey]map[*NotificationStream]struct{}
-	global         map[*NotificationStream]struct{}
-	pending        map[routerKey][]pendingNotification
-	pendingBytes   int64
+	mu           sync.Mutex
+	limits       ClientLimits
+	streams      map[routerKey]map[*NotificationStream]struct{}
+	global       map[*NotificationStream]struct{}
+	pending      map[routerKey][]pendingNotification
+	pendingBytes int64
+	// keptBytes counts the events turn handles keep for their next stream; they share the
+	// PendingNotificationBytes budget with the pending buffer.
+	keptBytes      int64
 	overflow       map[routerKey]overflowSentinel
 	timers         map[routerKey]*time.Timer
 	nextPendingSeq uint64
@@ -72,6 +75,16 @@ func (r *notificationRouter) subscribeTurn(threadID string, turnID string) *Noti
 	return r.subscribeKeysWithOnClose(turnScopedRouterKeys(turnID), nil, indexedTurnFilter(threadID, turnID))
 }
 
+// subscribeTurnSink subscribes sink to the events of one turn. The router calls the sink
+// synchronously: pending events during this call, live events from the routing goroutine,
+// so the caller must not hold locks that the sink takes.
+func (r *notificationRouter) subscribeTurnSink(threadID string, turnID string, sink notificationSink) *NotificationStream {
+	keys := dedupeRouterKeys(turnScopedRouterKeys(turnID))
+	var stream *NotificationStream
+	stream = newSinkNotificationStream(func() { r.unsubscribe(stream, keys) }, indexedTurnFilter(threadID, turnID), sink)
+	return r.attach(stream, keys)
+}
+
 func (r *notificationRouter) subscribeKeys(keys []routerKey, filter ...func(Notification) bool) *NotificationStream {
 	var streamFilter func(Notification, *paramIndex) bool
 	if len(filter) > 0 {
@@ -98,6 +111,12 @@ func (r *notificationRouter) subscribeKeysWithOnClose(
 		},
 		streamFilter,
 	)
+	return r.attach(stream, keys)
+}
+
+// attach hands stream the pending events of keys, in order, and then registers it for
+// live ones, unless a replayed terminal event or a recorded loss already closed it.
+func (r *notificationRouter) attach(stream *NotificationStream, keys []routerKey) *NotificationStream {
 	for {
 		r.mu.Lock()
 		if r.closed {
@@ -472,7 +491,7 @@ func (r *notificationRouter) appendPendingLocked(key routerKey, notification pen
 	if notification.retainedBytes <= 0 {
 		notification.retainedBytes = notificationRetainedBytes(notification.notification)
 	}
-	if notification.retainedBytes > r.limits.PendingNotificationBytes-r.pendingBytes {
+	if notification.retainedBytes > r.limits.PendingNotificationBytes-r.pendingBytes-r.keptBytes {
 		r.setPendingOverflowLocked(key, "pending notification byte budget exceeded")
 		return
 	}
@@ -632,6 +651,34 @@ func (r *notificationRouter) removePendingLocked(key routerKey) []pendingNotific
 
 func (r *notificationRouter) releasePendingBytesLocked(notification pendingNotification) {
 	r.pendingBytes -= notification.retainedBytes
+}
+
+// reserveKept counts bytes a turn handle keeps for its next stream against the budget the
+// pending buffer uses; false when they do not fit or the router is closed.
+func (r *notificationRouter) reserveKept(bytes int64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed || bytes > r.limits.PendingNotificationBytes-r.pendingBytes-r.keptBytes {
+		return false
+	}
+	r.keptBytes += bytes
+	return true
+}
+
+// releaseKept returns bytes reserved with reserveKept.
+func (r *notificationRouter) releaseKept(bytes int64) {
+	if bytes <= 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.keptBytes = max(r.keptBytes-bytes, 0)
+}
+
+func (r *notificationRouter) isClosed() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.closed
 }
 
 func (r *notificationRouter) unsubscribe(stream *NotificationStream, keys []routerKey) {

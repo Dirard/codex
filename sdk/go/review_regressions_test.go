@@ -132,7 +132,9 @@ func testKeptEventsBound(t *testing.T, limits ClientLimits) {
 			ThreadID: "thread-1", TurnID: "turn-1", ItemID: "item-1", Delta: delta,
 		}), nil)
 	}
-	waitForRouted(t, handle, 3)
+	// The handle gets its events while the client routes them, so they are kept once the
+	// client routed what followed them.
+	routedBarrier(t, client)
 	reopened, err := handle.Stream(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -150,24 +152,6 @@ func testKeptEventsBound(t *testing.T, limits ClientLimits) {
 	if text != "bc" || !errors.As(failure, &overflow) {
 		t.Fatalf("reopened stream = %q, %v; want the newest two events, then *OverflowError", text, failure)
 	}
-}
-
-// waitForRouted waits until the handle's pump observed count events while no stream was
-// open.
-func waitForRouted(t *testing.T, handle *TurnHandle, count int) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		handle.state.mu.Lock()
-		kept := len(handle.state.journal)
-		lost := handle.state.journalLost
-		handle.state.mu.Unlock()
-		if lost || kept >= count {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("the handle did not observe %d events", count)
 }
 
 // A Run that fails for a reason other than its ctx also releases its subscription

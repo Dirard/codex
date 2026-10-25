@@ -34,8 +34,9 @@ exit 0
 	return path
 }
 
-// R4.1, R4.3: Close fails a pending call and closes streams right away, then waits for the
-// runtime to finish shutting down instead of killing it.
+// R4.1, R4.3: Close fails a pending call and closes streams, the streams of turn handles
+// included, right away, then waits for the runtime to finish shutting down instead of
+// killing it.
 func TestClientCloseFailsPendingWorkBeforeRuntimeShutsDown(t *testing.T) {
 	const exitDelay = 2 * time.Second
 	client, err := NewClient(context.Background(), ClientConfig{CodexPath: writeSlowExitRuntime(t, exitDelay)})
@@ -43,6 +44,10 @@ func TestClientCloseFailsPendingWorkBeforeRuntimeShutsDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	stream, err := client.Notifications(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	turnStream, err := newTurnHandle(client, "thread-1", "turn-1", false).Stream(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +79,14 @@ func TestClientCloseFailsPendingWorkBeforeRuntimeShutsDown(t *testing.T) {
 	var closedErr *ClosedError
 	if !errors.As(stream.Err(), &closedErr) {
 		t.Fatalf("stream err = %v, want *ClosedError", stream.Err())
+	}
+	select {
+	case <-turnStream.done:
+		if !errors.As(turnStream.Err(), &closedErr) {
+			t.Fatalf("turn stream err = %v, want *ClosedError", turnStream.Err())
+		}
+	default:
+		t.Fatal("turn stream still open while the runtime shuts down")
 	}
 	if err := <-closed; err != nil {
 		t.Fatalf("Close: %v", err)

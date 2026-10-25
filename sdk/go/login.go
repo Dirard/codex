@@ -56,7 +56,9 @@ func (h *LoginHandle) UserCode() string {
 
 // Wait returns the login outcome once account/login/completed arrives and, after a
 // successful login, the account is visible. Every call gets the same outcome; when ctx ends
-// first, Wait returns its error and a later Wait resumes where it stopped.
+// first, Wait returns its error and a later Wait resumes where it stopped. When checking the
+// account after a successful completion fails while the client is open, Wait returns that
+// error and a later Wait checks the account again.
 func (h *LoginHandle) Wait(ctx context.Context) (*LoginResult, error) {
 	if h == nil || h.client == nil || h.client.router == nil || h.waiter == nil {
 		return nil, &ClosedError{}
@@ -87,7 +89,7 @@ func (h *LoginHandle) waitLogin(ctx context.Context) (*LoginResult, error) {
 	defer accountUpdates.Close()
 	account, err := h.client.Accounts.Read(ctx, false)
 	if err != nil {
-		return nil, err
+		return nil, h.accountCheckError(err)
 	}
 	if _, ok := account.Account.Value(); ok {
 		return result, nil
@@ -96,14 +98,24 @@ func (h *LoginHandle) waitLogin(ctx context.Context) (*LoginResult, error) {
 		notification, ok := accountUpdates.Next(ctx)
 		if !ok {
 			if err := accountUpdates.Err(); err != nil {
-				return nil, err
+				return nil, h.accountCheckError(err)
 			}
-			return nil, &ClosedError{}
+			return nil, h.accountCheckError(&ClosedError{})
 		}
 		if _, ok := notification.Payload.(protocol.AccountUpdatedNotification); ok {
 			return result, nil
 		}
 	}
+}
+
+// accountCheckError keeps a failed account check after a successful completion from
+// becoming the login's outcome while the client is open: the login itself succeeded, and a
+// later Wait can check again without the completion event it already consumed.
+func (h *LoginHandle) accountCheckError(err error) error {
+	if h.client.terminationError() != nil {
+		return err
+	}
+	return &retryableError{err: err}
 }
 
 func (h *LoginHandle) waitCompletion(ctx context.Context) (*LoginResult, error) {

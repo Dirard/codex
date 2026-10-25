@@ -118,9 +118,13 @@ type TurnOptions struct {
 	// InterruptOnCancel interrupts the turn on the runtime when the ctx of Thread.Run,
 	// TurnHandle.Wait or TurnHandle.Stream ends before the turn finished, and when the ctx
 	// of Thread.Turn or Thread.Run ends after turn/start was sent but before its response.
-	// The interrupt is sent once, with a context detached from the cancelled one and
-	// bounded by 5s. By default cancellation only stops the local wait or stream and the
-	// turn keeps running on the runtime.
+	// The interrupt is sent with a context detached from the cancelled one and bounded by
+	// 5s; once one succeeded, or TurnHandle.Interrupt did, no further one is sent, and a
+	// failed one is sent again by the next cancellation. A cancelled Wait or Run returns
+	// the interrupt's error joined with the ctx error; a cancelled Stream closes at once and
+	// interrupts in the background. A cancelled start waits up to 5s for the turn id and may
+	// spend up to 5s more on the interrupt. By default cancellation only stops the local
+	// wait or stream and the turn keeps running on the runtime.
 	InterruptOnCancel bool
 }
 
@@ -480,7 +484,7 @@ func (t *Thread) Run(ctx context.Context, input Input, opts TurnOptions) (*RunRe
 	if handle.client.router == nil {
 		return nil, &ClosedError{}
 	}
-	result, err := handle.state.wait(ctx)
+	result, err := handle.state.wait(ctx, false)
 	if err != nil {
 		// Nobody else holds this handle, so nobody can observe the turn any longer.
 		handle.state.release()
