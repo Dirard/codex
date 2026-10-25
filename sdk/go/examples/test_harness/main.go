@@ -2,27 +2,12 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 
 	codex "github.com/openai/codex/sdk/go"
+	"github.com/openai/codex/sdk/go/codextest"
 )
-
-type injectedTransport struct{}
-
-func (injectedTransport) Receive(context.Context) (json.RawMessage, error) {
-	return nil, io.EOF
-}
-
-func (injectedTransport) Send(context.Context, json.RawMessage) error {
-	return nil
-}
-
-func (injectedTransport) Close() error {
-	return nil
-}
 
 func newHarnessClient(ctx context.Context, codexHome string) (*codex.Client, error) {
 	codexPath := os.Getenv("CODEX_EXEC_PATH")
@@ -38,8 +23,16 @@ func newHarnessClient(ctx context.Context, codexHome string) (*codex.Client, err
 	})
 }
 
-func newInjectedTransportClient(ctx context.Context) (*codex.Client, error) {
-	return codex.NewClient(ctx, codex.ClientConfig{Transport: injectedTransport{}})
+// newInjectedTransportClient runs the client against the in-process fake app-server; see
+// examples/codextest for a scripted turn.
+func newInjectedTransportClient(ctx context.Context) (*codex.Client, *codextest.Server, error) {
+	srv := codextest.NewServer()
+	client, err := codex.NewClient(ctx, codex.ClientConfig{Transport: srv})
+	if err != nil {
+		_ = srv.Close()
+		return nil, nil, err
+	}
+	return client, srv, nil
 }
 
 func main() {}

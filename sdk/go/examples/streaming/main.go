@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	codex "github.com/openai/codex/sdk/go"
 	"github.com/openai/codex/sdk/go/protocol"
@@ -28,6 +29,28 @@ func streamTurn(ctx context.Context, thread *codex.Thread) error {
 		return err
 	}
 	return turn.Interrupt(ctx)
+}
+
+// printAnswer prints the answer as it streams, then waits for the turn's result. Wait
+// still returns the result after the stream consumed every event, and ending ctx
+// interrupts the turn because of InterruptOnCancel.
+func printAnswer(ctx context.Context, thread *codex.Thread) (*codex.RunResult, error) {
+	turn, err := thread.Turn(ctx, codex.Text("Explain the change."), codex.TurnOptions{InterruptOnCancel: true})
+	if err != nil {
+		return nil, err
+	}
+	stream, err := turn.Stream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer stream.Close()
+	for delta, err := range codex.Payloads[protocol.AgentMessageDeltaNotification](ctx, stream) {
+		if err != nil {
+			return nil, err
+		}
+		fmt.Print(delta.Delta)
+	}
+	return turn.Wait(ctx)
 }
 
 func main() {}
