@@ -19,6 +19,7 @@ fn binding(protected: bool) -> AgentWorktreeBinding {
             base_sha: "378e730aa1b2c3d4e5f60718293a4b5c6d7e8f90".to_string(),
             base_kind: AgentWorktreeBaseKind::WorkingTree,
             branch: "codex/agents/probe-01a1748c".to_string(),
+            source_root: Some("/work/demo".to_string()),
         },
         parent_checkout_protected: AtomicBool::new(protected),
         state: Mutex::default(),

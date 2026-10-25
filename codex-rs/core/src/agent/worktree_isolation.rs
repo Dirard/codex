@@ -356,6 +356,7 @@ fn create_worktree_blocking(
         base_sha,
         base_kind,
         branch,
+        source_root: checkout.source_root.to_str().map(str::to_owned),
     };
     let recorded = manager
         .bind_thread(&checkout.root, &thread_id)
@@ -790,12 +791,22 @@ fn discover_binding_blocking(
             owner.as_deref().unwrap_or("no thread")
         ));
     }
-    let source_root = codex_worktree::main_worktree_root(&root).map_err(|err| {
-        format!(
-            "cannot locate the repository of worktree {}: {err:#}",
-            root.display()
-        )
-    })?;
+    // The recorded parent checkout may itself be a linked worktree (a `--worktree` root);
+    // the main checkout is only a fallback for metadata without it.
+    let recorded_source = metadata
+        .source_root
+        .as_deref()
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_dir());
+    let source_root = recorded_source
+        .map(Ok)
+        .unwrap_or_else(|| codex_worktree::main_worktree_root(&root))
+        .map_err(|err| {
+            format!(
+                "cannot locate the repository of worktree {}: {err:#}",
+                root.display()
+            )
+        })?;
     let relative = stored_cwd
         .strip_prefix(&root)
         .map(Path::to_path_buf)

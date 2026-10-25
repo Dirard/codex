@@ -122,6 +122,7 @@ fn metadata(base_sha: &str, base_kind: AgentWorktreeBaseKind) -> AgentWorktreeMe
         base_sha: base_sha.to_owned(),
         base_kind,
         branch: BRANCH.to_owned(),
+        source_root: Some("/work/parent-checkout".to_owned()),
     }
 }
 

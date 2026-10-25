@@ -33,6 +33,7 @@ const THREAD_KEY: &str = "codex.agentThread";
 const BASE_KEY: &str = "codex.agentBase";
 const BASE_KIND_KEY: &str = "codex.agentBaseKind";
 const BRANCH_KEY: &str = "codex.agentBranch";
+const SOURCE_KEY: &str = "codex.agentSource";
 
 /// The commit an agent worktree starts from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,6 +77,9 @@ pub struct AgentWorktreeMetadata {
     pub base_kind: AgentWorktreeBaseKind,
     /// Created lazily by the first checkpoint that finds changes.
     pub branch: String,
+    /// The parent checkout the worktree was created from. It can be another linked worktree,
+    /// so the repository's main checkout is not a substitute. `None` when not UTF-8.
+    pub source_root: Option<String>,
 }
 
 /// Resolves the full SHA of the commit checked out at `source_cwd`.
@@ -117,7 +121,14 @@ pub fn write_agent_metadata(root: &Path, metadata: &AgentWorktreeMetadata) -> Re
         (BASE_KEY, metadata.base_sha.as_str()),
         (BASE_KIND_KEY, metadata.base_kind.as_str()),
         (BRANCH_KEY, metadata.branch.as_str()),
+        (
+            SOURCE_KEY,
+            metadata.source_root.as_deref().unwrap_or_default(),
+        ),
     ] {
+        if value.is_empty() {
+            continue;
+        }
         git_output(
             root,
             GitOperation::Metadata,
@@ -154,6 +165,7 @@ pub fn read_agent_metadata(root: &Path) -> Result<Option<AgentWorktreeMetadata>>
     let mut base_sha = None;
     let mut base_kind = None;
     let mut branch = None;
+    let mut source_root = None;
     for entry in output.stdout.split(|byte| *byte == b'\0') {
         let Some(separator) = entry.iter().position(|byte| *byte == b'\n') else {
             continue;
@@ -167,6 +179,7 @@ pub fn read_agent_metadata(root: &Path) -> Result<Option<AgentWorktreeMetadata>>
             "codex.agentbase" => base_sha = Some(value),
             "codex.agentbasekind" => base_kind = Some(value),
             "codex.agentbranch" => branch = Some(value),
+            "codex.agentsource" => source_root = Some(value),
             _ => {}
         }
     }
@@ -182,6 +195,7 @@ pub fn read_agent_metadata(root: &Path) -> Result<Option<AgentWorktreeMetadata>>
         base_sha,
         base_kind,
         branch,
+        source_root,
     }))
 }
 

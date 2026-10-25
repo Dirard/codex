@@ -691,6 +691,13 @@ async fn isolated_child_works_on_a_snapshot_and_the_parent_applies_its_branch() 
         ),
         branch
     );
+    assert_eq!(
+        git(
+            &root,
+            &["config", "--file", &config_worktree, "codex.agentSource"]
+        ),
+        parent.display().to_string()
+    );
 
     // R4.1, R4.2, R4.4: the host committed both edits and the parent's mail reports them.
     assert_eq!(agent_branches(&parent), vec![branch.clone()]);
