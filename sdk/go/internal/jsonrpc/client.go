@@ -28,7 +28,13 @@ type ClientOptions struct {
 	HandlerConcurrency int
 	HandlerQueue       int
 	HandlerTimeout     time.Duration
-	OnTermination      func(error) error
+	// OnTermination runs when the connection ended on its own; it returns the error that
+	// pending calls get instead.
+	OnTermination func(error) error
+	// OnClose runs when Close or CloseContext starts ending the connection, before pending
+	// calls fail and before the transport closes. It does not run when the connection
+	// already ended or is ending on its own: Close then waits for that termination.
+	OnClose func()
 }
 
 type Client struct {
@@ -53,6 +59,7 @@ type Client struct {
 	handlerSlots   chan struct{}
 	handlerTimeout time.Duration
 	onTermination  func(error) error
+	onClose        func()
 }
 
 type terminationOrigin uint8
@@ -99,6 +106,7 @@ func NewClientWithOptions(transport Transport, handler ServerRequestHandler, opt
 		handlerSlots:   make(chan struct{}, opts.HandlerConcurrency),
 		handlerTimeout: opts.HandlerTimeout,
 		onTermination:  opts.OnTermination,
+		onClose:        opts.OnClose,
 	}
 	for i := 0; i < opts.HandlerConcurrency; i++ {
 		go c.serverRequestWorker()
@@ -260,8 +268,29 @@ func (c *Client) Notify(ctx context.Context, method string, params any, trace js
 	return c.send(ctx, frame)
 }
 
+// Close ends the connection. Whoever starts ending the connection first owns its
+// termination: when the connection already ended or is ending on its own, Close waits for
+// that and pending calls keep the error it gave them.
 func (c *Client) Close() error {
 	return c.terminate(&ClosedError{}, terminationExplicitClose)
+}
+
+// CloseContext is Close with ctx bounding the transport's shutdown: when ctx ends before
+// the transport closed, a transport that offers CloseNow is closed at once, for example a
+// launched runtime is killed instead of waited for, and CloseContext returns ctx.Err() once
+// the transport closed.
+func (c *Client) CloseContext(ctx context.Context) error {
+	return c.terminateContext(ctx, &ClosedError{}, terminationExplicitClose)
+}
+
+// closeNowWhenDone closes a transport that offers CloseNow once ctx ends. stop reports
+// false when that happened.
+func (c *Client) closeNowWhenDone(ctx context.Context) (stop func() bool) {
+	now, ok := c.transport.(interface{ CloseNow() error })
+	if ctx == nil || !ok {
+		return func() bool { return true }
+	}
+	return context.AfterFunc(ctx, func() { _ = now.CloseNow() })
 }
 
 // Abort ends the connection like Close, but a transport that owns a runtime kills it at
@@ -280,22 +309,38 @@ func closeTransportNow(transport Transport) error {
 }
 
 func (c *Client) terminate(waiterErr error, origin terminationOrigin) error {
+	return c.terminateContext(nil, waiterErr, origin)
+}
+
+// terminateContext ends the connection once; a later caller waits for the first. A non-nil
+// ctx (CloseContext) bounds the transport's shutdown: it is watched only after the
+// termination is claimed, so closing the transport early cannot pass for a failed
+// connection.
+func (c *Client) terminateContext(ctx context.Context, waiterErr error, origin terminationOrigin) error {
 	c.closeMu.Lock()
 	if c.closed {
 		done := c.done
 		c.closeMu.Unlock()
+		stop := c.closeNowWhenDone(ctx)
 		<-done
+		if !stop() {
+			return ctx.Err()
+		}
 		return nil
 	}
 	c.closed = true
 	c.cancel()
 	c.closeMu.Unlock()
+	stop := c.closeNowWhenDone(ctx)
 
 	var closeErr error
 	switch origin {
 	case terminationExplicitClose:
 		// Pending calls end at once; closing the transport may wait for the runtime to
 		// shut down.
+		if c.onClose != nil {
+			c.onClose()
+		}
 		c.failAll(waiterErr)
 		closeErr = c.transport.Close()
 	case terminationAbort:
@@ -315,6 +360,10 @@ func (c *Client) terminate(waiterErr error, origin terminationOrigin) error {
 	c.terminalErr = waiterErr
 	close(c.done)
 	c.closeMu.Unlock()
+	if !stop() {
+		// ctx ended while the transport was closing.
+		return ctx.Err()
+	}
 	return closeErr
 }
 

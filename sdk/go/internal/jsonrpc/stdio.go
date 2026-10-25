@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -41,8 +42,11 @@ type StdioTransport struct {
 	shutdownGrace time.Duration
 	// killedByClose is set when Close sent a kill before observing the exit.
 	killedByClose atomic.Bool
-	closeOnce     sync.Once
-	closeErr      error
+	// hurry ends the shutdown grace period of a Close in progress, or of the next one.
+	hurry     chan struct{}
+	hurryOnce sync.Once
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // runtimeStdout reads the runtime's stdout. After the runtime exited it returns what the
@@ -188,6 +192,7 @@ func StartStdio(ctx context.Context, opts StdioOptions) (*StdioTransport, error)
 		stdout:        stdout,
 		exited:        exited,
 		shutdownGrace: opts.ShutdownGrace,
+		hurry:         make(chan struct{}),
 	}
 	go func() {
 		_ = cmd.Wait()
@@ -213,8 +218,12 @@ func (t *StdioTransport) Close() error {
 }
 
 // CloseNow kills a runtime that is still running without the grace period, for a
-// connection that already failed or never finished starting.
+// connection that already failed or never finished starting, or for a Close whose caller
+// stopped waiting: a Close in progress stops waiting for the runtime and kills it.
 func (t *StdioTransport) CloseNow() error {
+	if t.hurry != nil {
+		t.hurryOnce.Do(func() { close(t.hurry) })
+	}
 	return t.close(0)
 }
 
@@ -254,6 +263,13 @@ func (t *StdioTransport) exitedWithin(grace time.Duration) bool {
 		return true
 	case <-timer.C:
 		return false
+	case <-t.hurry:
+		select {
+		case <-t.exited:
+			return true
+		default:
+			return false
+		}
 	}
 }
 
@@ -268,19 +284,32 @@ func (t *StdioTransport) TerminationDetails(timeout time.Duration) (exitCode *in
 		select {
 		case <-t.exited:
 			if state := t.cmd.ProcessState; state != nil {
-				if status, ok := state.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-					if status.Signal() != syscall.SIGKILL || !t.killedByClose.Load() {
-						signal = status.Signal().String()
-					}
-				} else {
-					code := state.ExitCode()
-					exitCode = &code
-				}
+				status, _ := state.Sys().(syscall.WaitStatus)
+				exitCode, signal = exitReport(runtime.GOOS, state.ExitCode(), status.Signaled(), status.Signal(), t.killedByClose.Load())
 			}
 		case <-time.After(timeout):
 		}
 	}
 	return exitCode, signal, t.StderrTail()
+}
+
+// windowsKillExitCode is the exit code os.Process.Kill gives a process on Windows.
+const windowsKillExitCode = 1
+
+// exitReport turns how the runtime ended into the exit code and signal the SDK reports.
+// The kill Close sends is the SDK's own doing and is not reported: on POSIX it is SIGKILL,
+// on Windows, which has no signals, it is exit code 1.
+func exitReport(goos string, code int, signaled bool, sig syscall.Signal, killedByClose bool) (*int, string) {
+	if signaled {
+		if sig == syscall.SIGKILL && killedByClose {
+			return nil, ""
+		}
+		return nil, sig.String()
+	}
+	if goos == "windows" && killedByClose && code == windowsKillExitCode {
+		return nil, ""
+	}
+	return &code, ""
 }
 
 func (t *StdioTransport) StderrTail() string {
