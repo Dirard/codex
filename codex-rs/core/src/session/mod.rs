@@ -477,6 +477,8 @@ pub(crate) enum CompactedHistoryInstallation<'a> {
         reviewer_compaction_hash: Option<String>,
         turn_context: &'a TurnContext,
         started_item: Option<&'a TurnItem>,
+        /// Fork headroom: tool declarations the next request sends outside history.
+        tool_declaration_tokens: i64,
     },
 }
 
@@ -4505,6 +4507,7 @@ impl Session {
                     reviewer_compaction_hash,
                     turn_context,
                     started_item,
+                    tool_declaration_tokens,
                 } => {
                     // Validate immediately before slicing and replacing the captured prefix.
                     if state.history.history_version() != prefix.generation
@@ -4534,10 +4537,13 @@ impl Session {
                     items.extend_from_slice(suffix);
                     // Validate the complete prepared replacement, including the live suffix,
                     // before advancing the compaction window or mutating history.
-                    let candidate_tokens = crate::context_manager::estimate_history_token_count(
-                        &items,
-                        &base_instructions,
-                    );
+                    let candidate_tokens =
+                        crate::compact_remote_v2::estimate_candidate_request_tokens(
+                            &items,
+                            &base_instructions,
+                            model_info,
+                            tool_declaration_tokens,
+                        );
                     let scope = turn_context.config.model_auto_compact_token_limit_scope;
                     let status =
                         crate::session::context_window::context_window_token_status_for_usage(

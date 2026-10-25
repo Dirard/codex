@@ -47,9 +47,11 @@ pub(super) async fn run_compaction(
             let turn = &replacement_step_context.turn;
             let scope = turn.config.model_auto_compact_token_limit_scope;
             let base_instructions = sess.get_base_instructions().await;
-            let installed_tokens = crate::context_manager::estimate_history_token_count(
+            let installed_tokens = estimate_candidate_request_tokens(
                 sess.clone_history().await.annotated_items(),
                 &base_instructions,
+                turn.model_info().as_ref(),
+                tool_declaration_tokens(replacement_step_context),
             );
             let status = crate::session::context_window::context_window_token_status_for_usage(
                 turn.config.as_ref(),
@@ -231,6 +233,9 @@ async fn build_and_install_compaction(
         )
         .await;
         let base_instructions = sess.get_base_instructions().await;
+        let replacement_turn = &replacement_step_context.turn;
+        let replacement_model_info = replacement_turn.model_info();
+        let tool_tokens = tool_declaration_tokens(replacement_step_context);
         let mut attempts = 0;
         let new_history = loop {
             let new_history = assemble_compaction_history(
@@ -238,24 +243,25 @@ async fn build_and_install_compaction(
                 window_prefix.clone(),
                 context.clone(),
             );
-            let candidate_tokens = estimate_history_token_count(&new_history, &base_instructions);
-            let scope = replacement_step_context
-                .turn
-                .config
-                .model_auto_compact_token_limit_scope;
+            let candidate_tokens = estimate_candidate_request_tokens(
+                &new_history,
+                &base_instructions,
+                replacement_model_info.as_ref(),
+                tool_tokens,
+            );
+            let scope = replacement_turn.config.model_auto_compact_token_limit_scope;
             let status = context_window_token_status_for_usage(
-                replacement_step_context.turn.config.as_ref(),
-                replacement_step_context.turn.model_info().as_ref(),
+                replacement_turn.config.as_ref(),
+                replacement_model_info.as_ref(),
                 candidate_tokens,
                 matches!(scope, AutoCompactTokenLimitScope::BodyAfterPrefix)
                     .then_some(candidate_tokens),
             );
-            let overflow =
-                if enforces_compaction_headroom(&replacement_step_context.turn.session_source) {
-                    compaction_candidate_overflow(&status, scope)
-                } else {
-                    0
-                };
+            let overflow = if enforces_compaction_headroom(&replacement_turn.session_source) {
+                compaction_candidate_overflow(&status, scope)
+            } else {
+                0
+            };
             if overflow == 0 {
                 break new_history;
             }
@@ -314,6 +320,7 @@ async fn build_and_install_compaction(
                 reviewer_compaction_hash,
                 turn_context,
                 started_item: needs_start.then_some(&compaction_item),
+                tool_declaration_tokens: tool_declaration_tokens(replacement_step_context),
             },
         )
         .await

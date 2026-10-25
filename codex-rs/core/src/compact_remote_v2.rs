@@ -50,12 +50,14 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::AgentMessageInputContent;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 #[cfg(test)]
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
@@ -131,6 +133,42 @@ fn overflow(used: i64, limit: Option<i64>) -> i64 {
 /// upstream token-limit check, and Guardian fails closed with its own input-budget reason.
 pub(crate) fn enforces_compaction_headroom(session_source: &SessionSource) -> bool {
     !crate::guardian::is_basic_session_source(session_source)
+}
+
+/// Approximate tokens of the tool declarations the next request sends outside history.
+/// Guardian reviewers keep the upstream estimate without them.
+pub(crate) fn tool_declaration_tokens(step_context: &StepContext) -> i64 {
+    if !enforces_compaction_headroom(&step_context.turn.session_source) {
+        return 0;
+    }
+    let tokens = step_context
+        .tool_router
+        .model_visible_specs()
+        .iter()
+        .map(|spec| serde_json::to_string(spec).map_or(0, |json| approx_token_count(&json)))
+        .fold(0usize, usize::saturating_add);
+    i64::try_from(tokens).unwrap_or(i64::MAX)
+}
+
+/// Estimates a replacement history as the next request sends it: history items, base
+/// instructions, and tool declarations unless a Responses Lite window already declares them
+/// in history.
+pub(crate) fn estimate_candidate_request_tokens(
+    items: &[ResponseItemEnvelope],
+    base_instructions: &BaseInstructions,
+    model_info: &ModelInfo,
+    tool_declaration_tokens: i64,
+) -> i64 {
+    let history_tokens = estimate_history_token_count(items, base_instructions);
+    let tools_in_history = model_info.use_responses_lite
+        && items
+            .iter()
+            .any(|envelope| matches!(envelope.item, ResponseItem::AdditionalTools { .. }));
+    if tools_in_history {
+        history_tokens
+    } else {
+        history_tokens.saturating_add(tool_declaration_tokens)
+    }
 }
 
 pub(crate) fn compaction_candidate_overflow(
@@ -895,6 +933,45 @@ mod tests {
                 "{source:?}"
             );
         }
+    }
+
+    #[test]
+    fn candidate_request_estimate_counts_tools_outside_history() {
+        let base_instructions = BaseInstructions {
+            text: String::new(),
+            provenance: None,
+        };
+        let user = ResponseItemEnvelope::new(message("user", "hello", /*phase*/ None));
+        let declared_tools = ResponseItemEnvelope::new(ResponseItem::AdditionalTools {
+            id: None,
+            role: "developer".to_string(),
+            tools: Arc::from([serde_json::json!({"type": "function", "name": "lookup"})]),
+        });
+        let mut model_info = codex_models_manager::model_info::model_info_from_slug("gpt-5.4");
+        model_info.use_responses_lite = false;
+        let plain = vec![user.clone()];
+        let history_tokens = estimate_history_token_count(&plain, &base_instructions);
+
+        assert_eq!(
+            estimate_candidate_request_tokens(&plain, &base_instructions, &model_info, 700),
+            history_tokens + 700
+        );
+        // Only Responses Lite sends no top-level tools when history already declares them.
+        let incremental = vec![declared_tools, user];
+        let incremental_tokens = estimate_history_token_count(&incremental, &base_instructions);
+        assert_eq!(
+            estimate_candidate_request_tokens(&incremental, &base_instructions, &model_info, 700),
+            incremental_tokens + 700
+        );
+        model_info.use_responses_lite = true;
+        assert_eq!(
+            estimate_candidate_request_tokens(&incremental, &base_instructions, &model_info, 700),
+            incremental_tokens
+        );
+        assert_eq!(
+            estimate_candidate_request_tokens(&plain, &base_instructions, &model_info, 700),
+            history_tokens + 700
+        );
     }
 
     fn build_without_metadata(
