@@ -490,6 +490,7 @@ pub(super) async fn submission_loop(
             operation = sub.op.kind(),
             parent_turn_id = ?sub.parent_turn_id,
             root_turn_id = ?sub.root_turn_id,
+            op = ?sub.op,
             "Submission"
         );
         let turn_spawn_budget = sub.turn_spawn_budget.clone();
