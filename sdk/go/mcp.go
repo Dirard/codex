@@ -13,12 +13,15 @@ type MCPOAuthLoginOptions struct {
 	TimeoutSecs int64
 }
 
+// MCPOAuthHandle follows one MCP OAuth login. Wait records one outcome for every caller.
 type MCPOAuthHandle struct {
 	client           *Client
 	name             string
 	threadID         string
 	loginID          string
 	authorizationURL string
+
+	waiter memoWait[*MCPOAuthResult]
 }
 
 type MCPOAuthResult struct {
@@ -80,6 +83,8 @@ func (h *MCPOAuthHandle) AuthorizationURL() string {
 	return h.authorizationURL
 }
 
+// Wait returns the outcome of mcpServer/oauthLogin/completed. Every call gets the same
+// outcome; when ctx ends first, Wait returns its error and a later Wait keeps waiting.
 func (h *MCPOAuthHandle) Wait(ctx context.Context) (*MCPOAuthResult, error) {
 	if h == nil || h.client == nil || h.client.router == nil {
 		return nil, &ClosedError{}
@@ -87,6 +92,15 @@ func (h *MCPOAuthHandle) Wait(ctx context.Context) (*MCPOAuthResult, error) {
 	if err := h.client.ensureHighLevelEnabled("mcp oauth wait"); err != nil {
 		return nil, err
 	}
+	result, err := h.waiter.wait(ctx, h.waitCompletion)
+	if result == nil {
+		return nil, err
+	}
+	copied := *result
+	return &copied, err
+}
+
+func (h *MCPOAuthHandle) waitCompletion(ctx context.Context) (*MCPOAuthResult, error) {
 	keys := []routerKey{
 		{domain: "mcpServer", identity: h.name},
 	}

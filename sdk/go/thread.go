@@ -115,6 +115,13 @@ type TurnOptions struct {
 	CollaborationMode               protocol.CollaborationMode
 	MultiAgentMode                  protocol.MultiAgentMode
 	DisabledPluginIDs               []string
+	// InterruptOnCancel interrupts the turn on the runtime when the ctx of Thread.Run,
+	// TurnHandle.Wait or TurnHandle.Stream ends before the turn finished, and when the ctx
+	// of Thread.Turn or Thread.Run ends after turn/start was sent but before its response.
+	// The interrupt is sent once, with a context detached from the cancelled one and
+	// bounded by 5s. By default cancellation only stops the local wait or stream and the
+	// turn keeps running on the runtime.
+	InterruptOnCancel bool
 }
 
 type SteerOptions struct {
@@ -462,17 +469,24 @@ func (c *ThreadsClient) ListTimeline(ctx context.Context, params protocol.Thread
 	return c.client.Raw().ThreadTimelineList(ctx, params)
 }
 
+// Run starts a turn and waits for its result. When ctx ends first, Run returns its error
+// and stops following the turn; with TurnOptions.InterruptOnCancel it also interrupts the
+// turn on the runtime.
 func (t *Thread) Run(ctx context.Context, input Input, opts TurnOptions) (*RunResult, error) {
 	handle, err := t.Turn(ctx, input, opts)
 	if err != nil {
 		return nil, err
 	}
-	stream, err := handle.Stream(ctx)
-	if err != nil {
-		return nil, err
+	if handle.client.router == nil {
+		return nil, &ClosedError{}
 	}
-	defer stream.Close()
-	return collectRunResult(ctx, handle.id, stream, t.client.limits)
+	state := handle.turnState()
+	result, err := state.wait(ctx)
+	if err != nil && ctx.Err() != nil {
+		// Nobody else holds this handle, so nobody can observe the turn any longer.
+		state.release()
+	}
+	return result, err
 }
 
 func (t *Thread) Turn(ctx context.Context, input Input, opts TurnOptions) (*TurnHandle, error) {
@@ -490,11 +504,19 @@ func (t *Thread) Turn(ctx context.Context, input Input, opts TurnOptions) (*Turn
 		return nil, &ConfigError{Reason: "turn tool output cannot be combined with user input"}
 	}
 	params := turnStartParams(t.id, wireInput, opts)
-	response, err := t.client.Raw().TurnStart(ctx, params)
+	var response protocol.TurnStartResponse
+	if opts.InterruptOnCancel {
+		threadID := t.id
+		err = startTurnInterruptible(ctx, t.client, "turn/start", params, &response, func(response *protocol.TurnStartResponse) (string, string) {
+			return threadID, response.Turn.ID
+		})
+	} else {
+		response, err = t.client.Raw().TurnStart(ctx, params)
+	}
 	if err != nil {
 		return nil, err
 	}
-	return &TurnHandle{client: t.client, threadID: t.id, id: response.Turn.ID}, nil
+	return &TurnHandle{client: t.client, threadID: t.id, id: response.Turn.ID, interruptOnCancel: opts.InterruptOnCancel}, nil
 }
 
 func threadStartParams(opts ThreadStartOptions) protocol.ThreadStartParams {
