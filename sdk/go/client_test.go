@@ -159,3 +159,32 @@ func TestClientConfigCapsAdditionalContextLimitOverrides(t *testing.T) {
 		t.Fatalf("MaxAdditionalContextTotalBytes = %d, want protocol cap %d", limits.MaxAdditionalContextTotalBytes, protocol.MaxAdditionalContextTotalBytes)
 	}
 }
+
+// One malformed known notification does not end the connection: later calls succeed and
+// global observers see it as MalformedNotification.
+func TestClientSurvivesMalformedKnownNotification(t *testing.T) {
+	transport := newScriptedInitializedTransport(t, nil)
+	transport.responses["memory/reset"] = json.RawMessage(`{}`)
+	client, err := NewClient(context.Background(), ClientConfig{Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	global, err := client.Notifications(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport.deliverNotification("turn/completed", json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":7}}`), nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	notification, ok := global.Next(ctx)
+	if !ok {
+		t.Fatalf("global stream ended: %v", global.Err())
+	}
+	if _, malformed := notification.Payload.(MalformedNotification); !malformed {
+		t.Fatalf("payload = %T, want MalformedNotification", notification.Payload)
+	}
+	if _, err := client.Raw().MemoryReset(ctx); err != nil {
+		t.Fatalf("call after malformed notification: %v", err)
+	}
+}

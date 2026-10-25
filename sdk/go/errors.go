@@ -2,6 +2,7 @@ package codex
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/openai/codex/sdk/go/internal/jsonrpc"
 )
@@ -11,9 +12,30 @@ type ConfigError struct{ Reason string }
 
 func (e *ConfigError) Error() string { return "codex sdk config error: " + e.Reason }
 
-type TransportError struct{ Reason string }
+type TransportError struct {
+	Reason string
+	// ExitCode is the runtime's exit code when the connection ended because it exited.
+	ExitCode *int
+	// Signal names the signal that terminated the runtime, when it did not exit itself.
+	Signal string
+	// StderrTail is the redacted end of the runtime's stderr, when available.
+	StderrTail string
+	cause      error
+}
 
-func (e *TransportError) Error() string { return "codex sdk transport error: " + e.Reason }
+func (e *TransportError) Error() string {
+	message := "codex sdk transport error: " + e.Reason
+	switch {
+	case e.Signal != "":
+		message += " (runtime killed by signal: " + e.Signal + ")"
+	case e.ExitCode != nil:
+		message += fmt.Sprintf(" (runtime exit code %d)", *e.ExitCode)
+	}
+	return message
+}
+
+// Unwrap returns the transport failure that ended the connection, if known.
+func (e *TransportError) Unwrap() error { return e.cause }
 
 type CompatibilityError struct {
 	Reason           string

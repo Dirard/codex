@@ -195,8 +195,9 @@ func TestNotificationRouterPendingMapOverflowStateIsBounded(t *testing.T) {
 	if got := len(router.overflow); got > router.limits.PendingTurnMap {
 		t.Fatalf("overflow entries = %d, cap = %d", got, router.limits.PendingTurnMap)
 	}
-	if got := len(router.timers); got > router.limits.PendingTurnMap+1 {
-		t.Fatalf("pending timers = %d, cap = %d", got, router.limits.PendingTurnMap+1)
+	// Each tracked key is either buffered or a sentinel, and both maps are capped.
+	if got := len(router.timers); got > 2*router.limits.PendingTurnMap {
+		t.Fatalf("pending timers = %d, cap = %d", got, 2*router.limits.PendingTurnMap)
 	}
 }
 
@@ -223,30 +224,91 @@ func TestNotificationRouterMalformedKnownTerminalNotificationFailsClosed(t *test
 	}
 }
 
-func TestNotificationRouterPendingMapOverflowPreservesTrackedHandle(t *testing.T) {
+// A known notification that fails to decode closes only the streams it routes to; the
+// connection, other turns and global observers keep working.
+func TestNotificationRouterMalformedNotificationOnlyClosesItsStreams(t *testing.T) {
+	router := newTestNotificationRouter(t)
+	affected := router.subscribeTurn("thread-1", "turn-1")
+	t.Cleanup(func() { _ = affected.Close() })
+	unaffected := router.subscribeTurn("thread-1", "turn-2")
+	t.Cleanup(func() { _ = unaffected.Close() })
+	global := router.subscribeGlobal()
+	t.Cleanup(func() { _ = global.Close() })
+
+	err := router.route(
+		context.Background(),
+		"turn/completed",
+		json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":7}}`),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("route err = %v; a malformed payload must not end the connection", err)
+	}
+	var decodeErr *DecodeError
+	if _, ok := affected.Next(context.Background()); ok || !errors.As(affected.Err(), &decodeErr) {
+		t.Fatalf("affected stream err = %T(%v), want *DecodeError", affected.Err(), affected.Err())
+	}
+	if err := unaffected.Err(); err != nil {
+		t.Fatalf("unaffected turn stream closed: %v", err)
+	}
+	observed := nextNotificationForTest(t, global)
+	malformed, ok := observed.Payload.(MalformedNotification)
+	if !ok || malformed.Method != "turn/completed" || !errors.As(malformed.Err, &decodeErr) {
+		t.Fatalf("global payload = %#v, want MalformedNotification with DecodeError", observed.Payload)
+	}
+	later := router.subscribeGlobal()
+	t.Cleanup(func() { _ = later.Close() })
+	if err := later.Err(); err != nil {
+		t.Fatalf("router closed after malformed payload: %v", err)
+	}
+}
+
+// A malformed terminal notification for a turn nobody streams yet must fail that turn's
+// late subscriber instead of leaving it waiting forever.
+func TestNotificationRouterMalformedNotificationFailsLateSubscriber(t *testing.T) {
+	router := newTestNotificationRouter(t)
+	err := router.route(
+		context.Background(),
+		"turn/completed",
+		json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":7}}`),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("route err = %v", err)
+	}
+	late := router.subscribeTurn("thread-1", "turn-1")
+	t.Cleanup(func() { _ = late.Close() })
+	var decodeErr *DecodeError
+	if !errors.As(late.Err(), &decodeErr) {
+		t.Fatalf("late subscriber err = %T(%v), want *DecodeError", late.Err(), late.Err())
+	}
+}
+
+// A newer unsubscribed handle displaces the older one, which fails closed on subscribe.
+func TestNotificationRouterPendingMapOverflowEvictsOlderHandle(t *testing.T) {
 	router := newLimitedTestNotificationRouter(t, ClientLimits{
 		PendingTurnQueue: 4,
 		PendingTurnMap:   1,
 	})
 	ctx := context.Background()
 
-	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"tracked","delta":"a"}`), nil)
-	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"overflowed","delta":"b"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"older","delta":"a"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"newer","delta":"b"}`), nil)
 
-	tracked := router.subscribe("process", "tracked")
-	defer tracked.Close()
-	if tracked.Err() != nil {
-		t.Fatalf("tracked stream err = %v, want nil", tracked.Err())
+	newer := router.subscribe("process", "newer")
+	defer newer.Close()
+	if newer.Err() != nil {
+		t.Fatalf("newer stream err = %v, want nil", newer.Err())
 	}
-	if got := nextNotificationForTest(t, tracked); got.Method != "process/outputDelta" {
-		t.Fatalf("tracked method = %q, want process/outputDelta", got.Method)
+	if got := nextNotificationForTest(t, newer); got.Method != "process/outputDelta" {
+		t.Fatalf("newer method = %q, want process/outputDelta", got.Method)
 	}
 
-	overflowed := router.subscribe("process", "overflowed")
-	defer overflowed.Close()
+	older := router.subscribe("process", "older")
+	defer older.Close()
 	var overflowErr *OverflowError
-	if !errors.As(overflowed.Err(), &overflowErr) {
-		t.Fatalf("overflowed stream err = %T %[1]v, want *OverflowError", overflowed.Err())
+	if !errors.As(older.Err(), &overflowErr) {
+		t.Fatalf("older stream err = %T %[1]v, want *OverflowError", older.Err())
 	}
 }
 
@@ -271,58 +333,80 @@ func TestNotificationRouterPendingMapOverflowDoesNotPoisonUnrelatedHandle(t *tes
 	}
 }
 
-func TestNotificationRouterOverflowSentinelsSurviveDistinctMapOverflows(t *testing.T) {
+// Newer unsubscribed keys displace older ones; every displaced key keeps its own sentinel
+// while the sentinel map has room.
+func TestNotificationRouterEvictedKeysKeepSentinelsAcrossOverflows(t *testing.T) {
 	router := newLimitedTestNotificationRouter(t, ClientLimits{
 		PendingTurnQueue: 4,
 		PendingTurnMap:   2,
 	})
 	ctx := context.Background()
 
-	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"tracked-1","delta":"a"}`), nil)
-	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"tracked-2","delta":"b"}`), nil)
-	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"overflowed-1","delta":"b"}`), nil)
-	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"overflowed-2","delta":"c"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"evicted-1","delta":"a"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"evicted-2","delta":"b"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"buffered-1","delta":"b"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"buffered-2","delta":"c"}`), nil)
 
-	for _, identity := range []string{"tracked-1", "tracked-2"} {
-		tracked := router.subscribe("process", identity)
-		defer tracked.Close()
-		if tracked.Err() != nil {
-			t.Fatalf("%s stream err = %v, want nil", identity, tracked.Err())
+	for _, identity := range []string{"buffered-1", "buffered-2"} {
+		buffered := router.subscribe("process", identity)
+		defer buffered.Close()
+		if buffered.Err() != nil {
+			t.Fatalf("%s stream err = %v, want nil", identity, buffered.Err())
 		}
-		if got := nextNotificationForTest(t, tracked); got.Method != "process/outputDelta" {
+		if got := nextNotificationForTest(t, buffered); got.Method != "process/outputDelta" {
 			t.Fatalf("%s method = %q, want process/outputDelta", identity, got.Method)
 		}
 	}
 
-	for _, identity := range []string{"overflowed-1", "overflowed-2"} {
-		overflowed := router.subscribe("process", identity)
-		defer overflowed.Close()
+	for _, identity := range []string{"evicted-1", "evicted-2"} {
+		evicted := router.subscribe("process", identity)
+		defer evicted.Close()
 		var overflowErr *OverflowError
-		if !errors.As(overflowed.Err(), &overflowErr) {
-			t.Fatalf("%s stream err = %T %[2]v, want *OverflowError", identity, overflowed.Err())
+		if !errors.As(evicted.Err(), &overflowErr) {
+			t.Fatalf("%s stream err = %T %[2]v, want *OverflowError", identity, evicted.Err())
 		}
 	}
 }
 
-func TestNotificationRouterOverflowSentinelCapacityFailsClosed(t *testing.T) {
+// Overflowing the pending map evicts the oldest unsubscribed key instead of closing the
+// router: evicted keys still fail closed, and the oldest sentinel ages out like a timer.
+func TestNotificationRouterOverflowEvictsOldestPendingKey(t *testing.T) {
 	router := newLimitedTestNotificationRouter(t, ClientLimits{
 		PendingTurnQueue: 4,
 		PendingTurnMap:   1,
 	})
 	ctx := context.Background()
 
-	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"tracked","delta":"a"}`), nil)
-	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"overflowed-1","delta":"b"}`), nil)
-	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"overflowed-2","delta":"c"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"oldest","delta":"a"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"evicted","delta":"b"}`), nil)
+	routeNotificationForTest(router, ctx, "process/outputDelta", json.RawMessage(`{"processHandle":"latest","delta":"c"}`), nil)
 
-	stream := router.subscribe("process", "unrelated")
-	defer stream.Close()
-	var overflowErr *OverflowError
-	if !errors.As(stream.Err(), &overflowErr) {
-		t.Fatalf("router terminal err = %T %[1]v, want *OverflowError", stream.Err())
+	if len(router.pending) > 1 || len(router.overflow) > 1 {
+		t.Fatalf("pending keys = %d, sentinels = %d; want at most 1 each", len(router.pending), len(router.overflow))
 	}
-	if overflowErr.Reason != "pending overflow sentinel capacity exceeded" {
-		t.Fatalf("overflow reason = %q", overflowErr.Reason)
+	unrelated := router.subscribe("process", "unrelated")
+	defer unrelated.Close()
+	if err := unrelated.Err(); err != nil {
+		t.Fatalf("router closed by pending overflow: %v", err)
+	}
+
+	latest := router.subscribe("process", "latest")
+	defer latest.Close()
+	if got := nextNotificationForTest(t, latest); !strings.Contains(string(got.RawParams), `"delta":"c"`) {
+		t.Fatalf("latest key replay = %s", got.RawParams)
+	}
+
+	evicted := router.subscribe("process", "evicted")
+	defer evicted.Close()
+	var overflowErr *OverflowError
+	if !errors.As(evicted.Err(), &overflowErr) {
+		t.Fatalf("evicted key err = %T %[1]v, want *OverflowError", evicted.Err())
+	}
+
+	oldest := router.subscribe("process", "oldest")
+	defer oldest.Close()
+	if err := oldest.Err(); err != nil {
+		t.Fatalf("aged-out key err = %v, want an open stream", err)
 	}
 }
 
@@ -510,4 +594,49 @@ func routeNotificationForTest(router *notificationRouter, ctx context.Context, m
 	keys = append(keys, realtimeKeys...)
 	pendingKeys = append(pendingKeys, realtimeKeys...)
 	router.deliver(ctx, notification, keys, pendingKeys, true)
+}
+
+// Evicting buffered keys releases exactly their retained bytes.
+func TestNotificationRouterEvictionKeepsByteAccounting(t *testing.T) {
+	router := newLimitedTestNotificationRouter(t, ClientLimits{
+		PendingTurnQueue: 4,
+		PendingTurnMap:   2,
+	})
+	t.Cleanup(router.close)
+	for i := range 50 {
+		params := json.RawMessage(fmt.Sprintf(`{"processHandle":"process-%d","delta":"%s"}`, i%7, strings.Repeat("x", i)))
+		routeNotificationForTest(router, context.Background(), "process/outputDelta", params, nil)
+	}
+	router.mu.Lock()
+	defer router.mu.Unlock()
+	var retained int64
+	for _, pending := range router.pending {
+		for _, notification := range pending {
+			retained += notification.retainedBytes
+		}
+	}
+	if router.pendingBytes != retained {
+		t.Fatalf("pending bytes = %d, retained = %d", router.pendingBytes, retained)
+	}
+}
+
+// A malformed terminal notification for a resource that is not terminal for another key
+// does not poison that key for later subscribers.
+func TestNotificationRouterMalformedNotificationSentinelsOnlyTerminalKeys(t *testing.T) {
+	router := newTestNotificationRouter(t)
+	if err := router.route(
+		context.Background(),
+		"turn/completed",
+		json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":7}}`),
+		nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+	router.mu.Lock()
+	defer router.mu.Unlock()
+	for key := range router.overflow {
+		if !isTerminalNotification("turn/completed", key.domain) {
+			t.Fatalf("sentinel on non-terminal key %+v", key)
+		}
+	}
 }

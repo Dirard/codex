@@ -5,14 +5,24 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/openai/codex/sdk/go/internal/jsonrpc"
 	"github.com/openai/codex/sdk/go/protocol"
 )
 
+// runtimeExitWait bounds how long termination diagnostics wait for the runtime to exit.
+const runtimeExitWait = 2 * time.Second
+
+// terminationDetailer is implemented by transports that own a runtime process.
+type terminationDetailer interface {
+	TerminationDetails(timeout time.Duration) (exitCode *int, signal string, stderrTail string)
+}
+
 // Client owns a Codex app-server connection.
 type Client struct {
 	rpc                *jsonrpc.Client
+	runtimeProcess     terminationDetailer
 	raw                *protocol.RawClient
 	router             *notificationRouter
 	metadata           Metadata
@@ -80,6 +90,7 @@ func newClient(ctx context.Context, cfg ClientConfig) (*Client, error) {
 		rawOnly:            normalized.Mode == ClientModeRawOnly,
 		gatewayOAuth:       normalized.ExplicitGatewayOAuth,
 	}
+	client.runtimeProcess, _ = transport.(terminationDetailer)
 	client.router = newNotificationRouter(normalized.Limits)
 	client.initResourceClients()
 	rpc := jsonrpc.NewClientWithOptions(transport, client, jsonrpc.ClientOptions{
@@ -131,7 +142,10 @@ func (c *Client) handleUnexpectedTermination(err error) error {
 		c.closeResources(decodeErr)
 		return decodeErr
 	}
-	transportErr := &TransportError{Reason: "connection terminated unexpectedly"}
+	transportErr := &TransportError{Reason: "connection terminated unexpectedly", cause: err}
+	if c.runtimeProcess != nil {
+		transportErr.ExitCode, transportErr.Signal, transportErr.StderrTail = c.runtimeProcess.TerminationDetails(runtimeExitWait)
+	}
 	c.closeResources(transportErr)
 	return transportErr
 }

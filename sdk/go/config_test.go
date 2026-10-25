@@ -519,7 +519,7 @@ printf '%%s\n' "$@" > "$record_dir/args"
 printf '%%s\n' "${SAFE_FLAG:-}" > "$record_dir/safe_flag"
 head -c 131072 /dev/zero >&2 || true
 IFS= read -r line
-printf '%%s\n' '{"id":"go-1","result":{"userAgent":"codex-go-test dev 0.0.0","codexHome":"/tmp/codex","platformFamily":"unix","platformOs":"linux","stableProtocolDigest":"%s","experimentalProtocolDigest":"%s","stableSchemaDigest":"%s","experimentalSchemaDigest":"%s","stableManifestDigest":"%s","experimentalManifestDigest":"%s","activeProtocolMode":"experimental"}}'
+printf '%%s\n' '{"id":"go-1","result":{"userAgent":"codex_app_server/0.0.0 (Linux 7.0; x86_64) codex-go-test (codex_go_sdk; 0.0.0-dev)","codexHome":"/tmp/codex","platformFamily":"unix","platformOs":"linux","stableProtocolDigest":"%s","experimentalProtocolDigest":"%s","stableSchemaDigest":"%s","experimentalSchemaDigest":"%s","stableManifestDigest":"%s","experimentalManifestDigest":"%s","activeProtocolMode":"experimental"}}'
 IFS= read -r line || true
 IFS= read -r line || true
 if [ -n "${line:-}" ]; then
@@ -541,5 +541,46 @@ func assertFile(t *testing.T, path string, want string) {
 	}
 	if string(data) != want {
 		t.Fatalf("%s = %q, want %q", path, data, want)
+	}
+}
+
+// A runtime that crashes after initialize surfaces its exit code and stderr instead of
+// a bare "connection terminated" error.
+func TestRuntimeCrashReportsExitCodeAndStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fake runtime is POSIX-only")
+	}
+	path := filepath.Join(t.TempDir(), "crashing-codex")
+	script := fmt.Sprintf(`#!/bin/sh
+set -eu
+IFS= read -r line
+printf '%%s\n' '{"id":"go-1","result":{"userAgent":"codex_app_server/0.0.0 (Linux 7.0; x86_64) codex-go-test (codex_go_sdk; 0.0.0-dev)","codexHome":"/tmp/codex","platformFamily":"unix","platformOs":"linux","stableProtocolDigest":"%s","experimentalProtocolDigest":"%s","stableSchemaDigest":"%s","experimentalSchemaDigest":"%s","stableManifestDigest":"%s","experimentalManifestDigest":"%s","activeProtocolMode":"experimental"}}'
+IFS= read -r line || true
+IFS= read -r line || true
+printf 'thread main panicked: fake runtime crashed\n' >&2
+exit 3
+`, protocol.StableProtocolDigest, protocol.ExperimentalProtocolDigest, protocol.StableSchemaDigest, protocol.ExperimentalSchemaDigest, protocol.StableManifestDigest, protocol.ExperimentalManifestDigest)
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(context.Background(), ClientConfig{CodexPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	_, err = client.Raw().MemoryReset(context.Background())
+	var transportErr *TransportError
+	if !errors.As(err, &transportErr) {
+		t.Fatalf("err = %T %[1]v, want *TransportError", err)
+	}
+	if transportErr.ExitCode == nil || *transportErr.ExitCode != 3 {
+		t.Fatalf("exit code = %v, want 3 (%v)", transportErr.ExitCode, err)
+	}
+	if !strings.Contains(transportErr.StderrTail, "fake runtime crashed") {
+		t.Fatalf("stderr tail = %q", transportErr.StderrTail)
+	}
+	if errors.Unwrap(transportErr) == nil {
+		t.Fatal("transport error must unwrap to the termination cause")
 	}
 }

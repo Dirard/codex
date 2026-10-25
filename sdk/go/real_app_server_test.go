@@ -313,7 +313,11 @@ func TestRealAppServerSafeResourceWorkflows(t *testing.T) {
 	if _, err := client.Plugins.List(ctx, protocol.PluginListParams{}); err != nil {
 		t.Fatal(err)
 	}
-	thread, err := client.Threads.Start(ctx, ThreadStartOptions{CWD: workdir})
+	// The runtime starts paginated threads by default, and those reject detached reviews.
+	thread, err := client.Threads.Start(ctx, ThreadStartOptions{
+		CWD:         workdir,
+		HistoryMode: protocol.ThreadHistoryModeLegacy,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

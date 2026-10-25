@@ -3,11 +3,21 @@ package jsonrpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
 )
+
+// runtimeOutputDrain is how long stdout may stay idle, and stderr be copied, after the
+// runtime exited. A runtime descendant can keep the pipes open; it must not hide the exit
+// or block Close.
+const runtimeOutputDrain = time.Second
 
 type StdioOptions struct {
 	Path          string
@@ -19,13 +29,82 @@ type StdioOptions struct {
 }
 
 type StdioTransport struct {
-	transport  *StreamTransport
-	cmd        *exec.Cmd
-	stderr     *Ring
-	waitDone   chan error
-	stderrDone chan struct{}
-	closeOnce  sync.Once
-	closeErr   error
+	transport *StreamTransport
+	cmd       *exec.Cmd
+	stderr    *Ring
+	// exited is closed once cmd.Wait returned.
+	exited chan struct{}
+	// killedByClose is set when Close sent a kill before observing the exit.
+	killedByClose atomic.Bool
+	closeOnce     sync.Once
+	closeErr      error
+}
+
+// runtimeStdout reads the runtime's stdout. After the runtime exited it returns what the
+// runtime left in the pipe and then EOF once the pipe stays idle, even while a descendant
+// still holds the write end. Each read re-arms the idle deadline, so a slow reader loses
+// nothing.
+type runtimeStdout struct {
+	file   *os.File
+	exited chan struct{}
+	once   sync.Once
+	done   chan struct{}
+}
+
+func (r *runtimeStdout) Read(p []byte) (int, error) {
+	select {
+	case <-r.exited:
+		_ = r.file.SetReadDeadline(time.Now().Add(runtimeOutputDrain))
+	default:
+	}
+	n, err := r.file.Read(p)
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		err = io.EOF
+	}
+	if err != nil {
+		r.signal()
+	}
+	return n, err
+}
+
+// Close tolerates a pipe the drain already closed after the runtime exited.
+func (r *runtimeStdout) Close() error {
+	r.signal()
+	if err := r.file.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+		return err
+	}
+	return nil
+}
+
+// runtimeExited bounds a read that was already blocked when the runtime exited. Pipes
+// without deadline support (Windows) are closed after the drain instead, so a reader
+// slower than the drain can miss frames there.
+func (r *runtimeStdout) runtimeExited() {
+	if err := r.file.SetReadDeadline(time.Now().Add(runtimeOutputDrain)); err == nil {
+		return
+	}
+	select {
+	case <-r.done:
+	case <-time.After(runtimeOutputDrain):
+		_ = r.Close()
+	}
+}
+
+func (r *runtimeStdout) signal() {
+	r.once.Do(func() { close(r.done) })
+}
+
+// exitedPipeWriter tolerates a stdin pipe that cmd.Wait already closed after the runtime
+// exited.
+type exitedPipeWriter struct {
+	io.WriteCloser
+}
+
+func (w exitedPipeWriter) Close() error {
+	if err := w.WriteCloser.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+		return err
+	}
+	return nil
 }
 
 func StartStdio(ctx context.Context, opts StdioOptions) (*StdioTransport, error) {
@@ -42,48 +121,45 @@ func StartStdio(ctx context.Context, opts StdioOptions) (*StdioTransport, error)
 	if err != nil {
 		return nil, err
 	}
-	stdout, err := cmd.StdoutPipe()
+	// The parent owns the read end of stdout, so cmd.Wait cannot close it under the
+	// reader and drop the last frames of an exiting runtime.
+	stdoutRead, stdoutWrite, err := os.Pipe()
 	if err != nil {
 		_ = stdin.Close()
 		return nil, err
 	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		_ = stdin.Close()
-		_ = stdout.Close()
-		return nil, err
-	}
+	cmd.Stdout = stdoutWrite
+	stderr := NewRing(opts.StderrBytes)
+	cmd.Stderr = stderr
+	cmd.WaitDelay = runtimeOutputDrain
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
-		_ = stdout.Close()
-		_ = stderrPipe.Close()
+		_ = stdoutRead.Close()
+		_ = stdoutWrite.Close()
 		return nil, err
 	}
+	_ = stdoutWrite.Close()
 	if err := ctx.Err(); err != nil {
 		_ = stdin.Close()
-		_ = stdout.Close()
-		_ = stderrPipe.Close()
+		_ = stdoutRead.Close()
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
 		_ = cmd.Wait()
 		return nil, err
 	}
-	stderr := NewRing(opts.StderrBytes)
-	stderrDone := make(chan struct{})
-	go func() {
-		defer close(stderrDone)
-		_, _ = io.Copy(stderr, stderrPipe)
-	}()
+	exited := make(chan struct{})
+	stdout := &runtimeStdout{file: stdoutRead, exited: exited, done: make(chan struct{})}
 	t := &StdioTransport{
-		transport:  NewStreamTransport(stdout, stdin, opts.MaxFrameBytes),
-		cmd:        cmd,
-		stderr:     stderr,
-		waitDone:   make(chan error, 1),
-		stderrDone: stderrDone,
+		transport: NewStreamTransport(stdout, exitedPipeWriter{stdin}, opts.MaxFrameBytes),
+		cmd:       cmd,
+		stderr:    stderr,
+		exited:    exited,
 	}
 	go func() {
-		t.waitDone <- cmd.Wait()
+		_ = cmd.Wait()
+		close(exited)
+		stdout.runtimeExited()
 	}()
 	return t, nil
 }
@@ -100,16 +176,44 @@ func (t *StdioTransport) Close() error {
 	t.closeOnce.Do(func() {
 		t.closeErr = t.transport.Close()
 		if t.cmd.Process != nil {
-			_ = t.cmd.Process.Kill()
+			select {
+			case <-t.exited:
+			default:
+				t.killedByClose.Store(true)
+				_ = t.cmd.Process.Kill()
+			}
 		}
-		if t.waitDone != nil {
-			<-t.waitDone
-		}
-		if t.stderrDone != nil {
-			<-t.stderrDone
+		if t.exited != nil {
+			<-t.exited
 		}
 	})
 	return t.closeErr
+}
+
+// TerminationDetails waits up to timeout for the runtime to exit and returns its exit
+// code and terminating signal, when known, and the redacted stderr tail. The kill that
+// Close itself sends is not reported, since the SDK ended the runtime.
+func (t *StdioTransport) TerminationDetails(timeout time.Duration) (exitCode *int, signal string, stderrTail string) {
+	if t == nil {
+		return nil, "", ""
+	}
+	if t.exited != nil {
+		select {
+		case <-t.exited:
+			if state := t.cmd.ProcessState; state != nil {
+				if status, ok := state.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+					if status.Signal() != syscall.SIGKILL || !t.killedByClose.Load() {
+						signal = status.Signal().String()
+					}
+				} else {
+					code := state.ExitCode()
+					exitCode = &code
+				}
+			}
+		case <-time.After(timeout):
+		}
+	}
+	return exitCode, signal, t.StderrTail()
 }
 
 func (t *StdioTransport) StderrTail() string {

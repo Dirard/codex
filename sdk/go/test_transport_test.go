@@ -196,7 +196,7 @@ func (t *scriptedTransport) deliverNotification(method string, params json.RawMe
 
 func currentInitializePayload() json.RawMessage {
 	return json.RawMessage(`{
-		"userAgent":"codex-go-test dev 0.0.0",
+		"userAgent":"codex_app_server/0.0.0 (Linux 7.0; x86_64) codex-go-test (codex_go_sdk; 0.0.0-dev)",
 		"codexHome":"/tmp/codex",
 		"platformFamily":"unix",
 		"platformOs":"linux",
@@ -212,7 +212,7 @@ func currentInitializePayload() json.RawMessage {
 
 func stableInitializePayload() json.RawMessage {
 	return json.RawMessage(`{
-		"userAgent":"codex-go-test dev 0.0.0",
+		"userAgent":"codex_app_server/0.0.0 (Linux 7.0; x86_64) codex-go-test (codex_go_sdk; 0.0.0-dev)",
 		"codexHome":"/tmp/codex",
 		"platformFamily":"unix",
 		"platformOs":"linux",
@@ -228,7 +228,7 @@ func stableInitializePayload() json.RawMessage {
 
 func legacyInitializePayload() json.RawMessage {
 	return json.RawMessage(`{
-		"userAgent":"codex-go-test dev 0.0.0",
+		"userAgent":"codex_app_server/0.0.0 (Linux 7.0; x86_64) codex-go-test (codex_go_sdk; 0.0.0-dev)",
 		"codexHome":"/tmp/codex",
 		"platformFamily":"unix",
 		"platformOs":"linux"

@@ -161,6 +161,12 @@ _, _ = client.Threads.ListLoaded(ctx, protocol.ThreadLoadedListParams{})
 
 `examples/streaming` shows `Thread.Turn`, streamed notifications, `Steer`, `Interrupt`, and live turn-settings updates.
 
+## Failures And Back-Pressure
+
+- **Runtime crash.** When the runtime exits or the connection drops, calls and streams fail with `*TransportError`. For a runtime the SDK launched, `ExitCode` holds its exit code (or `Signal` the signal that killed it) and `StderrTail` the redacted end of its stderr; `errors.Unwrap` returns the underlying transport failure. Frames the runtime wrote before exiting are still delivered, and a runtime descendant that inherited its pipes cannot hide the exit for more than a couple of seconds.
+- **Unsubscribed events.** Events for a turn, process or other resource that no stream observes yet are buffered so a late `Stream()` still sees them. The buffer is bounded by `ClientLimits.PendingTurnMap`, `PendingTurnQueue` and `PendingNotificationBytes`. When it is full, the oldest buffered resource is evicted: subscribing to it later fails with `*OverflowError`, while the client and all other streams keep working. Records of evicted resources are bounded too; the oldest are forgotten the same way buffered events expire after `LifecycleInactivityTimeout`.
+- **Malformed known notifications.** If a notification with a known method does not decode, the streams it is routed to close with `*DecodeError`, and so does a later subscription to the same resource; global streams receive a `MalformedNotification` carrying the method, raw params and the error, and the connection stays open. Closing a stream does not stop the turn or process on the runtime: interrupt it explicitly if it must stop. A malformed JSON-RPC frame still ends the connection.
+
 ## Examples
 
 - `examples/run`: thread start, sync-style `Run`, image inputs, and structured output.

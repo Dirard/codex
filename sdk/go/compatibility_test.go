@@ -107,7 +107,7 @@ func TestStrictRejectsLegacyInitializeBeforeInitialized(t *testing.T) {
 		ExpectedDigest:   protocol.ExperimentalProtocolDigest,
 		ExpectedMode:     ProtocolModeExperimental,
 		RuntimeVersion:   "0.0.0",
-		UserAgent:        "codex-go-test dev 0.0.0",
+		UserAgent:        "codex_app_server/0.0.0 (Linux 7.0; x86_64) codex-go-test (codex_go_sdk; 0.0.0-dev)",
 		RequiredOverride: &requiredOverride,
 	}
 	if !reflect.DeepEqual(compatErr, want) {
@@ -266,7 +266,7 @@ func TestStrictRejectsDigestMismatchAndWrongMode(t *testing.T) {
 		ExpectedMode:     ProtocolModeExperimental,
 		FoundMode:        &foundExperimentalMode,
 		RuntimeVersion:   "0.0.0",
-		UserAgent:        "codex-go-test dev 0.0.0",
+		UserAgent:        "codex_app_server/0.0.0 (Linux 7.0; x86_64) codex-go-test (codex_go_sdk; 0.0.0-dev)",
 		RequiredOverride: &requiredOverride,
 	}
 	if !reflect.DeepEqual(compatErr, want) {
@@ -291,7 +291,7 @@ func TestStrictRejectsDigestMismatchAndWrongMode(t *testing.T) {
 		ExpectedMode:   ProtocolModeExperimental,
 		FoundMode:      &foundStableMode,
 		RuntimeVersion: "0.0.0",
-		UserAgent:      "codex-go-test dev 0.0.0",
+		UserAgent:      "codex_app_server/0.0.0 (Linux 7.0; x86_64) codex-go-test (codex_go_sdk; 0.0.0-dev)",
 	}
 	if !reflect.DeepEqual(compatErr, want) {
 		t.Fatalf("mode mismatch compatibility error = %#v, want %#v", compatErr, want)
@@ -372,4 +372,32 @@ func legacyInitializePayloadWithField(t *testing.T, field string, value any) jso
 		t.Fatal(err)
 	}
 	return payload
+}
+
+// The runtime version is the first name/version token; the client suffix must not make
+// every runtime look like a dev build.
+func TestRuntimeVersionUsesFirstUserAgentToken(t *testing.T) {
+	release := "codex_app_server/0.164.0 (Ubuntu 26.04; x86_64) xterm-256color (codex_go_sdk; 0.0.0-dev)"
+	if got := runtimeVersionFromUserAgent(release); got != "0.164.0" {
+		t.Fatalf("runtime version = %q, want 0.164.0", got)
+	}
+	if looksLikeDevBuild(release) {
+		t.Fatalf("release runtime %q treated as a dev build", release)
+	}
+	for _, dev := range []string{
+		"codex_app_server/0.0.0 (Ubuntu 26.04; x86_64) xterm-256color (codex_go_sdk; 1.2.3)",
+		"codex_app_server/0.165.0-dev (Ubuntu 26.04; x86_64)",
+	} {
+		if !looksLikeDevBuild(dev) {
+			t.Fatalf("dev runtime %q not treated as a dev build", dev)
+		}
+	}
+	// The originator is the client name and may contain spaces.
+	desktop := "Codex Desktop/0.164.0 (Mac OS 15.5; arm64) vscode/1.0 (Codex Desktop; 1.2.3)"
+	if got := runtimeVersionFromUserAgent(desktop); got != "0.164.0" {
+		t.Fatalf("runtime version = %q, want 0.164.0", got)
+	}
+	if got := runtimeVersionFromUserAgent("codex-go-test"); got != "" {
+		t.Fatalf("runtime version without a version token = %q, want empty", got)
+	}
 }

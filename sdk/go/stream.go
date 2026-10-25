@@ -18,6 +18,15 @@ type UnknownNotification struct {
 	Trace  []byte
 }
 
+// MalformedNotification is delivered to global streams when a known notification fails to
+// decode. Streams routed to it are closed with Err; the connection stays open.
+type MalformedNotification struct {
+	Method string
+	Params []byte
+	Trace  []byte
+	Err    *DecodeError
+}
+
 type NotificationStream struct {
 	ch             chan Notification
 	mu             sync.Mutex

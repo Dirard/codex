@@ -16,10 +16,10 @@ const (
 
 // ClientConfig configures SDK startup and runtime behavior.
 type ClientConfig struct {
-	CodexPath           string
-	Launch              LaunchOptions
-	CWD                 string
-	Env                 map[string]string
+	CodexPath string
+	Launch    LaunchOptions
+	CWD       string
+	Env       map[string]string
 	// ConfigOverrides accepts only audited non-secret runtime settings.
 	// Currently supported keys are model and sandbox_mode.
 	ConfigOverrides      map[string]string

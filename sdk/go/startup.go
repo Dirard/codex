@@ -25,24 +25,24 @@ const (
 )
 
 var reservedRuntimeEnv = map[string]struct{}{
-	"CODEX_APP_SERVER_AUTH_BASE_URL_FOR_TESTS":            {},
-	"CODEX_APP_SERVER_DEV_OPEN_APP_URL":                   {},
-	"CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG":             {},
-	"CODEX_APP_SERVER_LOGIN_CLIENT_ID":                    {},
-	"CODEX_APP_SERVER_LOGIN_ISSUER":                       {},
-	"CODEX_APP_SERVER_MANAGED_CONFIG_PATH":                {},
-	"CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE":          {},
-	"CODEX_APP_SERVER_TEST_USER_CONFIG_FILE":              {},
-	"CODEX_AUTHAPI_BASE_URL":                              {},
-	"CODEX_CODE_MODE_HOST_PATH":                           {},
-	"CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN":                  {},
-	"CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID":          {},
-	"CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID":              {},
-	"CODEX_EXEC_SERVER_NOISE_REGISTRY_URL":                {},
-	"CODEX_EXEC_SERVER_URL":                               {},
+	"CODEX_APP_SERVER_AUTH_BASE_URL_FOR_TESTS":             {},
+	"CODEX_APP_SERVER_DEV_OPEN_APP_URL":                    {},
+	"CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG":              {},
+	"CODEX_APP_SERVER_LOGIN_CLIENT_ID":                     {},
+	"CODEX_APP_SERVER_LOGIN_ISSUER":                        {},
+	"CODEX_APP_SERVER_MANAGED_CONFIG_PATH":                 {},
+	"CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE":           {},
+	"CODEX_APP_SERVER_TEST_USER_CONFIG_FILE":               {},
+	"CODEX_AUTHAPI_BASE_URL":                               {},
+	"CODEX_CODE_MODE_HOST_PATH":                            {},
+	"CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN":                   {},
+	"CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID":           {},
+	"CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID":               {},
+	"CODEX_EXEC_SERVER_NOISE_REGISTRY_URL":                 {},
+	"CODEX_EXEC_SERVER_URL":                                {},
 	"CODEX_INTERNAL_ORIGINATOR_OVERRIDE":                   {},
-	"CODEX_REFRESH_TOKEN_URL_OVERRIDE":                    {},
-	"CODEX_REVOKE_TOKEN_URL_OVERRIDE":                     {},
+	"CODEX_REFRESH_TOKEN_URL_OVERRIDE":                     {},
+	"CODEX_REVOKE_TOKEN_URL_OVERRIDE":                      {},
 	"CODEX_TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS": {},
 	"CODEX_TEST_RATE_LIMIT_RESET_REQUEST_TIMEOUT_MS":       {},
 }
@@ -656,17 +656,23 @@ func observedProtocolDigest(env initializeCompatibilityEnvelope, mode ProtocolMo
 	return *env.ExperimentalProtocolDigest
 }
 
+// looksLikeDevBuild reports whether the runtime itself is a dev build. Only the runtime's
+// own version counts: the user agent also carries the SDK client's version.
 func looksLikeDevBuild(userAgent string) bool {
-	lower := strings.ToLower(userAgent)
-	return strings.Contains(lower, "dev") || strings.Contains(lower, "0.0.0")
+	version := strings.ToLower(runtimeVersionFromUserAgent(userAgent))
+	return version == "0.0.0" || strings.Contains(version, "dev")
 }
 
+// runtimeVersionFromUserAgent returns the runtime version from the leading
+// `<originator>/<version>` part of the user agent. The originator is the client name and
+// may contain spaces, so the version follows the last slash before the platform details.
 func runtimeVersionFromUserAgent(userAgent string) string {
-	parts := strings.Fields(userAgent)
-	if len(parts) == 0 {
+	head, _, _ := strings.Cut(userAgent, " (")
+	slash := strings.LastIndex(head, "/")
+	if slash < 0 {
 		return ""
 	}
-	return parts[len(parts)-1]
+	return strings.TrimSpace(head[slash+1:])
 }
 
 func (c *Client) validateMethodCall(metadata protocol.MethodMetadata, params any) error {

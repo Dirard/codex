@@ -142,7 +142,7 @@ func TestStdioTransportCloseWaitsForProcessWait(t *testing.T) {
 	stdio := &StdioTransport{
 		transport: transport,
 		cmd:       &exec.Cmd{},
-		waitDone:  make(chan error, 1),
+		exited:    make(chan struct{}),
 	}
 	done := make(chan error, 1)
 	go func() {
@@ -155,7 +155,7 @@ func TestStdioTransportCloseWaitsForProcessWait(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	stdio.waitDone <- nil
+	close(stdio.exited)
 	select {
 	case err := <-done:
 		if err != nil {
@@ -198,4 +198,126 @@ func (w *blockingWriteCloser) Close() error {
 		close(w.closed)
 	}
 	return nil
+}
+
+// A runtime that writes its last frame and exits while the reader is still busy must not
+// lose that frame to cmd.Wait closing the pipes; its exit code and stderr stay available.
+func TestStdioTransportReadsFinalFramesAndReportsTermination(t *testing.T) {
+	ctx := context.Background()
+	script := `printf '%s\n' '{"id":1,"result":{"final":true}}'; printf 'fatal: runtime crashed\n' >&2; exit 3`
+	for attempt := 0; attempt < 5; attempt++ {
+		stdio, err := StartStdio(ctx, StdioOptions{
+			Path:          "/bin/sh",
+			Args:          []string{"-c", script},
+			MaxFrameBytes: 1 << 20,
+			StderrBytes:   4096,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The runtime exits before the busy reader gets to its last frame.
+		time.Sleep(100 * time.Millisecond)
+		frame, err := stdio.Receive(ctx)
+		if err != nil {
+			t.Fatalf("attempt %d: final frame lost: %v", attempt, err)
+		}
+		if !strings.Contains(string(frame), `"final":true`) {
+			t.Fatalf("attempt %d: frame = %s", attempt, frame)
+		}
+		if _, err := stdio.Receive(ctx); err == nil {
+			t.Fatalf("attempt %d: expected end of stream", attempt)
+		}
+		exitCode, _, stderrTail := stdio.TerminationDetails(2 * time.Second)
+		if exitCode == nil || *exitCode != 3 {
+			t.Fatalf("attempt %d: exit code = %v, want 3", attempt, exitCode)
+		}
+		if !strings.Contains(stderrTail, "fatal: runtime crashed") {
+			t.Fatalf("attempt %d: stderr tail = %q", attempt, stderrTail)
+		}
+		if err := stdio.Close(); err != nil {
+			t.Fatalf("attempt %d: close: %v", attempt, err)
+		}
+	}
+}
+
+// A runtime descendant that inherits stdout and stderr must neither hide the runtime's
+// exit nor make Close wait for the descendant.
+func TestStdioTransportExitIsNotHiddenByInheritedPipes(t *testing.T) {
+	ctx := context.Background()
+	script := `sleep 4 & printf '%s\n' '{"id":1,"result":{}}'; printf 'fatal: runtime crashed\n' >&2; exit 3`
+	stdio, err := StartStdio(ctx, StdioOptions{
+		Path:          "/bin/sh",
+		Args:          []string{"-c", script},
+		MaxFrameBytes: 1 << 20,
+		StderrBytes:   4096,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if _, err := stdio.Receive(ctx); err != nil {
+		t.Fatalf("final frame lost: %v", err)
+	}
+	if _, err := stdio.Receive(ctx); err == nil {
+		t.Fatal("expected end of stream after the runtime exited")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("runtime exit noticed after %v; the descendant hid it", elapsed)
+	}
+	exitCode, _, stderrTail := stdio.TerminationDetails(2 * time.Second)
+	if exitCode == nil || *exitCode != 3 {
+		t.Fatalf("exit code = %v, want 3", exitCode)
+	}
+	if !strings.Contains(stderrTail, "fatal: runtime crashed") {
+		t.Fatalf("stderr tail = %q", stderrTail)
+	}
+	closeStart := time.Now()
+	if err := stdio.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(closeStart); elapsed > 3*time.Second {
+		t.Fatalf("Close took %v while a descendant held the pipes", elapsed)
+	}
+}
+
+// A runtime killed by a signal reports the signal instead of a bare exit code.
+func TestStdioTransportReportsTerminatingSignal(t *testing.T) {
+	ctx := context.Background()
+	stdio, err := StartStdio(ctx, StdioOptions{
+		Path:          "/bin/sh",
+		Args:          []string{"-c", `kill -TERM $$`},
+		MaxFrameBytes: 1 << 20,
+		StderrBytes:   4096,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdio.Close()
+	if _, err := stdio.Receive(ctx); err == nil {
+		t.Fatal("expected end of stream")
+	}
+	if _, signal, _ := stdio.TerminationDetails(2 * time.Second); signal != "terminated" {
+		t.Fatalf("signal = %q, want terminated", signal)
+	}
+}
+
+// A reader busier than the post-exit drain window still gets the frames the runtime
+// left in the pipe.
+func TestStdioTransportSlowReaderKeepsFramesAfterExit(t *testing.T) {
+	ctx := context.Background()
+	stdio, err := StartStdio(ctx, StdioOptions{
+		Path:          "/bin/sh",
+		Args:          []string{"-c", `printf '%s\n' '{"id":1,"result":{"final":true}}'; exit 0`},
+		MaxFrameBytes: 1 << 20,
+		StderrBytes:   4096,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdio.Close()
+	time.Sleep(runtimeOutputDrain + 500*time.Millisecond)
+	frame, err := stdio.Receive(ctx)
+	if err != nil || !strings.Contains(string(frame), `"final":true`) {
+		t.Fatalf("frame = %s, err = %v", frame, err)
+	}
 }

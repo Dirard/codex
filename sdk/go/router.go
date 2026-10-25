@@ -25,11 +25,18 @@ type notificationRouter struct {
 	global         map[*NotificationStream]struct{}
 	pending        map[routerKey][]pendingNotification
 	pendingBytes   int64
-	overflow       map[routerKey]*OverflowError
+	overflow       map[routerKey]overflowSentinel
 	timers         map[routerKey]*time.Timer
 	nextPendingSeq uint64
 	closed         bool
 	terminalErr    error
+}
+
+// overflowSentinel records that a key lost events, with the error its late subscriber
+// gets; seq orders sentinels by age.
+type overflowSentinel struct {
+	err error
+	seq uint64
 }
 
 type pendingNotification struct {
@@ -44,7 +51,7 @@ func newNotificationRouter(limits ClientLimits) *notificationRouter {
 		streams:  map[routerKey]map[*NotificationStream]struct{}{},
 		global:   map[*NotificationStream]struct{}{},
 		pending:  map[routerKey][]pendingNotification{},
-		overflow: map[routerKey]*OverflowError{},
+		overflow: map[routerKey]overflowSentinel{},
 		timers:   map[routerKey]*time.Timer{},
 	}
 }
@@ -139,8 +146,8 @@ func (r *notificationRouter) subscribeKeysWithOnClose(
 					pending = append(pending, notification)
 				}
 			}
-			if err := r.overflow[key]; err != nil && overflowErr == nil {
-				overflowErr = err
+			if sentinel, ok := r.overflow[key]; ok && overflowErr == nil {
+				overflowErr = sentinel.err
 			}
 			delete(r.overflow, key)
 			if len(r.pending[key]) == 0 {
@@ -272,12 +279,11 @@ func (r *notificationRouter) route(ctx context.Context, method string, params js
 	if known {
 		payload, err := decodeKnownNotification(method, params)
 		if err != nil {
-			decodeErr := &DecodeError{
+			r.routeMalformed(ctx, notification, metadata, &DecodeError{
 				Reason: "invalid " + method + " notification payload",
 				cause:  err,
-			}
-			r.closeWithError(decodeErr)
-			return decodeErr
+			})
+			return nil
 		}
 		notification.Payload = payload
 	} else {
@@ -294,6 +300,39 @@ func (r *notificationRouter) route(ctx context.Context, method string, params js
 	pendingKeys = append(pendingKeys, realtimeKeys...)
 	r.deliver(ctx, notification, keys, pendingKeys, true)
 	return nil
+}
+
+// routeMalformed fails only the streams a malformed known notification routes to and
+// shows it to global observers, so one bad payload cannot end the whole connection.
+func (r *notificationRouter) routeMalformed(
+	ctx context.Context,
+	notification Notification,
+	metadata protocol.ServerNotificationRoutingMetadata,
+	decodeErr *DecodeError,
+) {
+	keys := routingKeys(metadata, notification.RawParams)
+	keys = append(keys, pendingRoutingKeys(metadata, notification.RawParams)...)
+	keys = append(keys, realtimeRoutingKeys(notification.Method, notification.RawParams)...)
+	keys = dedupeRouterKeys(keys)
+	r.closeKeys(keys, decodeErr)
+	// A late subscriber would wait forever for a terminal event that never decoded, so it
+	// fails the same way. Other keys only lose this one event.
+	r.mu.Lock()
+	if !r.closed {
+		for _, key := range keys {
+			if isTerminalNotification(notification.Method, key.domain) {
+				r.setPendingSentinelLocked(key, decodeErr)
+			}
+		}
+	}
+	r.mu.Unlock()
+	notification.Payload = MalformedNotification{
+		Method: notification.Method,
+		Params: notification.RawParams,
+		Trace:  notification.Trace,
+		Err:    decodeErr,
+	}
+	r.deliver(ctx, notification, nil, nil, true)
 }
 
 func (r *notificationRouter) close() {
@@ -327,7 +366,7 @@ func (r *notificationRouter) closeWithError(err error) {
 	r.global = map[*NotificationStream]struct{}{}
 	r.pending = map[routerKey][]pendingNotification{}
 	r.pendingBytes = 0
-	r.overflow = map[routerKey]*OverflowError{}
+	r.overflow = map[routerKey]overflowSentinel{}
 	r.timers = map[routerKey]*time.Timer{}
 	r.mu.Unlock()
 
@@ -380,11 +419,7 @@ func (r *notificationRouter) deliver(_ context.Context, notification Notificatio
 			retainedBytes: notificationRetainedBytes(notification),
 		}
 		for _, key := range dedupeRouterKeys(pendingKeys) {
-			if err := r.appendPendingLocked(key, pending); err != nil {
-				r.mu.Unlock()
-				r.closeWithError(err)
-				return
-			}
+			r.appendPendingLocked(key, pending)
 		}
 	}
 	r.mu.Unlock()
@@ -421,23 +456,25 @@ func (r *notificationRouter) dropPendingSequencesLocked(sequences map[uint64]str
 	}
 }
 
-func (r *notificationRouter) appendPendingLocked(key routerKey, notification pendingNotification) error {
+// appendPendingLocked buffers an event for a key nobody subscribed to yet. A full pending
+// map evicts its oldest key, which keeps an overflow sentinel, so memory stays bounded
+// without closing the router.
+func (r *notificationRouter) appendPendingLocked(key routerKey, notification pendingNotification) {
 	_, exists := r.pending[key]
 	if !exists && len(r.pending) >= r.limits.PendingTurnMap {
-		return r.setPendingOverflowLocked(key, "pending notification map overflow")
+		r.evictOldestPendingLocked()
 	}
 	if notification.retainedBytes <= 0 {
 		notification.retainedBytes = notificationRetainedBytes(notification.notification)
 	}
 	if notification.retainedBytes > r.limits.PendingNotificationBytes-r.pendingBytes {
-		return r.setPendingOverflowLocked(key, "pending notification byte budget exceeded")
+		r.setPendingOverflowLocked(key, "pending notification byte budget exceeded")
+		return
 	}
 	pending := append(r.pending[key], notification)
 	r.pendingBytes += notification.retainedBytes
 	if len(pending) > r.limits.PendingTurnQueue {
-		if err := r.setPendingOverflowLocked(key, "pending notification queue overflow"); err != nil {
-			return err
-		}
+		r.setPendingOverflowLocked(key, "pending notification queue overflow")
 		droppedCount := len(pending) - r.limits.PendingTurnQueue
 		for _, dropped := range pending[:droppedCount] {
 			r.releasePendingBytesLocked(dropped)
@@ -447,7 +484,25 @@ func (r *notificationRouter) appendPendingLocked(key routerKey, notification pen
 	}
 	r.pending[key] = pending
 	r.ensurePendingTimerLocked(key)
-	return nil
+}
+
+// evictOldestPendingLocked drops the key whose oldest buffered event is the oldest overall.
+func (r *notificationRouter) evictOldestPendingLocked() {
+	var oldest routerKey
+	oldestSeq := uint64(0)
+	for key, pending := range r.pending {
+		if len(pending) == 0 {
+			continue
+		}
+		if oldestSeq == 0 || pending[0].seq < oldestSeq {
+			oldest, oldestSeq = key, pending[0].seq
+		}
+	}
+	if oldestSeq == 0 {
+		return
+	}
+	r.removePendingLocked(oldest)
+	r.setPendingOverflowLocked(oldest, "pending notification map overflow")
 }
 
 func (r *notificationRouter) dropPendingNotifications(key routerKey, drop func(Notification) bool) {
@@ -500,13 +555,44 @@ func (r *notificationRouter) ensurePendingTimerLocked(key routerKey) {
 	})
 }
 
-func (r *notificationRouter) setPendingOverflowLocked(key routerKey, reason string) error {
-	if _, exists := r.overflow[key]; !exists && len(r.overflow) >= r.limits.PendingTurnMap {
-		return &OverflowError{Reason: "pending overflow sentinel capacity exceeded"}
+// setPendingOverflowLocked records that key lost events. A full sentinel map forgets its
+// oldest sentinel, the same way an inactive key expires.
+func (r *notificationRouter) setPendingOverflowLocked(key routerKey, reason string) {
+	r.setPendingSentinelLocked(key, &OverflowError{Reason: reason})
+}
+
+func (r *notificationRouter) setPendingSentinelLocked(key routerKey, err error) {
+	sentinel, exists := r.overflow[key]
+	if !exists {
+		if len(r.overflow) >= r.limits.PendingTurnMap {
+			r.dropOldestOverflowLocked()
+		}
+		sentinel.seq = r.nextPendingSeq
 	}
-	r.overflow[key] = &OverflowError{Reason: reason}
+	sentinel.err = err
+	r.overflow[key] = sentinel
 	r.ensurePendingTimerLocked(key)
-	return nil
+}
+
+func (r *notificationRouter) dropOldestOverflowLocked() {
+	var oldest routerKey
+	found := false
+	for key, sentinel := range r.overflow {
+		if !found || sentinel.seq < r.overflow[oldest].seq {
+			oldest, found = key, true
+		}
+	}
+	if !found {
+		return
+	}
+	// Forget the key entirely: a truncated buffer without its sentinel would replay a
+	// partial stream as if nothing was lost.
+	delete(r.overflow, oldest)
+	r.removePendingLocked(oldest)
+	if timer := r.timers[oldest]; timer != nil {
+		timer.Stop()
+		delete(r.timers, oldest)
+	}
 }
 
 func (r *notificationRouter) closeKeys(keys []routerKey, err error) {
