@@ -311,7 +311,7 @@ func TestStreamAfterTimedOutWaitGetsEventsInBetween(t *testing.T) {
 // R1.6 (review P2-2): the events handles keep for their next stream share the client's
 // pending budget; a handle that lost some reports the loss to its next stream.
 func TestKeptEventsShareTheClientPendingBudget(t *testing.T) {
-	const budget = 1 << 20
+	const budget = 256 << 10
 	const handles = 20
 	const deltasPerHandle = 5
 	transport := newScriptedInitializedTransport(t, nil)
@@ -329,7 +329,7 @@ func TestKeptEventsShareTheClientPendingBudget(t *testing.T) {
 		}
 		_ = stream.Close()
 	}
-	big := strings.Repeat("x", 200*1024)
+	big := strings.Repeat("x", 64*1024)
 	for i := range turns {
 		for range deltasPerHandle {
 			deliverDelta(t, transport, "thread-1", fmt.Sprintf("turn-%d", i), big)
