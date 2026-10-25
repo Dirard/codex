@@ -4,7 +4,7 @@ The Go SDK exposes the Codex app-server API from the `github.com/openai/codex/sd
 
 ## API Boundary
 
-The root `codex` package is the ergonomic public API for client configuration, resource clients, high-level handles, server handlers, limits, errors, and test transports. The `protocol` package is public typed raw access generated from the app-server schema and manifest; it is useful for exact request and response payloads, and it is coupled to the matching runtime protocol digest. The `internal/` packages, generator manifests, schema fixtures, and drift-test artifacts are not public API.
+The root `codex` package is the ergonomic public API for client configuration, resource clients, high-level handles, server handlers, limits, errors, and test transports. The `codextest` package is a public in-process fake app-server for tests of code that uses the SDK. The `protocol` package is public typed raw access generated from the app-server schema and manifest; it is useful for exact request and response payloads, and it is coupled to the matching runtime protocol digest. The `internal/` packages, generator manifests, schema fixtures, and drift-test artifacts are not public API.
 
 ## Install
 
@@ -59,6 +59,8 @@ Zero-valued `ClientLimits` fields use SDK defaults. Negative values fail during 
 | `HandlerTimeout` | 60s |
 | `StderrRingBytes` | 64 KiB |
 | `LifecycleInactivityTimeout` | 5m |
+
+`ShutdownGracePeriod` (outside `ClientLimits`) is how long `Close` lets a runtime the SDK launched exit on its own after its stdin is closed; zero means 5s, a negative value kills the runtime at once, and it cannot be combined with `Transport`.
 
 `ConfigOverrides` are restricted to the audited non-secret keys `model` and `sandbox_mode`; unsupported paths fail before runtime lookup. Do not pass API keys, OAuth tokens, cookies, private keys, or passwords through config overrides, logs, examples, or error text.
 
@@ -161,11 +163,31 @@ _, _ = client.Threads.ListLoaded(ctx, protocol.ThreadLoadedListParams{})
 
 `examples/streaming` shows `Thread.Turn`, streamed notifications, `Steer`, `Interrupt`, and live turn-settings updates.
 
+Streams can be ranged over (Go 1.23+ iterators). `stream.All(ctx)` yields each notification with a nil error and, when the stream closes with an error, that error once; a clean close, such as after `turn/completed`, just ends the loop, and `break` leaves the stream open. `codex.Payloads[T]` keeps only payloads of one type:
+
+```go
+stream, _ := turn.Stream(ctx)
+for delta, err := range codex.Payloads[protocol.AgentMessageDeltaNotification](ctx, stream) {
+    if err != nil {
+        return err
+    }
+    fmt.Print(delta.Delta)
+}
+result, err := turn.Wait(ctx)
+```
+
+## Handle Lifecycle And Cancellation
+
+- **One outcome per handle.** A `TurnHandle` or `ReviewHandle` subscribes to its turn once, on the first `Stream`/`Events` or `Wait`, and records the outcome. Repeated and concurrent `Wait` calls return the same result or error, `Wait` still returns the result after a stream consumed every event, and a stream requested after the turn finished is already closed (with no error after `turn/completed`). A stream sees events from the moment it subscribes; the first subscriber also gets the events buffered since the turn started. The handle keeps the collected result, bounded by `MaxRunResultItems` and `MaxRunResultBytes`, while it is referenced. `LoginHandle.Wait` and `MCPOAuthHandle.Wait` also record their outcome. `CommandHandle.Wait` and `GatewayOAuthHandle.Wait` already did.
+- **Cancelled waits resume.** When the ctx of a `Wait` ends first, `Wait` returns the ctx error and the handle keeps following the turn or login, so a later `Wait` returns the outcome. `Thread.Run` owns its handle, so a cancelled `Run` stops following the turn.
+- **Local cancellation by default.** Ending a ctx stops only the local wait or stream; the turn keeps running on the runtime and can still be stopped with `TurnHandle.Interrupt`. With `TurnOptions.InterruptOnCancel` (or `ReviewStartOptions.InterruptOnCancel`), ending the ctx of `Run`, `Wait`, `Stream`/`Events`, or of a `Turn`/`Run`/`Reviews.Start` call whose start request was already sent, interrupts the turn on the runtime once, with a context detached from the cancelled one and bounded by 5s. Closing a stream with `Close`, and cancelling after the turn finished, never interrupt. A failed interrupt is joined to the returned ctx error. `NotificationStream.Next(ctx)` still closes its stream when its own ctx ends; only the ctx passed to `Stream` or `Wait` decides about the interrupt.
+
 ## Failures And Back-Pressure
 
 - **Runtime crash.** When the runtime exits or the connection drops, calls and streams fail with `*TransportError`. For a runtime the SDK launched, `ExitCode` holds its exit code (or `Signal` the signal that killed it) and `StderrTail` the redacted end of its stderr; `errors.Unwrap` returns the underlying transport failure. Frames the runtime wrote before exiting are still delivered, and a runtime descendant that inherited its pipes cannot hide the exit for more than a couple of seconds.
 - **Unsubscribed events.** Events for a turn, process or other resource that no stream observes yet are buffered so a late `Stream()` still sees them. The buffer is bounded by `ClientLimits.PendingTurnMap`, `PendingTurnQueue` and `PendingNotificationBytes`. When it is full, the oldest buffered resource is evicted: subscribing to it later fails with `*OverflowError`, while the client and all other streams keep working. Records of evicted resources are bounded too; the oldest are forgotten the same way buffered events expire after `LifecycleInactivityTimeout`.
-- **Malformed known notifications.** If a notification with a known method does not decode, the streams it is routed to close with `*DecodeError`, and so does a later subscription to the same resource; global streams receive a `MalformedNotification` carrying the method, raw params and the error, and the connection stays open. Closing a stream does not stop the turn or process on the runtime: interrupt it explicitly if it must stop. A malformed JSON-RPC frame still ends the connection.
+- **Malformed known notifications.** If a notification with a known method does not decode, the streams it is routed to close with `*DecodeError`, and so does a later subscription to the same resource; global streams receive a `MalformedNotification` carrying the method, raw params and the error, and the connection stays open. Closing a stream does not stop the turn or process on the runtime: interrupt it explicitly or use `InterruptOnCancel` if it must stop. A malformed JSON-RPC frame still ends the connection.
+- **Shutdown.** `Close` first fails pending calls and closes streams with `*ClosedError`, then closes the runtime's stdin, keeps draining its stdout and waits up to `ShutdownGracePeriod` for it to exit, and kills it only after that. The runtime of the same build exits on EOF within tens of milliseconds when idle; its own RPC drain may take longer while work is in flight.
 
 ## Examples
 
@@ -178,6 +200,25 @@ _, _ = client.Threads.ListLoaded(ctx, protocol.ThreadLoadedListParams{})
 - `examples/skills_hooks`: skills, hooks, and plugin skill reads.
 - `examples/raw_protocol`: raw typed protocol calls beside the high-level wrapper.
 - `examples/test_harness`: `CODEX_EXEC_PATH` runtime setup and injected transport harness setup.
+- `examples/codextest`: a consumer function and its test against the `codextest` fake app-server.
+
+## Testing With codextest
+
+`codextest.Server` is an in-process fake app-server: pass it as `ClientConfig.Transport`. It answers `initialize` with this SDK build's protocol digests and the protocol mode the client asked for, records the initialize params, and reports handshake violations through `Err()`. Script each method with `Respond` (fixed result), `RespondError`, or `Handle` (a handler that may block and may queue notifications right after its response with `Call.NotifyAfter`); unscripted methods fail with JSON-RPC error `-32601` and are listed by `Unhandled()`. `Notify` sends notifications, `Request` sends a server request such as an approval and returns the client's answer, `Disconnect` simulates a runtime exit, and `Requests`/`WaitForRequest` inspect what the client sent. Builders such as `ThreadStartResponse`, `TurnStartResponse`, `AgentMessageCompleted` and `TurnCompleted` cover a typical turn.
+
+```go
+srv := codextest.NewServer()
+defer srv.Close()
+srv.Respond("thread/start", codextest.ThreadStartResponse("thread-1"))
+srv.Handle("turn/start", func(ctx context.Context, call *codextest.Call) (any, error) {
+    _ = call.NotifyAfter("item/completed", codextest.AgentMessageCompleted("thread-1", "turn-1", "item-1", "4"))
+    _ = call.NotifyAfter("turn/completed", codextest.TurnCompleted("thread-1", "turn-1", protocol.TurnStatusCompleted))
+    return codextest.TurnStartResponse("turn-1"), nil
+})
+client, err := codex.NewClient(ctx, codex.ClientConfig{Transport: srv})
+```
+
+See `examples/codextest` for a complete test, including `InterruptOnCancel`.
 
 ## Server Handlers
 
