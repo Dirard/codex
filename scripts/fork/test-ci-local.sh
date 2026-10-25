@@ -4,9 +4,10 @@
 #   scripts/fork/test-ci-local.sh
 #
 # Runs the ci-local.sh branches that otherwise need a long Rust or Go run, or a
-# CI runner: helper builds and the silent-skip guard of rust-test, the nextest
-# version check, sandbox-check and the go-real-app-server report check. cargo,
-# go, sysctl, unshare and bwrap are stubs placed first on PATH, so the test is
+# CI runner: helper builds and the silent-skip guard of rust-test, the
+# rust-app-server-test wrapper, the nextest version check, sandbox-check and
+# the go-real-app-server and go-auth-fixture report checks. cargo, go, sysctl,
+# unshare, bwrap and uname are stubs placed first on PATH, so the test is
 # hermetic and builds nothing.
 
 if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4))); then
@@ -83,7 +84,8 @@ esac
 STUB
 
 # Stub go: `go env NAME` and `go test` (-list prints $STUB_STATE/go-list, a
-# run prints $STUB_STATE/go-log and exits with $STUB_STATE/go-status).
+# run records the CODEX_* environment as a `go-env` call line, prints
+# $STUB_STATE/go-log and exits with $STUB_STATE/go-status).
 cat >"${work}/bin/go" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -96,6 +98,7 @@ case "$1" in
       cat "${state}/go-list"
       echo "ok   github.com/openai/codex/sdk/go 0.01s"
     else
+      printf 'go-env %s\n' "$(env | grep -E '^CODEX_' | LC_ALL=C sort | tr '\n' ' ')" >>"${state}/calls"
       cat "${state}/go-log"
       exit "$(cat "${state}/go-status")"
     fi
@@ -130,10 +133,21 @@ printf '${tool} %s\n' "\$*" >>"\${STUB_STATE:?}/calls"
 exit "\$(cat "\${STUB_STATE}/${tool}-status")"
 STUB
 done
+
+# Stub uname: `uname -s` prints $STUB_UNAME (Linux by default).
+real_uname="$(command -v uname)"
+cat >"${work}/bin/uname" <<STUB
+#!/usr/bin/env bash
+if [[ "\${1:-}" == -s ]]; then
+  printf '%s\n' "\${STUB_UNAME:-Linux}"
+else
+  exec "${real_uname}" "\$@"
+fi
+STUB
 chmod 0755 "${work}/bin/"*
 export PATH="${work}/bin:${PATH}"
 export TMPDIR="${work}/tmp"
-unset CI NEXTEST_PROFILE GITHUB_STEP_SUMMARY CODEX_EXEC_PATH
+unset CI NEXTEST_PROFILE GITHUB_STEP_SUMMARY CODEX_EXEC_PATH CODEX_GO_SDK_AUTH_FIXTURE_PATH STUB_UNAME
 
 passed=0
 failures=0
@@ -209,6 +223,8 @@ expect() {
 }
 
 calls_contain() { grep -qE -- "$1" "${STUB_STATE}/calls"; }
+calls_lack() { ! grep -qE -- "$1" "${STUB_STATE}/calls"; }
+calls_empty() { [[ ! -s "${STUB_STATE}/calls" ]]; }
 
 # --- rust-test: helpers and the silent-skip guard -------------------------
 
@@ -261,6 +277,22 @@ STUB_STATE="$(new_state)"
 junit "${STUB_STATE}" suite::rmcp_client::plugin_helper 'test_stdio_server binary not available, skipping test: x'
 NEXTEST_PROFILE=local check local-profile-guarded fail 'suite::rmcp_client::plugin_helper' \
   "${ci_local}" rust-test -p codex-core
+
+STUB_STATE="$(new_state)"
+check app-server-test-runs ok 'nextest run' "${ci_local}" rust-app-server-test --partition hash:2/4
+expect app-server-test-builds-tests calls_contain '^cargo test --locked --no-run -p codex-app-server$'
+expect app-server-test-partition calls_contain '^cargo nextest run .*-p codex-app-server .*--partition hash:2/4'
+expect app-server-test-helpers calls_contain '^cargo build .*-p codex-cli --bin codex -p codex-code-mode-host'
+
+STUB_STATE="$(new_state)"
+check app-server-test-rejects-package fail 'tests codex-app-server only' \
+  "${ci_local}" rust-app-server-test -p codex-core
+expect app-server-test-rejected-before-build calls_empty
+
+STUB_STATE="$(new_state)"
+junit "${STUB_STATE}" suite::v2::executor_mcp::uses_codex 'helper lookup: could not locate binary &quot;codex&quot;'
+check app-server-test-helper-guard fail 'suite::v2::executor_mcp::uses_codex' \
+  "${ci_local}" rust-app-server-test
 
 STUB_STATE="$(new_state)"
 echo 0.9.111 >"${STUB_STATE}/nextest-version"
@@ -330,6 +362,66 @@ go_state "${strict}" TestRealAppServerTurn
 printf '%s\n' "${strict}" TestRealAppServerTurn TestRealAppServerSilent >"${STUB_STATE}/go-list"
 CODEX_EXEC_PATH="${STUB_STATE}/codex" check go-real-test-without-pass fail 'did not pass: TestRealAppServerSilent' \
   "${ci_local}" go-real-app-server
+
+go_state "${strict}" TestRealAppServerTurn
+sed -i 's/--- PASS: TestRealAppServerTurn /--- SKIP: TestRealAppServerTurn /' "${STUB_STATE}/go-log"
+CODEX_EXEC_PATH="${STUB_STATE}/codex" STUB_UNAME=Darwin \
+  check go-real-skip-off-linux ok '1 of 2 TestRealAppServer tests passed, 1 skipped off Linux' \
+  "${ci_local}" go-real-app-server
+CODEX_EXEC_PATH="${STUB_STATE}/codex" \
+  check go-real-skip-on-linux fail 'did not pass: TestRealAppServerTurn' "${ci_local}" go-real-app-server
+
+go_state "${strict}" TestRealAppServerTurn
+sed -i "s/--- PASS: ${strict} /--- SKIP: ${strict} /" "${STUB_STATE}/go-log"
+CODEX_EXEC_PATH="${STUB_STATE}/codex" STUB_UNAME=Darwin \
+  check go-real-strict-skip-off-linux fail "did not pass: ${strict}" "${ci_local}" go-real-app-server
+
+# --- go-auth-fixture ------------------------------------------------------
+
+# auth_state NAME...: go_state plus a codex-app-server at the default path.
+auth_state() {
+  go_state "$@"
+  mkdir -p "${STUB_STATE}/target/debug"
+  printf '#!/bin/sh\n' >"${STUB_STATE}/target/debug/codex-app-server"
+  chmod 0755 "${STUB_STATE}/target/debug/codex-app-server"
+}
+
+auth_state TestAuthFixtureDeviceCodeFlow TestAuthFixtureUsageAndRateLimitRead
+CODEX_EXEC_PATH="${STUB_STATE}/codex" check go-auth-all-pass ok '2 of 2 TestAuthFixture tests passed' \
+  "${ci_local}" go-auth-fixture
+expect go-auth-default-binary calls_contain "^go-env .*CODEX_GO_SDK_AUTH_FIXTURE_PATH=${STUB_STATE}/target/debug/codex-app-server "
+expect go-auth-required calls_contain '^go-env .*CODEX_GO_SDK_REQUIRE_AUTH_FIXTURE=1 '
+expect go-auth-without-exec-path calls_lack '^go-env .*CODEX_EXEC_PATH='
+expect go-auth-runs-prefix calls_contain "^go test -race -count=1 -v -run \^TestAuthFixture \./\.\.\.$"
+
+auth_state TestAuthFixtureDeviceCodeFlow
+printf '#!/bin/sh\n' >"${STUB_STATE}/fixture-app-server"
+chmod 0755 "${STUB_STATE}/fixture-app-server"
+CODEX_GO_SDK_AUTH_FIXTURE_PATH="${STUB_STATE}/fixture-app-server" \
+  check go-auth-env-binary ok '1 of 1 TestAuthFixture tests passed' "${ci_local}" go-auth-fixture
+expect go-auth-env-binary-used calls_contain "^go-env .*CODEX_GO_SDK_AUTH_FIXTURE_PATH=${STUB_STATE}/fixture-app-server "
+
+auth_state TestAuthFixtureDeviceCodeFlow
+rm "${STUB_STATE}/target/debug/codex-app-server"
+check go-auth-missing-binary fail 'missing executable .*/codex-app-server' "${ci_local}" go-auth-fixture
+
+auth_state
+: >"${STUB_STATE}/go-list"
+printf 'testing: warning: no tests to run\nPASS\n' >"${STUB_STATE}/go-log"
+check go-auth-none-listed fail 'no TestAuthFixture tests' "${ci_local}" go-auth-fixture
+
+auth_state TestAuthFixtureDeviceCodeFlow TestAuthFixtureUsageAndRateLimitRead
+sed -i 's/--- PASS: TestAuthFixtureUsageAndRateLimitRead /--- SKIP: TestAuthFixtureUsageAndRateLimitRead /' \
+  "${STUB_STATE}/go-log"
+check go-auth-skip-fails fail 'did not pass: TestAuthFixtureUsageAndRateLimitRead' "${ci_local}" go-auth-fixture
+
+auth_state TestAuthFixtureDeviceCodeFlow
+echo 1 >"${STUB_STATE}/go-status"
+check go-auth-run-fails fail 'TestAuthFixture\* failed \(exit 1\)' "${ci_local}" go-auth-fixture
+
+auth_state TestAuthFixtureDeviceCodeFlow
+STUB_UNAME=Darwin check go-auth-linux-only fail 'Linux-only' "${ci_local}" go-auth-fixture
+expect go-auth-linux-only-runs-nothing calls_lack '^go test'
 
 echo "ci-local.sh self-test: ${passed} passed, ${failures} failed"
 [[ ${failures} -eq 0 ]]

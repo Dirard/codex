@@ -513,8 +513,18 @@ expect workflow-no-install-action-version-input bash -c "! grep -qE '^ +version:
 go_runtime="$(job_block "${fork_ci}" go-runtime)"
 expect workflow-go-runtime-reads-test-cache grep -qE '^ +shared-key: fork-ci-test$' <<<"${go_runtime}"
 expect workflow-go-runtime-never-saves grep -qE '^ +save-if: "?false"?$' <<<"${go_runtime}"
+app_server_job="$(job_block "${fork_ci}" rust-app-server)"
+expect workflow-app-server-reads-test-cache grep -qE '^ +shared-key: fork-ci-test$' <<<"${app_server_job}"
+expect workflow-app-server-never-saves grep -qE '^ +save-if: "?false"?$' <<<"${app_server_job}"
 expect workflow-two-cache-families \
   test "$(grep -oE 'shared-key: [a-z0-9-]+' "${fork_ci}" | sort -u | wc -l)" -eq 2
+
+# fork-ci result (and with it the release gate) needs every other job.
+ci_jobs="$(awk '/^jobs:/ { inside = 1; next } inside && /^  [A-Za-z0-9_-]+:$/ { sub(/:$/, ""); print $1 }' \
+  "${fork_ci}" | grep -vx result | LC_ALL=C sort)"
+result_needs="$(job_block "${fork_ci}" result | sed -nE 's/^ +needs: \[(.*)\]$/\1/p' | tr ',' '\n' |
+  tr -d ' ' | LC_ALL=C sort)"
+expect workflow-result-needs-every-job test -n "${ci_jobs}" -a "${ci_jobs}" = "${result_needs}"
 
 draft_job="$(job_block "${fork_release}" draft)"
 expect workflow-draft-cancellable grep -q '!cancelled()' <<<"${draft_job}"

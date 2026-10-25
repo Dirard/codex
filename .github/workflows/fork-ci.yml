@@ -120,6 +120,57 @@ jobs:
         if: always() && !cancelled()
         uses: ./.github/actions/check-clean-worktree
 
+  rust-app-server:
+    name: codex-app-server tests (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-24.04
+    # Cold cache: ~40 min to build the codex-app-server tests and helpers on
+    # 4 vCPUs. The default nextest profile runs the integration tests one at a
+    # time (test-group app_server_integration): a quarter is ~550 tests and
+    # took 9 min on a 32-core workstation.
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref || '' }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/fork-setup-rust
+        with:
+          free-disk: "true"
+          sandbox: "true"
+
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest@0.9.103
+
+      # Reads the rust-test cache (codex, helpers and most dependencies) and
+      # never saves one: the 10 GB cache budget holds two families.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: codex-rs
+          shared-key: fork-ci-test
+          save-if: "false"
+
+      - name: codex-app-server
+        run: scripts/fork/ci-local.sh rust-app-server-test --partition "hash:${{ matrix.shard }}/4"
+
+      - name: Upload nextest JUnit report
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: fork-ci-junit-app-server-shard-${{ matrix.shard }}
+          path: codex-rs/target/nextest/default/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
+
   go-sdk:
     name: Go SDK (gofmt, vet, race tests)
     runs-on: ubuntu-24.04
@@ -173,7 +224,7 @@ jobs:
           go-version-file: sdk/go/go.mod
           cache-dependency-path: sdk/go/go.mod
 
-      - name: Build codex and write_go_sdk_manifest
+      - name: Build codex, codex-app-server and write_go_sdk_manifest
         run: scripts/fork/ci-local.sh go-runtime-build
 
       - name: Generator drift (manifest, experimental schema, protocodex)
@@ -181,6 +232,9 @@ jobs:
 
       - name: TestRealAppServer* with strict handshake
         run: scripts/fork/ci-local.sh go-real-app-server
+
+      - name: TestAuthFixture* against codex-app-server
+        run: scripts/fork/ci-local.sh go-auth-fixture
 
       - name: Release script self-tests
         run: scripts/fork/ci-local.sh scripts
@@ -192,7 +246,7 @@ jobs:
   result:
     name: fork-ci result
     if: always()
-    needs: [rust-lint, rust-test, go-sdk, go-runtime]
+    needs: [rust-lint, rust-test, rust-app-server, go-sdk, go-runtime]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

@@ -16,13 +16,20 @@
 #       -p PACKAGE          test this package instead of the defaults (repeatable)
 #       -- ARGS...          extra arguments for `cargo nextest run` (select the
 #                           profile with NEXTEST_PROFILE, not --profile)
+#   rust-app-server-test [OPTIONS]
+#                         rust-test for codex-app-server; its integration tests
+#                         run one at a time in the default nextest profile
+#       --partition SPEC    nextest partition, for example hash:1/4
+#       -- ARGS...          extra arguments for `cargo nextest run`
 #   sandbox-check         require working unprivileged user namespaces and bwrap
 #   go-static             gofmt and go vet for sdk/go
 #   go-test               go test -race ./... (real-runtime tests skip)
-#   go-runtime-build      build codex and write_go_sdk_manifest
+#   go-runtime-build      build codex, codex-app-server and write_go_sdk_manifest
 #   go-generators         Go manifest, experimental schema and protocodex drift checks
 #   go-real-app-server    TestRealAppServer* (strict handshake included) against
 #                         codex; every test `go test -list` finds must pass
+#   go-auth-fixture       TestAuthFixture* (Linux only) against codex-app-server;
+#                         every test `go test -list` finds must pass
 #   scripts               shellcheck and the ci-local.sh / verify-release.sh /
 #                         release.sh self-tests
 #   all                   every command above except sandbox-check, in CI order
@@ -34,6 +41,9 @@
 #   CARGO_TARGET_DIR      honoured when locating built binaries.
 #   CODEX_EXEC_PATH       overrides the codex binary used by go-real-app-server
 #                         and the scripts self-test.
+#   CODEX_GO_SDK_AUTH_FIXTURE_PATH
+#                         overrides the codex-app-server binary used by
+#                         go-auth-fixture.
 #   NEXTEST_PROFILE, NEXTEST_RETRIES
 #                         passed through to nextest (CI uses the default profile).
 #   CI=true               a nextest version other than the pinned one is fatal.
@@ -109,6 +119,9 @@ helper_missing_re='binary not available, skipping|could not locate binary|CARGO_
 nextest_version=0.9.103
 
 strict_handshake_test=TestRealAppServerInitializeStrictDigest
+
+# Set by run_go_tests_require_pass: listed tests that reported SKIP.
+go_tests_skipped=0
 
 # Scratch directories removed on exit, whatever the outcome. Isolated HOMEs
 # are not listed: run_isolated keeps a failed one for inspection.
@@ -369,6 +382,15 @@ cmd_rust_test() {
   [[ ${guard} -eq 0 ]] || exit 1
 }
 
+cmd_rust_app_server_test() {
+  local arg
+  for arg in "$@"; do
+    [[ "${arg}" != -- ]] || break
+    [[ "${arg}" != -p ]] || die "rust-app-server-test tests codex-app-server only; use rust-test -p for other packages"
+  done
+  cmd_rust_test -p codex-app-server "$@"
+}
+
 # Reads a kernel parameter that must have the given value when it exists.
 check_kernel_param() {
   local key="$1" want="$2" file value
@@ -428,9 +450,10 @@ cmd_go_test() {
 }
 
 cmd_go_runtime_build() {
-  log "build codex and write_go_sdk_manifest"
+  log "build codex, codex-app-server and write_go_sdk_manifest"
   cargo_rs build --locked \
     -p codex-cli --bin codex \
+    -p codex-app-server --bin codex-app-server \
     -p codex-app-server-protocol --bin write_go_sdk_manifest
 }
 
@@ -486,50 +509,90 @@ cmd_go_generators() {
   ) || die "generated Go protocol drift; ${regen_hint}"
 }
 
+# Prints the sdk/go tests that `go test -list` finds for ^PREFIX, sorted.
+# `go test -run` exits 0 with "no tests to run", so this list, not the run,
+# names the tests that must pass (-race reuses the test binary of the run).
+list_go_tests() {
+  local prefix="$1"
+  (cd "${go_dir}" && go test -race -list "^${prefix}" ./...) |
+    awk -v prefix="${prefix}" 'index($0, prefix) == 1 && /^[A-Za-z0-9_]+$/' |
+    LC_ALL=C sort -u
+}
+
+# Runs ^PREFIX tests of sdk/go with -race under an isolated HOME and
+# `env ENV_ARG...`, then requires `--- PASS` for every test in LISTED; a test in
+# SKIPPABLE may report `--- SKIP` instead (both newline-separated). Sets
+# go_tests_skipped.
+run_go_tests_require_pass() {
+  local prefix="$1" listed="$2" skippable="$3"
+  shift 3
+  local scratch status=0
+  scratch="$(mktemp -d "${TMPDIR:-/tmp}/fork-ci-go-test.XXXXXX")"
+  cleanup_paths+=("${scratch}")
+  (
+    cd "${go_dir}"
+    run_isolated env "$@" go test -race -count=1 -v -run "^${prefix}" ./...
+  ) 2>&1 | tee "${scratch}/go-test.log" || status=$?
+  [[ ${status} -eq 0 ]] || die "${prefix}* failed (exit ${status})"
+
+  local name missing=()
+  go_tests_skipped=0
+  while IFS= read -r name; do
+    if grep -qE "^--- PASS: ${name} \(" "${scratch}/go-test.log"; then
+      continue
+    elif grep -qx "${name}" <<<"${skippable}" &&
+      grep -qE "^--- SKIP: ${name} \(" "${scratch}/go-test.log"; then
+      go_tests_skipped=$((go_tests_skipped + 1))
+    else
+      missing+=("${name}")
+    fi
+  done <<<"${listed}"
+  [[ ${#missing[@]} -eq 0 ]] || die "listed ${prefix} tests did not pass: ${missing[*]}"
+}
+
 cmd_go_real_app_server() {
   local codex
   codex="${CODEX_EXEC_PATH:-$(target_dir)/debug/codex}"
   require_built "${codex}"
 
-  # `go test -run` exits 0 with "no tests to run", so the tests that must pass
-  # come from `go test -list` of the same tree (-race reuses the test binary).
-  local listed count
-  listed="$(cd "${go_dir}" && go test -race -list '^TestRealAppServer' ./... |
-    awk '/^TestRealAppServer[A-Za-z0-9_]*$/' | LC_ALL=C sort -u)"
+  local listed count skippable=""
+  listed="$(list_go_tests TestRealAppServer)"
   [[ -n "${listed}" ]] || die "go test -list found no TestRealAppServer tests in sdk/go"
   grep -qx "${strict_handshake_test}" <<<"${listed}" ||
     die "${strict_handshake_test} is not listed by go test -list in sdk/go"
   count="$(grep -c . <<<"${listed}")"
+  # Linux-only cases skip elsewhere; the strict handshake must pass everywhere.
+  if [[ "$(uname -s)" != Linux ]]; then
+    skippable="$(grep -vx "${strict_handshake_test}" <<<"${listed}" || true)"
+  fi
 
-  local scratch
-  scratch="$(mktemp -d "${TMPDIR:-/tmp}/fork-ci-go-real.XXXXXX")"
-  cleanup_paths+=("${scratch}")
   log "go test -race TestRealAppServer* (${count} tests, codex=${codex})"
-  local status=0
-  (
-    cd "${go_dir}"
-    run_isolated env -u CODEX_GO_SDK_AUTH_FIXTURE_PATH -u CODEX_GO_SDK_REQUIRE_AUTH_FIXTURE \
-      CODEX_EXEC_PATH="${codex}" \
-      CODEX_GO_SDK_REQUIRE_REAL_APP_SERVER=1 \
-      go test -race -count=1 -v -run '^TestRealAppServer' ./...
-  ) 2>&1 | tee "${scratch}/go-test.log" || status=$?
-  [[ ${status} -eq 0 ]] || die "TestRealAppServer* failed (exit ${status})"
+  run_go_tests_require_pass TestRealAppServer "${listed}" "${skippable}" \
+    -u CODEX_GO_SDK_AUTH_FIXTURE_PATH -u CODEX_GO_SDK_REQUIRE_AUTH_FIXTURE \
+    CODEX_EXEC_PATH="${codex}" \
+    CODEX_GO_SDK_REQUIRE_REAL_APP_SERVER=1
+  log "$((count - go_tests_skipped)) of ${count} TestRealAppServer tests passed$([[ ${go_tests_skipped} -eq 0 ]] || echo ", ${go_tests_skipped} skipped off Linux")"
+}
 
-  # Every listed test must report PASS; SKIP is accepted only off Linux, where
-  # Linux-only cases skip. The strict handshake must pass everywhere.
-  local name missing=() skipped=0
-  while IFS= read -r name; do
-    if grep -qE "^--- PASS: ${name} \(" "${scratch}/go-test.log"; then
-      continue
-    elif [[ "$(uname -s)" != Linux && "${name}" != "${strict_handshake_test}" ]] &&
-      grep -qE "^--- SKIP: ${name} \(" "${scratch}/go-test.log"; then
-      skipped=$((skipped + 1))
-    else
-      missing+=("${name}")
-    fi
-  done <<<"${listed}"
-  [[ ${#missing[@]} -eq 0 ]] || die "listed TestRealAppServer tests did not pass: ${missing[*]}"
-  log "$((count - skipped)) of ${count} TestRealAppServer tests passed$([[ ${skipped} -eq 0 ]] || echo ", ${skipped} skipped off Linux")"
+# The auth fixture drives codex-app-server against a local HTTP fixture of the
+# ChatGPT auth and backend endpoints; it is Linux-only.
+cmd_go_auth_fixture() {
+  [[ "$(uname -s)" == Linux ]] || die "go-auth-fixture: the Go SDK auth fixture is Linux-only"
+  local app_server
+  app_server="${CODEX_GO_SDK_AUTH_FIXTURE_PATH:-$(target_dir)/debug/codex-app-server}"
+  require_built "${app_server}"
+
+  local listed count
+  listed="$(list_go_tests TestAuthFixture)"
+  [[ -n "${listed}" ]] || die "go test -list found no TestAuthFixture tests in sdk/go"
+  count="$(grep -c . <<<"${listed}")"
+
+  log "go test -race TestAuthFixture* (${count} tests, codex-app-server=${app_server})"
+  run_go_tests_require_pass TestAuthFixture "${listed}" "" \
+    -u CODEX_EXEC_PATH -u CODEX_GO_SDK_REQUIRE_REAL_APP_SERVER \
+    CODEX_GO_SDK_AUTH_FIXTURE_PATH="${app_server}" \
+    CODEX_GO_SDK_REQUIRE_AUTH_FIXTURE=1
+  log "${count} of ${count} TestAuthFixture tests passed"
 }
 
 cmd_scripts() {
@@ -550,7 +613,7 @@ cmd_scripts() {
   else
     log "no built codex at ${codex}; the self-test skips the runtime checks"
   fi
-  log "ci-local.sh self-test (stub cargo, go, sysctl, unshare, bwrap)"
+  log "ci-local.sh self-test (stub cargo, go, sysctl, unshare, bwrap, uname)"
   "${repo_root}/scripts/fork/test-ci-local.sh"
   log "verify-release.sh self-test"
   "${selftest[@]}"
@@ -562,11 +625,13 @@ cmd_all() {
   cmd_rust_fmt
   cmd_rust_clippy
   cmd_rust_test
+  cmd_rust_app_server_test
   cmd_go_static
   cmd_go_test
   cmd_go_runtime_build
   cmd_go_generators
   cmd_go_real_app_server
+  cmd_go_auth_fixture
   cmd_scripts
 }
 
@@ -582,12 +647,14 @@ main() {
     rust-clippy) cmd_rust_clippy "$@" ;;
     rust-helpers) cmd_rust_helpers "$@" ;;
     rust-test) cmd_rust_test "$@" ;;
+    rust-app-server-test) cmd_rust_app_server_test "$@" ;;
     sandbox-check) cmd_sandbox_check "$@" ;;
     go-static) cmd_go_static "$@" ;;
     go-test) cmd_go_test "$@" ;;
     go-runtime-build) cmd_go_runtime_build "$@" ;;
     go-generators) cmd_go_generators "$@" ;;
     go-real-app-server) cmd_go_real_app_server "$@" ;;
+    go-auth-fixture) cmd_go_auth_fixture "$@" ;;
     scripts) cmd_scripts "$@" ;;
     all) cmd_all "$@" ;;
     -h | --help | help) usage ;;
