@@ -72,6 +72,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::test_target_os;
@@ -344,11 +345,21 @@ if payload.get("prompt") == {blocked_prompt_json}:
     Ok(())
 }
 
-/// Fork: installs the blocking user prompt submit hook and a passing Stop hook together.
+/// Fork: the Stop hook installed beside the blocking user prompt submit hook.
+#[derive(Clone, Copy)]
+enum StopHookFixture {
+    Pass,
+    /// Marks `stop_hook_started` and waits for `stop_hook_release`, then blocks with these
+    /// continuation prompts in order.
+    Gated(&'static [&'static str]),
+}
+
+/// Fork: installs the blocking user prompt submit hook and a Stop hook together.
 fn write_user_prompt_submit_and_stop_hooks(
     home: &Path,
     blocked_prompt: &str,
     additional_context: &str,
+    stop_hook: StopHookFixture,
 ) -> Result<()> {
     let read_hooks = || -> Result<Value> {
         let hooks = fs::read_to_string(home.join("hooks.json")).context("read hooks.json")?;
@@ -356,9 +367,82 @@ fn write_user_prompt_submit_and_stop_hooks(
     };
     write_user_prompt_submit_hook(home, blocked_prompt, additional_context)?;
     let mut hooks = read_hooks()?;
-    write_stop_hook(home, /*block_prompts*/ &[])?;
+    match stop_hook {
+        StopHookFixture::Pass => write_stop_hook(home, /*block_prompts*/ &[])?,
+        StopHookFixture::Gated(block_prompts) => write_gated_stop_hook(home, block_prompts)?,
+    }
     hooks["hooks"]["Stop"] = read_hooks()?["hooks"]["Stop"].take();
     fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+/// Fork: a Stop hook that logs like `write_stop_hook`, then holds every invocation until the
+/// test creates `stop_hook_release`, so the test can queue input while the hook runs.
+fn write_gated_stop_hook(home: &Path, block_prompts: &[&str]) -> Result<()> {
+    let script_path = home.join("stop_hook.py");
+    let log_path = home.join("stop_hook_log.jsonl");
+    let started_path = home.join("stop_hook_started");
+    let release_path = home.join("stop_hook_release");
+    let prompts_json =
+        serde_json::to_string(block_prompts).context("serialize stop hook prompts for test")?;
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+import time
+
+log_path = Path(r"{log_path}")
+block_prompts = {prompts_json}
+
+payload = json.load(sys.stdin)
+existing = []
+if log_path.exists():
+    existing = [line for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+Path(r"{started_path}").write_text("started", encoding="utf-8")
+while not Path(r"{release_path}").exists():
+    time.sleep(0.01)
+
+invocation_index = len(existing)
+if invocation_index < len(block_prompts):
+    print(json.dumps({{"decision": "block", "reason": block_prompts[invocation_index]}}))
+else:
+    print(json.dumps({{"systemMessage": f"stop hook pass {{invocation_index + 1}} complete"}}))
+"#,
+        log_path = log_path.display(),
+        started_path = started_path.display(),
+        release_path = release_path.display(),
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "Stop": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "statusMessage": "running stop hook",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&script_path, script).context("write gated stop hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+/// Fork: waits until the gated Stop hook runs, lets `while_held` queue input, then releases it.
+async fn while_gated_stop_hook_runs<F>(home: &Path, while_held: F) -> Result<()>
+where
+    F: std::future::Future<Output = Result<()>>,
+{
+    fs_wait::wait_for_path_exists(home.join("stop_hook_started"), Duration::from_secs(30))
+        .await
+        .context("timed out waiting for the gated Stop hook to start")?;
+    while_held.await?;
+    fs::write(home.join("stop_hook_release"), "release").context("release gated Stop hook")?;
     Ok(())
 }
 
@@ -3411,6 +3495,7 @@ async fn blocked_queued_prompt_after_final_answer_completes_turn(
                 home,
                 "blocked queued prompt",
                 BLOCKED_PROMPT_CONTEXT,
+                StopHookFixture::Pass,
             )
             .expect("failed to write user prompt submit and stop hook test fixtures");
         })
@@ -3710,10 +3795,607 @@ async fn blocked_queued_prompt_does_not_strand_turn_input_beside_it(
                 rollout.contains(MAIL),
                 "the drained mail should join the next request"
             );
+            // Fork: a repeat inside the task would already show above; a new turn after
+            // TurnComplete would start before this barrier op is answered.
+            test.codex
+                .submit(Op::RealtimeConversationListVoices)
+                .await?;
+            wait_for_event(&test.codex, |event| {
+                assert!(
+                    !matches!(event, EventMsg::TurnStarted(_)),
+                    "queue-only mail should not start another turn",
+                );
+                matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
+            })
+            .await;
+            assert_eq!(server.requests().await.len(), 1);
         }
     }
 
     server.shutdown().await;
+    Ok(())
+}
+
+fn text_turn_input(text: &str) -> TurnInputRequest {
+    TurnInputRequest::user_input(vec![UserInput::Text {
+        text: text.to_string(),
+        text_elements: Vec::new(),
+    }])
+}
+
+/// Fork: starts a turn whose first answer finishes, steers the blocked prompt behind it and
+/// checks that this answer completed the turn through the Stop hook.
+async fn assert_blocked_steer_completes_finished_answer(test: &TestCodex) -> Result<()> {
+    test.codex
+        .start_or_steer_turn(text_turn_input("initial prompt"))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::AgentMessage(_),
+                ..
+            })
+        )
+    })
+    .await;
+    test.codex
+        .start_or_steer_turn(text_turn_input("blocked queued prompt"))
+        .await?;
+    let EventMsg::TurnComplete(turn_complete) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await
+    else {
+        unreachable!("wait_for_event returns the matched event");
+    };
+
+    assert_eq!(
+        turn_complete.last_agent_message.as_deref(),
+        Some("first response"),
+        "the finished answer should complete the turn",
+    );
+    let stop_inputs = read_stop_hook_inputs(test.codex_home_path())?;
+    assert_eq!(stop_inputs.len(), 1, "the Stop hook should run once");
+    assert_eq!(stop_inputs[0]["last_assistant_message"], "first response");
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FinishedAnswerTransport {
+    Sse,
+    WebSocketResponsesLite,
+}
+
+/// Fork: a prompt that preempts the stream only after the final answer finished leaves the model
+/// nothing to redo. When the hook blocks it, that answer completes the turn without resampling.
+#[test_case::test_case(FinishedAnswerTransport::Sse; "sse")]
+#[test_case::test_case(FinishedAnswerTransport::WebSocketResponsesLite; "websocket_responses_lite")]
+#[tokio::test]
+async fn blocked_prompt_preempting_a_finished_answer_completes_turn(
+    transport: FinishedAnswerTransport,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let answer = vec![
+        ev_response_created("resp-1"),
+        ev_message_item_added("msg-1", ""),
+        ev_output_text_delta("first "),
+        ev_message_item_done("msg-1", "first response"),
+    ];
+    let resample = vec![
+        ev_response_created("resp-2"),
+        ev_assistant_message("msg-2", "second response"),
+        ev_completed("resp-2"),
+    ];
+    let builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_pre_build_hook(|home| {
+            write_user_prompt_submit_and_stop_hooks(
+                home,
+                "blocked queued prompt",
+                BLOCKED_PROMPT_CONTEXT,
+                StopHookFixture::Pass,
+            )
+            .expect("failed to write user prompt submit and stop hook test fixtures");
+        });
+    match transport {
+        FinishedAnswerTransport::Sse => {
+            // Keep the gate open: only the preemption may end the first response.
+            let (gate_tx, gate_rx) = oneshot::channel::<()>();
+            let mut first_chunks = answer
+                .into_iter()
+                .map(|event| StreamingSseChunk {
+                    gate: None,
+                    body: sse_event(event),
+                })
+                .collect::<Vec<_>>();
+            first_chunks.push(StreamingSseChunk {
+                gate: Some(gate_rx),
+                body: sse_event(ev_completed("resp-1")),
+            });
+            let (server, _completions) = start_streaming_sse_server(vec![
+                first_chunks,
+                vec![StreamingSseChunk {
+                    gate: None,
+                    body: sse(resample),
+                }],
+            ])
+            .await;
+            let test = builder
+                .with_config(|config| {
+                    trust_discovered_hooks(config);
+                    config
+                        .features
+                        .enable(Feature::InstantInterrupt)
+                        .expect("enable InstantInterrupt feature");
+                })
+                .build_with_streaming_server(&server)
+                .await?;
+            assert_blocked_steer_completes_finished_answer(&test).await?;
+            assert_eq!(
+                server.requests().await.len(),
+                1,
+                "the blocked prompt should not resample the finished answer",
+            );
+            server.shutdown().await;
+            drop(gate_tx);
+        }
+        FinishedAnswerTransport::WebSocketResponsesLite => {
+            // The answer ends only after the preemption sends its drain interrupt.
+            let server = responses::start_websocket_server(vec![vec![
+                vec![ev_response_created("warmup"), ev_completed("warmup")],
+                answer,
+                vec![
+                    json!({"type": "response.interrupt.accepted", "response_id": "resp-1"}),
+                    ev_completed("resp-1"),
+                ],
+                resample,
+            ]])
+            .await;
+            let base_url = format!("{}/v1", server.uri());
+            let config_server = start_mock_server().await;
+            let test = builder
+                .with_model_info_override("gpt-5.4", |model_info| {
+                    model_info.use_responses_lite = true;
+                })
+                .with_config(move |config| {
+                    trust_discovered_hooks(config);
+                    config
+                        .features
+                        .enable(Feature::InstantInterrupt)
+                        .expect("enable InstantInterrupt feature");
+                    config.model_provider.base_url = Some(base_url);
+                    config.model_provider.supports_websockets = true;
+                })
+                .build_with_auto_env(&config_server)
+                .await?;
+            assert_blocked_steer_completes_finished_answer(&test).await?;
+            let requests = server
+                .connections()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(
+                requests.len(),
+                3,
+                "warmup, answer and drain interrupt only: {:?}",
+                requests
+                    .iter()
+                    .map(|request| request.body_json()["type"].clone())
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+enum InputDuringStopHook {
+    QueueOnlyMail,
+    BlockedPrompt,
+}
+
+/// Fork: input that arrives while the Stop hook runs after a blocked batch must not undo that
+/// completion: queue-only mail waits for the next turn and leaves post-turn compaction due, and
+/// another blocked prompt keeps the finished answer as the turn's last message.
+#[test_case::test_case(InputDuringStopHook::QueueOnlyMail; "queue_only_mail")]
+#[test_case::test_case(InputDuringStopHook::BlockedPrompt; "blocked_prompt")]
+#[tokio::test]
+async fn input_during_stop_hook_after_blocked_batch_keeps_the_finished_turn(
+    input: InputDuringStopHook,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    const MAIL: &str = "worker finished the audit";
+
+    let (gate_tx, gate_rx) = oneshot::channel();
+    let first_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_response_created("resp-1")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_message_item_added("msg-1", "")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_output_text_delta("first ")),
+        },
+        StreamingSseChunk {
+            gate: Some(gate_rx),
+            body: sse(vec![
+                ev_message_item_done("msg-1", "first response"),
+                // Above the post-turn threshold (half of 12000).
+                ev_completed_with_tokens("resp-1", /*total_tokens*/ 7_000),
+            ]),
+        },
+    ];
+    let second_chunks = vec![StreamingSseChunk {
+        gate: None,
+        body: sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-2", "compacted summary"),
+            ev_completed_with_tokens("resp-2", /*total_tokens*/ 10),
+        ]),
+    }];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_pre_build_hook(|home| {
+            write_user_prompt_submit_and_stop_hooks(
+                home,
+                "blocked queued prompt",
+                BLOCKED_PROMPT_CONTEXT,
+                StopHookFixture::Gated(&[]),
+            )
+            .expect("failed to write user prompt submit and stop hook test fixtures");
+        })
+        .with_config(|config| {
+            trust_discovered_hooks(config);
+            // Without remote compaction, the summary request goes to the streaming server.
+            config.model_provider.name = "Local compaction test provider".to_string();
+            config.model_context_window = Some(12_000);
+            config.model_auto_compact_token_limit = Some(100_000);
+            config.model_post_turn_compact_threshold_percent = 50;
+            config
+                .features
+                .disable(Feature::InstantInterrupt)
+                .expect("disable InstantInterrupt feature");
+        });
+    let test = builder.build_with_streaming_server(&server).await?;
+
+    test.codex
+        .start_or_steer_turn(text_turn_input("initial prompt"))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::AgentMessageContentDelta(_))
+    })
+    .await;
+    test.codex
+        .start_or_steer_turn(text_turn_input("blocked queued prompt"))
+        .await?;
+    let _ = gate_tx.send(());
+    while_gated_stop_hook_runs(test.codex_home_path(), async {
+        match input {
+            InputDuringStopHook::QueueOnlyMail => {
+                test.codex
+                    .submit(Op::InterAgentCommunication {
+                        communication: InterAgentCommunication::new(
+                            AgentPath::try_from("/root/worker").expect("worker path should parse"),
+                            AgentPath::root(),
+                            Vec::new(),
+                            MAIL.to_string(),
+                            /*trigger_turn*/ false,
+                        ),
+                        start_options: Default::default(),
+                    })
+                    .await?;
+                // Ops run in order, so this reply means the mail is already queued.
+                test.codex
+                    .submit(Op::RealtimeConversationListVoices)
+                    .await?;
+                wait_for_event(&test.codex, |event| {
+                    matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
+                })
+                .await;
+            }
+            InputDuringStopHook::BlockedPrompt => {
+                test.codex
+                    .start_or_steer_turn(text_turn_input("blocked queued prompt"))
+                    .await?;
+            }
+        }
+        Ok(())
+    })
+    .await?;
+    let EventMsg::TurnComplete(turn_complete) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await
+    else {
+        unreachable!("wait_for_event returns the matched event");
+    };
+
+    assert_eq!(
+        turn_complete.last_agent_message.as_deref(),
+        Some("first response"),
+        "{input:?} during the Stop hook should keep the finished answer",
+    );
+    assert_eq!(
+        read_stop_hook_inputs(test.codex_home_path())?.len(),
+        1,
+        "the Stop hook should run once",
+    );
+    let requests = server.requests().await;
+    let rollout = fs::read_to_string(test.codex.rollout_path().expect("rollout path"))?;
+    match input {
+        InputDuringStopHook::QueueOnlyMail => {
+            assert_eq!(
+                requests.len(),
+                2,
+                "the answer and post-turn compaction only",
+            );
+            assert!(
+                request_message_input_texts(&requests[1], "user")
+                    .iter()
+                    .any(|text| text.contains(SUMMARIZATION_PROMPT)),
+                "queue-only mail should not cancel post-turn compaction",
+            );
+            assert!(
+                !rollout.contains(MAIL),
+                "queue-only mail should wait for the next turn",
+            );
+        }
+        InputDuringStopHook::BlockedPrompt => {
+            assert_eq!(
+                requests.len(),
+                1,
+                "the second blocked prompt samples nothing"
+            );
+            let hook_prompts = read_user_prompt_submit_hook_inputs(test.codex_home_path())?
+                .iter()
+                .map(|input| {
+                    input["prompt"]
+                        .as_str()
+                        .expect("user prompt submit hook prompt")
+                        .to_string()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                hook_prompts,
+                vec![
+                    "initial prompt".to_string(),
+                    "blocked queued prompt".to_string(),
+                    "blocked queued prompt".to_string(),
+                ],
+            );
+        }
+    }
+    assert!(!rollout.contains("blocked queued prompt"));
+
+    server.shutdown().await;
+    Ok(())
+}
+
+/// Fork: a late tool output injected into the running turn, as a code-mode `notify` result is,
+/// keeps the turn sampling beside a blocked prompt like a standalone tool output does.
+#[tokio::test]
+async fn blocked_queued_prompt_does_not_strand_late_tool_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    const LATE_OUTPUT: &str = "late plan output";
+
+    let plan_arguments = json!({"plan": [{"step": "read", "status": "in_progress"}]}).to_string();
+    let (gate_tx, gate_rx) = oneshot::channel();
+    let tool_chunks = vec![StreamingSseChunk {
+        gate: None,
+        body: sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call("plan-call", "update_plan", &plan_arguments),
+            ev_completed("resp-1"),
+        ]),
+    }];
+    let answer_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_response_created("resp-2")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_message_item_added("msg-2", "")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_output_text_delta("first ")),
+        },
+        StreamingSseChunk {
+            gate: Some(gate_rx),
+            body: sse(vec![
+                ev_message_item_done("msg-2", "first response"),
+                ev_completed("resp-2"),
+            ]),
+        },
+    ];
+    let follow_up_chunks = vec![StreamingSseChunk {
+        gate: None,
+        body: sse(vec![
+            ev_response_created("resp-3"),
+            ev_assistant_message("msg-3", "follow-up handled"),
+            ev_completed("resp-3"),
+        ]),
+    }];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![tool_chunks, answer_chunks, follow_up_chunks]).await;
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_pre_build_hook(|home| {
+            write_user_prompt_submit_hook(home, "blocked queued prompt", BLOCKED_PROMPT_CONTEXT)
+                .expect("failed to write user prompt submit hook test fixture");
+        })
+        .with_config(|config| {
+            trust_discovered_hooks(config);
+            config.update_plan_enabled = true;
+            // Queue the input behind the response, so the answer finishes before the hook runs.
+            config
+                .features
+                .disable(Feature::InstantInterrupt)
+                .expect("disable InstantInterrupt feature");
+        });
+    let test = builder.build_with_streaming_server(&server).await?;
+
+    test.codex
+        .start_or_steer_turn(text_turn_input("initial prompt"))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::AgentMessageContentDelta(_))
+    })
+    .await;
+    test.codex
+        .start_or_steer_turn(text_turn_input("blocked queued prompt"))
+        .await?;
+    let late_output = serde_json::from_value(json!({
+        "type": "function_call_output",
+        "call_id": "plan-call",
+        "output": LATE_OUTPUT,
+    }))?;
+    // Code-mode `notify` delivers its output through the same running-turn injection.
+    test.codex
+        .inject_if_running(vec![late_output])
+        .await
+        .map_err(|_| anyhow::anyhow!("the turn should still be running"))?;
+    let _ = gate_tx.send(());
+    let EventMsg::TurnComplete(turn_complete) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await
+    else {
+        unreachable!("wait_for_event returns the matched event");
+    };
+
+    let requests = server.requests().await;
+    assert_eq!(
+        requests.len(),
+        3,
+        "the late tool output beside the blocked prompt should keep the turn sampling",
+    );
+    let follow_up: Value = serde_json::from_slice(&requests[2])?;
+    assert!(
+        follow_up["input"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|item| item["type"] == "function_call_output" && item["output"] == LATE_OUTPUT),
+        "the follow-up request should carry the late tool output",
+    );
+    assert!(
+        request_message_input_texts(&requests[2], "developer")
+            .contains(&BLOCKED_PROMPT_CONTEXT.to_string()),
+    );
+    assert!(
+        !request_message_input_texts(&requests[2], "user")
+            .contains(&"blocked queued prompt".to_string())
+    );
+    assert_eq!(
+        turn_complete.last_agent_message.as_deref(),
+        Some("follow-up handled"),
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+/// Fork: a prompt blocked while a Stop hook asks to continue must not end the turn before the
+/// model answers the continuation prompt.
+#[tokio::test]
+async fn blocked_prompt_during_stop_hook_continuation_still_samples_the_continuation() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "first response"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "continued response"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            write_user_prompt_submit_and_stop_hooks(
+                home,
+                "blocked queued prompt",
+                BLOCKED_PROMPT_CONTEXT,
+                StopHookFixture::Gated(&[FIRST_CONTINUATION_PROMPT]),
+            )
+            .expect("failed to write user prompt submit and stop hook test fixtures");
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .start_or_steer_turn(text_turn_input("initial prompt"))
+        .await?;
+    while_gated_stop_hook_runs(test.codex_home_path(), async {
+        test.codex
+            .start_or_steer_turn(text_turn_input("blocked queued prompt"))
+            .await?;
+        Ok(())
+    })
+    .await?;
+    let EventMsg::TurnComplete(turn_complete) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await
+    else {
+        unreachable!("wait_for_event returns the matched event");
+    };
+
+    let requests = responses.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "the continuation prompt should be sampled despite the blocked prompt",
+    );
+    assert_eq!(
+        request_hook_prompt_texts(&requests[1]),
+        vec![FIRST_CONTINUATION_PROMPT.to_string()],
+    );
+    assert!(
+        requests[1]
+            .message_input_texts("developer")
+            .contains(&BLOCKED_PROMPT_CONTEXT.to_string()),
+    );
+    assert!(
+        requests[1]
+            .message_input_texts("user")
+            .iter()
+            .all(|text| !text.contains("blocked queued prompt")),
+    );
+    assert_eq!(
+        turn_complete.last_agent_message.as_deref(),
+        Some("continued response"),
+    );
+    let stop_hook_active = read_stop_hook_inputs(test.codex_home_path())?
+        .iter()
+        .map(|input| {
+            input["stop_hook_active"]
+                .as_bool()
+                .expect("stop_hook_active bool")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(stop_hook_active, vec![false, true]);
     Ok(())
 }
 

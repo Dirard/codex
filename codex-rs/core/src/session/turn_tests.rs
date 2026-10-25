@@ -87,7 +87,8 @@ async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
     )
     .await;
 
-    assert!(handled);
+    // Fork: the visible assistant text is the response's terminal answer.
+    assert_eq!(handled, Some(true));
     assert_eq!(
         last_agent_message.as_deref(),
         Some("plan contributed assistant text")

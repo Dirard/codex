@@ -48,6 +48,26 @@ pub enum TurnInput {
     InterAgentCommunication(crate::PendingAgentMessage),
 }
 
+impl TurnInput {
+    /// Fork: whether this input needs a model step of its own, so that a prompt blocked beside
+    /// it cannot end the turn. Tool output, including a late code-mode `notify` result, needs
+    /// one, and so does mail that asks for a turn. Messages such as additional context or hook
+    /// context and queue-only mail only join the next model request.
+    pub(crate) fn needs_model_step(&self) -> bool {
+        match self {
+            TurnInput::UserInput { content, .. } => !content.is_empty(),
+            TurnInput::FunctionCallOutput(_) => true,
+            TurnInput::ResponseItem(envelope) => matches!(
+                envelope.item,
+                ResponseItem::FunctionCallOutput { .. }
+                    | ResponseItem::CustomToolCallOutput { .. }
+                    | ResponseItem::ToolSearchOutput { .. }
+            ),
+            TurnInput::InterAgentCommunication(mail) => mail.trigger_turn,
+        }
+    }
+}
+
 mod turn_input_response_item {
     use super::ResponseItem;
     use super::ResponseItemEnvelope;
@@ -520,6 +540,78 @@ mod tests {
     use codex_protocol::AgentPath;
     use codex_protocol::user_input::UserInput;
     use pretty_assertions::assert_eq;
+
+    /// Fork: the one rule for which input keeps a batch with a blocked prompt going.
+    #[test]
+    fn needs_model_step_covers_prompts_tool_output_and_turn_mail() {
+        let prompt = |content: Vec<UserInput>| TurnInput::UserInput {
+            content,
+            client_id: None,
+            metadata: UserInputMetadata::default(),
+        };
+        let item = |value: serde_json::Value| {
+            ResponseItemEnvelope::new(serde_json::from_value(value).expect("response item"))
+        };
+        let mail = |trigger_turn| {
+            TurnInput::InterAgentCommunication(
+                make_mail(AgentPath::root(), AgentPath::root(), "task", trigger_turn).into(),
+            )
+        };
+        let cases = [
+            (
+                "prompt",
+                prompt(vec![UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: Vec::new(),
+                }]),
+                true,
+            ),
+            ("empty prompt", prompt(Vec::new()), false),
+            (
+                "standalone tool output",
+                TurnInput::FunctionCallOutput(item(serde_json::json!({
+                    "type": "function_call_output", "name": "send", "output": "done",
+                }))),
+                true,
+            ),
+            (
+                "late function output",
+                TurnInput::ResponseItem(item(serde_json::json!({
+                    "type": "function_call_output", "call_id": "call", "output": "done",
+                }))),
+                true,
+            ),
+            (
+                "code-mode notify output",
+                TurnInput::ResponseItem(item(serde_json::json!({
+                    "type": "custom_tool_call_output", "call_id": "call", "name": "exec",
+                    "output": "progress",
+                }))),
+                true,
+            ),
+            (
+                "tool search output",
+                TurnInput::ResponseItem(item(serde_json::json!({
+                    "type": "tool_search_output", "call_id": "call", "execution": "client",
+                    "status": "completed", "tools": [],
+                }))),
+                true,
+            ),
+            (
+                "additional context",
+                TurnInput::ResponseItem(item(serde_json::json!({
+                    "type": "message", "role": "developer",
+                    "content": [{"type": "input_text", "text": "context"}],
+                }))),
+                false,
+            ),
+            ("mail that asks for a turn", mail(true), true),
+            ("queue-only mail", mail(false), false),
+        ];
+        for (name, input, expected) in cases {
+            assert_eq!(input.needs_model_step(), expected, "{name}");
+        }
+    }
 
     #[test_case::test_case("ResponseItem", TurnInput::ResponseItem)]
     #[test_case::test_case("FunctionCallOutput", TurnInput::FunctionCallOutput)]

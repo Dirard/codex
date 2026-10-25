@@ -90,12 +90,13 @@ pub(crate) async fn record_completed_response_item(
     .await;
 }
 
+/// Fork: returns whether the item is the response's terminal answer, which defers mail.
 pub(crate) async fn record_completed_response_item_with_finalized_facts(
     sess: &Session,
     step_context: &StepContext,
     item: &ResponseItem,
     finalized_facts: Option<&FinalizedTurnItemFacts>,
-) {
+) -> bool {
     let turn_context = &step_context.turn;
     sess.record_conversation_items(
         turn_context,
@@ -153,6 +154,7 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
         sess.record_memory_citation_for_turn(&turn_context.sub_id)
             .await;
     }
+    defers_mailbox_delivery
 }
 
 fn response_item_may_include_external_context(item: &ResponseItem) -> bool {
@@ -224,6 +226,8 @@ pub(crate) struct OutputItemResult {
     pub last_agent_message: Option<String>,
     pub needs_follow_up: bool,
     pub tool_future: Option<InFlightFuture<'static>>,
+    /// Fork: the item is the response's terminal answer.
+    pub terminal_answer: bool,
 }
 
 pub(crate) struct HandleOutputCtx {
@@ -402,7 +406,7 @@ pub(crate) async fn handle_output_item_done(
                     .emit_turn_item_completed(&ctx.step_context.turn, finalized_turn_item.turn_item)
                     .await;
             }
-            record_completed_response_item_with_finalized_facts(
+            output.terminal_answer = record_completed_response_item_with_finalized_facts(
                 ctx.sess.as_ref(),
                 ctx.step_context.as_ref(),
                 &item,

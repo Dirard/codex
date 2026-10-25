@@ -177,6 +177,7 @@ pub(crate) async fn run_turn(
     mcp_startup_requirements: &mut McpStartupRequirements,
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
+    previous_agent_message: Option<String>,
 ) -> CodexResult<Option<String>> {
     let auto_compaction_enabled = sess
         .services
@@ -452,7 +453,9 @@ pub(crate) async fn run_turn(
     }
     track_turn_resolved_config_analytics(&sess, &first_step_context, &input).await;
 
-    let mut last_agent_message: Option<String> = None;
+    // Fork: start from the answer of an earlier pass of this task, so a pass that samples
+    // nothing does not erase it.
+    let mut last_agent_message: Option<String> = previous_agent_message;
     let mut consecutive_compactions_without_progress = 0usize;
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
@@ -608,7 +611,11 @@ pub(crate) async fn run_turn(
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
                     made_progress,
+                    answered,
                 } = sampling_request_output;
+                // Fork: a user-input preemption after the terminal answer leaves the model
+                // nothing to redo; only the queued input decides whether the turn goes on.
+                let model_needs_follow_up = model_needs_follow_up && !answered;
                 model_follow_up_pending = model_needs_follow_up;
                 if made_progress {
                     consecutive_compactions_without_progress = 0;
@@ -767,16 +774,28 @@ pub(crate) async fn run_turn(
                         .get_pending_input(&sess.active_turn)
                         .await
                         .0;
-                    let blocked = run_hooks_and_record_inputs(
-                        &sess,
-                        &turn_context,
-                        &turn_context.capture_current_model_info(),
-                        &pending_input,
-                        PersistContext::SteeredUserInput,
-                    )
-                    .await;
+                    // Fork: an empty drain, such as a stale mailbox signal, leaves nothing to sample.
+                    let blocked = pending_input.is_empty()
+                        || run_hooks_and_record_inputs(
+                            &sess,
+                            &turn_context,
+                            &turn_context.capture_current_model_info(),
+                            &pending_input,
+                            PersistContext::SteeredUserInput,
+                        )
+                        .await;
                     if !blocked {
                         accepted_pending_input = Some(pending_input);
+                    } else if answered {
+                        // Fork: the queued input kept mailbox delivery open past the terminal
+                        // answer. Close it as that answer would have, so queue-only mail that
+                        // arrives while the turn completes waits for the next turn.
+                        sess.input_queue
+                            .defer_mailbox_delivery_to_next_turn(
+                                &sess.active_turn,
+                                &turn_context.sub_id,
+                            )
+                            .await;
                     }
                     !blocked
                 } else {
@@ -1028,15 +1047,8 @@ pub(crate) async fn run_hooks_and_record_inputs(
                 // Prompt telemetry can contain the full text, so emit it only after hooks accept it.
                 turn_context.session_telemetry.user_prompt(content);
             }
-            // Fork: a standalone tool output or mail that asks for a turn needs the model as
-            // much as a prompt does. Additional context and queue-only mail join the next
-            // request instead, so beside a blocked prompt they do not keep the turn going.
-            if match input_item {
-                TurnInput::UserInput { content, .. } => !content.is_empty(),
-                TurnInput::FunctionCallOutput(_) => true,
-                TurnInput::InterAgentCommunication(mail) => mail.trigger_turn,
-                TurnInput::ResponseItem(_) => false,
-            } {
+            // Fork: input that needs a model step keeps a batch with a blocked prompt going.
+            if input_item.needs_model_step() {
                 accepted_turn_input = true;
             }
             // Tool outputs retain their durability barrier, including in mixed input batches.
@@ -1920,6 +1932,7 @@ async fn run_sampling_request(
                     needs_follow_up: true,
                     last_agent_message: None,
                     made_progress: false,
+                    answered: false,
                 },
                 std::mem::take(original_input),
             ));
@@ -2068,6 +2081,10 @@ struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
     made_progress: bool,
+    /// Fork: the response ended with its terminal answer and owes no tool output,
+    /// continuation or mail delivery. A user-input preemption after that answer leaves the
+    /// model nothing to redo.
+    answered: bool,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -2605,7 +2622,8 @@ async fn emit_turn_item_in_plan_mode(
     }
 }
 
-/// Handle a completed assistant response item in plan mode, returning true if handled.
+/// Handle a completed assistant response item in plan mode, returning `Some` if handled.
+/// Fork: the value says whether the item was the terminal answer.
 async fn handle_assistant_item_done_in_plan_mode(
     sess: &Session,
     step_context: &StepContext,
@@ -2614,7 +2632,7 @@ async fn handle_assistant_item_done_in_plan_mode(
     state: &mut PlanModeStreamState,
     previously_active_item: Option<&TurnItem>,
     last_agent_message: &mut Option<String>,
-) -> bool {
+) -> Option<bool> {
     let turn_context = &step_context.turn;
     if let ResponseItem::Message { role, .. } = item
         && role == "assistant"
@@ -2644,7 +2662,7 @@ async fn handle_assistant_item_done_in_plan_mode(
             .as_ref()
             .and_then(|facts| facts.last_agent_message.clone());
 
-        record_completed_response_item_with_finalized_facts(
+        let terminal_answer = record_completed_response_item_with_finalized_facts(
             sess,
             step_context,
             item,
@@ -2654,9 +2672,9 @@ async fn handle_assistant_item_done_in_plan_mode(
         if let Some(agent_message) = final_last_agent_message {
             *last_agent_message = Some(agent_message);
         }
-        return true;
+        return Some(terminal_answer);
     }
-    false
+    None
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -2839,6 +2857,10 @@ async fn try_run_sampling_request(
     }
     let mut in_flight: FuturesOrdered<InFlightFuture<'static>> = FuturesOrdered::new();
     let mut needs_follow_up = false;
+    // Fork: whether the latest output item is the terminal answer, and whether the model
+    // still owes a step of its own (tool output, continuation, mail delivery).
+    let mut final_answer = false;
+    let mut model_owes_step = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
     let mut active_tool_argument_diff_consumer: Option<(
@@ -2913,6 +2935,7 @@ async fn try_run_sampling_request(
                     needs_follow_up: true,
                     last_agent_message,
                     made_progress,
+                    answered: final_answer && !model_owes_step,
                 });
             }
             Err(_) => break Err(CodexErr::TurnAborted),
@@ -2949,6 +2972,7 @@ async fn try_run_sampling_request(
                         needs_follow_up: true,
                         made_progress: last_agent_message.is_some(),
                         last_agent_message,
+                        answered: false,
                     });
                 }
                 break Err(err);
@@ -3014,7 +3038,7 @@ async fn try_run_sampling_request(
                     .await;
                 }
                 if let Some(state) = plan_mode_state.as_mut()
-                    && handle_assistant_item_done_in_plan_mode(
+                    && let Some(terminal_answer) = handle_assistant_item_done_in_plan_mode(
                         &sess,
                         &step_context,
                         turn_store.as_ref(),
@@ -3025,6 +3049,7 @@ async fn try_run_sampling_request(
                     )
                     .await
                 {
+                    final_answer = terminal_answer;
                     continue;
                 }
 
@@ -3084,6 +3109,8 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
+                final_answer = output_result.terminal_answer;
+                model_owes_step |= output_result.needs_follow_up;
                 // Hosts can keep the current response intact and deliver mail before the next
                 // model request instead of cutting off its remaining tool calls.
                 if preempt_for_mailbox_mail
@@ -3112,16 +3139,19 @@ async fn try_run_sampling_request(
                         // Further item boundaries must not drop the stream while it drains.
                         *draining_for_mailbox = true;
                         needs_follow_up = true;
+                        model_owes_step = true;
                         continue;
                     }
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
                         made_progress: last_agent_message.is_some(),
                         last_agent_message,
+                        answered: false,
                     });
                 }
             }
             ResponseEvent::OutputItemAdded(mut item) => {
+                final_answer = false;
                 assign_missing_streamed_response_item_id(&mut item, /*active_item*/ None);
                 sess.reserve_assistant_message_order(&turn_context, &item)
                     .await;
@@ -3307,11 +3337,13 @@ async fn try_run_sampling_request(
                 }
                 if let Some(false) = end_turn {
                     needs_follow_up = true;
+                    model_owes_step = true;
                 }
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     made_progress: last_agent_message.is_some(),
                     last_agent_message,
+                    answered: final_answer && !model_owes_step,
                 });
             }
             ResponseEvent::OutputTextDelta(delta) => {

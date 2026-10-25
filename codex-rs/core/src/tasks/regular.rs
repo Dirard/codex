@@ -100,14 +100,17 @@ impl SessionTask for RegularTask {
         let mut next_input = input;
         let mut prewarmed_client_session = prewarmed_client_session;
         let mut mcp_startup_requirements = McpStartupRequirements::default();
+        // Fork: a repeat that samples nothing keeps the answer of the pass before it.
+        let mut last_agent_message = None;
         loop {
-            let last_agent_message = run_turn(
+            last_agent_message = run_turn(
                 Arc::clone(&sess),
                 Arc::clone(&ctx),
                 next_input,
                 &mut mcp_startup_requirements,
                 prewarmed_client_session.take(),
                 cancellation_token.child_token(),
+                last_agent_message,
             )
             .instrument(run_turn_span.clone())
             .await?;

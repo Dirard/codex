@@ -774,3 +774,78 @@ async fn agent_mail_wakes_completed_root_when_enabled(
     assert!(controller.mail.lock().expect("mail lock").is_empty());
     Ok(())
 }
+
+/// Fork: a host mailbox signal without unread mail must not make a finished turn sample again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stale_host_mailbox_signal_does_not_resample_a_finished_turn() -> anyhow::Result<()> {
+    use core_test_support::streaming_sse::StreamingSseChunk;
+    use core_test_support::streaming_sse::start_streaming_sse_server;
+
+    skip_if_no_network!(Ok(()));
+    let (gate_tx, gate_rx) = tokio::sync::oneshot::channel();
+    // A response without a final answer leaves mailbox delivery open for the current turn.
+    let first_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![responses::ev_response_created("resp-1")]),
+        },
+        StreamingSseChunk {
+            gate: Some(gate_rx),
+            body: responses::sse(vec![responses::ev_completed("resp-1")]),
+        },
+    ];
+    let resample_chunks = vec![StreamingSseChunk {
+        gate: None,
+        body: responses::sse(vec![
+            responses::ev_response_created("resp-2"),
+            responses::ev_assistant_message("msg-2", "unexpected resample"),
+            responses::ev_completed("resp-2"),
+        ]),
+    }];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, resample_chunks]).await;
+    let thread_id = ThreadId::new();
+    let controller = Arc::new(TestAgentControl::new(thread_id));
+    let test = test_codex()
+        .with_thread_manager({
+            let controller = Arc::clone(&controller);
+            move |manager| {
+                manager
+                    .with_thread_id_generator(move || thread_id)
+                    .with_agent_control_factory(move |_| {
+                        let control: Arc<dyn AgentControl> = controller.clone();
+                        async move { Ok(control) }
+                    })
+            }
+        })
+        .build_with_streaming_server(&server)
+        .await?;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "answer briefly".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        server.wait_for_request_count(1),
+    )
+    .await
+    .context("the turn should send its first request")?;
+    // The host reports unread mail, but take_mailbox finds none.
+    controller.mailbox_state.send_replace(true);
+    let _ = gate_tx.send(());
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(
+        server.requests().await.len(),
+        1,
+        "an empty drain should not sample again",
+    );
+    server.shutdown().await;
+    Ok(())
+}
