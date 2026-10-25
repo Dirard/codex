@@ -151,7 +151,26 @@ target_dir() {
 }
 
 cargo_rs() {
+  repair_rusty_v8_build_cache
   (cd "${rust_dir}" && cargo "$@")
+}
+
+# The v8 build script extracts librusty_v8.a into <target>/<profile>/gn_out, beside
+# the profile's build/, .fingerprint/ and deps/ directories, which are the only ones
+# rust-cache keeps. A restored cache then holds a finished build-script run without
+# its library: cargo skips the script and linking v8 fails. Forget such runs so the
+# script extracts RUSTY_V8_ARCHIVE again.
+repair_rusty_v8_build_cache() {
+  local target output dir profile
+  target="$(target_dir)"
+  for output in "${target}"/*/build/v8-*/output; do
+    [[ -f "${output}" ]] || continue
+    dir="$(sed -n 's/^cargo:rustc-link-search=\(native=\)\{0,1\}//p' "${output}" | head -n 1)"
+    [[ -n "${dir}" && ! -f "${dir}/librusty_v8.a" ]] || continue
+    profile="${output%/build/*}"
+    log "rusty_v8: ${dir}/librusty_v8.a is missing; rerunning the v8 build script in ${profile##*/}"
+    rm -rf "${profile}"/build/v8-* "${profile}"/.fingerprint/v8-*
+  done
 }
 
 # Exports tool locations that would otherwise follow HOME.
@@ -368,6 +387,7 @@ cmd_rust_test() {
     # As in fork-ci.yml: error values must not capture backtraces, because tests
     # compare their Debug output; panics still honour RUST_BACKTRACE.
     export RUST_LIB_BACKTRACE=0
+    repair_rusty_v8_build_cache
     run_isolated cargo "${nextest_args[@]}" "${extra[@]}"
   ) || status=$?
 

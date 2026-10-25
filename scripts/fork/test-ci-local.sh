@@ -423,5 +423,30 @@ auth_state TestAuthFixtureDeviceCodeFlow
 STUB_UNAME=Darwin check go-auth-linux-only fail 'Linux-only' "${ci_local}" go-auth-fixture
 expect go-auth-linux-only-runs-nothing calls_lack '^go test'
 
+# --- rusty_v8: a cached build-script run without its static library --------
+
+STUB_STATE="$(new_state)"
+export STUB_STATE
+v8_target="${STUB_STATE}/target"
+mkdir -p "${v8_target}/debug/build/v8-run1" "${v8_target}/debug/build/v8-script1" \
+  "${v8_target}/debug/.fingerprint/v8-run1" "${v8_target}/debug/.fingerprint/codex-core-1"
+printf 'cargo:rustc-link-lib=static=rusty_v8\ncargo:rustc-link-search=%s\n' \
+  "${v8_target}/debug/gn_out/obj" >"${v8_target}/debug/build/v8-run1/output"
+check rusty-v8-missing-lib-repaired ok 'librusty_v8\.a is missing' "${ci_local}" rust-helpers
+expect rusty-v8-build-dirs-removed test ! -e "${v8_target}/debug/build/v8-run1"
+expect rusty-v8-fingerprint-removed test ! -e "${v8_target}/debug/.fingerprint/v8-run1"
+expect rusty-v8-other-fingerprints-kept test -d "${v8_target}/debug/.fingerprint/codex-core-1"
+
+STUB_STATE="$(new_state)"
+export STUB_STATE
+v8_target="${STUB_STATE}/target"
+mkdir -p "${v8_target}/debug/build/v8-run1" "${v8_target}/debug/gn_out/obj" "${v8_target}/debug/.fingerprint/v8-run1"
+: >"${v8_target}/debug/gn_out/obj/librusty_v8.a"
+printf 'cargo:rustc-link-search=native=%s\n' "${v8_target}/debug/gn_out/obj" \
+  >"${v8_target}/debug/build/v8-run1/output"
+check rusty-v8-present-lib-kept ok 'build test helpers' "${ci_local}" rust-helpers
+expect rusty-v8-present-build-kept test -f "${v8_target}/debug/build/v8-run1/output"
+expect rusty-v8-present-fingerprint-kept test -d "${v8_target}/debug/.fingerprint/v8-run1"
+
 echo "ci-local.sh self-test: ${passed} passed, ${failures} failed"
 [[ ${failures} -eq 0 ]]
