@@ -16,6 +16,14 @@ import (
 	internaljsonrpc "github.com/openai/codex/sdk/go/internal/jsonrpc"
 )
 
+const (
+	authFixtureAccountID = "account-123"
+	// Workspace routing changes only the origin of Responses requests, which
+	// these tests do not send. A reserved .invalid host keeps a future turn
+	// test from sending fixture tokens to a real backend.
+	authFixtureWorkspaceOrigin = "https://workspace.invalid"
+)
+
 type authFixtureRequest struct {
 	key           string
 	backend       bool
@@ -49,7 +57,7 @@ func (f *authHTTPFixture) handle(w http.ResponseWriter, r *http.Request) {
 		f.requests = append(f.requests, authFixtureRequest{
 			key:           r.Method + " " + r.URL.Path,
 			backend:       isBackend,
-			authenticated: strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") && r.Header.Get("ChatGPT-Account-ID") == "account-123",
+			authenticated: strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") && r.Header.Get("ChatGPT-Account-ID") == authFixtureAccountID,
 		})
 		f.mu.Unlock()
 	}
@@ -73,6 +81,16 @@ func (f *authHTTPFixture) handle(w http.ResponseWriter, r *http.Request) {
 			"id_token":      authFixtureIDToken(),
 			"access_token":  "fixture-access-token",
 			"refresh_token": "fixture-refresh-token",
+		})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/codex/accounts/check":
+		// Workspace routing discovery: the app-server reads it after a ChatGPT
+		// login and fails the login without it.
+		writeAuthFixtureJSON(w, map[string]any{
+			"accounts": []any{map[string]any{
+				"id":                       authFixtureAccountID,
+				"workspace_backend_origin": authFixtureWorkspaceOrigin,
+				"account_routing_override": "NO_CONSTRAINT",
+			}},
 		})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/codex/profiles/me":
 		writeAuthFixtureJSON(w, map[string]any{

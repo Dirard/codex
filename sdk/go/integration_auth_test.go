@@ -48,11 +48,34 @@ func TestAuthFixtureFakeAPIKeyLogin(t *testing.T) {
 func TestAuthFixtureDeviceCodeFlow(t *testing.T) {
 	client, fixture, _ := newAuthFixtureClient(t)
 	completeAuthFixtureDeviceLogin(t, client)
+
+	response, err := client.Accounts.Read(authFixtureContext(t), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, ok := response.Account.Value()
+	if !ok {
+		t.Fatal("account/read did not observe the device-code login")
+	}
+	if email, _ := account.Email.Value(); account.TypeValue != "chatgpt" || email != "fixture@example.test" {
+		t.Fatalf("account = type %q email %q, want the fixture ChatGPT account", account.TypeValue, email)
+	}
+	routing, ok := response.WorkspaceRouting.Value()
+	want := protocol.WorkspaceRouting{
+		AccountRoutingOverride: protocol.AccountRoutingOverrideNoConstraint,
+		BackendOrigin:          authFixtureWorkspaceOrigin,
+		ChatgptAccountID:       authFixtureAccountID,
+	}
+	if !ok || routing != want {
+		t.Fatalf("workspace routing = %#v (set %v), want %#v", routing, ok, want)
+	}
 	fixture.assertRequested(t, map[string]int{
 		"POST /api/accounts/deviceauth/usercode": 1,
 		"POST /api/accounts/deviceauth/token":    1,
 		"POST /oauth/token":                      1,
+		"GET /api/codex/accounts/check":          1,
 	})
+	fixture.assertBackendRequestsAuthenticated(t)
 }
 
 func TestAuthFixtureUsageAndRateLimitRead(t *testing.T) {
