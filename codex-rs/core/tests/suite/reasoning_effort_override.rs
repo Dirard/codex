@@ -570,10 +570,12 @@ async fn reasoning_effort_override_capacity_retry_keeps_latest_adjacent_update()
         responses::sse(vec![responses::ev_completed("first")]),
     )
     .await;
-    // Fork: unadvised overloads get at least three retries even with zero stream retries.
-    let overloaded = ResponseTemplate::new(503)
-        .set_body_json(serde_json::json!({"error": {"code": "server_is_overloaded"}}));
-    let failed = responses::mount_response_sequence(&server, vec![overloaded; 4]).await;
+    let failed = responses::mount_response_once(
+        &server,
+        ResponseTemplate::new(503)
+            .set_body_json(serde_json::json!({"error": {"code": "server_is_overloaded"}})),
+    )
+    .await;
     let retried = responses::mount_sse_once(
         &server,
         responses::sse(vec![responses::ev_completed("retried")]),
@@ -632,12 +634,7 @@ async fn reasoning_effort_override_capacity_retry_keeps_latest_adjacent_update()
     })
     .await;
     let request = retried.single_request();
-    let failed_requests = failed.requests();
-    assert_eq!(failed_requests.len(), 4);
-    let mut expected = failed_requests
-        .last()
-        .expect("final overload attempt")
-        .input();
+    let mut expected = failed.single_request().input();
     assert_eq!(expected.pop(), Some(effort_update(ReasoningEffort::High)));
     expected.push(effort_update(ReasoningEffort::Medium));
     assert_eq!(request.input(), expected);

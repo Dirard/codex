@@ -4034,22 +4034,12 @@ async fn server_overloaded_uses_independent_retry_budget() -> anyhow::Result<()>
                 "server_is_overloaded",
                 "Selected model is at capacity. Please try different model.",
             ),
-            sse_failed(
-                "resp-overloaded-2",
-                "server_is_overloaded",
-                "Selected model is at capacity. Please try different model.",
-            ),
-            sse_failed(
-                "resp-overloaded-3",
-                "server_is_overloaded",
-                "Selected model is at capacity. Please try different model.",
-            ),
             sse(vec![
                 ev_response_created("resp-first-success"),
                 ev_completed("resp-first-success"),
             ]),
             sse_failed(
-                "resp-overloaded-4",
+                "resp-overloaded-2",
                 "server_is_overloaded",
                 "Selected model is at capacity. Please try different model.",
             ),
@@ -4059,9 +4049,9 @@ async fn server_overloaded_uses_independent_retry_budget() -> anyhow::Result<()>
                 "temporary stream failure",
             ),
             sse_failed(
-                "resp-generic-after-2",
-                "server_error",
-                "temporary stream failure",
+                "resp-overloaded-3",
+                "server_is_overloaded",
+                "Selected model is at capacity. Please try different model.",
             ),
         ],
     )
@@ -4078,7 +4068,9 @@ async fn server_overloaded_uses_independent_retry_budget() -> anyhow::Result<()>
     test.submit_turn("first").await?;
     test.submit_turn("second").await?;
 
-    assert_eq!(responses_mock.requests().len(), 8);
+    // Each turn spends one retry from each budget. The explicit overload budget has no
+    // capacity floor, so the second turn's next overload is terminal.
+    assert_eq!(responses_mock.requests().len(), 6);
     Ok(())
 }
 

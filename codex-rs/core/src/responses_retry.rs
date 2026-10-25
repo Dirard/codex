@@ -22,6 +22,19 @@ use tracing::warn;
 
 const INITIAL_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(5);
 const MAX_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(60);
+/// Fork capacity floor for `ServerOverloaded` when the provider keeps its default retries.
+const SERVER_OVERLOADED_RETRY_FLOOR: u64 = 3;
+
+/// Retries allowed for `ServerOverloaded` on its independent counter. Only the provider
+/// default is raised to the fork floor; an explicit `stream_max_retries` is honored as
+/// configured (after per-request caps), so an explicit zero fails fast.
+fn server_overloaded_max_retries(max_retries: u64, configured_stream_retries: Option<u64>) -> u64 {
+    if configured_stream_retries.is_some() {
+        max_retries
+    } else {
+        max_retries.max(SERVER_OVERLOADED_RETRY_FLOOR)
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ResponsesStreamRequest {
@@ -91,7 +104,10 @@ pub(crate) async fn handle_response_stream_error(
     let (retries, max_retries) = if matches!(err.details(), CodexErrorDetails::ServerOverloaded) {
         (
             &mut retry_state.server_overloaded_retries,
-            max_retries.max(3),
+            server_overloaded_max_retries(
+                max_retries,
+                turn_context.provider.info().stream_max_retries,
+            ),
         )
     } else {
         (&mut retry_state.retries, max_retries)

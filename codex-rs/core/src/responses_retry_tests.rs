@@ -2,6 +2,7 @@ use super::ResponsesStreamRequest;
 use super::ResponsesStreamRetryState;
 use super::handle_response_stream_error;
 use super::log_retry;
+use super::server_overloaded_max_retries;
 use crate::realtime_history::RealtimeHistoryState;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
@@ -12,6 +13,26 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tracing_test::internal::MockWriter;
+
+/// The capacity floor only raises the provider default; explicit budgets, including zero,
+/// stay as configured after per-request caps.
+#[test]
+fn server_overloaded_floor_applies_only_to_default() {
+    for (max_retries, configured, expected) in [
+        (5, None, 5),
+        (2, None, 3),
+        (0, None, 3),
+        (0, Some(0), 0),
+        (2, Some(4), 2),
+        (4, Some(4), 4),
+    ] {
+        assert_eq!(
+            server_overloaded_max_retries(max_retries, configured),
+            expected,
+            "max_retries={max_retries} configured={configured:?}"
+        );
+    }
+}
 
 #[tokio::test]
 async fn sampling_retry_logs_stream_error_context() {

@@ -500,11 +500,11 @@ async fn exhausted_http_retries_preserve_deadline_through_error_mapping() {
 }
 
 /// Retry advice changes delays but never extends either retry budget or its displayed count.
-#[test_case::test_case(None, 2, 3; "without_advice")]
+// Fork: headerless overloads also retry with backoff within an explicit stream budget.
+#[test_case::test_case(None, 2, 9; "without_advice")]
 #[test_case::test_case(Some("0"), 0, 3; "advice_without_stream_retries")]
 #[test_case::test_case(Some("0"), 2, 9; "advice_with_stream_retries")]
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "fork retries server overloads at least three times"]
 async fn responses_http_overload_respects_retry_limits(
     retry_after: Option<&str>,
     stream_max_retries: u64,
@@ -564,13 +564,10 @@ async fn responses_http_overload_respects_retry_limits(
     .expect("overload retries should finish the turn within 10 seconds");
 
     assert_eq!(error_events, 1);
-    let expected_messages = if retry_after.is_some() {
-        (1..=stream_max_retries)
-            .map(|retry| format!("Reconnecting... {retry}/{stream_max_retries}"))
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
+    // Fork: headerless overloads report their stream retries like advised ones.
+    let expected_messages = (1..=stream_max_retries)
+        .map(|retry| format!("Reconnecting... {retry}/{stream_max_retries}"))
+        .collect::<Vec<_>>();
     assert_eq!(reconnect_messages, expected_messages);
     let request_count = server
         .received_requests()
@@ -941,7 +938,6 @@ async fn compact_v2_rate_limit_uses_server_advice(
 
 /// Headerless remote compaction v2 overloads exhaust request retries before one terminal error.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "fork retries server overloads at least three times"]
 async fn compact_v2_overload_without_retry_after_exhausts_request_retries() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -967,7 +963,8 @@ async fn compact_v2_overload_without_retry_after_exhausts_request_retries() -> R
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.model_provider.request_max_retries = Some(2);
-            config.model_provider.stream_max_retries = Some(2);
+            // Fork: overloads retry within an explicit stream budget; zero keeps them terminal.
+            config.model_provider.stream_max_retries = Some(0);
         })
         .build_with_auto_env(&server)
         .await?;
@@ -1274,7 +1271,6 @@ async fn sse_failure_uses_server_advice(
 
 /// A streamed backend overload remains terminal despite an enclosing retry header.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "fork retries server overloads at least three times"]
 async fn sse_overload_with_retry_after_is_terminal() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1293,7 +1289,8 @@ async fn sse_overload_with_retry_after_is_terminal() -> Result<()> {
     let test = test_codex()
         .with_config(|config| {
             config.model_provider.request_max_retries = Some(2);
-            config.model_provider.stream_max_retries = Some(2);
+            // Fork: overloads retry within an explicit stream budget; zero keeps them terminal.
+            config.model_provider.stream_max_retries = Some(0);
         })
         .build_with_auto_env(&server)
         .await?;
@@ -1348,7 +1345,6 @@ async fn sse_overload_with_retry_after_is_terminal() -> Result<()> {
 
 /// A streamed backend overload without retry advice must complete with one terminal error.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "fork retries server overloads at least three times"]
 async fn sse_overload_without_retry_after_is_terminal() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1366,7 +1362,8 @@ async fn sse_overload_without_retry_after_is_terminal() -> Result<()> {
     let test = test_codex()
         .with_config(|config| {
             config.model_provider.request_max_retries = Some(2);
-            config.model_provider.stream_max_retries = Some(2);
+            // Fork: overloads retry within an explicit stream budget; zero keeps them terminal.
+            config.model_provider.stream_max_retries = Some(0);
         })
         .build_with_auto_env(&server)
         .await?;
@@ -1866,18 +1863,15 @@ async fn websocket_upgrade_rejection_uses_retry_after() -> Result<()> {
     submit_user_input(&test, "retry the rejected websocket upgrade").await?;
     wait_for_turn_completion(&test).await;
 
-    // All four WebSocket advice deadlines apply, including the one before transport fallback.
-    assert!(start.elapsed() >= Duration::from_secs(4));
+    // Both WebSocket advice deadlines apply, including the one before transport fallback.
+    assert!(start.elapsed() >= Duration::from_secs(2));
     let requests = server.received_requests().await.unwrap_or_default();
     let methods = requests
         .iter()
         .filter(|request| request.url.path() == "/v1/responses")
         .map(|request| request.method.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(
-        methods,
-        vec!["GET", "GET", "GET", "GET", "GET", "POST", "POST"]
-    );
+    assert_eq!(methods, vec!["GET", "GET", "GET", "POST", "POST"]);
     assert_eq!(response_mock.requests().len(), 2);
     Ok(())
 }
@@ -2150,7 +2144,6 @@ async fn websocket_overload_retries_only_while_it_has_retry_after() -> Result<()
 
 /// Headerless websocket overloads must neither reconnect nor fall back to HTTP.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "fork retries server overloads at least three times"]
 async fn websocket_overload_without_retry_after_is_terminal() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2176,7 +2169,8 @@ async fn websocket_overload_without_retry_after_is_terminal() -> Result<()> {
             config.model_catalog =
                 Some(bundled_models_response().expect("bundled models.json should parse"));
             config.model_provider.request_max_retries = Some(2);
-            config.model_provider.stream_max_retries = Some(2);
+            // Fork: overloads retry within an explicit stream budget; zero keeps them terminal.
+            config.model_provider.stream_max_retries = Some(0);
         })
         .build_with_websocket_server(&server)
         .await?;
