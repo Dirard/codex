@@ -181,6 +181,30 @@ pub(crate) fn soft_headroom_accepts(
         && status.active_context_tokens < current_context_tokens
 }
 
+/// Fail-fast lower bound before paying for a foreground compaction: every candidate carries
+/// the base instructions and the tool declarations, so when they alone reach the full context
+/// window no summary can be installed. Returns that lower bound when it does.
+pub(crate) fn mandatory_request_overflows_window(
+    step_context: &StepContext,
+    base_instructions: &BaseInstructions,
+) -> Option<i64> {
+    if !enforces_compaction_headroom(&step_context.turn.session_source) {
+        return None;
+    }
+    let mandatory_tokens = i64::try_from(approx_token_count(&base_instructions.text))
+        .unwrap_or(i64::MAX)
+        .saturating_add(tool_declaration_tokens(step_context));
+    let turn = &step_context.turn;
+    context_window_token_status_for_usage(
+        turn.config.as_ref(),
+        turn.model_info().as_ref(),
+        mandatory_tokens,
+        /*auto_compact_window_prefill_tokens*/ None,
+    )
+    .full_context_window_limit_reached
+    .then_some(mandatory_tokens)
+}
+
 pub(crate) fn compaction_candidate_overflow(
     status: &crate::session::context_window::ContextWindowTokenStatus,
     scope: AutoCompactTokenLimitScope,

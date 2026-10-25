@@ -1688,6 +1688,48 @@ async fn remote_compact_v2_soft_headroom_without_progress_stops_the_turn() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_auto_compact_v2_fails_fast_when_tools_exceed_context_window() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    // Base instructions and tool declarations alone exceed this window, so no candidate can
+    // ever fit and an automatic compaction request would be paid for nothing.
+    let harness = TestCodexHarness::with_builder(remote_v2_test_codex(
+        /*context_window*/ 1_000, /*effective_context_window_percent*/ 100,
+    ))
+    .await?;
+    let codex = harness.test().codex.clone();
+    let mut at_limit = responses::ev_completed_with_tokens("sample-1", /*total_tokens*/ 1_000);
+    at_limit["response"]["end_turn"] = json!(false);
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![responses::sse(vec![
+            responses::ev_response_created("sample-1"),
+            at_limit,
+        ])],
+    )
+    .await;
+
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "hopeless window".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let error = wait_for_event_match(&codex, |event| match event {
+        EventMsg::Error(error) => Some(error.codex_error_info.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_turn_complete(&codex).await;
+
+    assert_eq!(error, Some(CodexErrorInfo::ContextWindowExceeded));
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(!is_compact_request(&requests[0]));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_without_progress_stops_after_two_retries() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

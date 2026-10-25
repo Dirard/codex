@@ -2,7 +2,7 @@
 //! A rejected or still-over-budget prepared result may fall back to one foreground request.
 //! Prepared prefixes are validated by the history replacement primitive before mutation.
 //! A foreground summary-only candidate without headroom is installed with a warning when it
-//! fits the window and shrinks the context.
+//! fits the window and shrinks the context; a hopeless automatic request is never sent.
 
 use super::*;
 use crate::compact::assemble_compaction_history;
@@ -150,6 +150,21 @@ async fn build_and_install_compaction(
             )),
         )
     } else {
+        // Automatic compaction retries every turn, so it must not pay for a request that
+        // cannot fit. An explicit `/compact` still sends it, as upstream.
+        let base_instructions = sess.get_base_instructions().await;
+        if matches!(compaction_metadata.trigger(), CompactionTrigger::Auto)
+            && let Some(mandatory_tokens) =
+                mandatory_request_overflows_window(replacement_step_context, &base_instructions)
+        {
+            warn!(
+                turn_id = %turn_context.sub_id,
+                mandatory_tokens,
+                "instructions and tool declarations alone exceed the context window; \
+                 skipping a compaction that cannot fit"
+            );
+            return Err(CodexErr::ContextWindowExceeded);
+        }
         let attempt = run_remote_compact_v2_attempt(
             sess,
             step_context,
