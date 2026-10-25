@@ -1,35 +1,85 @@
 name: fork-rust-release
 
+# Builds the fork runtime packages for one exact commit, verifies them, runs
+# fork-ci on the same commit, and stages a draft GitHub release. Tags and
+# publication stay manual: the draft job summary lists the commands.
 on:
-  # Tags identify verified releases; build packages once before creating them.
   workflow_dispatch:
     inputs:
       release_version:
-        description: Release version without the rust-v prefix
+        description: Release version without the rust-v prefix (must match codex-rs/Cargo.toml)
         required: true
         type: string
       checkout_ref:
-        description: Git ref or commit to build
+        description: Full 40-character commit SHA to build
         required: true
-        default: codex/fork
         type: string
       build_matrix:
-        description: Optional JSON array of runner and target pairs
+        description: Optional JSON array of runner and target pairs (a partial matrix never creates a draft)
         required: false
         type: string
+      create_draft:
+        description: Create a draft release after the packages pass verification
+        required: false
+        default: true
+        type: boolean
+      require_ci:
+        description: Create the draft only when fork-ci passes for the commit
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: fork-rust-release-${{ inputs.release_version || github.ref_name }}
+  group: fork-rust-release-${{ inputs.release_version }}
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    name: Validate inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+      sha: ${{ steps.validate.outputs.sha }}
+      matrix: ${{ steps.validate.outputs.matrix }}
+      targets: ${{ steps.validate.outputs.targets }}
+      full_matrix: ${{ steps.validate.outputs.full_matrix }}
+    steps:
+      - name: Require a full commit SHA
+        env:
+          CHECKOUT_REF: ${{ inputs.checkout_ref }}
+        run: |
+          [[ "${CHECKOUT_REF}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::checkout_ref must be a full 40-character lowercase commit SHA"
+            exit 1
+          }
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.checkout_ref }}
+          persist-credentials: false
+
+      - name: Validate version, commit, matrix, tags and releases
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.release_version }}
+          SHA: ${{ inputs.checkout_ref }}
+          BUILD_MATRIX: ${{ inputs.build_matrix }}
+          REPO: ${{ github.repository }}
+        run: |
+          scripts/fork/release.sh preflight --repo "${REPO}" --version "${VERSION}" \
+            --sha "${SHA}" --matrix "${BUILD_MATRIX}" --output "${GITHUB_OUTPUT}"
+
   build:
     name: Build ${{ matrix.target }}
+    needs: preflight
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 240
+    # macOS arm64 took 201 minutes for 0.164.0; hosted jobs stop at 360.
+    timeout-minutes: 330
     defaults:
       run:
         working-directory: codex-rs
@@ -38,29 +88,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.build_matrix || '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},{"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-gnu"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin"},{"runner":"macos-15","target":"aarch64-apple-darwin"},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc"}]') }}
+        include: ${{ fromJSON(needs.preflight.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.checkout_ref || github.sha }}
+          ref: ${{ needs.preflight.outputs.sha }}
           persist-credentials: false
-
-      - name: Resolve release version
-        id: release
-        shell: bash
-        env:
-          MANUAL_VERSION: ${{ inputs.release_version }}
-        run: |
-          set -euo pipefail
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha(\.[0-9]+){0,2}|beta(\.[0-9]+)?))?$ ]]
-            version="${GITHUB_REF_NAME#rust-v}"
-          else
-            version="${MANUAL_VERSION}"
-          fi
-          [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha(\.[0-9]+){0,2}|beta(\.[0-9]+)?))?$ ]]
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
         with:
@@ -92,7 +126,7 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          cargo build --target "${TARGET}" --release --bin bwrap
+          cargo build --locked --target "${TARGET}" --release --bin bwrap
 
           bwrap_path="target/${TARGET}/release/bwrap"
           strip --strip-debug --strip-unneeded "${bwrap_path}"
@@ -114,13 +148,13 @@ jobs:
           for binary in "${binaries[@]}"; do
             build_args+=(--bin "${binary}")
           done
-          cargo build --target "${TARGET}" --release "${build_args[@]}"
+          cargo build --locked --target "${TARGET}" --release "${build_args[@]}"
 
       - name: Package runtime
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
-          VERSION: ${{ steps.release.outputs.version }}
+          VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
           dest="${GITHUB_WORKSPACE}/dist/${TARGET}"
@@ -174,6 +208,90 @@ jobs:
       - name: Upload release binaries
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: codex-${{ steps.release.outputs.version }}-${{ matrix.target }}
+          name: codex-${{ needs.preflight.outputs.version }}-${{ matrix.target }}
           path: dist/${{ matrix.target }}
           if-no-files-found: error
+
+  ci:
+    name: fork-ci
+    needs: preflight
+    uses: ./.github/workflows/fork-ci.yml
+    with:
+      ref: ${{ needs.preflight.outputs.sha }}
+
+  verify:
+    name: Verify packages
+    needs: [preflight, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: sdk/go/go.mod
+          cache-dependency-path: sdk/go/go.mod
+
+      # Package artifacts are codex-<version>-<target>; every target contains a
+      # hyphen, so the pattern skips codex-<version>-SHA256SUMS.
+      - name: Download packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: codex-${{ needs.preflight.outputs.version }}-*-*
+          path: ${{ runner.temp }}/dist
+          merge-multiple: true
+
+      - name: Verify layout, modes, architectures, version and strict handshake
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          TARGETS: ${{ needs.preflight.outputs.targets }}
+          DIST: ${{ runner.temp }}/dist
+        run: scripts/fork/verify-release.sh --version "${VERSION}" --dist "${DIST}" --targets "${TARGETS}"
+
+      - name: Upload SHA256SUMS
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: codex-${{ needs.preflight.outputs.version }}-SHA256SUMS
+          path: ${{ runner.temp }}/dist/SHA256SUMS
+          if-no-files-found: error
+
+  draft:
+    name: Create draft release
+    needs: [preflight, verify, ci]
+    if: >-
+      always()
+      && inputs.create_draft
+      && needs.preflight.outputs.full_matrix == 'true'
+      && needs.verify.result == 'success'
+      && (needs.ci.result == 'success' || !inputs.require_ci)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
+          persist-credentials: false
+
+      - name: Download verified packages and SHA256SUMS
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: codex-${{ needs.preflight.outputs.version }}-*
+          path: ${{ runner.temp }}/dist
+          merge-multiple: true
+
+      - name: Stage the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          SHA: ${{ needs.preflight.outputs.sha }}
+          DIST: ${{ runner.temp }}/dist
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          scripts/fork/release.sh draft --repo "${REPO}" --version "${VERSION}" \
+            --sha "${SHA}" --dist "${DIST}" --run-url "${RUN_URL}"
