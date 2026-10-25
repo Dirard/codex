@@ -352,6 +352,9 @@ cmd_rust_test() {
   (
     cd "${rust_dir}"
     export RUST_MIN_STACK=8388608 INSTA_UPDATE=no
+    # As in fork-ci.yml: error values must not capture backtraces, because tests
+    # compare their Debug output; panics still honour RUST_BACKTRACE.
+    export RUST_LIB_BACKTRACE=0
     run_isolated cargo "${nextest_args[@]}" "${extra[@]}"
   ) || status=$?
 
