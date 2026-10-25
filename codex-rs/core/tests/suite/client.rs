@@ -4069,8 +4069,16 @@ async fn server_overloaded_uses_independent_retry_budget() -> anyhow::Result<()>
     test.submit_turn("second").await?;
 
     // Each turn spends one retry from each budget. The explicit overload budget has no
-    // capacity floor, so the second turn's next overload is terminal.
+    // capacity floor, so the second turn's next overload is terminal: no request follows it.
     assert_eq!(responses_mock.requests().len(), 6);
+    let received = server
+        .received_requests()
+        .await
+        .expect("mock server should record requests")
+        .into_iter()
+        .filter(|request| request.url.path().ends_with("/responses"))
+        .count();
+    assert_eq!(received, 6);
     Ok(())
 }
 
