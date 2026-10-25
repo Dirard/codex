@@ -80,8 +80,8 @@ Settings: relative to window 3
   text: {"format":{"name":"codex_output_schema","schema":{"additionalProperties":false,"properties":{"outcome":{"enum":["allow","deny"],"type":"string"},"rationale":{"type":"string"},"risk_level":{"enum":["low","medium","high","critical"],"type":"string"},"user_authorization":{"enum":["unknown","low","medium","high"],"type":"string"}},"required":["outcome"],"type":"object"},"strict":false,"type":"json_schema"},"verbosity":"low"}
   tools: <removed>
 -- request 6 (turn) --
-00:additional_tools/developer (1; hash=792bd693c344318b):
-        - namespace/functions; hash=3380b3e652f61533
+00:additional_tools/developer (1; hash=b56001c633274740):
+        - namespace/functions; hash=5cfb570f7d4ca18e
           - custom/exec
           - function/wait
 01:message/developer:

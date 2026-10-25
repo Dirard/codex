@@ -16,8 +16,8 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=bf58843f73e72a42):
-        - namespace/functions; hash=266b5388e5d9e4bd
+00:additional_tools/developer (3; hash=078286223eb21aeb):
+        - namespace/functions; hash=c860fec5185f28ae
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -54,8 +54,8 @@ Settings:
 ## Window 2 (after request 3: input diverged at item 00)
 Settings: same as window 1
 -- request 4 (turn) --
-00:additional_tools/developer (3; hash=b15fb63a76c6b1a3):
-        - namespace/functions; hash=0dda1c003a7913ea
+00:additional_tools/developer (3; hash=d5a3e1fd8acc90f6):
+        - namespace/functions; hash=dc460cdd58d258b5
           - custom/exec
           - function/wait
           - function/request_user_input

@@ -31,11 +31,8 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - `yield_time_ms` asks `exec` to yield early if the script is still running. Defaults to {{ default_exec_yield_time_ms }} ms.
 - `max_output_tokens` sets the token budget for direct `exec` results. Defaults to 10000 tokens.
 - When the JS code is fully evaluated, the isolate's lifetime ends and unawaited promises are silently discarded.
-- Batch only already-known independent calls, using the smallest group that covers them.
-- Prefer `Promise.allSettled` when partial results are useful. Use `Promise.all` only when the whole group is all-or-nothing; it is fail-fast and does not cancel calls already started.
-- Keep discovery → adaptive follow-up, approvals, waits/resumes, and conflicting writes sequential. Runtime tool eligibility still decides whether calls actually overlap.
-- Request narrow fields and ranges because every nested result shares the outer `exec` `max_output_tokens` budget.
-- Before the module ends, pass needed values to `text`, `image`, `audio`, `generatedImage`, or `notify`, or save them with `store`.
+- Batch only known independent calls in the smallest group; prefer `Promise.allSettled` (`Promise.all` fails fast without cancelling started calls). Keep discovery, approvals, waits and conflicting writes sequential.
+- Only values passed to `text`, `image`, `audio`, `generatedImage`, `notify`, or `store` survive the module; request narrow fields.
 
 - Global helpers:
 - `exit()`: Immediately ends the current script successfully (like an early return from the top level).
@@ -48,7 +45,7 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - `notify(value: string | number | boolean | undefined | null)`: immediately injects an extra `custom_tool_call_output` for the current `exec` call. Values are stringified like `text(...)`.
 - `setTimeout(callback: () => void, delayMs?: number)`: schedules a callback to run later and returns a timeout id. Pending timeouts do not keep `exec` alive by themselves; await an explicit promise if you need to wait for one.
 - `clearTimeout(timeoutId?: number)`: cancels a timeout created by `setTimeout`.
-- `EXEC_TOOLS`: metadata for tools exposed inside `exec` as `{ name, description }` entries. Entries marked as direct-only must be called directly, not through `tools.*`.
+- `EXEC_TOOLS`: `{ name, description }` of tools exposed inside `exec`; call direct-only ones directly, not via `tools.*`.
 - `yield_control()`: yields the accumulated output to the model immediately while the script keeps running."#;
 const WAIT_DESCRIPTION_TEMPLATE: &str = r#"- Use `wait` only after `exec` returns `Script running with cell ID ...`.
 - `cell_id` identifies the running `exec` cell to resume.
@@ -802,25 +799,30 @@ bar"
         );
 
         for expected in [
-            "already-known independent calls",
-            "`Promise.allSettled` when partial results are useful",
-            "`Promise.all` only when the whole group is all-or-nothing",
-            "smallest group",
-            "discovery",
-            "approvals",
-            "waits/resumes",
-            "conflicting writes",
-            "Runtime tool eligibility still decides whether calls actually overlap",
-            "outer `exec` `max_output_tokens` budget",
-            "Before the module ends",
-            "`text`, `image`, `audio`, `generatedImage`, or `notify`",
-            "`store`",
+            "Batch only known independent calls in the smallest group",
+            "prefer `Promise.allSettled`",
+            "`Promise.all` fails fast without cancelling started calls",
+            "Keep discovery, approvals, waits and conflicting writes sequential",
+            "Only values passed to `text`, `image`, `audio`, `generatedImage`, `notify`, or `store` survive the module",
+            "request narrow fields",
+            "call direct-only ones directly, not via `tools.*`",
         ] {
             assert!(
                 description.contains(expected),
                 "missing batching guidance {expected:?}: {description}"
             );
         }
+        // The guidance is sent with every Code Mode request; keep it within half of the
+        // original fork addition (694 bytes).
+        let guidance_bytes = description
+            .lines()
+            .filter(|line| line.starts_with("- Batch only") || line.starts_with("- Only values"))
+            .map(str::len)
+            .sum::<usize>();
+        assert!(
+            guidance_bytes <= 347,
+            "batching guidance grew to {guidance_bytes} bytes"
+        );
     }
 
     #[test]
