@@ -1895,17 +1895,23 @@ impl UnifiedExecProcessManager {
 
     /// Fork: whether an armed exit notification still waits for its live process.
     pub(crate) async fn has_pending_exit_notifications(&self) -> bool {
+        self.pending_exit_notification_count().await > 0
+    }
+
+    /// Fork: number of live processes whose exit will still be reported.
+    pub(crate) async fn pending_exit_notification_count(&self) -> usize {
         self.process_store
             .lock()
             .await
             .processes
             .values()
-            .any(|entry| {
+            .filter(|entry| {
                 entry
                     .exit_notifier
                     .as_ref()
                     .is_some_and(|notifier| notifier.is_pending())
             })
+            .count()
     }
 
     pub(crate) async fn resolve_terminal(

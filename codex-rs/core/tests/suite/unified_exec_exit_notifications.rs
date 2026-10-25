@@ -591,3 +591,75 @@ async fn wait_agent_returns_on_background_terminal_exit() -> Result<()> {
     assert!(delivered[0].contains("waited-for"));
     Ok(())
 }
+
+/// R4.1: a `wait_agent` timeout names the terminals that will still report their exit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wait_agent_timeout_reports_pending_background_terminals() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_target_windows!(Ok(()), "uses POSIX shell commands");
+    const NAMESPACE: &str = "collaboration";
+
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            tool_call(
+                "resp-1",
+                "bg-call",
+                "exec_command",
+                &exec_args(
+                    "sleep 3; echo still-running-at-timeout",
+                    /*yield_time_ms*/ 250,
+                    /*notify_on_exit*/ true,
+                ),
+            ),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_function_call_with_namespace(
+                    "wait-call",
+                    NAMESPACE,
+                    "wait_agent",
+                    r#"{"timeout_ms":200}"#,
+                ),
+                ev_completed("resp-2"),
+            ]),
+            message("resp-3", "It is still running."),
+            message("resp-4", "Now it has finished."),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("enable multi-agent v2");
+            config
+                .features
+                .enable(Feature::ExecExitNotifications)
+                .expect("enable exit notifications");
+            config.multi_agent_v2.min_wait_timeout_ms = 100;
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("start and wait briefly").await?;
+    let wait_output = mock.requests()[2]
+        .function_call_output_text("wait-call")
+        .expect("wait_agent output");
+    assert!(
+        wait_output.contains(
+            "Wait timed out. Active agents: pending_init=0, running=0, interrupted=0. Background terminals that will report their exit: 1."
+        ),
+        "{wait_output}"
+    );
+
+    // The exit still arrives afterwards and starts its own turn.
+    assert_eq!(count_turns_until_completed(&test, 1).await, 1);
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 4);
+    assert!(notifications(&requests[3])[0].contains("still-running-at-timeout"));
+    Ok(())
+}

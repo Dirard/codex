@@ -135,7 +135,7 @@ impl Handler {
                     WaitOutcome::BackgroundTerminal => "background_terminal",
                     WaitOutcome::Steered => "steered",
                     WaitOutcome::NoActiveAgents => "no_active_agents",
-                    WaitOutcome::TimedOut(_) => "timed_out",
+                    WaitOutcome::TimedOut(..) => "timed_out",
                 },
             )],
         );
@@ -195,13 +195,19 @@ impl WaitAgentResult {
             ),
             WaitOutcome::Steered => ("Wait interrupted by new input.".to_string(), false),
             WaitOutcome::NoActiveAgents => ("No active agents.".to_string(), false),
-            WaitOutcome::TimedOut(snapshot) => (
-                format!(
+            WaitOutcome::TimedOut(snapshot, background_terminals) => {
+                let mut message = format!(
                     "Wait timed out. Active agents: pending_init={}, running={}, interrupted={}.",
                     snapshot.pending_init, snapshot.running, snapshot.interrupted
-                ),
-                true,
-            ),
+                );
+                // Fork: say what the wait is still for when only terminals are pending.
+                if background_terminals > 0 {
+                    message.push_str(&format!(
+                        " Background terminals that will report their exit: {background_terminals}."
+                    ));
+                }
+                (message, true)
+            }
         };
         let message = match requested_timeout_ms {
             Some(requested_timeout_ms) if requested_timeout_ms < timeout_ms => format!(
@@ -245,7 +251,8 @@ enum WaitOutcome {
     BackgroundTerminal,
     Steered,
     NoActiveAgents,
-    TimedOut(ActiveAgentSnapshot),
+    /// Agent snapshot and the number of terminals whose exit will still be reported.
+    TimedOut(ActiveAgentSnapshot, usize),
 }
 
 /// A bound board delivers posts from agents outside the caller's subtree. Remote and
@@ -364,7 +371,12 @@ async fn wait_for_activity(
             if let Some(outcome) = recheck_activity(session, turn_state).await {
                 return Ok(outcome);
             }
-            Ok(WaitOutcome::TimedOut(snapshot))
+            let background_terminals = session
+                .services
+                .unified_exec_manager
+                .pending_exit_notification_count()
+                .await;
+            Ok(WaitOutcome::TimedOut(snapshot, background_terminals))
         }
     }
 }
