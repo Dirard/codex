@@ -24,23 +24,27 @@ func Answer(ctx context.Context, client *codex.Client, question string) (string,
 	return result.FinalResponse, nil
 }
 
-func main() {
+func run(ctx context.Context) error {
 	codexPath := os.Getenv("CODEX_EXEC_PATH")
 	if codexPath == "" {
-		fmt.Fprintln(os.Stderr, "set CODEX_EXEC_PATH to a compatible codex runtime")
-		os.Exit(2)
+		return fmt.Errorf("set CODEX_EXEC_PATH to a compatible codex runtime")
 	}
-	ctx := context.Background()
 	client, err := codex.NewClient(ctx, codex.ClientConfig{CodexPath: codexPath})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return err
 	}
 	defer client.Close()
 	answer, err := Answer(ctx, client, "What is 2+2?")
 	if err != nil {
+		return err
+	}
+	fmt.Println(answer)
+	return nil
+}
+
+func main() {
+	if err := run(context.Background()); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Println(answer)
 }
