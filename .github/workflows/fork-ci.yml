@@ -86,12 +86,14 @@ jobs:
           free-disk: "true"
           sandbox: "true"
 
+      # The version goes in `tool` (install-action has no `version` input);
+      # ci-local.sh rust-test fails in CI when it differs from nextest_version.
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
         with:
-          tool: nextest
-          version: 0.9.103
+          tool: nextest@0.9.103
 
-      # Every shard builds the same binaries; only the first one saves the cache.
+      # Every shard builds the same binaries; only the first one saves the cache,
+      # which go-runtime also reads (two cache families per Cargo.lock in all).
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: codex-rs
@@ -125,7 +127,7 @@ jobs:
           ref: ${{ inputs.ref || '' }}
           persist-credentials: false
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: sdk/go/go.mod
           cache-dependency-path: sdk/go/go.mod
@@ -155,14 +157,15 @@ jobs:
           free-disk: "true"
           sandbox: "true"
 
+      # Restores the rust-test cache (it builds codex too) and never saves one,
+      # so the repository's 10 GB cache budget holds two families, not three.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: codex-rs
-          shared-key: fork-ci-go-runtime
-          cache-on-failure: "true"
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/fork' }}
+          shared-key: fork-ci-test
+          save-if: "false"
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: sdk/go/go.mod
           cache-dependency-path: sdk/go/go.mod

@@ -40,18 +40,24 @@ runs:
         sudo apt-get update -y
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
 
-    # Same runner preparation as upstream .github/actions/setup-ci: Ubuntu 24.04
-    # restricts unprivileged user namespaces through AppArmor, and bubblewrap
-    # sandbox tests need them.
+    # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor, and
+    # bubblewrap sandbox tests need them. Each key is written only when its
+    # /proc file exists; enumerating `sysctl -a | grep -q` under pipefail would
+    # depend on how SIGPIPE is handled (upstream .github/actions/setup-ci).
+    # sandbox-check then requires the result, so sandbox tests cannot skip
+    # silently on a runner where this did not take effect.
     - name: Allow unprivileged user namespaces
       if: inputs.sandbox == 'true'
       shell: bash
       run: |
         set -euo pipefail
-        sudo sysctl -w kernel.unprivileged_userns_clone=1
-        if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
+        if [[ -e /proc/sys/kernel/unprivileged_userns_clone ]]; then
+          sudo sysctl -w kernel.unprivileged_userns_clone=1
+        fi
+        if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
         fi
+        "${GITHUB_WORKSPACE}/scripts/fork/ci-local.sh" sandbox-check
 
     - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
       with:
