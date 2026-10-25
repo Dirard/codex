@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -132,6 +133,50 @@ func FuzzRingRedaction(f *testing.F) {
 		}
 		if len(tail) > int(limit) {
 			t.Fatalf("stderr tail of %d bytes exceeds limit %d", len(tail), limit)
+		}
+	})
+}
+
+// redactionMarker is a secret value FuzzRingRedactionHidesSecrets puts after a secret-like
+// word; \x01 is removed from the fuzzed text, so the marker appears only where inserted.
+const redactionMarker = "\x01leaked-value\x01"
+
+// redactionOracleWords are the words whose line the stderr tail must hide. The list is the
+// test's own, not the implementation's.
+var redactionOracleWords = []string{"token", "password", "secret", "api_key", "apikey", "credential", "authorization", "cookie"}
+
+// FuzzRingRedactionHidesSecrets checks redaction against secrets the target inserted
+// itself: a value that follows a secret-like word on its line never reaches the stderr
+// tail, whatever surrounds it and however the output is split into writes.
+func FuzzRingRedactionHidesSecrets(f *testing.F) {
+	for word := range redactionOracleWords {
+		f.Add([]byte("panic: "), []byte("\nnext line\n"), uint8(word), uint8(0), uint16(2), uint16(9), uint16(64))
+		f.Add([]byte("a\nb "), []byte(" tail"), uint8(word), uint8(0xff), uint16(7), uint16(30), uint16(8))
+	}
+	f.Fuzz(func(t *testing.T, prefix []byte, suffix []byte, word uint8, caseMask uint8, first uint16, second uint16, limit uint16) {
+		keyword := []byte(redactionOracleWords[int(word)%len(redactionOracleWords)])
+		for i := range keyword {
+			if caseMask&(1<<(i%8)) != 0 && keyword[i] >= 'a' && keyword[i] <= 'z' {
+				keyword[i] -= 'a' - 'A'
+			}
+		}
+		var data []byte
+		data = append(data, bytes.ReplaceAll(prefix, []byte{1}, nil)...)
+		data = append(data, keyword...)
+		data = append(data, ": Bearer "+redactionMarker...)
+		data = append(data, bytes.ReplaceAll(suffix, []byte{1}, nil)...)
+		ring := NewRing(int(limit))
+		cuts := []int{int(first) % (len(data) + 1), int(second) % (len(data) + 1)}
+		if cuts[0] > cuts[1] {
+			cuts[0], cuts[1] = cuts[1], cuts[0]
+		}
+		for _, part := range [][]byte{data[:cuts[0]], data[cuts[0]:cuts[1]], data[cuts[1]:]} {
+			if _, err := ring.Write(part); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if tail := ring.String(); strings.Contains(tail, redactionMarker) {
+			t.Fatalf("stderr tail leaks the value after %q: %q", keyword, tail)
 		}
 	})
 }

@@ -62,6 +62,7 @@ func FuzzNotificationRouterRoute(f *testing.F) {
 		if !withinBudget {
 			t.Fatal("pending byte accounting left its budget")
 		}
+		decoded := false
 		select {
 		case notification := <-global.Events():
 			_, known := protocol.ServerNotificationRoutingByMethod[method]
@@ -78,11 +79,55 @@ func FuzzNotificationRouterRoute(f *testing.F) {
 				if !known {
 					t.Fatalf("unknown method %s delivered as %T", method, notification.Payload)
 				}
+				decoded = true
 			}
 		default:
 			t.Fatal("global observers did not receive the notification")
 		}
+		// Keyed delivery: a decoded notification of turn u of thread t, by the old
+		// map-based reading of its params, reaches the turn's stream.
+		if decoded && routesToTestTurn(method, params) {
+			select {
+			case notification, ok := <-turn.Events():
+				if !ok || notification.Method != method {
+					t.Fatalf("turn stream got %v (open %v), want %s", notification.Method, ok, method)
+				}
+			default:
+				t.Fatalf("%s for turn u of thread t did not reach the turn stream: %s", method, params)
+			}
+		}
 	})
+}
+
+// routesToTestTurn reports whether method routes by turn identity and params name turn
+// "u" of thread "t", reading params through the map-based reference decoder. A turn
+// stream identifies the turn by turnId, or by turn.id when there is no string turnId.
+func routesToTestTurn(method string, params []byte) bool {
+	metadata, ok := protocol.ServerNotificationRoutingByMethod[method]
+	if !ok || strings.HasPrefix(method, "thread/realtime/") {
+		return false
+	}
+	if threadID, ok := referenceStringAt(params, "threadId"); !ok || threadID != "t" {
+		return false
+	}
+	turnID, ok := referenceStringAt(params, "turnId")
+	if !ok {
+		turnID, ok = referenceStringAt(params, "turn.id")
+	}
+	if !ok || turnID != "u" {
+		return false
+	}
+	for _, route := range metadata.Routes {
+		for _, extractor := range route.IdentityExtractors {
+			if extractor.FieldPath != "turnId" && extractor.FieldPath != "turn.id" {
+				continue
+			}
+			if turnID, ok := referenceStringAt(params, extractor.FieldPath); ok && turnID == "u" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // FuzzInitializeCompatibility checks the initialize response check: no panic, strict mode
