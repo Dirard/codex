@@ -55,7 +55,7 @@ fn a_dropped_ancestor_root_is_replaced_by_the_worktree() {
     let worktree = abs("/home/u/.codex/worktrees/6d88/demo");
     assert_eq!(
         rebase_workspace_roots(&[abs("/work")], &source, &worktree),
-        [worktree.clone()]
+        vec![worktree]
     );
 }
 

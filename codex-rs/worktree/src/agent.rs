@@ -247,7 +247,7 @@ pub fn checkpoint(request: CheckpointRequest<'_>) -> Result<CheckpointOutcome> {
         commit_tree(root, &tree, Some(&head), &message)?
     } else {
         // The agent committed by itself (for example with full access); keep its commits.
-        head.clone()
+        head
     };
 
     git_output(

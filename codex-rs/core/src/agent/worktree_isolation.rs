@@ -809,6 +809,10 @@ fn discover_binding_blocking(
 }
 
 /// Checkpoints the worktree and renders the completion-mail block (spec UC4).
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the binding lock serializes checkpoint and finalize of one worktree (R4.6)"
+)]
 pub(crate) async fn checkpoint_report(binding: &Arc<AgentWorktreeBinding>) -> String {
     let _state = binding.state.lock().await;
     let blocking = Arc::clone(binding);
@@ -903,6 +907,10 @@ async fn finalize_tree_worktrees(bindings: Vec<Arc<AgentWorktreeBinding>>) {
 }
 
 /// Checkpoints a stopped child's worktree and removes it when it never changed (R6.1, R6.4).
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the binding lock serializes checkpoint and finalize of one worktree (R4.6)"
+)]
 async fn finalize_tree_worktree(binding: Arc<AgentWorktreeBinding>) {
     let mut state = binding.state.lock().await;
     if state.finalized || !state.stopped {
