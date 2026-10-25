@@ -168,6 +168,8 @@ pub enum Feature {
     UnifiedExecTty,
     /// Fork: let `exec_command` notify the thread when a background process exits.
     ExecExitNotifications,
+    /// Fork: let the model run background workflow scripts that orchestrate agents.
+    Workflows,
     /// Removed compatibility flag for the retired patched zsh backend.
     ShellZshFork,
     /// Removed compatibility flag for the retired patched zsh backend.
@@ -1168,6 +1170,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ExecExitNotifications,
         key: "exec_exit_notifications",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Workflows,
+        key: "workflows",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

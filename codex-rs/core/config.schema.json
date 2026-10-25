@@ -1412,6 +1412,9 @@
             "windows_sandbox_service": {
               "type": "boolean"
             },
+            "workflows": {
+              "type": "boolean"
+            },
             "workspace_dependencies": {
               "type": "boolean"
             },
@@ -7283,6 +7286,88 @@
         }
       ]
     },
+    "WorkflowApprovalToml": {
+      "description": "Approval of a workflow run before it starts.",
+      "oneOf": [
+        {
+          "enum": [
+            "always",
+            "never"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Ask unless the approval policy is `never`.",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "WorkflowsToml": {
+      "additionalProperties": false,
+      "description": "Fork: limits and defaults of background workflow runs (`features.workflows`).",
+      "properties": {
+        "capacity_wait_ms": {
+          "description": "How long a call waits for agent capacity before resolving to null, in milliseconds. Default: 600000.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "default_budget_tokens": {
+          "description": "Token budget of a run without `budget_tokens`, as non-cached input plus output.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "exec_wait_timeout_ms": {
+          "description": "How long `codex exec` waits for active runs before cancelling them, in milliseconds. Default: 7200000.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_active_runs": {
+          "description": "Non-terminal runs allowed per thread. Default: 3.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_agents_per_run": {
+          "description": "Agents one run may start. Default: 1000.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_concurrent_agents": {
+          "description": "Agents of one run that work at the same time. Default: min(16, CPUs - 2).",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_heap_bytes": {
+          "description": "V8 heap limit of a run's script cell, in bytes. Default: 268435456.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "notification_max_tokens": {
+          "description": "Token limit of the result preview in the completion notification. Default: 2000.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "require_approval": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkflowApprovalToml"
+            }
+          ],
+          "description": "Whether the user approves a run before it starts. Default: `auto`."
+        }
+      },
+      "type": "object"
+    },
     "WorkspaceRootsToml": {
       "type": "object"
     }
@@ -8062,6 +8147,9 @@
         "windows_sandbox_service": {
           "type": "boolean"
         },
+        "workflows": {
+          "type": "boolean"
+        },
         "workspace_dependencies": {
           "type": "boolean"
         },
@@ -8564,6 +8652,14 @@
       ],
       "default": null,
       "description": "Windows-specific configuration."
+    },
+    "workflows": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/WorkflowsToml"
+        }
+      ],
+      "description": "Fork: limits of background workflow runs."
     }
   },
   "title": "ConfigToml",
