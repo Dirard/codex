@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"unicode"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -217,7 +218,7 @@ func (s *objectScan) begin(data []byte, spec *objectSpec) (bool, error) {
 			break
 		}
 	}
-	tag, ok := simpleJSONString(raw)
+	tag, ok := decodeJSONString(raw)
 	if !ok {
 		if err := json.Unmarshal(raw, &tag); err != nil {
 			return false, fmt.Errorf("field %s: %w", field.name, err)
@@ -678,37 +679,126 @@ const (
 	swarHighs = 0x8080808080808080
 )
 
-// simpleJSONString returns the value of a JSON string literal without escapes, control
-// characters or invalid UTF-8, which encoding/json decodes to exactly its bytes.
-func simpleJSONString(data []byte) (string, bool) {
+// decodeJSONString returns the value of the JSON string literal data exactly as
+// encoding/json decodes it — escapes resolved, unpaired surrogates and invalid UTF-8
+// replaced by U+FFFD — and false when data is not a valid JSON string literal, which
+// callers leave to json.Unmarshal. A literal without escapes, control characters or
+// non-ASCII bytes is checked eight bytes at a time.
+func decodeJSONString(data []byte) (string, bool) {
 	if len(data) < 2 || data[0] != '"' || data[len(data)-1] != '"' {
 		return "", false
 	}
 	inner := data[1 : len(data)-1]
-	// Eight bytes at a time: (x - 0x01…) &^ x has a high bit set in some byte exactly when
-	// x has a zero byte, and (x - 0x20…) &^ x when x has a byte below 0x20.
-	var high uint64
+	// (x - 0x01…) &^ x has a high bit set in some byte exactly when x has a zero byte, and
+	// (x - 0x20…) &^ x when x has a byte below 0x20; x & 0x80… finds non-ASCII bytes.
 	i := 0
 	for ; i+8 <= len(inner); i += 8 {
 		w := binary.LittleEndian.Uint64(inner[i:])
-		high |= w
 		quote := w ^ (swarOnes * '"')
 		backslash := w ^ (swarOnes * '\\')
-		if ((w-swarOnes*0x20)&^w|(quote-swarOnes)&^quote|(backslash-swarOnes)&^backslash)&swarHighs != 0 {
-			return "", false
+		if ((w-swarOnes*0x20)&^w|(quote-swarOnes)&^quote|(backslash-swarOnes)&^backslash|w)&swarHighs != 0 {
+			break
 		}
 	}
 	for ; i < len(inner); i++ {
-		c := inner[i]
-		if c < 0x20 || c == '"' || c == '\\' {
-			return "", false
+		if c := inner[i]; c < 0x20 || c == '"' || c == '\\' || c >= utf8.RuneSelf {
+			break
 		}
-		high |= uint64(c)
 	}
-	if high&swarHighs != 0 && !utf8.Valid(inner) {
-		return "", false
+	if i == len(inner) {
+		return string(inner), true
 	}
-	return string(inner), true
+	return unquoteJSONString(inner, i)
+}
+
+// unquoteJSONString decodes the inside of a string literal whose first i bytes are plain
+// ASCII, following encoding/json's unquote and rejecting what its scanner rejects.
+func unquoteJSONString(inner []byte, i int) (string, bool) {
+	out := make([]byte, i, len(inner)+utf8.UTFMax)
+	copy(out, inner[:i])
+	for i < len(inner) {
+		c := inner[i]
+		switch {
+		case c == '\\':
+			if i+1 >= len(inner) {
+				return "", false
+			}
+			switch inner[i+1] {
+			case '"', '\\', '/':
+				out = append(out, inner[i+1])
+			case 'b':
+				out = append(out, '\b')
+			case 'f':
+				out = append(out, '\f')
+			case 'n':
+				out = append(out, '\n')
+			case 'r':
+				out = append(out, '\r')
+			case 't':
+				out = append(out, '\t')
+			case 'u':
+				r, ok := jsonHex4(inner[i+2:])
+				if !ok {
+					return "", false
+				}
+				i += 6
+				if utf16.IsSurrogate(r) {
+					if low, ok := jsonLowSurrogate(inner[i:]); ok {
+						if decoded := utf16.DecodeRune(r, low); decoded != unicode.ReplacementChar {
+							out = utf8.AppendRune(out, decoded)
+							i += 6
+							continue
+						}
+					}
+					r = unicode.ReplacementChar
+				}
+				out = utf8.AppendRune(out, r)
+				continue
+			default:
+				return "", false
+			}
+			i += 2
+		case c == '"' || c < 0x20:
+			return "", false
+		case c < utf8.RuneSelf:
+			out = append(out, c)
+			i++
+		default:
+			r, size := utf8.DecodeRune(inner[i:])
+			out = utf8.AppendRune(out, r)
+			i += size
+		}
+	}
+	return string(out), true
+}
+
+func jsonHex4(data []byte) (rune, bool) {
+	if len(data) < 4 {
+		return 0, false
+	}
+	var r rune
+	for _, c := range data[:4] {
+		switch {
+		case '0' <= c && c <= '9':
+			c -= '0'
+		case 'a' <= c && c <= 'f':
+			c = c - 'a' + 10
+		case 'A' <= c && c <= 'F':
+			c = c - 'A' + 10
+		default:
+			return 0, false
+		}
+		r = r*16 + rune(c)
+	}
+	return r, true
+}
+
+// jsonLowSurrogate reads the \uXXXX escape at the start of data, if there is a valid one.
+func jsonLowSurrogate(data []byte) (rune, bool) {
+	if len(data) < 6 || data[0] != '\\' || data[1] != 'u' {
+		return 0, false
+	}
+	return jsonHex4(data[2:])
 }
 
 // decodePayload decodes a notification payload exactly as json.Unmarshal(params, v) does,

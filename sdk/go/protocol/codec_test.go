@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 // scanTestSpec has wire names that need escapes, non-ASCII and case-folding care.
@@ -213,37 +212,40 @@ func FuzzLooseEqualFoldCoversEqualFold(f *testing.F) {
 	})
 }
 
-func TestSimpleJSONStringMatchesUnmarshal(t *testing.T) {
+func TestDecodeJSONStringMatchesUnmarshal(t *testing.T) {
 	for _, input := range []string{
-		`""`, `"a"`, `"12345678"`, `"123456789"`, `"névé snow"`, `"a\"b"`, `"a\\b"`, `"a\nb"`,
-		"\"a\x01b\"", "\"\xff\"", `"unterminated`, `x"`, `"`, `"` + strings.Repeat("abcdefgh", 9) + `"`,
-		`"` + strings.Repeat("abcdefgh", 9) + `\"x"`, "\"" + strings.Repeat("a", 15) + "\x1f\"", `"tab	in"`,
+		`""`, `"a"`, `"12345678"`, `"123456789"`, `"névé snow"`, `"a\"b"`, `"a\\b"`, `"a\nb"`, `"\/\b\f\r\t"`,
+		`"\u0041\u00e9\u20ac"`, `"\ud83d\ude00"`, `"\ud800"`, `"\udc00x"`, `"\ud800\u0041"`, `"\ud800\ud800"`, `"\u12"`, `"\uZZZZ"`,
+		`"\'"`, `"\x"`, `"trailing\"`, "\"a\x01b\"", "\"\xff\"", "\"\xed\xa0\x80\"", "\"\xef\xbf\xbd\"", `"unterminated`, `x"`, `"`,
+		`"` + strings.Repeat("abcdefgh", 9) + `"`, `"` + strings.Repeat("abcdefgh", 9) + `\"x"`, "\"" + strings.Repeat("a", 15) + "\x1f\"",
+		"\"tab\tin\"", `"a" "b"`, `"a" `, `"line\nline\n` + strings.Repeat("é", 20) + `"`,
 	} {
-		checkSimpleJSONString(t, []byte(input))
+		checkDecodeJSONString(t, []byte(input))
 	}
 }
 
-func FuzzSimpleJSONStringMatchesUnmarshal(f *testing.F) {
+func FuzzDecodeJSONStringMatchesUnmarshal(f *testing.F) {
 	f.Add([]byte(`"plain"`))
-	f.Add([]byte(`"esc\"aped"`))
+	f.Add([]byte(`"esc\"aped\n\u00e9\ud83d\ude00"`))
 	f.Add([]byte("\"\xe2\x82\""))
 	f.Fuzz(func(t *testing.T, data []byte) {
-		checkSimpleJSONString(t, data)
+		checkDecodeJSONString(t, data)
 	})
 }
 
-func checkSimpleJSONString(t *testing.T, data []byte) {
+// checkDecodeJSONString requires decodeJSONString to agree with json.Unmarshal whenever
+// it accepts data, and to accept every single string literal json.Unmarshal accepts.
+func checkDecodeJSONString(t *testing.T, data []byte) {
 	t.Helper()
-	got, ok := simpleJSONString(data)
+	got, ok := decodeJSONString(data)
 	var want string
 	err := json.Unmarshal(data, &want)
 	if ok && (err != nil || got != want) {
-		t.Fatalf("simpleJSONString(%q) = %q, json.Unmarshal = %q, %v", data, got, want, err)
+		t.Fatalf("decodeJSONString(%q) = %q, json.Unmarshal = %q, %v", data, got, want, err)
 	}
-	plain := len(data) >= 2 && data[0] == '"' && data[len(data)-1] == '"' && bytes.Count(data, []byte(`"`)) == 2 &&
-		!bytes.ContainsRune(data, '\\') && utf8.Valid(data) && !bytes.ContainsFunc(data, func(r rune) bool { return r < 0x20 })
-	if !ok && plain {
-		t.Fatalf("simpleJSONString(%q) missed a plain string", data)
+	literal := len(data) >= 2 && data[0] == '"' && data[len(data)-1] == '"'
+	if !ok && err == nil && literal {
+		t.Fatalf("decodeJSONString(%q) rejected a literal json.Unmarshal decodes to %q", data, want)
 	}
 }
 

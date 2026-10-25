@@ -87,12 +87,12 @@ func (o *OptionalNonNull[T]) UnmarshalJSON(data []byte) error {
 	return unmarshalOptionalValue(data, &o.value)
 }
 
-// unmarshalOptionalValue decodes an optional value. A string literal without escapes is
-// copied directly: encoding/json has validated it already when it calls UnmarshalJSON,
-// and decoding it again would validate and scan it twice more.
+// unmarshalOptionalValue decodes an optional value. A string is decoded directly from
+// the literal: decodeJSONString accepts only valid literals, and json.Unmarshal would
+// validate and scan the value twice more.
 func unmarshalOptionalValue[T any](data []byte, value *T) error {
 	if text, ok := any(value).(*string); ok {
-		if decoded, ok := simpleJSONString(data); ok {
+		if decoded, ok := decodeJSONString(data); ok {
 			*text = decoded
 			return nil
 		}
