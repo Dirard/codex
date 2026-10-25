@@ -297,7 +297,10 @@ pub struct BranchChanges {
 }
 
 /// Summarizes the agent branch against its base; `None` when the branch does not exist.
-pub fn branch_changes(root: &Path, metadata: &AgentWorktreeMetadata) -> Result<Option<BranchChanges>> {
+pub fn branch_changes(
+    root: &Path,
+    metadata: &AgentWorktreeMetadata,
+) -> Result<Option<BranchChanges>> {
     let branch_ref = branch_ref(&metadata.branch)?;
     if optional_commit(root, &branch_ref)?.is_none() {
         return Ok(None);
@@ -432,6 +435,22 @@ pub fn remove_if_unchanged(
     .context("cannot remove the unchanged agent worktree")?;
     remove_empty_bucket(root);
     Ok(RemoveOutcome::Removed)
+}
+
+/// Returns the main checkout of the repository that the linked worktree `root` belongs to.
+pub fn main_worktree_root(root: &Path) -> Result<PathBuf> {
+    let output = git_output(
+        root,
+        GitOperation::Metadata,
+        ["worktree", "list", "--porcelain", "-z"],
+    )?;
+    let first = output
+        .stdout
+        .split(|byte| *byte == b'\0')
+        .next()
+        .and_then(|field| field.strip_prefix(b"worktree "))
+        .context("git did not report a main worktree")?;
+    crate::git::git_path_from_bytes(first)
 }
 
 /// Removes a worktree created for a child that never started; it holds no agent work.
@@ -576,9 +595,8 @@ fn worktree_config_path(root: &Path) -> Result<PathBuf> {
 }
 
 fn repository_root(cwd: &Path) -> Result<PathBuf> {
-    let path = git_path(cwd, ["rev-parse", "--show-toplevel"]).with_context(|| {
-        format!("{} is not inside a Git working tree", cwd.display())
-    })?;
+    let path = git_path(cwd, ["rev-parse", "--show-toplevel"])
+        .with_context(|| format!("{} is not inside a Git working tree", cwd.display()))?;
     dunce::canonicalize(&path)
         .with_context(|| format!("cannot resolve repository root {}", path.display()))
 }

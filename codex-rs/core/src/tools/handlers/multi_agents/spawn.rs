@@ -136,6 +136,8 @@ async fn handle_spawn_agent(
                 multi_agent_v2_usage_hints: None,
                 cyber_access_program: turn.cyber_access_program,
                 turn_spawn_budget: Some(step_context.turn_spawn_budget.clone()),
+                // Fork: worktree isolation applies only to native MultiAgentV2 children (R1.4).
+                worktree: None,
             },
         })
         .await

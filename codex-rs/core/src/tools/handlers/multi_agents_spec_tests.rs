@@ -124,6 +124,7 @@ fn spawn_agent_tool_v2_fork_turns_lists_supported_values() {
             model_catalog_in_context: false,
             usage_hint_text: None,
             explorer_profile: false,
+            worktree_isolation: false,
         },
         /*description_override*/ None,
     ) else {
@@ -464,4 +465,58 @@ fn list_agents_tool_status_schema_includes_interrupted() {
             "not_found"
         ])
     );
+}
+
+/// Fork: `isolation` and the `worktree` result field exist only with the feature enabled (R1.1).
+#[test]
+fn spawn_agent_tool_v2_exposes_isolation_only_when_enabled() {
+    let tool = |worktree_isolation, hide_agent_type_model_reasoning| {
+        let ToolSpec::Function(tool) = create_spawn_agent_tool_v2(
+            SpawnAgentToolOptions {
+                multi_agent_version: MultiAgentVersion::V2,
+                hide_agent_type_model_reasoning,
+                worktree_isolation,
+                ..Default::default()
+            },
+            /*description_override*/ None,
+        ) else {
+            panic!("spawn_agent should be a function tool");
+        };
+        tool
+    };
+    let has_isolation = |tool: &ResponsesApiTool| {
+        tool.parameters
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.contains_key("isolation"))
+    };
+    let has_worktree_output = |tool: &ResponsesApiTool| {
+        tool.output_schema
+            .as_ref()
+            .map(codex_tools::ToolOutputSchema::to_value)
+            .is_some_and(|schema| schema["properties"].get("worktree").is_some())
+    };
+
+    let disabled = tool(false, false);
+    assert!(!has_isolation(&disabled));
+    assert!(!has_worktree_output(&disabled));
+
+    for hide_metadata in [false, true] {
+        let enabled = tool(true, hide_metadata);
+        assert!(has_isolation(&enabled));
+        assert!(has_worktree_output(&enabled));
+        let isolation = enabled
+            .parameters
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.get("isolation"))
+            .and_then(|schema| serde_json::to_value(schema).ok())
+            .expect("isolation schema");
+        assert_eq!(isolation["enum"], serde_json::json!(["none", "worktree"]));
+        assert!(
+            isolation["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("| git apply"))
+        );
+    }
 }

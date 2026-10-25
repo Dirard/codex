@@ -201,6 +201,8 @@ pub(crate) struct LocalAgentRuntime {
     pub(super) shared_thread_instructions_provider:
         Arc<OnceLock<Arc<dyn ThreadInstructionsProvider>>>,
     pub(super) registry: Arc<AgentRegistry>,
+    /// Fork: managed worktrees of isolated children, loaded or not.
+    pub(crate) worktrees: Arc<crate::agent::worktree_isolation::AgentWorktrees>,
     pub(super) residency: Arc<V2Residency>,
     pub(super) mailboxes: Arc<super::mailbox::Mailboxes>,
     /// Shared by every session in this tree, including private delegates.
@@ -220,6 +222,7 @@ impl LocalAgentRuntime {
             manager,
             thread_id_generator,
             registry: Arc::default(),
+            worktrees: Arc::default(),
             residency: Arc::default(),
             mailboxes: Arc::default(),
             shutdown: CancellationToken::new(),
@@ -316,6 +319,13 @@ impl LocalAgentRuntime {
 
     pub(crate) fn generate_thread_id(&self) -> ThreadId {
         (self.thread_id_generator)()
+    }
+
+    /// Fork: whether `thread_id` is the root of this local agent tree.
+    pub(crate) fn is_tree_root(&self, thread_id: ThreadId) -> bool {
+        self.registry
+            .agent_id_for_path(&codex_protocol::AgentPath::root())
+            == Some(thread_id)
     }
 
     pub(crate) fn root_thread_instructions_provider(

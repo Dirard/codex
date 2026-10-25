@@ -1567,6 +1567,10 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                             explorer_profile: crate::agent::explorer_profile::enabled(
                                 &turn_context.config,
                             ),
+                            worktree_isolation: turn_context
+                                .config
+                                .features
+                                .enabled(Feature::AgentWorktreeIsolation),
                         },
                         spawn_agent_description.map(str::to_owned),
                     ),
@@ -1660,6 +1664,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     expose_spawn_agent_model_overrides: true,
                     usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
                     explorer_profile: false,
+                    worktree_isolation: false,
                 }),
                 exposure,
             );

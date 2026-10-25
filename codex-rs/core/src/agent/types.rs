@@ -46,6 +46,9 @@ pub struct SpawnAgentOptions {
     pub multi_agent_v2_usage_hints: Option<ResolvedMultiAgentV2UsageHints>,
     pub cyber_access_program: Option<CyberAccessProgram>,
     pub turn_spawn_budget: Option<TurnSpawnBudget>,
+    /// Fork: managed worktree prepared for an isolated child. The local backend reserves the
+    /// child's thread ID from it and registers the binding before the child starts.
+    pub worktree: Option<crate::agent::worktree_isolation::SpawnWorktree>,
 }
 
 /// Cumulative spawn budget for the root user input that requested a delegation.

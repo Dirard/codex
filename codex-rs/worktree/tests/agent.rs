@@ -45,7 +45,10 @@ impl Fixture {
         fs::create_dir_all(&repository).expect("create repository");
         git(&repository, &["init", "--quiet", "-b", "main"]);
         git(&repository, &["config", "user.name", "Codex Test"]);
-        git(&repository, &["config", "user.email", "codex@example.invalid"]);
+        git(
+            &repository,
+            &["config", "user.email", "codex@example.invalid"],
+        );
         fs::write(repository.join(".gitignore"), "target/\n*.log\n").expect("write ignore file");
         fs::write(repository.join("a.txt"), "one\n").expect("write tracked file");
         git(&repository, &["add", "."]);
@@ -147,7 +150,10 @@ fn snapshot_contains_tracked_and_untracked_changes_without_touching_the_source()
 
     let snapshot = snapshot_working_tree(repository).expect("snapshot working tree");
 
-    assert_eq!(git(repository, &["status", "--porcelain=v1"]), status_before);
+    assert_eq!(
+        git(repository, &["status", "--porcelain=v1"]),
+        status_before
+    );
     assert_eq!(git(repository, &["rev-parse", "HEAD"]), head_before);
     assert_eq!(git(repository, &["for-each-ref"]), refs_before);
     assert_eq!(
@@ -163,7 +169,10 @@ fn snapshot_contains_tracked_and_untracked_changes_without_touching_the_source()
         "Codex Agent <codex-agent@localhost.invalid>"
     );
     let files = git(repository, &["ls-tree", "-r", "--name-only", &snapshot]);
-    assert_eq!(files.lines().collect::<Vec<_>>(), [".gitignore", "a.txt", "new.txt"]);
+    assert_eq!(
+        files.lines().collect::<Vec<_>>(),
+        [".gitignore", "a.txt", "new.txt"]
+    );
     assert_eq!(
         git(repository, &["show", &format!("{snapshot}:a.txt")]),
         "one\ntwo"
@@ -198,10 +207,16 @@ fn snapshot_with_unmerged_index_fails_before_any_checkout() {
     let repository = &fixture.repository;
     git(repository, &["checkout", "--quiet", "-b", "other"]);
     fs::write(repository.join("a.txt"), "other\n").expect("write conflicting change");
-    git(repository, &["commit", "--quiet", "--no-gpg-sign", "-am", "other"]);
+    git(
+        repository,
+        &["commit", "--quiet", "--no-gpg-sign", "-am", "other"],
+    );
     git(repository, &["checkout", "--quiet", "main"]);
     fs::write(repository.join("a.txt"), "main\n").expect("write conflicting change");
-    git(repository, &["commit", "--quiet", "--no-gpg-sign", "-am", "main"]);
+    git(
+        repository,
+        &["commit", "--quiet", "--no-gpg-sign", "-am", "main"],
+    );
     assert!(git_fails(repository, &["merge", "--no-edit", "other"]));
 
     let error = snapshot_working_tree(repository).expect_err("unmerged index must fail");
@@ -291,7 +306,10 @@ fn checkpoints_create_the_branch_lazily_and_stack_commits() {
         &fixture.repository,
         &["rev-parse", "--verify", &format!("refs/heads/{BRANCH}")]
     ));
-    assert_eq!(branch_changes(&checkout.root, &metadata).expect("summary"), None);
+    assert_eq!(
+        branch_changes(&checkout.root, &metadata).expect("summary"),
+        None
+    );
 
     fs::write(checkout.root.join("a.txt"), "one\nagent\n").expect("modify tracked file");
     fs::write(checkout.root.join("new_file.txt"), "new\n").expect("write untracked file");
@@ -358,7 +376,10 @@ fn checkpoint_refuses_a_branch_moved_outside_the_worktree() {
     };
 
     // Another writer moves the branch to an unrelated commit while the agent keeps working.
-    git(&fixture.repository, &["checkout", "--quiet", "-b", "unrelated", "main"]);
+    git(
+        &fixture.repository,
+        &["checkout", "--quiet", "-b", "unrelated", "main"],
+    );
     fs::write(fixture.repository.join("b.txt"), "elsewhere\n").expect("write other change");
     git(&fixture.repository, &["add", "b.txt"]);
     git(

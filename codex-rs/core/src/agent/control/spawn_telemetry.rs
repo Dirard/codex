@@ -11,6 +11,10 @@ use std::time::Duration;
 
 pub(super) struct SpawnMeasurements {
     pub(super) history_mode: ThreadHistoryMode,
+    /// Fork: building the isolated child's base commit.
+    pub(super) worktree_base: Option<Duration>,
+    /// Fork: creating and binding the isolated child's managed worktree.
+    pub(super) worktree_create: Option<Duration>,
     pub(super) residency_reservation: Option<Duration>,
     pub(super) fork_context: Option<Duration>,
     pub(super) child_create: Duration,
@@ -47,6 +51,12 @@ pub(super) fn record_spawn_success(
             multi_agent_version,
         );
     };
+    if let Some(duration) = measurements.worktree_base {
+        record_phase("worktree_base", duration);
+    }
+    if let Some(duration) = measurements.worktree_create {
+        record_phase("worktree_create", duration);
+    }
     if let Some(duration) = measurements.residency_reservation {
         record_phase("residency_reservation", duration);
     }

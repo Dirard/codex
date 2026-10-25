@@ -45,6 +45,9 @@ mod agent_control;
 mod agent_execution;
 mod agent_message_wake;
 mod agent_websocket;
+// Fork: worktree isolation is unavailable on Windows (R2.6).
+#[cfg(unix)]
+mod agent_worktree_isolation;
 mod agents_md;
 mod app_tool_exposure;
 mod apply_patch_cli;

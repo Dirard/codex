@@ -338,3 +338,70 @@ async fn credential_refresh_does_not_restore_a_removed_environment() {
         "removal should wait until the credential refresh finishes"
     );
 }
+
+/// Fork: an isolated child's environment moves into its worktree; outside roots stay.
+#[tokio::test]
+async fn rebase_onto_worktree_moves_cwd_and_roots_inside_the_repository() {
+    let path = |path: &str| {
+        PathUri::from_abs_path(&AbsolutePathBuf::from_absolute_path(path).expect("absolute path"))
+    };
+    let source = AbsolutePathBuf::from_absolute_path("/work/demo").expect("source root");
+    let worktree =
+        AbsolutePathBuf::from_absolute_path("/codex/worktrees/6d88/demo").expect("worktree root");
+    let roots = vec![
+        path("/work/demo"),
+        path("/work/demo/sub"),
+        path("/opt/added"),
+        path("/work"),
+    ];
+    let mut config = tests::test_environment_config();
+    config.workspace_roots = roots.clone();
+    let selection = TurnEnvironmentSelection {
+        selected_capability_roots: Default::default(),
+        environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+        cwd: path("/work/demo/sub"),
+        workspace_roots: roots,
+        config: EnvironmentConfigState::Ready(config),
+    };
+    let environments = ThreadEnvironments::new(
+        Arc::new(EnvironmentManager::default_for_tests()),
+        crate::shell::default_user_shell(),
+        ThreadEnvironmentDefaults::new(tests::test_environment_config(), SandboxType::None),
+        ShellSnapshot::disabled(),
+        TurnEnvironmentSnapshot::default(),
+        /*non_blocking_snapshots*/ false,
+    );
+    environments.update_selections(std::slice::from_ref(&selection));
+    let snapshot = environments.snapshot().await;
+
+    let rebased = snapshot
+        .rebase_onto_worktree(LOCAL_ENVIRONMENT_ID, &source, &worktree)
+        .expect("rebase local environment");
+
+    let environment = rebased.primary().expect("rebased environment");
+    let expected_roots = vec![
+        path("/codex/worktrees/6d88/demo"),
+        path("/codex/worktrees/6d88/demo/sub"),
+        path("/opt/added"),
+    ];
+    assert_eq!(
+        environment.selection.cwd,
+        path("/codex/worktrees/6d88/demo/sub")
+    );
+    assert_eq!(environment.selection.workspace_roots, expected_roots);
+    assert_eq!(environment.config().workspace_roots, expected_roots);
+    // The parent's own snapshot is left untouched.
+    assert_eq!(
+        snapshot
+            .primary()
+            .expect("parent environment")
+            .selection
+            .cwd,
+        path("/work/demo/sub")
+    );
+    assert!(
+        snapshot
+            .rebase_onto_worktree("missing", &source, &worktree)
+            .is_err()
+    );
+}

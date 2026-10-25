@@ -15,10 +15,15 @@ use crate::agent::types::LiveAgent;
 use crate::agent::types::MessageDeliveryMode;
 use crate::agent::types::SpawnAgentForkMode;
 use crate::agent::types::SpawnAgentOptions;
+use crate::agent::worktree_isolation::AgentWorktreeBinding;
+use crate::agent::worktree_isolation::PreparedAgentWorktree;
+use crate::agent::worktree_isolation::prepare_agent_worktree;
+use crate::agent::worktree_isolation::resolve_isolation;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::session::multi_agents::resolve_usage_hints;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
+use codex_features::AgentIsolation;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::AgentPath;
 use codex_protocol::error::CodexErr;
@@ -37,6 +42,8 @@ pub(crate) struct ThreadSpawnRequest {
     pub agent_type: Option<String>,
     pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Fork: `None` uses the prepared child config's default, so a role config file can choose.
+    pub isolation: Option<AgentIsolation>,
 }
 
 /// Accepted child and its effective configuration. Acceptance does not mean the turn completed.
@@ -44,6 +51,8 @@ pub(crate) struct ThreadSpawnResult {
     pub agent: LiveAgent,
     pub config: ThreadConfigSnapshot,
     pub task_name: AgentPath,
+    /// Fork: the child's managed worktree when it was spawned with worktree isolation.
+    pub worktree: Option<Arc<AgentWorktreeBinding>>,
 }
 
 /// Separates preparation errors from backend failures to preserve native tool error reporting.
@@ -51,6 +60,9 @@ pub(crate) struct ThreadSpawnResult {
 pub(crate) enum ThreadSpawnError {
     #[error("{0}")]
     Preparation(String),
+    /// Fork: worktree isolation was requested but cannot be provided; no child was spawned.
+    #[error("{0}")]
+    IsolationUnavailable(String),
     #[error(transparent)]
     Backend(#[from] CodexErr),
 }
@@ -69,6 +81,7 @@ pub(crate) async fn spawn(
         agent_type,
         model,
         reasoning_effort,
+        isolation,
     } = request;
     let message_text = match &message {
         AgentMessage::Plaintext(text) | AgentMessage::Encrypted(text) => text,
@@ -95,13 +108,41 @@ pub(crate) async fn spawn(
     )
     .await
     .map_err(ThreadSpawnError::Preparation)?;
-    let config = prepared.config;
+    let mut config = prepared.config;
     let task_name = turn
         .session_source
         .get_agent_path()
         .unwrap_or_else(AgentPath::root)
         .join(&task_name)
         .map_err(ThreadSpawnError::Preparation)?;
+    // Fork: resolve isolation after the role config file has shaped the child config, then
+    // move the child into its own worktree before anything captures its cwd (spec UC1, UC2).
+    let isolation =
+        resolve_isolation(isolation, &config).map_err(ThreadSpawnError::IsolationUnavailable)?;
+    let prepared_worktree = if isolation == AgentIsolation::Worktree {
+        if !session.services.agent_control.supports_worktree_isolation() {
+            return Err(ThreadSpawnError::IsolationUnavailable(
+                "worktree isolation requires the local agent backend".to_string(),
+            ));
+        }
+        let thread_id = session.services.local_agent_runtime.generate_thread_id();
+        Some(
+            prepare_agent_worktree(
+                thread_id,
+                &step_context.inherited_environments,
+                &mut config,
+                &task_name,
+            )
+            .await
+            .map_err(ThreadSpawnError::IsolationUnavailable)?,
+        )
+    } else {
+        None
+    };
+    let environments = prepared_worktree
+        .as_ref()
+        .map(|prepared| prepared.environments.clone())
+        .unwrap_or_else(|| step_context.inherited_environments.clone());
     let spawn_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: session.thread_id,
         depth: next_thread_spawn_depth(&turn.session_source),
@@ -134,7 +175,7 @@ pub(crate) async fn spawn(
     } else {
         None
     };
-    let (agent, config) = session
+    let spawned = session
         .services
         .agent_control
         .spawn(SpawnRequest {
@@ -152,17 +193,31 @@ pub(crate) async fn spawn(
                 parent_turn_id: Some(turn.sub_id.clone()),
                 root_turn_id: turn.turn_metadata_state.root_turn_id(),
                 turn_trigger: turn.turn_metadata_state.current_turn_trigger(),
-                environments: Some(step_context.inherited_environments.clone()),
+                environments: Some(environments),
                 disabled_plugin_ids: Some(turn.disabled_plugin_ids.clone()),
                 multi_agent_v2_usage_hints,
                 cyber_access_program: turn.cyber_access_program,
                 turn_spawn_budget: Some(step_context.turn_spawn_budget.clone()),
+                worktree: prepared_worktree
+                    .as_ref()
+                    .map(PreparedAgentWorktree::spawn_worktree),
             },
         })
-        .await?;
+        .await;
+    let (agent, config) = match spawned {
+        Ok(spawned) => spawned,
+        Err(err) => {
+            // The backend never registered the child, so its worktree holds no work (R2.7).
+            if let Some(prepared) = prepared_worktree {
+                prepared.discard().await;
+            }
+            return Err(err.into());
+        }
+    };
     Ok(ThreadSpawnResult {
         agent,
         config,
         task_name,
+        worktree: prepared_worktree.map(|prepared| prepared.binding),
     })
 }

@@ -1421,6 +1421,69 @@ impl TurnEnvironmentSnapshot {
         // conversion can be removed.
         self.single_local_environment()?.cwd().to_abs_path().ok()
     }
+
+    /// Fork: moves one ready environment's cwd, workspace roots and permissions from the
+    /// parent's repository into an agent worktree; other environments stay unchanged.
+    ///
+    /// Spec `agent-worktree-isolation` UC3 step "rebase the environments onto the worktree".
+    pub(crate) fn rebase_onto_worktree(
+        &self,
+        environment_id: &str,
+        source_root: &AbsolutePathBuf,
+        worktree_root: &AbsolutePathBuf,
+    ) -> Result<Self, String> {
+        use crate::agent::worktree_isolation::rebase_cwd;
+        use crate::agent::worktree_isolation::rebase_permission_snapshot;
+        use crate::agent::worktree_isolation::rebase_workspace_root_uris;
+
+        let mut found = false;
+        let environments = self
+            .environments
+            .iter()
+            .map(|environment| match environment {
+                TurnEnvironmentState::Ready(ready)
+                    if ready.selection.environment_id == environment_id =>
+                {
+                    found = true;
+                    let mut ready = ready.clone();
+                    let selection = &mut ready.selection;
+                    selection.cwd = rebase_cwd(&selection.cwd, source_root, worktree_root)?;
+                    selection.workspace_roots = rebase_workspace_root_uris(
+                        &selection.workspace_roots,
+                        source_root,
+                        worktree_root,
+                    )?;
+                    if let EnvironmentConfigState::Ready(config) = &mut selection.config {
+                        config.workspace_roots = rebase_workspace_root_uris(
+                            &config.workspace_roots,
+                            source_root,
+                            worktree_root,
+                        )?;
+                        config.permission_profile = rebase_permission_snapshot(
+                            &config.permission_profile,
+                            source_root,
+                            worktree_root,
+                        )?;
+                    }
+                    Ok(TurnEnvironmentState::Ready(ready))
+                }
+                TurnEnvironmentState::Starting(starting)
+                    if starting.selection.environment_id == environment_id =>
+                {
+                    Err(format!(
+                        "environment {environment_id} is still starting; retry once it is ready"
+                    ))
+                }
+                other => Ok(other.clone()),
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        if !found {
+            return Err(format!(
+                "environment {environment_id} is not available for the agent worktree"
+            ));
+        }
+        Ok(Self { environments })
+    }
 }
 
 #[cfg(test)]

@@ -312,6 +312,10 @@ impl AgentControl for LocalAgentControl {
         Box::pin(async move { self.record_rollout_budget_usage(&usage) })
     }
 
+    fn supports_worktree_isolation(&self) -> bool {
+        true
+    }
+
     fn turn_finished<'a>(
         &'a self,
         outcome: AgentTurnOutcome,

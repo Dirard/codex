@@ -43,6 +43,8 @@ fn records_bounded_spawn_phase_metrics() {
         MultiAgentVersion::V2,
         SpawnMeasurements {
             history_mode: ThreadHistoryMode::Paginated,
+            worktree_base: Some(Duration::from_millis(5)),
+            worktree_create: Some(Duration::from_millis(7)),
             residency_reservation: Some(Duration::from_millis(11)),
             fork_context: Some(Duration::from_millis(13)),
             child_create: Duration::from_millis(17),
@@ -90,6 +92,8 @@ fn records_bounded_spawn_phase_metrics() {
             ("input_admission".to_string(), (1, 23.0)),
             ("residency_reservation".to_string(), (1, 11.0)),
             ("total".to_string(), (1, 29.0)),
+            ("worktree_base".to_string(), (1, 5.0)),
+            ("worktree_create".to_string(), (1, 7.0)),
         ])
     );
 }

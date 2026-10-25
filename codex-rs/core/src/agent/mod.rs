@@ -7,6 +7,8 @@ mod registry;
 pub(crate) mod role;
 pub(crate) mod status;
 pub(crate) mod types;
+// Fork: MultiAgentV2 worktree isolation.
+pub(crate) mod worktree_isolation;
 
 pub(crate) use codex_protocol::protocol::AgentStatus;
 pub(crate) use control::LocalAgentControl;

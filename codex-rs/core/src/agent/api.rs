@@ -64,6 +64,12 @@ pub trait AgentControl: Send + Sync {
         request: SpawnRequest,
     ) -> BoxFuture<'_, Result<(LiveAgent, ThreadConfigSnapshot)>>;
 
+    /// Fork: whether `spawn` honors `SpawnAgentOptions::worktree`. Only the local backend
+    /// checkpoints and finalizes isolated worktrees, so host backends reject isolation.
+    fn supports_worktree_isolation(&self) -> bool {
+        false
+    }
+
     /// Resolve, reload if needed and accept input. Agent messages retain their attribution
     /// and wake mode: queue-only messages do not start work and follow-ups cannot target
     /// the root. Legacy user input can address loaded threads outside the agent registry.

@@ -1,0 +1,976 @@
+//! Fork: isolates MultiAgentV2 children in managed git worktrees.
+//!
+//! The host creates each isolated child's worktree, moves the child's cwd, environment
+//! selection and writable roots onto it, records the child's changes on an agent branch
+//! after every terminal turn, and removes unchanged worktrees when the agent tree stops.
+//! Bindings live in the tree's local runtime and are recovered after a restart from the
+//! child's stored cwd, guarded by the worktree's owner record.
+//! Spec: `specs/agent-worktree-isolation-2026-10-25.md`.
+
+use crate::config::Config;
+use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::session::turn_context::TurnEnvironment;
+use codex_features::AgentIsolation;
+use codex_features::AgentWorktreeBase;
+use codex_features::Feature;
+use codex_protocol::AgentPath;
+use codex_protocol::ThreadId;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::PermissionProfileSnapshot;
+use codex_protocol::models::ProfileWorkspaceRoot;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxKind;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
+use codex_worktree::AgentWorktreeBaseKind;
+use codex_worktree::AgentWorktreeMetadata;
+use codex_worktree::BranchChanges;
+use codex_worktree::CheckpointOutcome;
+use codex_worktree::CheckpointRequest;
+use codex_worktree::CreateWorktree;
+use codex_worktree::RemoveOutcome;
+use codex_worktree::WorktreeManager;
+use codex_worktree::WorktreeSettings;
+use serde::Serialize;
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::PoisonError;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
+use tokio::sync::Mutex;
+use tracing::warn;
+
+const WORKTREE_METRIC: &str = "codex.multi_agent.worktree";
+
+/// A child's managed worktree and the parent checkout it was created from.
+#[derive(Debug)]
+pub struct AgentWorktreeBinding {
+    pub(crate) thread_id: ThreadId,
+    pub(crate) agent_path: AgentPath,
+    pub(crate) environment_id: String,
+    /// Root of the managed worktree.
+    pub(crate) root: AbsolutePathBuf,
+    /// The child's cwd inside the worktree, matching the parent's cwd in its checkout.
+    pub(crate) cwd: AbsolutePathBuf,
+    /// Root of the parent's repository checkout.
+    pub(crate) source_root: AbsolutePathBuf,
+    pub(crate) metadata: AgentWorktreeMetadata,
+    parent_checkout_protected: AtomicBool,
+    /// Serializes checkpoint and finalize operations of this worktree.
+    state: Mutex<BindingState>,
+}
+
+#[derive(Debug, Default)]
+struct BindingState {
+    /// No runtime of the child is loaded, so its worktree is quiescent.
+    stopped: bool,
+    finalized: bool,
+}
+
+impl AgentWorktreeBinding {
+    pub(crate) fn parent_checkout_protected(&self) -> bool {
+        self.parent_checkout_protected.load(Ordering::Acquire)
+    }
+
+    fn set_parent_checkout_protected(&self, protected: bool) {
+        self.parent_checkout_protected
+            .store(protected, Ordering::Release);
+    }
+
+    /// Worktree details reported in the `spawn_agent` result.
+    pub(crate) fn spawned_worktree(&self) -> SpawnedWorktree {
+        SpawnedWorktree {
+            path: self.root.to_string_lossy().into_owned(),
+            branch: self.metadata.branch.clone(),
+            base: self.metadata.base_sha.clone(),
+            base_kind: self.metadata.base_kind.as_str().to_owned(),
+            parent_checkout_protected: self.parent_checkout_protected(),
+        }
+    }
+
+    pub(crate) async fn mark_running(&self) {
+        self.state.lock().await.stopped = false;
+    }
+}
+
+/// The `worktree` object of a successful isolated `spawn_agent` call.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct SpawnedWorktree {
+    pub(crate) path: String,
+    pub(crate) branch: String,
+    pub(crate) base: String,
+    pub(crate) base_kind: String,
+    pub(crate) parent_checkout_protected: bool,
+}
+
+/// Isolated children of one local agent tree, loaded or not.
+#[derive(Debug, Default)]
+pub(crate) struct AgentWorktrees {
+    bindings: StdMutex<HashMap<ThreadId, Arc<AgentWorktreeBinding>>>,
+    tree_stopping: AtomicBool,
+}
+
+impl AgentWorktrees {
+    pub(crate) fn insert(&self, binding: Arc<AgentWorktreeBinding>) {
+        self.bindings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(binding.thread_id, binding);
+    }
+
+    pub(crate) fn remove(&self, thread_id: ThreadId) -> Option<Arc<AgentWorktreeBinding>> {
+        self.bindings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&thread_id)
+    }
+
+    pub(crate) fn get(&self, thread_id: ThreadId) -> Option<Arc<AgentWorktreeBinding>> {
+        self.bindings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&thread_id)
+            .cloned()
+    }
+
+    fn all(&self) -> Vec<Arc<AgentWorktreeBinding>> {
+        self.bindings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    /// Records that a session of this tree stopped and finalizes worktrees once the tree stops.
+    ///
+    /// Eviction also stops a child, so a child finalizes only while the tree is stopping. The
+    /// tree's root marks the tree as stopping; whichever of a child and the root stops last
+    /// finalizes that child's worktree (spec UC6 step "finalize each isolated child").
+    pub(crate) async fn session_stopped(
+        &self,
+        thread_id: ThreadId,
+        is_tree_root: bool,
+        tree_cancelled: bool,
+    ) {
+        if is_tree_root {
+            self.tree_stopping.store(true, Ordering::Release);
+        }
+        let tree_stopping = tree_cancelled || self.tree_stopping.load(Ordering::Acquire);
+        if let Some(binding) = self.get(thread_id) {
+            binding.state.lock().await.stopped = true;
+            if tree_stopping {
+                finalize_tree_worktree(binding).await;
+            }
+        }
+        if is_tree_root || tree_cancelled {
+            finalize_tree_worktrees(self.all()).await;
+        }
+    }
+}
+
+/// Resolves the effective isolation of a native MAv2 child.
+///
+/// An explicit argument wins; otherwise the prepared child config (including its role
+/// config file) chooses. Worktree isolation requires the `agent_worktree_isolation` feature.
+pub(crate) fn resolve_isolation(
+    requested: Option<AgentIsolation>,
+    config: &Config,
+) -> Result<AgentIsolation, String> {
+    let enabled = config.features.enabled(Feature::AgentWorktreeIsolation);
+    match requested {
+        Some(AgentIsolation::Worktree) if !enabled => Err(
+            "worktree isolation is not enabled; enable the `agent_worktree_isolation` feature or spawn with isolation `none`"
+                .to_string(),
+        ),
+        Some(isolation) => Ok(isolation),
+        None if enabled => Ok(config.agent_worktree_isolation.default_isolation),
+        None => Ok(AgentIsolation::None),
+    }
+}
+
+/// The worktree handed to the local backend with a spawn request.
+#[derive(Clone, Debug)]
+pub struct SpawnWorktree {
+    pub(crate) binding: Arc<AgentWorktreeBinding>,
+    pub(crate) base_duration: Duration,
+    pub(crate) create_duration: Duration,
+}
+
+/// A created and registered-to-be worktree with the child's rebased environments.
+pub(crate) struct PreparedAgentWorktree {
+    pub(crate) binding: Arc<AgentWorktreeBinding>,
+    pub(crate) environments: TurnEnvironmentSnapshot,
+    pub(crate) base_duration: Duration,
+    pub(crate) create_duration: Duration,
+}
+
+impl PreparedAgentWorktree {
+    pub(crate) fn spawn_worktree(&self) -> SpawnWorktree {
+        SpawnWorktree {
+            binding: Arc::clone(&self.binding),
+            base_duration: self.base_duration,
+            create_duration: self.create_duration,
+        }
+    }
+
+    /// Removes a worktree whose child never registered; it holds no agent work (R2.7).
+    pub(crate) async fn discard(self) {
+        discard_worktree(&self.binding).await;
+    }
+}
+
+/// Creates the managed worktree and records its metadata, then moves the child config onto it.
+///
+/// Spec UC2 step "create the managed worktree and record its metadata" and UC3 step "rebase
+/// the environments onto the worktree". On any failure after creation the worktree is removed.
+pub(crate) async fn prepare_agent_worktree(
+    thread_id: ThreadId,
+    inherited_environments: &TurnEnvironmentSnapshot,
+    config: &mut Config,
+    agent_path: &AgentPath,
+) -> Result<PreparedAgentWorktree, String> {
+    if cfg!(windows) {
+        return Err("worktree isolation is not supported on Windows yet".to_string());
+    }
+    let environment = inherited_environments
+        .single_local_environment()
+        .ok_or_else(|| {
+            "worktree isolation requires the child to run in a single local environment".to_string()
+        })?;
+    let environment_id = environment.selection.environment_id.clone();
+    let source_cwd = environment.cwd().to_abs_path().map_err(|_| {
+        "worktree isolation requires a local absolute working directory".to_string()
+    })?;
+    let settings = worktree_settings(config)?;
+    let base_kind = match config.agent_worktree_isolation.base {
+        AgentWorktreeBase::WorkingTree => AgentWorktreeBaseKind::WorkingTree,
+        AgentWorktreeBase::Head => AgentWorktreeBaseKind::Head,
+    };
+    let branch = agent_branch_name(agent_path, thread_id);
+    let thread_id_text = thread_id.to_string();
+    let blocking_source_cwd = source_cwd.clone();
+    let created = tokio::task::spawn_blocking(move || {
+        create_worktree_blocking(
+            settings,
+            blocking_source_cwd.as_path(),
+            base_kind,
+            thread_id_text,
+            branch,
+        )
+    })
+    .await
+    .map_err(|err| format!("worktree isolation failed: {err}"))??;
+    let CreatedWorktree {
+        root,
+        cwd,
+        source_root,
+        metadata,
+        base_duration,
+        create_duration,
+    } = created;
+    let binding = Arc::new(AgentWorktreeBinding {
+        thread_id,
+        agent_path: agent_path.clone(),
+        environment_id: environment_id.clone(),
+        root,
+        cwd,
+        source_root,
+        metadata,
+        parent_checkout_protected: AtomicBool::new(false),
+        state: Mutex::default(),
+    });
+    let rebased = inherited_environments
+        .rebase_onto_worktree(&environment_id, &binding.source_root, &binding.root)
+        .and_then(|environments| {
+            rebase_child_config(config, &binding)?;
+            Ok(environments)
+        });
+    let environments = match rebased {
+        Ok(environments) => environments,
+        Err(err) => {
+            discard_worktree(&binding).await;
+            return Err(err);
+        }
+    };
+    binding.set_parent_checkout_protected(parent_checkout_protected(
+        &environments,
+        &environment_id,
+        &binding,
+    ));
+    apply_isolation_note(config, &binding);
+    record_worktree_outcome("created");
+    Ok(PreparedAgentWorktree {
+        binding,
+        environments,
+        base_duration,
+        create_duration,
+    })
+}
+
+struct CreatedWorktree {
+    root: AbsolutePathBuf,
+    cwd: AbsolutePathBuf,
+    source_root: AbsolutePathBuf,
+    metadata: AgentWorktreeMetadata,
+    base_duration: Duration,
+    create_duration: Duration,
+}
+
+fn create_worktree_blocking(
+    settings: WorktreeSettings,
+    source_cwd: &Path,
+    base_kind: AgentWorktreeBaseKind,
+    thread_id: String,
+    branch: String,
+) -> Result<CreatedWorktree, String> {
+    let unavailable = |err: anyhow::Error| format!("worktree isolation is unavailable: {err:#}");
+    let base_started = Instant::now();
+    let base_sha = match base_kind {
+        AgentWorktreeBaseKind::WorkingTree => codex_worktree::snapshot_working_tree(source_cwd),
+        AgentWorktreeBaseKind::Head => codex_worktree::resolve_head_commit(source_cwd),
+    }
+    .map_err(unavailable)?;
+    let base_duration = base_started.elapsed();
+    let create_started = Instant::now();
+    let manager = WorktreeManager::new(settings);
+    let checkout = manager
+        .create(&CreateWorktree {
+            source_cwd: source_cwd.to_path_buf(),
+            base: Some(base_sha.clone()),
+        })
+        .map_err(unavailable)?;
+    let metadata = AgentWorktreeMetadata {
+        thread_id: thread_id.clone(),
+        base_sha,
+        base_kind,
+        branch,
+    };
+    let recorded = manager
+        .bind_thread(&checkout.root, &thread_id)
+        .and_then(|()| codex_worktree::write_agent_metadata(&checkout.root, &metadata))
+        .map_err(unavailable)
+        .and_then(|()| {
+            Ok((
+                absolute(&checkout.root)?,
+                absolute(&checkout.cwd)?,
+                absolute(&checkout.source_root)?,
+            ))
+        });
+    match recorded {
+        Ok((root, cwd, source_root)) => Ok(CreatedWorktree {
+            root,
+            cwd,
+            source_root,
+            metadata,
+            base_duration,
+            create_duration: create_started.elapsed(),
+        }),
+        Err(err) => {
+            if let Err(cleanup) =
+                codex_worktree::discard_agent_worktree(&checkout.source_root, &checkout.root)
+            {
+                warn!("failed to remove incomplete agent worktree: {cleanup:#}");
+            }
+            Err(err)
+        }
+    }
+}
+
+fn absolute(path: &Path) -> Result<AbsolutePathBuf, String> {
+    AbsolutePathBuf::from_absolute_path(path)
+        .map_err(|err| format!("worktree path {} is not absolute: {err}", path.display()))
+}
+
+async fn discard_worktree(binding: &AgentWorktreeBinding) {
+    let source_root = binding.source_root.to_path_buf();
+    let root = binding.root.to_path_buf();
+    match tokio::task::spawn_blocking(move || {
+        codex_worktree::discard_agent_worktree(&source_root, &root)
+    })
+    .await
+    {
+        Ok(Ok(())) => record_worktree_outcome("discarded"),
+        Ok(Err(err)) => warn!(
+            "failed to remove agent worktree {}: {err:#}",
+            binding.root.display()
+        ),
+        Err(err) => warn!("agent worktree cleanup task failed: {err}"),
+    }
+}
+
+/// `codex/agents/<last agent path segment>-<first 8 hex digits of the thread ID>`.
+pub(crate) fn agent_branch_name(agent_path: &AgentPath, thread_id: ThreadId) -> String {
+    let thread_id = thread_id.to_string();
+    let prefix = thread_id
+        .chars()
+        .filter(char::is_ascii_hexdigit)
+        .take(8)
+        .collect::<String>();
+    format!("codex/agents/{}-{prefix}", agent_path.name())
+}
+
+/// Shares Desktop's managed root (`$CODEX_HOME/worktrees` or `desktop.git-worktree-root`).
+fn worktree_settings(config: &Config) -> Result<WorktreeSettings, String> {
+    let desktop = config
+        .config_layer_stack
+        .effective_config()
+        .get("desktop")
+        .and_then(|desktop| serde_json::to_value(desktop).ok())
+        .and_then(|desktop| match desktop {
+            serde_json::Value::Object(settings) => Some(settings.into_iter().collect()),
+            _ => None,
+        });
+    WorktreeSettings::for_cli(config.codex_home.as_path(), desktop.as_ref())
+        .map_err(|err| format!("worktree isolation is unavailable: {err:#}"))
+}
+
+/// Where a path lies relative to the parent's repository.
+enum RebasedPath {
+    Inside(AbsolutePathBuf),
+    Outside,
+    ContainsRepository,
+}
+
+fn rebase_path(
+    path: &AbsolutePathBuf,
+    source_root: &AbsolutePathBuf,
+    worktree_root: &AbsolutePathBuf,
+) -> RebasedPath {
+    let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    for candidate in [path.as_path(), canonical.as_path()] {
+        if let Ok(relative) = candidate.strip_prefix(source_root) {
+            return RebasedPath::Inside(worktree_root.join(relative));
+        }
+    }
+    if source_root.as_path().starts_with(path.as_path())
+        || source_root.as_path().starts_with(&canonical)
+    {
+        RebasedPath::ContainsRepository
+    } else {
+        RebasedPath::Outside
+    }
+}
+
+/// Maps workspace roots onto the worktree (R3.2).
+///
+/// Roots inside the repository move to the same relative path in the worktree, roots outside
+/// stay and roots containing the repository are dropped. When no root lies in the worktree
+/// afterwards, the worktree root is added so the child can still write its own checkout.
+pub(crate) fn rebase_workspace_roots(
+    roots: &[AbsolutePathBuf],
+    source_root: &AbsolutePathBuf,
+    worktree_root: &AbsolutePathBuf,
+) -> Vec<AbsolutePathBuf> {
+    let mut rebased = Vec::with_capacity(roots.len().max(1));
+    for root in roots {
+        let next = match rebase_path(root, source_root, worktree_root) {
+            RebasedPath::Inside(path) => path,
+            RebasedPath::Outside => root.clone(),
+            RebasedPath::ContainsRepository => continue,
+        };
+        if !rebased.contains(&next) {
+            rebased.push(next);
+        }
+    }
+    if !rebased
+        .iter()
+        .any(|root| root.as_path().starts_with(worktree_root.as_path()))
+    {
+        rebased.push(worktree_root.clone());
+    }
+    rebased
+}
+
+pub(crate) fn rebase_workspace_root_uris(
+    roots: &[PathUri],
+    source_root: &AbsolutePathBuf,
+    worktree_root: &AbsolutePathBuf,
+) -> Result<Vec<PathUri>, String> {
+    let roots = roots
+        .iter()
+        .map(PathUri::to_abs_path)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "worktree isolation requires local workspace roots".to_string())?;
+    Ok(rebase_workspace_roots(&roots, source_root, worktree_root)
+        .iter()
+        .map(PathUri::from_abs_path)
+        .collect())
+}
+
+/// Moves a working directory inside the repository to the same place in the worktree.
+pub(crate) fn rebase_cwd(
+    cwd: &PathUri,
+    source_root: &AbsolutePathBuf,
+    worktree_root: &AbsolutePathBuf,
+) -> Result<PathUri, String> {
+    let path = cwd
+        .to_abs_path()
+        .map_err(|_| "worktree isolation requires a local working directory".to_string())?;
+    match rebase_path(&path, source_root, worktree_root) {
+        RebasedPath::Inside(path) => Ok(PathUri::from_abs_path(&path)),
+        RebasedPath::Outside | RebasedPath::ContainsRepository => Err(format!(
+            "working directory {} is outside the repository {}",
+            path.display(),
+            source_root.display()
+        )),
+    }
+}
+
+/// Moves absolute permission entries inside the repository onto the worktree.
+pub(crate) fn rebase_permission_profile(
+    profile: &PermissionProfile,
+    source_root: &AbsolutePathBuf,
+    worktree_root: &AbsolutePathBuf,
+) -> Result<PermissionProfile, String> {
+    let PermissionProfile::Managed {
+        file_system:
+            ManagedFileSystemPermissions::Restricted {
+                entries,
+                glob_scan_max_depth,
+            },
+        network,
+    } = profile
+    else {
+        return Ok(profile.clone());
+    };
+    let source_prefix = format!("{}/", source_root.display());
+    let entries = entries
+        .iter()
+        .map(|entry| {
+            let path = match &entry.path {
+                FileSystemPath::Path { path } => match path.to_abs_path() {
+                    Ok(absolute) => match rebase_path(&absolute, source_root, worktree_root) {
+                        RebasedPath::Inside(rebased) => FileSystemPath::Path {
+                            path: PathUri::from_abs_path(&rebased),
+                        },
+                        RebasedPath::Outside | RebasedPath::ContainsRepository => {
+                            entry.path.clone()
+                        }
+                    },
+                    Err(_) => entry.path.clone(),
+                },
+                FileSystemPath::GlobPattern { pattern } => {
+                    match pattern.strip_prefix(&source_prefix) {
+                        Some(relative) => FileSystemPath::GlobPattern {
+                            pattern: format!("{}/{relative}", worktree_root.display()),
+                        },
+                        None if pattern == &source_root.display().to_string() => {
+                            return Err(format!(
+                                "permission pattern `{pattern}` covers the whole repository and cannot be moved to the worktree"
+                            ));
+                        }
+                        None => entry.path.clone(),
+                    }
+                }
+                FileSystemPath::Special { .. } => entry.path.clone(),
+            };
+            Ok(FileSystemSandboxEntry {
+                path,
+                access: entry.access,
+                missing_path_behavior: entry.missing_path_behavior,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Restricted {
+            entries,
+            glob_scan_max_depth: *glob_scan_max_depth,
+        },
+        network: *network,
+    })
+}
+
+pub(crate) fn rebase_permission_snapshot(
+    snapshot: &PermissionProfileSnapshot,
+    source_root: &AbsolutePathBuf,
+    worktree_root: &AbsolutePathBuf,
+) -> Result<PermissionProfileSnapshot, String> {
+    let profile =
+        rebase_permission_profile(snapshot.permission_profile(), source_root, worktree_root)?;
+    Ok(match snapshot.active_permission_profile() {
+        Some(active) => {
+            let roots = snapshot
+                .profile_workspace_roots()
+                .iter()
+                .filter_map(|root| match root.as_uri().to_abs_path() {
+                    Ok(path) => match rebase_path(&path, source_root, worktree_root) {
+                        RebasedPath::Inside(rebased) => Some(ProfileWorkspaceRoot::from(rebased)),
+                        RebasedPath::Outside => Some(root.clone()),
+                        RebasedPath::ContainsRepository => None,
+                    },
+                    Err(_) => Some(root.clone()),
+                })
+                .collect();
+            PermissionProfileSnapshot::active_with_profile_workspace_roots(profile, active, roots)
+        }
+        None => PermissionProfileSnapshot::legacy(profile),
+    })
+}
+
+/// Moves the child config's cwd, workspace roots and permissions onto the worktree (R3.1–R3.3).
+pub(crate) fn rebase_child_config(
+    config: &mut Config,
+    binding: &AgentWorktreeBinding,
+) -> Result<(), String> {
+    config.cwd = binding.cwd.clone();
+    let roots =
+        rebase_workspace_roots(&config.workspace_roots, &binding.source_root, &binding.root);
+    config.workspace_roots = roots;
+    let snapshot = config.permissions.permission_profile_state().snapshot();
+    let rebased = rebase_permission_snapshot(&snapshot, &binding.source_root, &binding.root)?;
+    if rebased != snapshot {
+        config
+            .permissions
+            .set_permission_profile_from_session_snapshot(rebased)
+            .map_err(|err| format!("worktree permissions are invalid: {err}"))?;
+    }
+    Ok(())
+}
+
+/// Whether the child's sandbox keeps the parent's checkout read-only (R3.4).
+fn parent_checkout_protected(
+    environments: &TurnEnvironmentSnapshot,
+    environment_id: &str,
+    binding: &AgentWorktreeBinding,
+) -> bool {
+    environments
+        .turn_environments()
+        .find(|environment| environment.selection.environment_id == environment_id)
+        .is_some_and(|environment| environment_protects_source(environment, binding))
+}
+
+fn environment_protects_source(
+    environment: &TurnEnvironment,
+    binding: &AgentWorktreeBinding,
+) -> bool {
+    let policy = environment
+        .permission_profile_with_workspace_roots()
+        .file_system_sandbox_policy();
+    match policy.kind {
+        FileSystemSandboxKind::Restricted => !policy
+            .can_write_local_path_with_cwd(binding.source_root.as_path(), binding.cwd.as_path()),
+        FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => false,
+    }
+}
+
+/// Developer instructions appended for an isolated child (R3.5).
+pub(crate) fn isolation_developer_note(binding: &AgentWorktreeBinding) -> String {
+    let protection = if binding.parent_checkout_protected() {
+        "read-only"
+    } else {
+        "still writable (the sandbox does not protect it)"
+    };
+    format!(
+        "You are working in an isolated git worktree at {cwd}. It was created from the {base_description} ({base_short}) of the parent checkout {source_root}, which is {protection} for you. Keep all edits inside your working directory and prefer relative paths. Do not run git commands that write repository metadata (add, commit, switch, stash, merge): they fail in the sandbox. Do not request escalated permissions to edit the parent checkout. When you finish, Codex records your changes on branch {branch} and reports them to the parent.",
+        cwd = binding.cwd.display(),
+        base_description = binding.metadata.base_kind.description(),
+        base_short = short_sha(&binding.metadata.base_sha),
+        source_root = binding.source_root.display(),
+        branch = binding.metadata.branch,
+    )
+}
+
+pub(crate) fn apply_isolation_note(config: &mut Config, binding: &AgentWorktreeBinding) {
+    let note = isolation_developer_note(binding);
+    config.developer_instructions = Some(match config.developer_instructions.take() {
+        Some(existing) if !existing.trim().is_empty() => format!("{existing}\n\n{note}"),
+        Some(_) | None => note,
+    });
+}
+
+/// Prepares a reloaded isolated child: its worktree must exist, and its config moves onto it.
+///
+/// Spec UC5 step "rebase the environments onto the worktree" for cold reload and resume.
+pub(crate) fn prepare_reload(
+    binding: &AgentWorktreeBinding,
+    config: &mut Config,
+    environments: Option<TurnEnvironmentSnapshot>,
+) -> Result<Option<TurnEnvironmentSnapshot>, String> {
+    if !binding.root.join(".git").exists() {
+        return Err(format!(
+            "its worktree {} no longer exists; changes recorded before it was removed are on branch {}",
+            binding.root.display(),
+            binding.metadata.branch
+        ));
+    }
+    rebase_child_config(config, binding)?;
+    let environments = environments
+        .map(|environments| {
+            environments.rebase_onto_worktree(
+                &binding.environment_id,
+                &binding.source_root,
+                &binding.root,
+            )
+        })
+        .transpose()?;
+    if let Some(environments) = &environments {
+        binding.set_parent_checkout_protected(parent_checkout_protected(
+            environments,
+            &binding.environment_id,
+            binding,
+        ));
+    }
+    apply_isolation_note(config, binding);
+    Ok(environments)
+}
+
+/// Recovers a binding from a child's stored cwd after a restart (R5.2).
+///
+/// Paths outside the managed root, and worktrees whose agent metadata names another thread,
+/// are not this child's isolation. An agent worktree for this thread is accepted only when
+/// its owner record names the same thread.
+pub(crate) async fn discover_binding(
+    config: &Config,
+    thread_id: ThreadId,
+    agent_path: AgentPath,
+    stored_cwd: &Path,
+) -> Result<Option<Arc<AgentWorktreeBinding>>, String> {
+    let settings = worktree_settings(config)?;
+    let stored_cwd = stored_cwd.to_path_buf();
+    let discovered = tokio::task::spawn_blocking(move || {
+        discover_binding_blocking(settings, thread_id, &stored_cwd)
+    })
+    .await
+    .map_err(|err| format!("worktree discovery failed: {err}"))??;
+    Ok(discovered.map(|(root, cwd, source_root, metadata)| {
+        Arc::new(AgentWorktreeBinding {
+            thread_id,
+            agent_path,
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            root,
+            cwd,
+            source_root,
+            metadata,
+            parent_checkout_protected: AtomicBool::new(false),
+            state: Mutex::new(BindingState {
+                stopped: true,
+                finalized: false,
+            }),
+        })
+    }))
+}
+
+type DiscoveredBinding = (
+    AbsolutePathBuf,
+    AbsolutePathBuf,
+    AbsolutePathBuf,
+    AgentWorktreeMetadata,
+);
+
+fn discover_binding_blocking(
+    settings: WorktreeSettings,
+    thread_id: ThreadId,
+    stored_cwd: &Path,
+) -> Result<Option<DiscoveredBinding>, String> {
+    let manager = WorktreeManager::new(settings);
+    let Some(root) = manager.managed_checkout_root(stored_cwd) else {
+        return Ok(None);
+    };
+    if !root.join(".git").exists() {
+        return Err(format!(
+            "its managed worktree {} no longer exists",
+            root.display()
+        ));
+    }
+    let metadata = codex_worktree::read_agent_metadata(&root)
+        .map_err(|err| format!("cannot read agent worktree metadata: {err:#}"))?;
+    let Some(metadata) = metadata.filter(|metadata| metadata.thread_id == thread_id.to_string())
+    else {
+        return Ok(None);
+    };
+    let owner = manager.owner(&root).map_err(|err| {
+        format!(
+            "cannot read the owner of worktree {}: {err:#}",
+            root.display()
+        )
+    })?;
+    if owner.as_deref() != Some(metadata.thread_id.as_str()) {
+        return Err(format!(
+            "worktree {} is owned by {}, not by this agent",
+            root.display(),
+            owner.as_deref().unwrap_or("no thread")
+        ));
+    }
+    let source_root = codex_worktree::main_worktree_root(&root).map_err(|err| {
+        format!(
+            "cannot locate the repository of worktree {}: {err:#}",
+            root.display()
+        )
+    })?;
+    let relative = stored_cwd
+        .strip_prefix(&root)
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    Ok(Some((
+        absolute(&root)?,
+        absolute(&root.join(relative))?,
+        absolute(&source_root)?,
+        metadata,
+    )))
+}
+
+/// Checkpoints the worktree and renders the completion-mail block (spec UC4).
+pub(crate) async fn checkpoint_report(binding: &Arc<AgentWorktreeBinding>) -> String {
+    let _state = binding.state.lock().await;
+    let blocking = Arc::clone(binding);
+    let result = tokio::task::spawn_blocking(move || {
+        let checkpoint = codex_worktree::checkpoint(CheckpointRequest {
+            root: blocking.root.as_path(),
+            metadata: &blocking.metadata,
+            agent_path: blocking.agent_path.as_str(),
+        })
+        .map_err(|err| format!("{err:#}"));
+        let changes = codex_worktree::branch_changes(blocking.root.as_path(), &blocking.metadata)
+            .map_err(|err| format!("{err:#}"));
+        (checkpoint, changes)
+    })
+    .await;
+    let (checkpoint, changes) = match result {
+        Ok(result) => result,
+        Err(err) => (Err(format!("checkpoint task failed: {err}")), Ok(None)),
+    };
+    if let Ok(CheckpointOutcome::Committed {
+        index_refresh_error: Some(error),
+        ..
+    }) = &checkpoint
+    {
+        warn!("agent worktree index refresh failed after checkpoint: {error}");
+    }
+    render_worktree_block(binding, checkpoint.as_ref().err(), changes)
+}
+
+/// Renders the `<agent_worktree>` block appended to the completion message (R4.4, R4.5, R7.2).
+pub(crate) fn render_worktree_block(
+    binding: &AgentWorktreeBinding,
+    checkpoint_error: Option<&String>,
+    changes: Result<Option<BranchChanges>, String>,
+) -> String {
+    let base_short = short_sha(&binding.metadata.base_sha);
+    let mut lines = vec!["<agent_worktree>".to_string()];
+    let changes = match changes {
+        Ok(changes) => changes,
+        Err(err) => {
+            lines.push(format!("summary_failed: {}", single_line(&err)));
+            None
+        }
+    };
+    match &changes {
+        Some(_) => lines.push(format!("branch: {}", binding.metadata.branch)),
+        None => lines.push("branch: none".to_string()),
+    }
+    lines.push(format!(
+        "base: {base_short} ({})",
+        binding.metadata.base_kind.description()
+    ));
+    if let Some(err) = checkpoint_error {
+        lines.push(format!("checkpoint_failed: {}", single_line(err)));
+    }
+    match &changes {
+        Some(changes) => {
+            lines.push(format!("changes: {}", changes.shortstat));
+            let mut files = changes
+                .files
+                .iter()
+                .map(|file| format!("{} {}", file.status, file.path))
+                .collect::<Vec<_>>()
+                .join("; ");
+            if changes.total_files > changes.files.len() {
+                files.push_str(&format!(
+                    "; and {} more",
+                    changes.total_files - changes.files.len()
+                ));
+            }
+            lines.push(format!("files: {files}"));
+        }
+        None => lines.push("changes: none".to_string()),
+    }
+    lines.push(format!("checkout: {}", binding.root.display()));
+    if changes.is_some() {
+        lines.push(format!(
+            "apply: git diff --binary {} {} | git apply",
+            binding.metadata.base_sha, binding.metadata.branch
+        ));
+    }
+    lines.push("</agent_worktree>".to_string());
+    lines.join("\n")
+}
+
+async fn finalize_tree_worktrees(bindings: Vec<Arc<AgentWorktreeBinding>>) {
+    for binding in bindings {
+        if binding.state.lock().await.stopped {
+            finalize_tree_worktree(binding).await;
+        }
+    }
+}
+
+/// Checkpoints a stopped child's worktree and removes it when it never changed (R6.1, R6.4).
+async fn finalize_tree_worktree(binding: Arc<AgentWorktreeBinding>) {
+    let mut state = binding.state.lock().await;
+    if state.finalized || !state.stopped {
+        return;
+    }
+    state.finalized = true;
+    let blocking = Arc::clone(&binding);
+    let result = tokio::task::spawn_blocking(move || {
+        if blocking.root.join(".git").exists() {
+            codex_worktree::checkpoint(CheckpointRequest {
+                root: blocking.root.as_path(),
+                metadata: &blocking.metadata,
+                agent_path: blocking.agent_path.as_str(),
+            })?;
+        }
+        codex_worktree::remove_if_unchanged(
+            blocking.source_root.as_path(),
+            blocking.root.as_path(),
+            &blocking.metadata,
+        )
+    })
+    .await;
+    match result {
+        Ok(Ok(RemoveOutcome::Removed | RemoveOutcome::AlreadyMissing)) => {
+            record_worktree_outcome("removed");
+        }
+        Ok(Ok(RemoveOutcome::Kept(reason))) => {
+            tracing::info!(
+                worktree = %binding.root.display(),
+                branch = %binding.metadata.branch,
+                ?reason,
+                "kept agent worktree with changes"
+            );
+            record_worktree_outcome("kept");
+        }
+        Ok(Err(err)) => {
+            warn!(
+                "failed to finalize agent worktree {}: {err:#}",
+                binding.root.display()
+            );
+            record_worktree_outcome("kept");
+        }
+        Err(err) => warn!("agent worktree finalize task failed: {err}"),
+    }
+}
+
+pub(crate) fn record_worktree_outcome(outcome: &'static str) {
+    if let Some(metrics) = codex_otel::global() {
+        let _ = metrics.counter(WORKTREE_METRIC, /*inc*/ 1, &[("outcome", outcome)]);
+    }
+}
+
+fn short_sha(sha: &str) -> &str {
+    sha.get(..12).unwrap_or(sha)
+}
+
+fn single_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+#[path = "worktree_isolation_tests.rs"]
+mod tests;

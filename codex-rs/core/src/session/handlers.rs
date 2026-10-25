@@ -338,6 +338,18 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
 
     crate::hook_runtime::run_session_end_hooks(sess).await;
     emit_thread_stop_lifecycle(sess).await;
+
+    // Fork: with the session's processes stopped, finalize agent worktrees once the agent
+    // tree stops; eviction alone keeps them (spec agent-worktree-isolation UC6).
+    let runtime = &sess.services.local_agent_runtime;
+    runtime
+        .worktrees
+        .session_stopped(
+            sess.thread_id,
+            runtime.is_tree_root(sess.thread_id),
+            runtime.shutdown.is_cancelled(),
+        )
+        .await;
 }
 
 async fn emit_thread_stop_lifecycle(sess: &Session) {

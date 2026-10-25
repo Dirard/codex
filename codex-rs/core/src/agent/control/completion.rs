@@ -110,9 +110,16 @@ impl LocalAgentControl {
                 &status,
             ),
         };
-        let Some(message) = message else {
+        let Some(mut message) = message else {
             return;
         };
+        // Fork: record an isolated child's changes on its branch before the parent hears
+        // about the turn, and tell the parent how to apply them (spec UC4).
+        if let Some(binding) = self.runtime.worktrees.get(outcome.thread_id) {
+            let block = crate::agent::worktree_isolation::checkpoint_report(&binding).await;
+            message.push_str("\n\n");
+            message.push_str(&block);
+        }
         // `communication` owns the message. Keep a second copy only when the
         // recorder will actually need it after parent delivery succeeds.
         let trace_message = trace.is_enabled().then(|| message.clone());

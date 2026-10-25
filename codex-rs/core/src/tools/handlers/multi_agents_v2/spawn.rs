@@ -1,6 +1,7 @@
 use super::*;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::types::SpawnAgentForkMode;
+use crate::agent::worktree_isolation::SpawnedWorktree;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::thread_spawn::ThreadSpawnError;
 use crate::thread_spawn::ThreadSpawnRequest;
@@ -113,6 +114,7 @@ async fn handle_spawn_agent(
     let turn = &step_context.turn;
     let arguments = function_arguments(payload)?;
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
+    let isolation = args.isolation()?;
     let role_name = args
         .agent_type
         .as_deref()
@@ -143,11 +145,15 @@ async fn handle_spawn_agent(
             agent_type: args.agent_type.clone(),
             model: args.model,
             reasoning_effort: args.reasoning_effort,
+            isolation,
         },
     )
     .await
     .map_err(|err| match err {
-        ThreadSpawnError::Preparation(message) => FunctionCallError::RespondToModel(message),
+        ThreadSpawnError::Preparation(message)
+        | ThreadSpawnError::IsolationUnavailable(message) => {
+            FunctionCallError::RespondToModel(message)
+        }
         ThreadSpawnError::Backend(err) => {
             record_collab_spawn_failure(
                 &turn.session_telemetry,
@@ -192,12 +198,21 @@ async fn handle_spawn_agent(
     let task_name = String::from(new_agent_path);
 
     let hide_agent_metadata = turn.config.multi_agent_v2.hide_spawn_agent_metadata;
+    // Fork: the worktree stays visible with hidden metadata; the parent needs it to merge.
+    let worktree = spawned
+        .worktree
+        .as_ref()
+        .map(|binding| binding.spawned_worktree());
     let output = if hide_agent_metadata {
-        SpawnAgentResult::HiddenMetadata { task_name }
+        SpawnAgentResult::HiddenMetadata {
+            task_name,
+            worktree,
+        }
     } else {
         SpawnAgentResult::WithNickname {
             task_name,
             nickname,
+            worktree,
         }
     };
     Ok((output, new_thread_id, agent_status, agent_snapshot))
@@ -219,9 +234,26 @@ struct SpawnAgentArgs {
     reasoning_effort: Option<ReasoningEffort>,
     fork_turns: Option<String>,
     fork_context: Option<bool>,
+    /// Fork: `none` or `worktree`; omission uses the configured default.
+    isolation: Option<String>,
 }
 
 impl SpawnAgentArgs {
+    fn isolation(&self) -> Result<Option<codex_features::AgentIsolation>, FunctionCallError> {
+        match self.isolation.as_deref().map(str::trim) {
+            None | Some("") => Ok(None),
+            Some(value) if value.eq_ignore_ascii_case("none") => {
+                Ok(Some(codex_features::AgentIsolation::None))
+            }
+            Some(value) if value.eq_ignore_ascii_case("worktree") => {
+                Ok(Some(codex_features::AgentIsolation::Worktree))
+            }
+            Some(_) => Err(FunctionCallError::RespondToModel(
+                "isolation must be `none` or `worktree`".to_string(),
+            )),
+        }
+    }
+
     fn fork_mode(
         &self,
         default_fork_turns: &str,
@@ -259,9 +291,13 @@ pub(crate) enum SpawnAgentResult {
     WithNickname {
         task_name: String,
         nickname: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        worktree: Option<SpawnedWorktree>,
     },
     HiddenMetadata {
         task_name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        worktree: Option<SpawnedWorktree>,
     },
 }
 

@@ -19,6 +19,7 @@ pub use agent::RemoveOutcome;
 pub use agent::branch_changes;
 pub use agent::checkpoint;
 pub use agent::discard_agent_worktree;
+pub use agent::main_worktree_root;
 pub use agent::read_agent_metadata;
 pub use agent::remove_if_unchanged;
 pub use agent::resolve_head_commit;
