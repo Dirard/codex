@@ -1678,6 +1678,15 @@ impl Session {
         }
     }
 
+    /// Fork: lets tests outside this module give a test session model-derived instructions.
+    #[cfg(test)]
+    pub(crate) async fn set_base_instructions_provenance_for_test(
+        &self,
+        provenance: Option<BaseInstructionsProvenance>,
+    ) {
+        self.state.lock().await.base_instructions_provenance = provenance;
+    }
+
     // Merges connector IDs into the session-level explicit connector selection.
     #[tracing::instrument(
         level = "trace",

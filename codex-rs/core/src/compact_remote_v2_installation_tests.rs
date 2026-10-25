@@ -432,3 +432,76 @@ async fn prepared_prefix_counts_tool_declarations_in_headroom() {
         .collect::<Vec<_>>();
     assert_eq!(after, before);
 }
+
+async fn hopeless_check_session(
+    context_window: Option<i64>,
+) -> (Arc<Session>, Arc<TurnContext>, Arc<StepContext>) {
+    let (sess, turn, _events) =
+        crate::session::tests::make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            Vec::new(),
+            move |config| {
+                config.model = Some("gpt-5.2".to_string());
+                config.model_context_window = context_window;
+                // The request copy of model instructions then omits the update_plan section.
+                config.update_plan_enabled = false;
+                config.model_catalog = None;
+            },
+        )
+        .await;
+    sess.set_base_instructions_provenance_for_test(Some(
+        codex_protocol::models::BaseInstructionsProvenance::Model {
+            model: turn.model_info().slug.clone(),
+        },
+    ))
+    .await;
+    let step = sess
+        .capture_step_context(Arc::clone(&turn), &CancellationToken::new())
+        .await
+        .expect("capture step");
+    (sess, turn, step)
+}
+
+/// The fail-fast lower bound counts the instructions the compaction request sends: a window
+/// that fits them and the tools is not hopeless, even though the persisted instructions with
+/// the update_plan section would not fit.
+#[tokio::test]
+async fn hopeless_auto_compaction_counts_the_sent_instructions() {
+    let (sess, turn, step) = hopeless_check_session(/*context_window*/ None).await;
+    let token_count = |text: &str| {
+        i64::try_from(codex_utils_output_truncation::approx_token_count(text)).expect("tokens")
+    };
+    let persisted = token_count(&sess.get_base_instructions().await.text);
+    let sent = token_count(&sess.get_prompt_base_instructions().await.text);
+    assert!(sent < persisted, "sent={sent} persisted={persisted}");
+    let tools = tool_declaration_tokens(&step);
+    let percent = turn.model_info().effective_context_window_percent;
+    // A full window halfway between the sent and the persisted lower bounds.
+    let context_window = ((sent + tools + (persisted - sent) / 2) * 100 + percent - 1) / percent;
+
+    let (sess, turn, step) = hopeless_check_session(Some(context_window)).await;
+    let full_window = step
+        .turn
+        .model_info()
+        .usable_context_window()
+        .expect("configured window");
+    assert!(
+        sent + tools < full_window && full_window <= persisted + tools,
+        "sent={sent} persisted={persisted} tools={tools} window={full_window}"
+    );
+    reject_hopeless_auto_compaction(&sess, &turn, &step, CompactionTrigger::Auto)
+        .await
+        .expect("the sent instructions and tools fit the window");
+
+    let (sess, turn, step) = hopeless_check_session(Some(context_window / 2)).await;
+    let error = reject_hopeless_auto_compaction(&sess, &turn, &step, CompactionTrigger::Auto)
+        .await
+        .expect_err("half the window cannot hold the instructions and tools");
+    assert!(matches!(
+        error.details(),
+        CodexErrorDetails::ContextWindowExceeded
+    ));
+    reject_hopeless_auto_compaction(&sess, &turn, &step, CompactionTrigger::Manual)
+        .await
+        .expect("an explicit /compact still sends its request");
+}
