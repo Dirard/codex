@@ -61,6 +61,9 @@ yarn-error.log*
 .vercel/
 .netlify/
 /.tmp/sdk-ci/
+# scripts/fork/go-codec-diff.sh (temporary legacy protocol package and its registry)
+/sdk/go/internal/protocodex/legacyprotocol/
+/sdk/go/internal/protocodex/codec_diff_registry_test.go
 /upstream-rusty-v8/
 
 # patches
