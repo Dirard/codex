@@ -84,6 +84,10 @@ async fn apply_role_to_config_inner(
     };
     let role_layer_toml = load_role_layer_toml(config, config_file, is_built_in, role_name).await?;
     let role_config = deserialize_config_toml_with_base(role_layer_toml, &config.codex_home)?;
+    // Fork: a role may choose its children's isolation defaults; the feature flag itself
+    // stays with the parent session's configuration.
+    let worktree_isolation =
+        crate::config::agent_worktree_isolation_toml_config(role_config.features.as_ref()).cloned();
     let model_provider = role_config.model_provider.filter(|provider_id| {
         role_config.model_providers.contains_key(provider_id)
             || (!built_in_model_providers(/*openai_base_url*/ None).contains_key(provider_id)
@@ -133,13 +137,20 @@ async fn apply_role_to_config_inner(
     }
 
     let role_layer_toml = TomlValue::try_from(&overrides)?;
-    if role_layer_toml
+    if !role_layer_toml
         .as_table()
         .is_some_and(toml::map::Map::is_empty)
     {
-        return Ok(());
+        *config = role_overrides::build_next_config(config, role_layer_toml, &overrides)?;
     }
-    *config = role_overrides::build_next_config(config, role_layer_toml, &overrides)?;
+    if let Some(worktree_isolation) = worktree_isolation {
+        if let Some(default_isolation) = worktree_isolation.default_isolation {
+            config.agent_worktree_isolation.default_isolation = default_isolation;
+        }
+        if let Some(base) = worktree_isolation.base {
+            config.agent_worktree_isolation.base = base;
+        }
+    }
     Ok(())
 }
 

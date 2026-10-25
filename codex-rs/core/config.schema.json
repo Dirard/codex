@@ -6,6 +6,25 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AgentIsolation": {
+      "description": "Where a MultiAgentV2 child runs relative to its parent's checkout.",
+      "oneOf": [
+        {
+          "description": "The child shares its parent's checkout.",
+          "enum": [
+            "none"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The child works in its own managed git worktree.",
+          "enum": [
+            "worktree"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -27,6 +46,51 @@
             "type": "string"
           },
           "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "AgentWorktreeBase": {
+      "description": "The commit an isolated child's worktree starts from.",
+      "oneOf": [
+        {
+          "description": "The parent's HEAD plus tracked modifications and untracked, non-ignored files.",
+          "enum": [
+            "working_tree"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The parent's HEAD commit.",
+          "enum": [
+            "head"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "AgentWorktreeIsolationConfigToml": {
+      "additionalProperties": false,
+      "description": "`[features.agent_worktree_isolation]` settings for isolated MultiAgentV2 children.",
+      "properties": {
+        "base": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AgentWorktreeBase"
+            }
+          ],
+          "description": "Commit an isolated child's worktree starts from."
+        },
+        "default_isolation": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AgentIsolation"
+            }
+          ],
+          "description": "Isolation used when `spawn_agent` omits `isolation`. Role config files may set it."
+        },
+        "enabled": {
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -755,6 +819,9 @@
           "properties": {
             "agent_message_board": {
               "type": "boolean"
+            },
+            "agent_worktree_isolation": {
+              "$ref": "#/definitions/FeatureToml_for_AgentWorktreeIsolationConfigToml"
             },
             "analytics_plan_history": {
               "type": "boolean"
@@ -1676,6 +1743,16 @@
         }
       },
       "type": "object"
+    },
+    "FeatureToml_for_AgentWorktreeIsolationConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/AgentWorktreeIsolationConfigToml"
+        }
+      ]
     },
     "FeatureToml_for_AsyncCompactionConfigToml": {
       "anyOf": [
@@ -7392,6 +7469,9 @@
       "properties": {
         "agent_message_board": {
           "type": "boolean"
+        },
+        "agent_worktree_isolation": {
+          "$ref": "#/definitions/FeatureToml_for_AgentWorktreeIsolationConfigToml"
         },
         "analytics_plan_history": {
           "type": "boolean"

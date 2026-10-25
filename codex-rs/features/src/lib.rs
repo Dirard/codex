@@ -17,6 +17,9 @@ use toml::Table;
 mod feature_configs;
 mod legacy;
 mod runtime_auth;
+pub use feature_configs::AgentIsolation;
+pub use feature_configs::AgentWorktreeBase;
+pub use feature_configs::AgentWorktreeIsolationConfigToml;
 pub use feature_configs::AsyncCompactionConfigToml;
 pub use feature_configs::CodeModeConfigToml;
 pub use feature_configs::CodeModeHostConfigToml;
@@ -240,6 +243,8 @@ pub enum Feature {
     MultiAgentV2,
     /// Fork: run `explorer` children read-only on a cheaper model with a capped result.
     ExplorerProfile,
+    /// Fork: let MultiAgentV2 children work in their own managed git worktree.
+    AgentWorktreeIsolation,
     /// Keep spawn model choices in append-only context instead of tool descriptions.
     ModelCatalogInContext,
     /// Inherit client-defined dynamic tools in fresh V2 subagents.
@@ -915,6 +920,8 @@ pub struct FeaturesToml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explorer_profile: Option<FeatureToml<ExplorerProfileConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_worktree_isolation: Option<FeatureToml<AgentWorktreeIsolationConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<FeatureToml<TokenBudgetConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub async_compaction: Option<FeatureToml<AsyncCompactionConfigToml>>,
@@ -987,6 +994,13 @@ impl FeaturesToml {
             .and_then(FeatureToml::enabled)
         {
             entries.insert(Feature::ExplorerProfile.key().to_string(), enabled);
+        }
+        if let Some(enabled) = self
+            .agent_worktree_isolation
+            .as_ref()
+            .and_then(FeatureToml::enabled)
+        {
+            entries.insert(Feature::AgentWorktreeIsolation.key().to_string(), enabled);
         }
         if let Some(enabled) = self.token_budget.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::TokenBudget.key().to_string(), enabled);
@@ -1559,6 +1573,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ExplorerProfile,
         key: "explorer_profile",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::AgentWorktreeIsolation,
+        key: "agent_worktree_isolation",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

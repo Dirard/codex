@@ -406,6 +406,49 @@ impl FeatureConfig for ExplorerProfileConfigToml {
     }
 }
 
+// Fork: worktree isolation for MultiAgentV2 children.
+/// Where a MultiAgentV2 child runs relative to its parent's checkout.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentIsolation {
+    /// The child shares its parent's checkout.
+    #[default]
+    None,
+    /// The child works in its own managed git worktree.
+    Worktree,
+}
+
+/// The commit an isolated child's worktree starts from.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentWorktreeBase {
+    /// The parent's HEAD plus tracked modifications and untracked, non-ignored files.
+    #[default]
+    WorkingTree,
+    /// The parent's HEAD commit.
+    Head,
+}
+
+/// `[features.agent_worktree_isolation]` settings for isolated MultiAgentV2 children.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentWorktreeIsolationConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Isolation used when `spawn_agent` omits `isolation`. Role config files may set it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_isolation: Option<AgentIsolation>,
+    /// Commit an isolated child's worktree starts from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<AgentWorktreeBase>,
+}
+
+impl FeatureConfig for AgentWorktreeIsolationConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContextManagementConfigToml {

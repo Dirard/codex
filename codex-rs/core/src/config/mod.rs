@@ -64,6 +64,9 @@ use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_exec_server::ReadFileOptions;
+use codex_features::AgentIsolation;
+use codex_features::AgentWorktreeBase;
+use codex_features::AgentWorktreeIsolationConfigToml;
 use codex_features::CodeModeConfigToml;
 use codex_features::CurrentTimeReminderConfigToml;
 use codex_features::CurrentTimeReminderDeliveryMode;
@@ -1163,6 +1166,10 @@ pub struct Config {
     /// Fork: settings applied to `explorer` children while `explorer_profile` is enabled.
     pub explorer_profile: ExplorerProfileConfig,
 
+    /// Fork: defaults for MultiAgentV2 children isolated in managed git worktrees.
+    /// The `agent_worktree_isolation` feature flag gates the behavior itself.
+    pub agent_worktree_isolation: AgentWorktreeIsolationConfig,
+
     /// Context-window token budget configuration, when enabled.
     pub token_budget: Option<TokenBudgetConfig>,
     /// Runtime snapshot of configured token-budget preferences before startup activation.
@@ -1415,6 +1422,30 @@ impl Default for ExplorerProfileConfig {
             model: None,
             reasoning_effort: None,
             max_result_tokens: DEFAULT_EXPLORER_PROFILE_MAX_RESULT_TOKENS,
+        }
+    }
+}
+
+/// Fork: resolved `[features.agent_worktree_isolation]` settings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct AgentWorktreeIsolationConfig {
+    /// Isolation used when `spawn_agent` omits `isolation`; role config files may set it.
+    pub default_isolation: AgentIsolation,
+    /// Commit an isolated child's worktree starts from.
+    pub base: AgentWorktreeBase,
+}
+
+impl AgentWorktreeIsolationConfig {
+    /// Resolves the settings from a features table, keeping defaults for omitted values.
+    pub(crate) fn from_features_toml(features: Option<&FeaturesToml>) -> Self {
+        let configured = agent_worktree_isolation_toml_config(features);
+        Self {
+            default_isolation: configured
+                .and_then(|config| config.default_isolation)
+                .unwrap_or_default(),
+            base: configured
+                .and_then(|config| config.base)
+                .unwrap_or_default(),
         }
     }
 }
@@ -3176,6 +3207,15 @@ fn resolve_explorer_profile_config(
     })
 }
 
+pub(crate) fn agent_worktree_isolation_toml_config(
+    features: Option<&FeaturesToml>,
+) -> Option<&AgentWorktreeIsolationConfigToml> {
+    match features?.agent_worktree_isolation.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
 fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiAgentV2ConfigToml> {
     match features?.multi_agent_v2.as_ref()? {
         FeatureToml::Enabled(_) => None,
@@ -4060,6 +4100,8 @@ impl Config {
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let explorer_profile = resolve_explorer_profile_config(&cfg)?;
+        let agent_worktree_isolation =
+            AgentWorktreeIsolationConfig::from_features_toml(cfg.features.as_ref());
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
         let rollout_budget = resolve_rollout_budget_config(&cfg, &features)?;
         let current_time_reminder = resolve_current_time_reminder_config(&cfg, &features)?;
@@ -4807,6 +4849,7 @@ impl Config {
             ghost_snapshot,
             multi_agent_v2,
             explorer_profile,
+            agent_worktree_isolation,
             token_budget,
             token_budget_startup_config: None,
             rollout_budget,
