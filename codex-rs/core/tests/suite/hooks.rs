@@ -2886,6 +2886,15 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
         .with_config(move |config| {
             trust_discovered_hooks(config);
             config.otel.log_user_prompt = true;
+            // Fork: both queued prompts must wait behind the gated first response and be
+            // drained in one batch. With instant interrupts the first steer preempts that
+            // response, and the second prompt can arrive after the queue was already drained.
+            // blocked_prompt_preempting_accepted_prompt_response_resamples_the_turn covers
+            // the preempting path.
+            config
+                .features
+                .disable(Feature::InstantInterrupt)
+                .expect("disable InstantInterrupt feature");
         });
     let test = builder.build_with_streaming_server(&server).await?;
 
