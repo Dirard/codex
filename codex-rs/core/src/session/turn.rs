@@ -470,6 +470,9 @@ pub(crate) async fn run_turn(
 
     let mut next_step_context = Some(first_step_context);
     let mut guardian_budget_compacted = false;
+    // Fork: whether the model still owes this turn a step: a preempted response, tool output,
+    // or a Stop hook continuation. Blocked steered input must not end the turn before that.
+    let mut model_follow_up_pending = false;
     loop {
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
@@ -483,6 +486,9 @@ pub(crate) async fn run_turn(
             Vec::new()
         };
 
+        // Fork: a batch whose prompts are all blocked ends the turn only when nothing else
+        // needs sampling. With instant interrupts, a blocked prompt can preempt the answer to
+        // an earlier accepted prompt; ending here would leave that prompt unanswered.
         if run_hooks_and_record_inputs(
             &sess,
             &turn_context,
@@ -491,6 +497,7 @@ pub(crate) async fn run_turn(
             PersistContext::SteeredUserInput,
         )
         .await
+            && !model_follow_up_pending
         {
             break;
         }
@@ -597,6 +604,7 @@ pub(crate) async fn run_turn(
                     last_agent_message: sampling_request_last_agent_message,
                     made_progress,
                 } = sampling_request_output;
+                model_follow_up_pending = model_needs_follow_up;
                 if made_progress {
                     consecutive_compactions_without_progress = 0;
                 }
@@ -778,6 +786,8 @@ pub(crate) async fn run_turn(
                                 )
                                 .await;
                             stop_hook_active = true;
+                            // Fork: the model must answer the continuation prompt.
+                            model_follow_up_pending = true;
                             continue;
                         } else {
                             sess.send_event(

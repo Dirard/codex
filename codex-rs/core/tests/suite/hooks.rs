@@ -3034,6 +3034,294 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
     Ok(())
 }
 
+/// Fork: with instant interrupts, a queued prompt that arrives after an earlier accepted
+/// prompt was drained preempts the answer to that prompt. When the hook then blocks it, the
+/// turn samples again instead of ending with the accepted prompt unanswered.
+#[tokio::test]
+#[traced_test]
+async fn blocked_prompt_preempting_accepted_prompt_response_resamples_the_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    // Keep both senders alive: a dropped gate would end the stream instead of preemption.
+    let (first_gate_tx, first_gate_rx) = oneshot::channel::<()>();
+    let (second_gate_tx, second_gate_rx) = oneshot::channel::<()>();
+    let first_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_response_created("resp-1")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_message_item_added("msg-1", "")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_output_text_delta("first ")),
+        },
+        StreamingSseChunk {
+            gate: Some(first_gate_rx),
+            body: sse_event(ev_completed("resp-1")),
+        },
+    ];
+    let second_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_response_created("resp-2")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_message_item_added("msg-2", "")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_output_text_delta("accepted ")),
+        },
+        StreamingSseChunk {
+            gate: Some(second_gate_rx),
+            body: sse_event(ev_completed("resp-2")),
+        },
+    ];
+    let third_chunks = vec![StreamingSseChunk {
+        gate: None,
+        body: sse(vec![
+            ev_response_created("resp-3"),
+            ev_assistant_message("msg-3", "accepted queued prompt handled"),
+            ev_completed("resp-3"),
+        ]),
+    }];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, second_chunks, third_chunks]).await;
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_pre_build_hook(|home| {
+            write_user_prompt_submit_hook(home, "blocked queued prompt", BLOCKED_PROMPT_CONTEXT)
+                .expect("failed to write user prompt submit hook test fixture");
+        })
+        .with_config(move |config| {
+            trust_discovered_hooks(config);
+            config.otel.log_user_prompt = true;
+            config
+                .features
+                .enable(Feature::InstantInterrupt)
+                .expect("enable InstantInterrupt feature");
+        });
+    let test = builder.build_with_streaming_server(&server).await?;
+    let user_input = |text: &str| {
+        TurnInputRequest::user_input(vec![UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }])
+    };
+
+    test.codex
+        .start_or_steer_turn(user_input("initial prompt"))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::AgentMessageContentDelta(_))
+    })
+    .await;
+
+    // The accepted prompt preempts the first response and is drained on its own.
+    test.codex
+        .start_or_steer_turn(user_input("accepted queued prompt"))
+        .await?;
+    timeout(Duration::from_secs(30), server.wait_for_request_count(2))
+        .await
+        .context("the accepted prompt should start a second request")?;
+    wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::AgentMessageContentDelta(delta) if delta.item_id == "msg-2"
+        )
+    })
+    .await;
+
+    // The blocked prompt preempts the answer to the accepted prompt.
+    test.codex
+        .start_or_steer_turn(user_input("blocked queued prompt"))
+        .await?;
+    let EventMsg::TurnComplete(turn_complete) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await
+    else {
+        unreachable!("wait_for_event returns the matched event");
+    };
+
+    let requests = server.requests().await;
+    assert_eq!(
+        requests.len(),
+        3,
+        "the turn should sample again after the blocked prompt preempted the accepted answer",
+    );
+    let third_user_texts = request_message_input_texts(&requests[2], "user");
+    assert!(third_user_texts.contains(&"accepted queued prompt".to_string()));
+    assert!(!third_user_texts.contains(&"blocked queued prompt".to_string()));
+    assert!(
+        request_message_input_texts(&requests[2], "developer")
+            .contains(&BLOCKED_PROMPT_CONTEXT.to_string()),
+        "the next request should include the blocked prompt's hook context",
+    );
+    assert_eq!(
+        turn_complete.last_agent_message.as_deref(),
+        Some("accepted queued prompt handled"),
+    );
+
+    logs_assert(|lines| {
+        let prompts: Vec<_> = lines
+            .iter()
+            .filter(|line| line.contains("codex.user_prompt") && line.contains(" prompt="))
+            .collect();
+        if prompts.len() == 2
+            && prompts[0].contains("prompt=initial prompt")
+            && prompts[1].contains("prompt=accepted queued prompt")
+        {
+            Ok(())
+        } else {
+            Err(format!(
+                "expected only accepted prompts in telemetry: {prompts:?}"
+            ))
+        }
+    });
+    let rollout = fs::read_to_string(test.codex.rollout_path().expect("rollout path"))?;
+    assert!(!rollout.contains("blocked queued prompt"));
+    assert!(rollout.contains("accepted queued prompt handled"));
+
+    let hook_prompts = read_user_prompt_submit_hook_inputs(test.codex_home_path())?
+        .iter()
+        .map(|input| {
+            input["prompt"]
+                .as_str()
+                .expect("user prompt submit hook prompt")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        hook_prompts,
+        vec![
+            "initial prompt".to_string(),
+            "accepted queued prompt".to_string(),
+            "blocked queued prompt".to_string(),
+        ],
+    );
+
+    server.shutdown().await;
+    drop((first_gate_tx, second_gate_tx));
+    Ok(())
+}
+
+/// Fork: a prompt queued during a tool-calling response and blocked by the hook must not end
+/// the turn before the model receives the tool output.
+#[tokio::test]
+async fn blocked_queued_prompt_does_not_strand_pending_tool_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (gate_tx, gate_rx) = oneshot::channel();
+    let plan_arguments = json!({"plan": [{"step": "read", "status": "in_progress"}]}).to_string();
+    let first_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_response_created("resp-1")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_message_item_added("msg-1", "")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_output_text_delta("planning")),
+        },
+        StreamingSseChunk {
+            gate: Some(gate_rx),
+            body: sse(vec![
+                ev_message_item_done("msg-1", "planning"),
+                ev_function_call("plan-call", "update_plan", &plan_arguments),
+                ev_completed("resp-1"),
+            ]),
+        },
+    ];
+    let second_chunks = vec![StreamingSseChunk {
+        gate: None,
+        body: sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-2", "plan recorded"),
+            ev_completed("resp-2"),
+        ]),
+    }];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_pre_build_hook(|home| {
+            write_user_prompt_submit_hook(home, "blocked queued prompt", BLOCKED_PROMPT_CONTEXT)
+                .expect("failed to write user prompt submit hook test fixture");
+        })
+        .with_config(move |config| {
+            trust_discovered_hooks(config);
+            config.update_plan_enabled = true;
+            // Queue the prompt behind the response, so only the tool output needs a follow-up.
+            config
+                .features
+                .disable(Feature::InstantInterrupt)
+                .expect("disable InstantInterrupt feature");
+        });
+    let test = builder.build_with_streaming_server(&server).await?;
+    let user_input = |text: &str| {
+        TurnInputRequest::user_input(vec![UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }])
+    };
+
+    test.codex
+        .start_or_steer_turn(user_input("initial prompt"))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::AgentMessageContentDelta(_))
+    })
+    .await;
+    test.codex
+        .start_or_steer_turn(user_input("blocked queued prompt"))
+        .await?;
+    let _ = gate_tx.send(());
+    let EventMsg::TurnComplete(turn_complete) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await
+    else {
+        unreachable!("wait_for_event returns the matched event");
+    };
+
+    let requests = server.requests().await;
+    assert_eq!(
+        requests.len(),
+        2,
+        "the model should receive the tool output after the blocked prompt",
+    );
+    let follow_up: Value = serde_json::from_slice(&requests[1])?;
+    assert!(
+        follow_up["input"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|item| item["type"] == "function_call_output" && item["call_id"] == "plan-call"),
+        "the follow-up request should carry the tool output",
+    );
+    assert!(
+        !request_message_input_texts(&requests[1], "user")
+            .contains(&"blocked queued prompt".to_string())
+    );
+    assert_eq!(
+        turn_complete.last_agent_message.as_deref(),
+        Some("plan recorded"),
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn permission_request_hook_allows_exec_command_without_user_approval() -> Result<()> {
     skip_if_no_network!(Ok(()));
