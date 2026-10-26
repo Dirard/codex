@@ -144,17 +144,14 @@ default_test_packages=(
   codex-thread-manager-sample
   codex-thread-store
   codex-tools
+  codex-tui
   codex-utils-output-truncation
   core_test_support
 )
 
-# Fork-touched packages whose tests do not run in fork CI yet, with the reason.
-# fork-coverage accepts them and prints them.
-untested_fork_packages=(
-  # 44 snapshot tests fail on codex/fork; fix them, then move this package to
-  # default_test_packages.
-  codex-tui
-)
+# Fork-touched packages whose tests do not run in fork CI yet, one per line with
+# a comment giving the reason. fork-coverage accepts them and prints them.
+untested_fork_packages=()
 
 # Binaries that codex-core integration tests locate next to their test
 # executables (codex_utils_cargo_bin::cargo_bin falls back to target/debug).

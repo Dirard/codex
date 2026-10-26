@@ -72,7 +72,7 @@ jobs:
     name: Rust tests (shard ${{ matrix.shard }}/3)
     runs-on: ubuntu-24.04
     # Cold cache: ~40 min to build codex-core tests and helpers on 4 vCPUs,
-    # then ~10 min for one third of codex-core, linux-sandbox and protocol.
+    # then one third of the default_test_packages tests.
     timeout-minutes: 100
     strategy:
       fail-fast: false
@@ -104,7 +104,7 @@ jobs:
           cache-on-failure: "true"
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/fork' && matrix.shard == 1 }}
 
-      - name: codex-core, codex-linux-sandbox, codex-app-server-protocol, codex-workflow, codex-worktree, codex-exec, codex-utils-string
+      - name: Fork-touched packages (default_test_packages in ci-local.sh)
         run: scripts/fork/ci-local.sh rust-test --partition "hash:${{ matrix.shard }}/3"
 
       - name: Upload nextest JUnit report
