@@ -43,17 +43,24 @@ impl Session {
 
     /// Fork: upstream's `send_event_raw_with_persistence`, publishing the status of the event
     /// itself; the body is `send_event_raw_with_persistence_and_status` (B4).
-    pub(super) async fn send_event_raw_with_persistence(&self, event: Event, persist: bool) {
+    ///
+    /// Not an `async fn`: it returns the body's future, so every event pays no extra future
+    /// layer (stack depth matters, see `guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history`).
+    pub(super) fn send_event_raw_with_persistence(
+        &self,
+        event: Event,
+        persist: bool,
+    ) -> impl Future<Output = ()> + Send + '_ {
         let status = agent_status_from_event(&event.msg);
         self.send_event_raw_with_persistence_and_status(event, persist, status)
-            .await;
     }
 
     /// Fork: upstream's `deliver_event_raw`, publishing the status of the event itself; the
-    /// body is `deliver_event_raw_with_status` (B4).
-    pub(super) async fn deliver_event_raw(&self, event: Event) {
+    /// body is `deliver_event_raw_with_status` (B4). Returns the body's future, like
+    /// `send_event_raw_with_persistence`.
+    pub(super) fn deliver_event_raw(&self, event: Event) -> impl Future<Output = ()> + Send + '_ {
         let status = agent_status_from_event(&event.msg);
-        self.deliver_event_raw_with_status(event, status).await;
+        self.deliver_event_raw_with_status(event, status)
     }
 
     /// Fork: a V1 child's turn started by mail that asks for a turn reports its completion to
