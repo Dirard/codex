@@ -79,6 +79,17 @@ impl WorkflowWait {
     }
 }
 
+/// The deprecation notice app-server sends for exec's own `thread/read` backfill.
+pub(crate) fn is_backfill_deprecation_notice(
+    notification: &codex_app_server_protocol::ServerNotification,
+) -> bool {
+    matches!(
+        notification,
+        codex_app_server_protocol::ServerNotification::DeprecationNotice(notice)
+            if notice.summary.contains("omit `includeTurns`")
+    )
+}
+
 /// Ids of the thread's runs that have not finished.
 pub(crate) async fn active_workflow_runs(
     client: &InProcessAppServerClient,
@@ -113,5 +124,28 @@ pub(crate) async fn active_workflow_runs(
             warn!("thread/workflow/list failed: {err}");
             Vec::new()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_app_server_protocol::DeprecationNoticeNotification;
+    use codex_app_server_protocol::ServerNotification;
+
+    #[test]
+    fn only_the_backfill_notice_is_dropped() {
+        let notice = |summary: &str| {
+            ServerNotification::DeprecationNotice(DeprecationNoticeNotification {
+                summary: summary.to_string(),
+                details: None,
+            })
+        };
+        assert!(is_backfill_deprecation_notice(&notice(
+            "Full-history hydration is deprecated for paginated threads; omit `includeTurns` or set it to `false`, then page with `thread/turns/list` and `thread/items/list`."
+        )));
+        assert!(!is_backfill_deprecation_notice(&notice(
+            "Some other deprecation."
+        )));
     }
 }

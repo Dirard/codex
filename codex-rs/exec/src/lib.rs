@@ -1392,6 +1392,12 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             }
             InProcessServerEvent::ServerNotification(notification) => {
                 let mut notification = *notification;
+                // Fork: exec's own turn backfill reads paginated threads with
+                // `includeTurns`; while it waits for workflow turns, the resulting notice
+                // would reach the output although the user cannot act on it.
+                if workflow_wait::is_backfill_deprecation_notice(&notification) {
+                    continue;
+                }
                 if let Some(wait) = workflow_wait.as_mut()
                     && let ServerNotification::TurnStarted(payload) = &notification
                     && payload.thread_id == primary_thread_id_for_requests
