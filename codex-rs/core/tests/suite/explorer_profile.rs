@@ -1242,11 +1242,15 @@ fn init_git_checkout(cwd: &std::path::Path) -> Result<()> {
 
 // Review P7: with `default_isolation = "worktree"` every explorer got a worktree it never
 // writes to, and under a full-access parent its note said the parent checkout was writable.
-#[test_case(None, false; "default_isolation_skips_explorers")]
-#[test_case(Some("worktree"), true; "explicit_worktree_note_is_read_only")]
+// R9.3: the worktree note of an explorer says it is read-only and gives no edit instructions,
+// also when a full-history fork carries the note in the copied history.
+#[test_case(None, None, false; "default_isolation_skips_explorers")]
+#[test_case(Some("worktree"), None, true; "explicit_worktree_note_is_read_only")]
+#[test_case(Some("worktree"), Some("all"), true; "full_fork_worktree_note_is_read_only")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn explorer_worktree_isolation_stays_read_only(
     isolation: Option<&str>,
+    fork_turns: Option<&str>,
     expect_worktree: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1262,6 +1266,9 @@ async fn explorer_worktree_isolation_stays_read_only(
     });
     if let Some(isolation) = isolation {
         spawn_args["isolation"] = json!(isolation);
+    }
+    if let Some(fork_turns) = fork_turns {
+        spawn_args["fork_turns"] = json!(fork_turns);
     }
     mount_parent_spawn(&server, spawn_args).await?;
     let child = mount_sse_once_match(
@@ -1314,13 +1321,19 @@ async fn explorer_worktree_isolation_stays_read_only(
     );
     if expect_worktree {
         assert!(
-            developer_text.contains("which is read-only for you"),
+            developer_text.contains("are read-only for you"),
             "{developer_text}"
         );
         assert!(
-            !developer_text.contains("still writable"),
+            developer_text.contains("you are a read-only explorer"),
             "{developer_text}"
         );
+        for edit_instruction in ["still writable", "Keep all edits", "records your changes"] {
+            assert!(
+                !developer_text.contains(edit_instruction),
+                "{edit_instruction}: {developer_text}"
+            );
+        }
     }
     Ok(())
 }

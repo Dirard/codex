@@ -131,16 +131,21 @@ impl LocalAgentControl {
         let worktree = self
             .worktree_binding_for_reload(config, thread_id, stored_cwd, session_source)
             .await?;
+        // A reloaded explorer gets the read-only worktree note, also after a restart or
+        // without its parent (explorer-and-questions spec, R9.3).
+        let explorer = crate::agent::explorer_profile::applies_to_source(config, session_source);
+        if let Some(binding) = worktree.as_ref() {
+            binding.set_read_only_explorer(explorer);
+        }
         let parent = match (worktree.as_ref(), parent) {
             (Some(binding), Some((parent, environments))) => {
                 // A reloaded explorer's worktree note judges the parent checkout by its
                 // read-only access (explorer-and-questions spec, R9.2).
-                let environments =
-                    if crate::agent::explorer_profile::applies_to_source(config, session_source) {
-                        crate::agent::explorer_profile::clamp_environment_snapshot(&environments)
-                    } else {
-                        environments
-                    };
+                let environments = if explorer {
+                    crate::agent::explorer_profile::clamp_environment_snapshot(&environments)
+                } else {
+                    environments
+                };
                 let environments = prepare_reload(binding, config, Some(environments))
                     .map_err(|err| {
                         CodexErr::InvalidRequest(format!(

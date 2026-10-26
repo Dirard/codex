@@ -181,8 +181,9 @@ async fn spawn_with(
             ));
         }
         let thread_id = session.services.local_agent_runtime.generate_thread_id();
-        // An explorer's worktree note judges the parent checkout by its read-only access.
-        let inherited_environments = if explorer {
+        // An explorer's worktree note judges the parent checkout by its read-only access and
+        // gives no edit instructions (explorer-and-questions spec, R9.2, R9.3).
+        let inherited = if explorer {
             crate::agent::explorer_profile::clamp_environment_snapshot(
                 &step_context.inherited_environments,
             )
@@ -190,7 +191,7 @@ async fn spawn_with(
             step_context.inherited_environments.clone()
         };
         Some(
-            prepare_agent_worktree(thread_id, &inherited_environments, &mut config, &task_name)
+            prepare_agent_worktree(thread_id, &inherited, &mut config, &task_name, explorer)
                 .await
                 .map_err(ThreadSpawnError::IsolationUnavailable)?,
         )

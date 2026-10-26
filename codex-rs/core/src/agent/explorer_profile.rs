@@ -336,6 +336,23 @@ fn is_read_only(annotations: Option<&rmcp::model::ToolAnnotations>) -> bool {
     annotations.and_then(|annotations| annotations.read_only_hint) == Some(true)
 }
 
+/// Worktree note of an explorer in an isolated worktree (spec UC9, R9.3).
+///
+/// The note of other children asks them to keep their edits in the worktree and says Codex
+/// records their changes; an explorer cannot change files, so its note says that instead.
+pub(crate) fn worktree_developer_note(
+    cwd: &std::path::Path,
+    base_description: &str,
+    base_short: &str,
+    source_root: &std::path::Path,
+) -> String {
+    format!(
+        "You are working in an isolated git worktree at {cwd}. It was created from the {base_description} ({base_short}) of the parent checkout {source_root}. Both the worktree and the parent checkout are read-only for you: you are a read-only explorer, so read files and run read-only commands there (prefer relative paths), and do not try to create, edit, move or delete files, run git commands that write repository metadata, or request escalated permissions. Codex appends an <agent_worktree> block to your result; do not write that block yourself.",
+        cwd = cwd.display(),
+        source_root = source_root.display(),
+    )
+}
+
 /// Default worktree isolation does not apply to explorers: they never write, so a worktree
 /// would only cost a checkout (review P7). An explicit request still isolates them.
 pub(crate) fn skips_default_isolation(config: &Config, role_name: Option<&str>) -> bool {

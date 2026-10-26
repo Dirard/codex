@@ -68,6 +68,9 @@ pub struct AgentWorktreeBinding {
     /// one taken by another worktree (R4.2).
     metadata: StdMutex<AgentWorktreeMetadata>,
     parent_checkout_protected: AtomicBool,
+    /// The child is a read-only explorer, so its note gives no edit instructions
+    /// (explorer-and-questions spec, R9.3).
+    read_only_explorer: AtomicBool,
     /// Serializes checkpoint and finalize operations of this worktree.
     state: Mutex<BindingState>,
 }
@@ -105,6 +108,16 @@ impl AgentWorktreeBinding {
     fn set_parent_checkout_protected(&self, protected: bool) {
         self.parent_checkout_protected
             .store(protected, Ordering::Release);
+    }
+
+    fn read_only_explorer(&self) -> bool {
+        self.read_only_explorer.load(Ordering::Acquire)
+    }
+
+    /// Marks the child as a read-only explorer before its note is written (R9.3).
+    pub(crate) fn set_read_only_explorer(&self, read_only_explorer: bool) {
+        self.read_only_explorer
+            .store(read_only_explorer, Ordering::Release);
     }
 
     /// Worktree details reported in the `spawn_agent` result.
@@ -255,11 +268,13 @@ impl PreparedAgentWorktree {
 ///
 /// Spec UC2 step "create the managed worktree and record its metadata" and UC3 step "rebase
 /// the environments onto the worktree". On any failure after creation the worktree is removed.
+/// `read_only_explorer` selects the explorer's note (explorer-and-questions spec, R9.3).
 pub(crate) async fn prepare_agent_worktree(
     thread_id: ThreadId,
     inherited_environments: &TurnEnvironmentSnapshot,
     config: &mut Config,
     agent_path: &AgentPath,
+    read_only_explorer: bool,
 ) -> Result<PreparedAgentWorktree, String> {
     if cfg!(windows) {
         return Err("worktree isolation is not supported on Windows yet".to_string());
@@ -309,6 +324,7 @@ pub(crate) async fn prepare_agent_worktree(
         source_root,
         metadata: StdMutex::new(metadata),
         parent_checkout_protected: AtomicBool::new(false),
+        read_only_explorer: AtomicBool::new(read_only_explorer),
         state: Mutex::default(),
     });
     let rebased = inherited_environments
@@ -745,9 +761,18 @@ fn environment_protects_source(
     }
 }
 
-/// Developer instructions appended for an isolated child (R3.5).
+/// Developer instructions appended for an isolated child (R3.5); a read-only explorer gets its
+/// own note without edit instructions (explorer-and-questions spec, R9.3).
 pub(crate) fn isolation_developer_note(binding: &AgentWorktreeBinding) -> String {
     let metadata = binding.metadata();
+    if binding.read_only_explorer() {
+        return crate::agent::explorer_profile::worktree_developer_note(
+            binding.cwd.as_path(),
+            metadata.base_kind.description(),
+            short_sha(&metadata.base_sha),
+            binding.source_root.as_path(),
+        );
+    }
     let protection = if binding.parent_checkout_protected() {
         "read-only"
     } else {
@@ -836,6 +861,7 @@ pub(crate) async fn discover_binding(
             source_root,
             metadata: StdMutex::new(metadata),
             parent_checkout_protected: AtomicBool::new(false),
+            read_only_explorer: AtomicBool::new(false),
             state: Mutex::new(BindingState {
                 stopped: true,
                 finalized: false,

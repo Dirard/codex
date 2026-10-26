@@ -22,6 +22,7 @@ fn binding(protected: bool) -> AgentWorktreeBinding {
             source_root: Some("/work/demo".to_string()),
         }),
         parent_checkout_protected: AtomicBool::new(protected),
+        read_only_explorer: AtomicBool::new(false),
         state: Mutex::default(),
     }
 }
@@ -323,4 +324,41 @@ fn isolation_note_describes_the_worktree_and_protection() {
     assert!(protected.contains("do not write that block yourself"));
     let unprotected = isolation_developer_note(&binding(false));
     assert!(unprotected.contains("which is still writable (the sandbox does not protect it)"));
+    assert!(unprotected.contains("Keep all edits inside your working directory"));
+}
+
+/// Explorer-and-questions R9.3: a read-only explorer's note names the worktree but gives no
+/// edit instructions, whatever the parent checkout's protection.
+#[test]
+fn explorer_isolation_note_has_no_edit_instructions() {
+    for protected in [true, false] {
+        let binding = binding(protected);
+        binding.set_read_only_explorer(true);
+        let note = isolation_developer_note(&binding);
+        assert!(
+            note.starts_with(
+                "You are working in an isolated git worktree at /home/u/.codex/worktrees/6d88/demo/sub."
+            ),
+            "{note}"
+        );
+        assert!(
+            note.contains("snapshot of the parent working tree (378e730aa1b2)"),
+            "{note}"
+        );
+        assert!(note.contains("parent checkout /work/demo"), "{note}");
+        assert!(note.contains("are read-only for you"), "{note}");
+        assert!(note.contains("you are a read-only explorer"), "{note}");
+        assert!(note.contains("do not write that block yourself"), "{note}");
+        for edit_instruction in [
+            "Keep all edits",
+            "still writable",
+            "records your changes",
+            "to edit the parent checkout",
+        ] {
+            assert!(
+                !note.contains(edit_instruction),
+                "{edit_instruction}: {note}"
+            );
+        }
+    }
 }
