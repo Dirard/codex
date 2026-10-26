@@ -32,6 +32,13 @@ pub const MAX_LISTED_CHANGED_PATHS: usize = 20;
 /// Highest suffix of a free agent branch name: `<branch>-2` through `<branch>-20`.
 const LAST_FREE_BRANCH_SUFFIX: usize = 20;
 
+const AGENT_PATH_TRAILER: &str = "Codex-Agent-Path";
+const THREAD_TRAILER: &str = "Codex-Thread-Id";
+const BASE_TRAILER: &str = "Codex-Agent-Base";
+const BASE_KIND_TRAILER: &str = "Codex-Agent-Base-Kind";
+/// Message of a `working_tree` base snapshot commit.
+const SNAPSHOT_MESSAGE: &str = "Codex agent base snapshot of the parent working tree";
+
 const THREAD_KEY: &str = "codex.agentThread";
 const BASE_KEY: &str = "codex.agentBase";
 const BASE_KIND_KEY: &str = "codex.agentBaseKind";
@@ -108,12 +115,7 @@ pub fn snapshot_working_tree(source_cwd: &Path) -> Result<String> {
     }
     stage_all(&root, &index)?;
     let tree = write_tree(&root, &index)?;
-    commit_tree(
-        &root,
-        &tree,
-        head.as_deref(),
-        "Codex agent base snapshot of the parent working tree",
-    )
+    commit_tree(&root, &tree, head.as_deref(), SNAPSHOT_MESSAGE)
 }
 
 /// Records agent ownership and base details in the worktree's `config.worktree`.
@@ -265,10 +267,13 @@ pub fn checkpoint(request: CheckpointRequest<'_>) -> Result<CheckpointOutcome> {
         copy_index(root, &index)?;
         stage_all(root, &index)?;
         let tree = write_tree(root, &index)?;
+        // The base trailers let a removed worktree be restored from its branch (R4.9).
         let message = format!(
-            "codex agent {agent_path} checkpoint\n\nCodex-Agent-Path: {agent_path}\nCodex-Thread-Id: {thread_id}\n",
+            "codex agent {agent_path} checkpoint\n\n{AGENT_PATH_TRAILER}: {agent_path}\n{THREAD_TRAILER}: {thread_id}\n{BASE_TRAILER}: {base}\n{BASE_KIND_TRAILER}: {base_kind}\n",
             agent_path = request.agent_path,
             thread_id = metadata.thread_id,
+            base = metadata.base_sha,
+            base_kind = metadata.base_kind.as_str(),
         );
         commit_tree(root, &tree, Some(&head), &message)?
     } else {
@@ -576,10 +581,18 @@ fn is_ancestor(root: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
 }
 
 fn has_changes(root: &Path) -> Result<bool> {
+    // Without optional locks `status` does not rewrite the index, so inspecting a worktree
+    // does not count as activity for the sweep (R10.4).
     let status = git_output(
         root,
         GitOperation::WorkingTree,
-        ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        [
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ],
     )?;
     Ok(!status.stdout.is_empty())
 }
@@ -714,6 +727,28 @@ fn format_shortstat(files: usize, insertions: u64, deletions: u64) -> String {
     }
     parts.join(", ")
 }
+
+#[path = "agent_maintenance.rs"]
+mod maintenance;
+#[path = "agent_merge.rs"]
+mod merge;
+
+pub use maintenance::AgentWorktreeState;
+pub use maintenance::AgentWorktreeStatus;
+pub use maintenance::RecoveredBranch;
+pub use maintenance::RestoreFrom;
+pub use maintenance::SweepPolicy;
+pub use maintenance::SweepReport;
+pub use maintenance::agent_branch_for_thread;
+pub use maintenance::agent_worktree_status;
+pub use maintenance::checkout_root;
+pub use maintenance::last_activity;
+pub use maintenance::restore_agent_worktree;
+pub use maintenance::sweep_agent_worktrees;
+pub use merge::CleanMerge;
+pub use merge::MergeOutcome;
+pub use merge::MergedChange;
+pub use merge::merge_agent_branch;
 
 #[cfg(test)]
 #[path = "agent_tests.rs"]

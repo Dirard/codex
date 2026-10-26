@@ -3,26 +3,41 @@
 
 use codex_worktree::AgentWorktreeBaseKind;
 use codex_worktree::AgentWorktreeMetadata;
+use codex_worktree::AgentWorktreeState;
+use codex_worktree::AgentWorktreeStatus;
 use codex_worktree::CheckpointOutcome;
 use codex_worktree::CheckpointRequest;
 use codex_worktree::CreateWorktree;
 use codex_worktree::KeptReason;
 use codex_worktree::ManagedWorktree;
+use codex_worktree::MergeOutcome;
+use codex_worktree::MergedChange;
+use codex_worktree::RecoveredBranch;
 use codex_worktree::RemoveOutcome;
+use codex_worktree::RestoreFrom;
+use codex_worktree::SweepPolicy;
+use codex_worktree::SweepReport;
 use codex_worktree::WorktreeManager;
 use codex_worktree::WorktreeSettings;
+use codex_worktree::agent_branch_for_thread;
+use codex_worktree::agent_worktree_status;
 use codex_worktree::branch_changes;
 use codex_worktree::checkpoint;
+use codex_worktree::merge_agent_branch;
 use codex_worktree::read_agent_metadata;
 use codex_worktree::remove_if_unchanged;
 use codex_worktree::resolve_head_commit;
+use codex_worktree::restore_agent_worktree;
 use codex_worktree::snapshot_working_tree;
+use codex_worktree::sweep_agent_worktrees;
 use codex_worktree::write_agent_metadata;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
+use std::time::SystemTime;
 use tempfile::TempDir;
 
 const BRANCH: &str = "codex/agents/probe-01a1748c";
@@ -334,6 +349,9 @@ fn checkpoints_create_the_branch_lazily_and_stack_commits() {
     assert!(message.starts_with("codex agent /root/probe checkpoint"));
     assert!(message.contains(&format!("Codex-Thread-Id: {THREAD_ID}")));
     assert!(message.contains("Codex-Agent-Path: /root/probe"));
+    // R4.9: the base travels with the branch.
+    assert!(message.contains(&format!("Codex-Agent-Base: {base}")));
+    assert!(message.contains("Codex-Agent-Base-Kind: working_tree"));
     let changes = branch_changes(&checkout.root, &metadata)
         .expect("summary")
         .expect("branch exists");
@@ -611,4 +629,526 @@ fn changed_or_branched_worktrees_are_kept() {
         RemoveOutcome::Kept(KeptReason::Branch)
     );
     assert!(dirty.root.exists());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Amend 2026-10-27: worktree state (UC9), restore (UC5, Q13), sweep (UC10), merge (UC11)
+// ---------------------------------------------------------------------------------------------
+
+/// Creates a worktree owned by `thread_id` with agent metadata, like an isolated spawn.
+fn agent_worktree(
+    fixture: &Fixture,
+    base: &str,
+    thread_id: &str,
+    branch: &str,
+) -> (ManagedWorktree, AgentWorktreeMetadata) {
+    let checkout = fixture.create(base);
+    let metadata = AgentWorktreeMetadata {
+        thread_id: thread_id.to_owned(),
+        base_sha: base.to_owned(),
+        base_kind: AgentWorktreeBaseKind::WorkingTree,
+        branch: branch.to_owned(),
+        source_root: fixture.repository.to_str().map(str::to_owned),
+    };
+    fixture
+        .manager()
+        .bind_thread(&checkout.root, thread_id)
+        .expect("bind owner");
+    write_agent_metadata(&checkout.root, &metadata).expect("write agent metadata");
+    (checkout, metadata)
+}
+
+/// Moves the last activity of a worktree `hours` into the past (R10.4).
+fn age(root: &Path, hours: u64) {
+    let time = SystemTime::now() - Duration::from_secs(hours * 3600);
+    let git_dir = PathBuf::from(git(
+        root,
+        &["rev-parse", "--path-format=absolute", "--git-dir"],
+    ));
+    let mut paths = vec![root.to_path_buf()];
+    for file in [
+        "HEAD",
+        "index",
+        "config.worktree",
+        "codex-thread.json",
+        "logs/HEAD",
+    ] {
+        paths.push(git_dir.join(file));
+    }
+    for path in paths.into_iter().filter(|path| path.exists()) {
+        fs::File::open(&path)
+            .and_then(|file| file.set_modified(time))
+            .expect("set modification time");
+    }
+}
+
+fn sweep(fixture: &Fixture, policy: SweepPolicy, in_use: &[&Path]) -> SweepReport {
+    let held = in_use
+        .iter()
+        .map(|path| path.to_path_buf())
+        .collect::<Vec<_>>();
+    sweep_agent_worktrees(
+        &fixture.manager(),
+        &fixture.repository,
+        &policy,
+        &|root| held.iter().any(|held| held == root),
+        SystemTime::now(),
+    )
+    .expect("sweep agent worktrees")
+}
+
+const DAY_POLICY: SweepPolicy = SweepPolicy {
+    keep_count: 15,
+    max_idle: Duration::from_secs(24 * 3600),
+    min_idle: Duration::from_secs(3600),
+};
+
+#[test]
+fn worktree_state_tracks_changes_branch_and_removal() {
+    let fixture = Fixture::new();
+    let base = snapshot_working_tree(&fixture.repository).expect("snapshot");
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    let status = |metadata: &AgentWorktreeMetadata| {
+        agent_worktree_status(&checkout.root, metadata).expect("worktree status")
+    };
+
+    assert_eq!(
+        status(&metadata),
+        AgentWorktreeStatus {
+            state: AgentWorktreeState::Clean,
+            branch: None
+        }
+    );
+    fs::create_dir_all(checkout.root.join("target")).expect("create build output");
+    fs::write(checkout.root.join("target/out.bin"), "build\n").expect("write build output");
+    assert_eq!(status(&metadata).state, AgentWorktreeState::Clean);
+
+    fs::write(checkout.root.join("a.txt"), "one\nagent\n").expect("modify tracked file");
+    assert_eq!(
+        status(&metadata),
+        AgentWorktreeStatus {
+            state: AgentWorktreeState::Changed,
+            branch: None
+        }
+    );
+    checkpoint_worktree(&checkout.root, &metadata);
+    assert_eq!(
+        status(&metadata),
+        AgentWorktreeStatus {
+            state: AgentWorktreeState::Changed,
+            branch: Some(BRANCH.to_owned())
+        }
+    );
+
+    fs::remove_dir_all(&checkout.root).expect("remove the checkout");
+    assert_eq!(
+        status(&metadata),
+        AgentWorktreeStatus {
+            state: AgentWorktreeState::Removed,
+            branch: None
+        }
+    );
+}
+
+#[test]
+fn a_removed_worktree_is_restored_from_its_branch_or_base() {
+    let fixture = Fixture::new();
+    let base = snapshot_working_tree(&fixture.repository).expect("snapshot");
+    let manager = fixture.manager();
+
+    // With a branch: the checkout comes back at its old path, attached to the branch.
+    let (branched, branched_metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    fs::write(branched.root.join("agent.txt"), "agent\n").expect("write agent file");
+    checkpoint_worktree(&branched.root, &branched_metadata);
+    git(
+        &fixture.repository,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            branched.root.to_str().expect("UTF-8 path"),
+        ],
+    );
+    assert!(!branched.root.exists());
+    let recovered = agent_branch_for_thread(&fixture.repository, BRANCH, THREAD_ID)
+        .expect("find branch")
+        .expect("own branch");
+    assert_eq!(
+        recovered,
+        RecoveredBranch {
+            branch: BRANCH.to_owned(),
+            tip: git(&fixture.repository, &["rev-parse", BRANCH]),
+            base_sha: base.clone(),
+            base_kind: AgentWorktreeBaseKind::WorkingTree,
+        }
+    );
+    restore_agent_worktree(
+        &manager,
+        &fixture.repository,
+        &branched.root,
+        &branched_metadata,
+        &RestoreFrom::Branch {
+            name: recovered.branch,
+            tip: recovered.tip,
+        },
+    )
+    .expect("restore from the branch");
+    assert_eq!(
+        fs::read_to_string(branched.root.join("agent.txt")).expect("read restored file"),
+        "agent\n"
+    );
+    assert_eq!(
+        git(&branched.root, &["symbolic-ref", "HEAD"]),
+        format!("refs/heads/{BRANCH}")
+    );
+    assert_eq!(git(&branched.root, &["status", "--porcelain=v1"]), "");
+    assert_eq!(
+        manager.owner(&branched.root).expect("owner"),
+        Some(THREAD_ID.to_owned())
+    );
+    assert_eq!(
+        read_agent_metadata(&branched.root).expect("metadata"),
+        Some(branched_metadata)
+    );
+
+    // Without a branch: the checkout comes back detached at its base.
+    let clean_thread = "01a1748c-0000-7000-8000-0000000000c1";
+    let clean_branch = "codex/agents/clean-00000000000000c1";
+    let (clean, clean_metadata) = agent_worktree(&fixture, &base, clean_thread, clean_branch);
+    fs::remove_dir_all(&clean.root).expect("remove the checkout");
+    assert_eq!(
+        agent_branch_for_thread(&fixture.repository, clean_branch, clean_thread)
+            .expect("search branches"),
+        None
+    );
+    restore_agent_worktree(
+        &manager,
+        &fixture.repository,
+        &clean.root,
+        &clean_metadata,
+        &RestoreFrom::Base,
+    )
+    .expect("restore from the base");
+    assert_eq!(git(&clean.root, &["rev-parse", "HEAD"]), base);
+    assert!(git_fails(&clean.root, &["symbolic-ref", "-q", "HEAD"]));
+
+    // An occupied path or a missing base fails and leaves no worktree behind.
+    let occupied = restore_agent_worktree(
+        &manager,
+        &fixture.repository,
+        &clean.root,
+        &clean_metadata,
+        &RestoreFrom::Base,
+    )
+    .expect_err("occupied path");
+    assert!(format!("{occupied:#}").contains("occupied"), "{occupied:#}");
+    fs::remove_dir_all(&clean.root).expect("remove the checkout");
+    let missing_base = AgentWorktreeMetadata {
+        base_sha: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+        ..clean_metadata
+    };
+    let missing = restore_agent_worktree(
+        &manager,
+        &fixture.repository,
+        &clean.root,
+        &missing_base,
+        &RestoreFrom::Base,
+    )
+    .expect_err("missing base");
+    assert!(
+        format!("{missing:#}").contains("no longer in the repository"),
+        "{missing:#}"
+    );
+    assert!(!clean.root.exists());
+}
+
+#[test]
+fn agent_branch_for_thread_finds_free_names_and_old_checkpoints() {
+    let fixture = Fixture::new();
+    let base = snapshot_working_tree(&fixture.repository).expect("snapshot");
+    // Another worktree holds the recorded name, so the checkpoint moves to `-2`.
+    let other_thread = "01a1748c-0000-7000-8000-0000000000ff";
+    let (other, other_metadata) = agent_worktree(&fixture, &base, other_thread, BRANCH);
+    fs::write(other.root.join("other.txt"), "other\n").expect("write other file");
+    checkpoint_worktree(&other.root, &other_metadata);
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    fs::write(checkout.root.join("mine.txt"), "mine\n").expect("write own file");
+    let CheckpointOutcome::Committed { branch, .. } =
+        checkpoint_worktree(&checkout.root, &metadata)
+    else {
+        panic!("expected a checkpoint");
+    };
+    assert_eq!(branch, format!("{BRANCH}-2"));
+    let recovered = agent_branch_for_thread(&fixture.repository, BRANCH, THREAD_ID)
+        .expect("find branch")
+        .expect("own branch");
+    assert_eq!(recovered.branch, format!("{BRANCH}-2"));
+    assert_eq!(recovered.base_sha, base);
+
+    // A checkpoint written before R4.9 has no base trailers: its parent is the base.
+    let tree = git(
+        &fixture.repository,
+        &["rev-parse", &format!("{base}^{{tree}}")],
+    );
+    let old = git(
+        &fixture.repository,
+        &[
+            "commit-tree",
+            "-p",
+            &base,
+            "-m",
+            &format!(
+                "codex agent /root/old checkpoint\n\nCodex-Agent-Path: /root/old\nCodex-Thread-Id: {other_thread}0"
+            ),
+            &tree,
+        ],
+    );
+    let old_branch = "codex/agents/old-0000000000000000";
+    git(&fixture.repository, &["branch", old_branch, &old]);
+    assert_eq!(
+        agent_branch_for_thread(&fixture.repository, old_branch, &format!("{other_thread}0"))
+            .expect("find old branch"),
+        Some(RecoveredBranch {
+            branch: old_branch.to_owned(),
+            tip: old,
+            base_sha: base,
+            base_kind: AgentWorktreeBaseKind::WorkingTree,
+        })
+    );
+}
+
+#[test]
+fn sweep_removes_only_unchanged_idle_agent_worktrees() {
+    let fixture = Fixture::new();
+    let base = snapshot_working_tree(&fixture.repository).expect("snapshot");
+    let thread = |suffix: &str| format!("01a1748c-0000-7000-8000-0000000000{suffix}");
+    let branch = |suffix: &str| format!("codex/agents/sweep-00000000000000{suffix}");
+
+    let (changed, changed_metadata) = agent_worktree(&fixture, &base, &thread("a1"), &branch("a1"));
+    fs::write(changed.root.join("work.txt"), "work\n").expect("write change");
+    checkpoint_worktree(&changed.root, &changed_metadata);
+    let (dirty, _) = agent_worktree(&fixture, &base, &thread("a2"), &branch("a2"));
+    fs::write(dirty.root.join("draft.txt"), "draft\n").expect("write uncommitted change");
+    let (stale, _) = agent_worktree(&fixture, &base, &thread("a3"), &branch("a3"));
+    fs::create_dir_all(stale.root.join("target")).expect("create build output");
+    fs::write(stale.root.join("target/out.bin"), "build\n").expect("write build output");
+    let (fresh, _) = agent_worktree(&fixture, &base, &thread("a4"), &branch("a4"));
+    let (held, _) = agent_worktree(&fixture, &base, &thread("a5"), &branch("a5"));
+    let desktop = fixture.create(&base);
+    for root in [
+        &changed.root,
+        &dirty.root,
+        &stale.root,
+        &held.root,
+        &desktop.root,
+    ] {
+        age(root, 48);
+    }
+    let branches_before = git(&fixture.repository, &["for-each-ref", "refs/heads"]);
+
+    let report = sweep(&fixture, DAY_POLICY, &[&held.root]);
+
+    assert_eq!(report.removed, vec![stale.root.clone()]);
+    assert_eq!(report.failed, Vec::new());
+    assert!(!stale.root.exists());
+    for kept in [
+        &changed.root,
+        &dirty.root,
+        &fresh.root,
+        &held.root,
+        &desktop.root,
+    ] {
+        assert!(kept.exists(), "{} must stay", kept.display());
+    }
+    assert_eq!(
+        git(&fixture.repository, &["for-each-ref", "refs/heads"]),
+        branches_before
+    );
+}
+
+#[test]
+fn sweep_keeps_the_most_recent_unchanged_worktrees() {
+    let fixture = Fixture::new();
+    let base = snapshot_working_tree(&fixture.repository).expect("snapshot");
+    let mut roots = Vec::new();
+    for (index, hours) in [3_u64, 5, 7].into_iter().enumerate() {
+        let (checkout, _) = agent_worktree(
+            &fixture,
+            &base,
+            &format!("01a1748c-0000-7000-8000-00000000000{index}"),
+            &format!("codex/agents/keep-000000000000000{index}"),
+        );
+        age(&checkout.root, hours);
+        roots.push(checkout.root);
+    }
+    let (young, _) = agent_worktree(
+        &fixture,
+        &base,
+        "01a1748c-0000-7000-8000-0000000000b0",
+        "codex/agents/keep-00000000000000b0",
+    );
+    let policy = SweepPolicy {
+        keep_count: 1,
+        ..DAY_POLICY
+    };
+
+    let report = sweep(&fixture, policy, &[]);
+
+    // `keep_count = 1` keeps the most recent unchanged worktree (the young one); the older
+    // ones beyond the count are removed although none of them is a day old.
+    let mut removed = report.removed;
+    removed.sort();
+    let mut expected = roots.clone();
+    expected.sort();
+    assert_eq!(removed, expected);
+    assert!(young.root.exists());
+
+    // A young worktree beyond the count stays too.
+    let (second_young, _) = agent_worktree(
+        &fixture,
+        &base,
+        "01a1748c-0000-7000-8000-0000000000b1",
+        "codex/agents/keep-00000000000000b1",
+    );
+    let report = sweep(
+        &fixture,
+        SweepPolicy {
+            keep_count: 0,
+            ..DAY_POLICY
+        },
+        &[],
+    );
+    assert_eq!(report.removed, Vec::<PathBuf>::new());
+    assert!(young.root.exists() && second_young.root.exists());
+}
+
+#[test]
+fn merge_agent_branch_merges_over_parent_edits() {
+    let fixture = Fixture::new();
+    let repository = &fixture.repository;
+    fs::write(repository.join("geometry.py"), "a\nb\nc\nd\ne\nf\n").expect("write file");
+    git(repository, &["add", "geometry.py"]);
+    git(
+        repository,
+        &["commit", "--quiet", "--no-gpg-sign", "-m", "geometry"],
+    );
+    let base = snapshot_working_tree(repository).expect("snapshot");
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    fs::write(checkout.root.join("geometry.py"), "a\nb\nc\nd\ne\nF\n").expect("agent edit");
+    fs::write(checkout.root.join("added.txt"), "added\n").expect("agent file");
+    checkpoint_worktree(&checkout.root, &metadata);
+    // The parent edits the start of the same file after the spawn.
+    fs::write(repository.join("geometry.py"), "A\nb\nc\nd\ne\nf\n").expect("parent edit");
+    let status_before = git(repository, &["status", "--porcelain=v1"]);
+    let index_before = fs::read(repository.join(".git/index")).expect("read index");
+    let head_before = git(repository, &["rev-parse", "HEAD"]);
+
+    let outcome = merge_agent_branch(repository, &checkout.root, &metadata).expect("merge");
+
+    let MergeOutcome::Clean(merge) = outcome else {
+        panic!("expected a clean merge, got {outcome:?}");
+    };
+    assert_eq!(merge.tip, git(repository, &["rev-parse", BRANCH]));
+    assert!(!merge.pending_worktree_changes);
+    assert_eq!(
+        merge.changes,
+        vec![
+            MergedChange {
+                path: "added.txt".to_owned(),
+                old: None,
+                new: Some("added\n".to_owned()),
+            },
+            MergedChange {
+                path: "geometry.py".to_owned(),
+                old: Some("A\nb\nc\nd\ne\nf\n".to_owned()),
+                new: Some("A\nb\nc\nd\ne\nF\n".to_owned()),
+            },
+        ]
+    );
+    assert_eq!(
+        git(repository, &["status", "--porcelain=v1"]),
+        status_before
+    );
+    assert_eq!(
+        fs::read(repository.join(".git/index")).expect("read index"),
+        index_before
+    );
+    assert_eq!(git(repository, &["rev-parse", "HEAD"]), head_before);
+    assert!(!repository.join("added.txt").exists());
+}
+
+#[test]
+fn merge_agent_branch_reports_conflicts_and_unrepresentable_changes() {
+    let fixture = Fixture::new();
+    let repository = &fixture.repository;
+    let base = snapshot_working_tree(repository).expect("snapshot");
+
+    // No branch yet.
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    fs::write(checkout.root.join("a.txt"), "agent\n").expect("agent edit");
+    assert_eq!(
+        merge_agent_branch(repository, &checkout.root, &metadata).expect("merge"),
+        MergeOutcome::NoBranch {
+            pending_worktree_changes: true
+        }
+    );
+
+    // The same line on both sides conflicts.
+    checkpoint_worktree(&checkout.root, &metadata);
+    fs::write(repository.join("a.txt"), "parent\n").expect("parent edit");
+    assert_eq!(
+        merge_agent_branch(repository, &checkout.root, &metadata).expect("merge"),
+        MergeOutcome::Conflicts(vec!["a.txt".to_owned()])
+    );
+
+    // After the parent takes the agent's line the branch is already applied.
+    fs::write(repository.join("a.txt"), "agent\n").expect("parent takes the change");
+    assert!(matches!(
+        merge_agent_branch(repository, &checkout.root, &metadata).expect("merge"),
+        MergeOutcome::AlreadyApplied { .. }
+    ));
+
+    // An added file that exists in the parent as an ignored file conflicts.
+    fs::write(checkout.root.join("debug.log"), "agent log\n").expect("agent ignored-name file");
+    git(&checkout.root, &["add", "--force", "debug.log"]);
+    checkpoint_worktree(&checkout.root, &metadata);
+    fs::write(repository.join("debug.log"), "parent log\n").expect("parent ignored file");
+    assert_eq!(
+        merge_agent_branch(repository, &checkout.root, &metadata).expect("merge"),
+        MergeOutcome::Conflicts(vec!["debug.log".to_owned()])
+    );
+    fs::remove_file(repository.join("debug.log")).expect("remove parent log");
+
+    // Binary content and executable files cannot be written through a text patch.
+    let other_thread = "01a1748c-0000-7000-8000-0000000000e1";
+    let other_branch = "codex/agents/binary-00000000000000e1";
+    let (binary, binary_metadata) = agent_worktree(&fixture, &base, other_thread, other_branch);
+    fs::write(binary.root.join("blob.bin"), [0_u8, 1, 2, 3]).expect("write binary");
+    checkpoint_worktree(&binary.root, &binary_metadata);
+    assert_eq!(
+        merge_agent_branch(repository, &binary.root, &binary_metadata).expect("merge"),
+        MergeOutcome::Unrepresentable {
+            path: "blob.bin".to_owned(),
+            reason: "binary or non-UTF-8 content",
+        }
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let script_thread = "01a1748c-0000-7000-8000-0000000000e2";
+        let script_branch = "codex/agents/script-00000000000000e2";
+        let (script, script_metadata) =
+            agent_worktree(&fixture, &base, script_thread, script_branch);
+        let path = script.root.join("run.sh");
+        fs::write(&path, "#!/bin/sh\n").expect("write script");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("make executable");
+        checkpoint_worktree(&script.root, &script_metadata);
+        assert_eq!(
+            merge_agent_branch(repository, &script.root, &script_metadata).expect("merge"),
+            MergeOutcome::Unrepresentable {
+                path: "run.sh".to_owned(),
+                reason: "an executable file",
+            }
+        );
+    }
 }
