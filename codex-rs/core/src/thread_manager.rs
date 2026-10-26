@@ -15,7 +15,6 @@ use crate::agent::LocalAgentControl;
 use crate::agent::api::AgentConfigUpdate;
 use crate::agent::api::AgentControl;
 use crate::agent::control::AgentControlInit;
-use crate::agent::types::TurnSpawnBudget;
 use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
@@ -75,7 +74,6 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::ClientMcpExtensions;
@@ -193,18 +191,10 @@ pub struct NewThread {
     pub session_configured: SessionConfiguredEvent,
 }
 
-pub(crate) enum ThreadSpawnOutcome {
-    Spawned(NewThread),
-    AlreadyRunning(NewThread),
-}
-
-impl ThreadSpawnOutcome {
-    fn into_new_thread(self) -> NewThread {
-        match self {
-            Self::Spawned(thread) | Self::AlreadyRunning(thread) => thread,
-        }
-    }
-}
+// Fork: spawn outcomes and inherited dynamic tools.
+#[path = "thread_manager_fork.rs"]
+mod fork;
+pub(crate) use fork::ThreadSpawnOutcome;
 
 // TODO(ccunningham): Add an explicit non-interrupting live-turn snapshot once
 // core can represent sampling boundaries directly instead of relying on
@@ -382,7 +372,7 @@ struct ThreadSpawnRequest {
     inherited_environments: Option<TurnEnvironmentSnapshot>,
     inherited_instructions: Option<SessionInstructions>,
     inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
-    turn_spawn_budget: Option<TurnSpawnBudget>,
+    turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
     user_shell_override: Option<crate::shell::Shell>,
 }
 
@@ -452,7 +442,7 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) inherited_instructions: Option<SessionInstructions>,
     pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     pub(crate) client_mcp_extensions: Option<ClientMcpExtensions>,
-    pub(crate) turn_spawn_budget: Option<TurnSpawnBudget>,
+    pub(crate) turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
 }
 
 /// Shared, `Arc`-owned state for [`ThreadManager`]. This `Arc` is required to have a single
@@ -1256,9 +1246,7 @@ impl ThreadManager {
             request
         };
         request.startup = startup;
-        Box::pin(self.state.spawn_thread(request))
-            .await
-            .map(ThreadSpawnOutcome::into_new_thread)
+        Box::pin(self.state.spawn_thread(request)).await
     }
 
     // TODO(jif) merge with fork_agent
@@ -1388,7 +1376,6 @@ impl ThreadManager {
             agent_control,
         )))
         .await
-        .map(ThreadSpawnOutcome::into_new_thread)
     }
 
     pub(crate) async fn start_thread_with_user_shell_override_for_tests(
@@ -1405,9 +1392,7 @@ impl ThreadManager {
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.state.auth_manager), agent_control);
         request.user_shell_override = Some(user_shell_override);
-        Box::pin(self.state.spawn_thread(request))
-            .await
-            .map(ThreadSpawnOutcome::into_new_thread)
+        Box::pin(self.state.spawn_thread(request)).await
     }
 
     pub(crate) async fn resume_legacy_thread_from_rollout_with_user_shell_override_for_tests(
@@ -1434,9 +1419,7 @@ impl ThreadManager {
         };
         let mut request = ThreadSpawnRequest::new(options, auth_manager, agent_control);
         request.user_shell_override = Some(user_shell_override);
-        Box::pin(self.state.spawn_thread(request))
-            .await
-            .map(ThreadSpawnOutcome::into_new_thread)
+        Box::pin(self.state.spawn_thread(request)).await
     }
 
     /// Removes the thread from the manager's internal map, though the thread is stored
@@ -1715,9 +1698,7 @@ impl ThreadManager {
         request.forked_from_thread_id = source_thread_id;
         request.fork_persistence = fork_persistence;
         request.inherited_instructions = Some(instructions);
-        Box::pin(self.state.spawn_thread(request))
-            .await
-            .map(ThreadSpawnOutcome::into_new_thread)
+        Box::pin(self.state.spawn_thread(request)).await
     }
 
     pub(crate) fn agent_control(&self) -> LocalAgentControl {
@@ -1878,7 +1859,7 @@ impl ThreadManagerState {
         op: Op,
         parent_turn_id: Option<String>,
         root_turn_id: Option<String>,
-        turn_spawn_budget: Option<TurnSpawnBudget>,
+        turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
         message_delivery: Option<crate::agent_communication::MessageDelivery>,
     ) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
@@ -2079,13 +2060,13 @@ impl ThreadManagerState {
         agent_control: LocalAgentControl,
         parent_thread_id: Option<ThreadId>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
-        turn_spawn_budget: Option<TurnSpawnBudget>,
+        turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
     ) -> CodexResult<NewThread> {
         (options.client_mcp_extensions, options.prompt_cache_key) =
             self.inherited_child_settings(parent_thread_id).await;
-        if options.dynamic_tools.is_empty() {
-            options.dynamic_tools = self.dynamic_tools_for_child(parent_thread_id).await;
-        }
+        // Fork: inherit the parent's dynamic tools (fork-resume-dynamic-tools spec).
+        self.inherit_dynamic_tools(&mut options, parent_thread_id)
+            .await;
         let forked = matches!(options.initial_history, InitialHistory::Forked(_));
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.auth_manager), agent_control);
@@ -2096,9 +2077,7 @@ impl ThreadManagerState {
             request.fork_persistence = ForkPersistence::CopiedDeferred;
         }
         request.turn_spawn_budget = turn_spawn_budget;
-        Box::pin(self.spawn_thread(request))
-            .await
-            .map(ThreadSpawnOutcome::into_new_thread)
+        Box::pin(self.spawn_thread(request)).await
     }
 
     pub(crate) async fn resume_thread_with_history_with_source(
@@ -2147,7 +2126,7 @@ impl ThreadManagerState {
         request.inherited_instructions = inherited_instructions;
         request.inherited_exec_policy = inherited_exec_policy;
         request.turn_spawn_budget = turn_spawn_budget;
-        Box::pin(self.spawn_thread(request)).await
+        Box::pin(self.spawn_thread_outcome(request)).await
     }
 
     async fn inherited_child_settings(
@@ -2172,21 +2151,9 @@ impl ThreadManagerState {
             .unwrap_or_default()
     }
 
-    async fn dynamic_tools_for_child(
-        &self,
-        parent_thread_id: Option<ThreadId>,
-    ) -> Vec<DynamicToolSpec> {
-        let Some(parent_thread_id) = parent_thread_id else {
-            return Vec::new();
-        };
-        let Ok(parent) = self.get_thread(parent_thread_id).await else {
-            return Vec::new();
-        };
-        parent.session.dynamic_tools().await
-    }
-
     /// Spawn a new thread with optional history and register it with the manager.
-    async fn spawn_thread(
+    // Fork: reports a resume of a running thread; `spawn_thread` wraps it (thread_manager_fork.rs).
+    async fn spawn_thread_outcome(
         &self,
         mut request: ThreadSpawnRequest,
     ) -> CodexResult<ThreadSpawnOutcome> {
@@ -2337,6 +2304,8 @@ impl ThreadManagerState {
                             resumed.conversation_id
                         )));
                     }
+                    // Fork: report the running thread without holding the thread map
+                    // (race-safe publication, `a15a3170d7`).
                     drop(threads);
                     let session_configured =
                         thread.startup_metadata().to_session_configured_event();
