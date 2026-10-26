@@ -574,10 +574,11 @@ async fn oauth_login_automatically_selects_callback_specific_cimd_without_metada
     });
 
     let codex_home = TempDir::new()?;
+    // A root key: in the extra config it would land in the provider table and the
+    // login would store its tokens in the host keyring.
     mock_responses_config(&responses_server.uri())
-        .with_extra_config(&format!(
-            "mcp_oauth_credentials_store = \"file\"\n[mcp_servers.cimd]\nurl = \"{base_url}/mcp\""
-        ))
+        .with_root_config("mcp_oauth_credentials_store = \"file\"")
+        .with_extra_config(&format!("[mcp_servers.cimd]\nurl = \"{base_url}/mcp\""))
         .write(codex_home.path())?;
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
