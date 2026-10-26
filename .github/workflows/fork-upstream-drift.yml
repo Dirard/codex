@@ -1,0 +1,70 @@
+name: fork-upstream-drift
+
+# Reports how far codex/fork lags behind openai/codex main: commits behind,
+# since when, and the files a merge would conflict on. The report goes to the
+# job summary; the same command runs locally as
+#   git fetch https://github.com/openai/codex.git main
+#   scripts/fork/upstream-drift.sh HEAD FETCH_HEAD
+#
+# A second step fails when a package the fork changes lacks strict clippy or
+# tests in fork CI (scripts/fork/ci-local.sh fork-coverage).
+#
+# A manual or scheduled run fails when an upstream sync is due, so GitHub
+# notifies the owner. A run for a push to codex/fork only reports. GitHub runs
+# `schedule` only from the default branch, so the same file also lives on
+# main (the openai/codex mirror): there the schedule fires and the job checks
+# out codex/fork. Keep both copies identical, so syncing main into codex/fork
+# merges cleanly.
+on:
+  push:
+    branches: [codex/fork]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      max_age_days:
+        description: Days the fork may stay behind upstream before a sync is due
+        required: false
+        default: "7"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    name: Upstream drift
+    # Upstream and other forks carry no codex/fork branch.
+    if: github.repository == 'Dirard/codex'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: codex/fork
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch openai/codex main
+        run: git fetch --no-tags https://github.com/openai/codex.git main
+
+      - name: Measure drift
+        env:
+          EVENT: ${{ github.event_name }}
+          MAX_AGE_DAYS: ${{ inputs.max_age_days || '7' }}
+        run: |
+          status=0
+          scripts/fork/upstream-drift.sh --max-age-days "${MAX_AGE_DAYS}" \
+            --summary "${GITHUB_STEP_SUMMARY}" HEAD FETCH_HEAD || status=$?
+          if [[ ${status} -eq 3 && "${EVENT}" == push ]]; then
+            echo "::notice::An upstream sync of codex/fork is due; see the job summary."
+            exit 0
+          fi
+          exit "${status}"
+
+      - name: Fork packages covered by fork CI
+        if: ${{ !cancelled() }}
+        run: scripts/fork/ci-local.sh fork-coverage FETCH_HEAD
