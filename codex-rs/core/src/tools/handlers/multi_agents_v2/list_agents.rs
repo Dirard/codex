@@ -59,42 +59,24 @@ impl Handler {
         let workflow_children = session.services.local_agent_runtime.workflow_children();
         let agents = agents
             .into_iter()
-            .filter_map(|agent| {
-                // Fork: name the owning workflow run; finished workflow agents are omitted,
-                // since one run may start hundreds of them (dynamic workflow, R3.3).
-                let owner = agent
+            // Fork: workflow runs own their agents; finished ones are omitted (dynamic workflow).
+            .filter_map(|agent| workflow_children.listed_owner(agent))
+            .map(|(agent, owner)| ListedAgent {
+                agent_name: agent
                     .metadata
                     .agent_path
                     .as_ref()
-                    .and_then(|path| workflow_children.owner(path.as_str()))
-                    .map(|run_id| format!("workflow:{run_id}"));
-                if owner.is_some() && crate::agent::status::is_final(&agent.status) {
-                    return None;
-                }
-                Some(ListedAgent {
-                    agent_name: agent
-                        .metadata
-                        .agent_path
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| agent.thread_id.to_string()),
-                    // Fork: an explorer's final answer is capped like its completion mail.
-                    agent_status: match (
-                        agent.status,
-                        crate::agent::explorer_profile::result_max_tokens_for_role(
-                            &turn.config,
-                            agent.metadata.agent_role.as_deref(),
-                        ),
-                    ) {
-                        (AgentStatus::Completed(Some(message)), Some(max_tokens)) => {
-                            AgentStatus::Completed(Some(
-                                crate::agent::explorer_profile::cap_result(&message, max_tokens),
-                            ))
-                        }
-                        (status, _) => status,
-                    },
-                    owner,
-                })
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| agent.thread_id.to_string()),
+                // Fork: an explorer's final answer is capped like its completion mail.
+                agent_status: crate::agent::explorer_profile::cap_status(
+                    agent.status,
+                    crate::agent::explorer_profile::result_max_tokens_for_role(
+                        &turn.config,
+                        agent.metadata.agent_role.as_deref(),
+                    ),
+                ),
+                owner,
             })
             .collect();
         Ok(boxed_tool_output(ListAgentsResult { agents }))

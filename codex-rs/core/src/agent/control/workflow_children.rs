@@ -119,6 +119,24 @@ impl WorkflowChildren {
     }
 
     /// Run that owns the agent at `path`.
+    /// `list_agents` names the run that owns an agent as `workflow:<run_id>`; finished
+    /// workflow agents are omitted, since one run may start hundreds of them (R3.3).
+    pub(crate) fn listed_owner(
+        &self,
+        agent: crate::agent::types::LiveAgent,
+    ) -> Option<(crate::agent::types::LiveAgent, Option<String>)> {
+        let owner = agent
+            .metadata
+            .agent_path
+            .as_ref()
+            .and_then(|path| self.owner(path.as_str()))
+            .map(|run_id| format!("workflow:{run_id}"));
+        if owner.is_some() && crate::agent::status::is_final(&agent.status) {
+            return None;
+        }
+        Some((agent, owner))
+    }
+
     pub(crate) fn owner(&self, path: &str) -> Option<String> {
         self.state()
             .by_path
