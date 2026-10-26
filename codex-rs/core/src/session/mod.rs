@@ -316,6 +316,8 @@ mod rollout_reconstruction_tests;
 // Fork: session modules of the fork; the hot files keep thin hooks into them
 // (specs/fork-rebase-sustainability-2026-10-26.md, UC2).
 mod fork_agent_delivery;
+mod fork_compaction;
+mod fork_output_truncation;
 mod fork_spawn_budget;
 // Fork end
 
@@ -332,7 +334,6 @@ use crate::state::AcceptedUserInputResponse;
 use crate::state::AutoCompactWindowIds;
 use crate::state::AutoCompactWindowSnapshot;
 use crate::state::PendingRequestPermissions;
-use crate::state::PreparedAutoCompactWindow;
 use crate::state::ReasoningEffortPin;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -3781,38 +3782,26 @@ impl Session {
         mut items: Vec<ResponseItemEnvelope>,
         image_preparations: Vec<ImagePreparationMetadata>,
     ) {
-        let originating_truncation = turn_context.output_truncation_for_model(model_info);
+        // Save the originating history budget for replay.
+        // Preserve any existing tool-specific override.
+        let policy: codex_utils_output_truncation::TruncationPolicy =
+            model_info.truncation_policy.into();
+        let originating_truncation = turn_context.output_truncation_for_model(model_info); // Fork
         for envelope in &mut items {
             if matches!(
                 envelope.item,
                 ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. }
             ) {
-                let metadata = envelope.metadata.get_or_insert_default();
-                if let Some(policy) = metadata.history_truncation_policy {
-                    metadata
-                        .history_truncation_token_limit
-                        .get_or_insert_with(|| policy.token_budget());
-                    continue;
-                }
-                // Preserve a tool-specific token override, then save the complete policy so
-                // replay does not depend on the model or config selected after this output.
-                let truncation = if let Some(policy) = metadata
+                // Fork: save the complete originating truncation; its token limit wins below.
+                fork_output_truncation::annotate_tool_output_metadata(
+                    envelope.metadata.get_or_insert_default(),
+                    originating_truncation,
+                );
+                envelope
+                    .metadata
+                    .get_or_insert_default()
                     .history_truncation_token_limit
-                    .map(codex_utils_output_truncation::TruncationPolicy::Tokens)
-                {
-                    originating_truncation.with_policy(policy)
-                } else {
-                    originating_truncation
-                        .with_policy(with_serialization_allowance(originating_truncation.policy))
-                };
-                metadata
-                    .history_truncation_token_limit
-                    .get_or_insert_with(|| {
-                        with_serialization_allowance(originating_truncation.policy).token_budget()
-                    });
-                metadata.history_truncation_policy = Some(truncation.policy);
-                metadata.history_truncation_max_lines = truncation.max_lines;
-                metadata.history_truncation_mcp_max_lines = truncation.mcp_max_lines;
+                    .get_or_insert_with(|| with_serialization_allowance(policy).token_budget());
             }
         }
         // Last-N-turn forks retain a suffix starting at a user turn boundary. Repeat the
@@ -4441,7 +4430,7 @@ impl Session {
         }
         // Wait for accepted updates to finish persisting, then keep later updates from
         // overtaking the current settings snapshot while its checkpoint is written.
-        let base_instructions = self.get_base_instructions().await;
+        let base_instructions = self.get_base_instructions().await; // Fork: headroom check
         let _settings_guard = thread_settings::acquire_persistence_lock(self).await;
         let (compacted_item, started_item) = {
             let mut state = self.state.lock().await;
@@ -4486,29 +4475,15 @@ impl Session {
                         prefix_context.into_iter().map(ResponseItemEnvelope::new),
                     );
                     items.extend_from_slice(suffix);
-                    // Validate the complete prepared replacement, including the live suffix,
-                    // before advancing the compaction window or mutating history.
-                    let candidate_tokens =
-                        crate::compact_remote_v2::estimate_candidate_request_tokens(
-                            &items,
-                            &base_instructions,
-                            model_info,
-                            tool_declaration_tokens,
-                        );
-                    let scope = turn_context.config.model_auto_compact_token_limit_scope;
-                    let status =
-                        crate::session::context_window::context_window_token_status_for_usage(
-                            turn_context.config.as_ref(),
-                            model_info,
-                            candidate_tokens,
-                            matches!(scope, AutoCompactTokenLimitScope::BodyAfterPrefix)
-                                .then_some(candidate_tokens),
-                        );
-                    if crate::compact_remote_v2::enforces_compaction_headroom(
-                        &turn_context.session_source,
-                    ) && crate::compact_remote_v2::compaction_candidate_overflow(&status, scope)
-                        > 0
-                    {
+                    // Fork: validate the complete prepared replacement, including the live
+                    // suffix, before advancing the compaction window or mutating history.
+                    if fork_compaction::prepared_candidate_overflows(
+                        &items,
+                        &base_instructions,
+                        model_info,
+                        tool_declaration_tokens,
+                        turn_context,
+                    ) {
                         return false;
                     }
                     // The unchanged suffix already contains updates through this baseline.
@@ -4704,48 +4679,26 @@ impl Session {
     /// Normally both inputs come from the same step. Async compaction uses the prefix's
     /// world state so later state updates can stay in history unchanged.
     /// Returns rendered items with placement preserved for the caller's history layout.
-    pub(crate) async fn build_initial_context_with_world_state(
-        &self,
-        step_context: &StepContext,
-        world_state: &WorldState,
-    ) -> (Vec<WorldStateUpdate>, WorldStateSnapshot) {
-        self.build_initial_context_with_world_state_inner(step_context, world_state, None)
-            .await
-    }
-
-    pub(crate) async fn build_initial_context_with_world_state_for_window(
-        &self,
-        step_context: &StepContext,
-        world_state: &WorldState,
-        auto_compact_window_ids: AutoCompactWindowIds,
-    ) -> (Vec<WorldStateUpdate>, WorldStateSnapshot) {
-        self.build_initial_context_with_world_state_inner(
-            step_context,
-            world_state,
-            Some(auto_compact_window_ids),
-        )
-        .await
-    }
-
+    /// Fork: `build_initial_context_with_world_state(_for_window)` wrap this (fork_compaction.rs).
     async fn build_initial_context_with_world_state_inner(
         &self,
         step_context: &StepContext,
         world_state: &WorldState,
-        auto_compact_window_ids: Option<AutoCompactWindowIds>,
+        window_ids: Option<AutoCompactWindowIds>,
     ) -> (Vec<WorldStateUpdate>, WorldStateSnapshot) {
         let turn_context = step_context.turn.as_ref();
         let mut developer_sections = Vec::<RenderedFragment>::with_capacity(8);
         let mut contextual_user_sections = Vec::<RenderedFragment>::with_capacity(2);
         let mut separate_developer_messages = Vec::<ResponseItem>::new();
         let mut context_window_hints = Vec::new();
-        let (session_source, current_window_ids) = {
+        let (session_source, auto_compact_window_ids) = {
             let state = self.state.lock().await;
             (
                 state.session_configuration.session_source.clone(),
                 state.auto_compact_window_ids(),
             )
         };
-        let auto_compact_window_ids = auto_compact_window_ids.unwrap_or(current_window_ids);
+        let auto_compact_window_ids = window_ids.unwrap_or(auto_compact_window_ids); // Fork
         let separate_guardian_developer_message =
             crate::guardian::is_basic_session_source(&session_source);
         // Keep the guardian policy prompt out of the aggregated developer bundle so it
@@ -5058,19 +5011,6 @@ impl Session {
     pub(crate) async fn advance_auto_compact_window(&self) -> (u64, AutoCompactWindowIds) {
         let mut state = self.state.lock().await;
         state.advance_auto_compact_window()
-    }
-
-    pub(crate) async fn prepare_auto_compact_window(&self) -> PreparedAutoCompactWindow {
-        let state = self.state.lock().await;
-        state.prepare_auto_compact_window()
-    }
-
-    pub(crate) async fn commit_prepared_auto_compact_window(
-        &self,
-        prepared: PreparedAutoCompactWindow,
-    ) -> bool {
-        let mut state = self.state.lock().await;
-        state.commit_prepared_auto_compact_window(prepared)
     }
 
     pub(crate) async fn request_new_context_window(&self) {
