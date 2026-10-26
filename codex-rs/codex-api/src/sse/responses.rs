@@ -439,10 +439,8 @@ pub fn process_responses_event(
                         .map(str::to_owned);
                     let token_usage = response
                         .and_then(|response| response.get("usage"))
-                        .and_then(|usage| {
-                            serde_json::from_value::<ResponseCompletedUsage>(usage.clone()).ok()
-                        })
-                        .map(Into::into);
+                        // Fork: partial usage keeps its counters (responses_fork.rs).
+                        .and_then(fork::token_usage);
                     return Err(ResponsesEventError::Api(ApiError::ResponseIncomplete(
                         Box::new(ResponseIncompleteError {
                             reason: reason.to_string(),
@@ -464,18 +462,8 @@ pub fn process_responses_event(
                         }
                         return Ok(Some(ResponseEvent::Completed {
                             response_id: resp.id,
-                            token_usage: resp
-                                .usage
-                                .and_then(|usage| {
-                                    serde_json::from_value::<ResponseCompletedUsage>(usage)
-                                        .inspect_err(|err| {
-                                            debug!(
-                                                "failed to parse response.completed usage: {err}"
-                                            );
-                                        })
-                                        .ok()
-                                })
-                                .map(Into::into),
+                            // Fork: partial usage keeps its counters (responses_fork.rs).
+                            token_usage: resp.usage.as_ref().and_then(fork::token_usage),
                             usage_metadata: resp.usage_metadata,
                             end_turn: if interrupted {
                                 Some(false)
@@ -686,7 +674,10 @@ async fn process_sse_with_treatment(
 #[path = "responses_error_tests.rs"]
 mod error_tests;
 
-// Fork: tolerant `response.completed.usage` (docs/fork/02-compaction-context.md F8).
+// Fork: tolerant usage of `response.completed` and `response.incomplete`
+// (docs/fork/02-compaction-context.md F8, R7).
+#[path = "responses_fork.rs"]
+mod fork;
 #[cfg(test)]
 #[path = "responses_fork_tests.rs"]
 mod fork_tests;
