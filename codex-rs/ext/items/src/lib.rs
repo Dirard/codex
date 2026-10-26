@@ -11,6 +11,7 @@ use ts_rs::TS;
 pub mod image_generation;
 pub mod sleep;
 pub mod web_search;
+pub mod workflow;
 
 /// Canonical extension-owned turn item carried through core lifecycle events.
 ///
@@ -42,6 +43,10 @@ pub enum ExtensionItem {
     #[serde(rename = "web.search")]
     #[ts(rename = "web.search")]
     WebSearch(web_search::WebSearchItem),
+    // Fork: start or completion of a dynamic workflow run.
+    #[serde(rename = "workflow.run")]
+    #[ts(rename = "workflow.run")]
+    Workflow(workflow::WorkflowItem),
 }
 
 impl ExtensionItem {
@@ -52,6 +57,7 @@ impl ExtensionItem {
             Self::ImageGeneration(item) => &item.id,
             Self::Sleep(item) => &item.id,
             Self::WebSearch(item) => &item.id,
+            Self::Workflow(item) => &item.id,
         }
     }
 }

@@ -61,6 +61,7 @@ pub(crate) fn notification_routing_strategy(method: &'static str) -> Notificatio
         | "thread/prediction/updated"
         | "thread/goal/cleared"
         | "thread/queue/changed"
+        | "thread/workflow/updated"
         | "thread/settings/updated"
         | "guardianWarning"
         | "thread/realtime/started"

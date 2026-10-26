@@ -38,6 +38,19 @@ impl RunStatus {
             Self::Interrupted => "interrupted",
         }
     }
+
+    /// The status named by [`Self::as_str`].
+    pub fn parse(value: &str) -> Option<Self> {
+        [
+            Self::Running,
+            Self::Completed,
+            Self::Failed,
+            Self::Cancelled,
+            Self::Interrupted,
+        ]
+        .into_iter()
+        .find(|status| status.as_str() == value)
+    }
 }
 
 /// State of one `agent()` call.

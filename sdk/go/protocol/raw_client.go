@@ -172,6 +172,24 @@ func (c RawClient) ThreadQueueStart(ctx context.Context, params ThreadQueueStart
 	return result, err
 }
 
+func (c RawClient) ThreadWorkflowList(ctx context.Context, params ThreadWorkflowListParams) (ThreadWorkflowListResponse, error) {
+	var result ThreadWorkflowListResponse
+	err := c.sender.Call(ctx, "thread/workflow/list", params, &result, MethodMetadataByMethod["thread/workflow/list"])
+	return result, err
+}
+
+func (c RawClient) ThreadWorkflowRead(ctx context.Context, params ThreadWorkflowReadParams) (ThreadWorkflowReadResponse, error) {
+	var result ThreadWorkflowReadResponse
+	err := c.sender.Call(ctx, "thread/workflow/read", params, &result, MethodMetadataByMethod["thread/workflow/read"])
+	return result, err
+}
+
+func (c RawClient) ThreadWorkflowCancel(ctx context.Context, params ThreadWorkflowCancelParams) (ThreadWorkflowCancelResponse, error) {
+	var result ThreadWorkflowCancelResponse
+	err := c.sender.Call(ctx, "thread/workflow/cancel", params, &result, MethodMetadataByMethod["thread/workflow/cancel"])
+	return result, err
+}
+
 func (c RawClient) ThreadMetadataUpdate(ctx context.Context, params ThreadMetadataUpdateParams) (ThreadMetadataUpdateResponse, error) {
 	var result ThreadMetadataUpdateResponse
 	err := c.sender.Call(ctx, "thread/metadata/update", params, &result, MethodMetadataByMethod["thread/metadata/update"])

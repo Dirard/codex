@@ -889,6 +889,78 @@
             },
             "method": {
               "enum": [
+                "thread/workflow/list"
+              ],
+              "title": "Thread/workflow/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadWorkflowListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/workflow/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/workflow/read"
+              ],
+              "title": "Thread/workflow/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadWorkflowReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/workflow/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/workflow/cancel"
+              ],
+              "title": "Thread/workflow/cancelRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadWorkflowCancelParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/workflow/cancelRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/metadata/update"
               ],
               "title": "Thread/metadata/updateRequestMethod",
@@ -6840,6 +6912,26 @@
             "params"
           ],
           "title": "Thread/queue/changedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/workflow/updated"
+              ],
+              "title": "Thread/workflow/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadWorkflowUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/workflow/updatedNotification",
           "type": "object"
         },
         {
@@ -26784,6 +26876,47 @@
             "type": "object"
           },
           {
+            "description": "Start or completion of a dynamic workflow run.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "notification": {
+                "default": null,
+                "description": "Completion notification delivered to the model; set once the run is terminal.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "runId": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/definitions/v2/WorkflowRunStatus"
+              },
+              "type": {
+                "enum": [
+                  "workflow"
+                ],
+                "title": "WorkflowThreadItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "runId",
+              "status",
+              "type"
+            ],
+            "title": "WorkflowThreadItem",
+            "type": "object"
+          },
+          {
             "properties": {
               "id": {
                 "type": "string"
@@ -31081,6 +31214,140 @@
         ],
         "type": "object"
       },
+      "ThreadWorkflowCancelParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "threadId"
+        ],
+        "title": "ThreadWorkflowCancelParams",
+        "type": "object"
+      },
+      "ThreadWorkflowCancelResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "run": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/WorkflowRun"
+              }
+            ],
+            "description": "The run after cancellation settled; a finished run is returned unchanged."
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "title": "ThreadWorkflowCancelResponse",
+        "type": "object"
+      },
+      "ThreadWorkflowListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadWorkflowListParams",
+        "type": "object"
+      },
+      "ThreadWorkflowListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "runs": {
+            "description": "Runs of the loaded thread in start order, without `agents`.",
+            "items": {
+              "$ref": "#/definitions/v2/WorkflowRun"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "ThreadWorkflowListResponse",
+        "type": "object"
+      },
+      "ThreadWorkflowReadParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "includeResult": {
+            "description": "When true, return the full result of a finished run.",
+            "type": "boolean"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "threadId"
+        ],
+        "title": "ThreadWorkflowReadParams",
+        "type": "object"
+      },
+      "ThreadWorkflowReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "result": {
+            "description": "JSON text of the run result; set when `includeResult` was true and the run returned one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/WorkflowRun"
+              }
+            ],
+            "description": "The run with its `agents`."
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "title": "ThreadWorkflowReadResponse",
+        "type": "object"
+      },
+      "ThreadWorkflowUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "A run of the thread changed. Sent at most every 250 ms per run, and always once with the terminal snapshot.",
+        "properties": {
+          "run": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/WorkflowRun"
+              }
+            ],
+            "description": "The run without `agents`."
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "threadId"
+        ],
+        "title": "ThreadWorkflowUpdatedNotification",
+        "type": "object"
+      },
       "TokenUsageBreakdown": {
         "properties": {
           "cacheWriteInputTokens": {
@@ -32846,6 +33113,291 @@
         ],
         "title": "WindowsWorldWritableWarningNotification",
         "type": "object"
+      },
+      "WorkflowAgent": {
+        "description": "One `agent()` call of a run.",
+        "properties": {
+          "agentPath": {
+            "description": "Agent path of the child thread, once spawned.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cachedTokens": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "chargedTokens": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phase": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Why the call resolved to null.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seq": {
+            "description": "Call number in the script, starting at 1.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/definitions/v2/WorkflowAgentState"
+          },
+          "threadId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cachedTokens",
+          "chargedTokens",
+          "seq",
+          "state"
+        ],
+        "type": "object"
+      },
+      "WorkflowAgentCounts": {
+        "description": "`agent()` calls of a run by state.",
+        "properties": {
+          "awaitingApproval": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "completed": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "null": {
+            "description": "Calls that resolved to null.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "queued": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "running": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "awaitingApproval",
+          "completed",
+          "null",
+          "queued",
+          "running"
+        ],
+        "type": "object"
+      },
+      "WorkflowAgentState": {
+        "description": "State of one `agent()` call.",
+        "oneOf": [
+          {
+            "enum": [
+              "queued",
+              "running",
+              "awaitingApproval",
+              "completed"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Resolved to null; `reason` says why.",
+            "enum": [
+              "null"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "WorkflowPhase": {
+        "description": "`agent()` calls attributed to a phase.",
+        "properties": {
+          "finished": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "started": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "finished",
+          "started",
+          "title"
+        ],
+        "type": "object"
+      },
+      "WorkflowRun": {
+        "description": "Snapshot of a workflow run; `revision` grows on every change.",
+        "properties": {
+          "agentCounts": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/WorkflowAgentCounts"
+              }
+            ],
+            "description": "`agent()` calls of the run by state."
+          },
+          "agents": {
+            "description": "Every `agent()` call; returned only by `thread/workflow/read`.",
+            "items": {
+              "$ref": "#/definitions/v2/WorkflowAgent"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "budgetTokens": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cachedTokens": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "chargedTokens": {
+            "description": "Non-cached input plus output tokens of the run's agents.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "currentPhase": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finishedAtMs": {
+            "description": "Unix time in milliseconds; null while the run is active.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "logsTail": {
+            "description": "The last `log()` lines of the script.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "nullReasons": {
+            "additionalProperties": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "description": "Calls that resolved to null, by reason.",
+            "type": "object"
+          },
+          "phases": {
+            "items": {
+              "$ref": "#/definitions/v2/WorkflowPhase"
+            },
+            "type": "array"
+          },
+          "resultPreview": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "startedAtMs": {
+            "description": "Unix time in milliseconds.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/definitions/v2/WorkflowRunStatus"
+          }
+        },
+        "required": [
+          "agentCounts",
+          "cachedTokens",
+          "chargedTokens",
+          "description",
+          "logsTail",
+          "name",
+          "nullReasons",
+          "phases",
+          "revision",
+          "runId",
+          "startedAtMs",
+          "status"
+        ],
+        "type": "object"
+      },
+      "WorkflowRunStatus": {
+        "description": "Lifecycle status of a dynamic workflow run.",
+        "enum": [
+          "running",
+          "completed",
+          "failed",
+          "cancelled",
+          "interrupted"
+        ],
+        "type": "string"
       },
       "WorkspaceMessage": {
         "properties": {

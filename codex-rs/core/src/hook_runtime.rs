@@ -754,8 +754,17 @@ pub(crate) async fn record_pending_input(
             .await;
         }
         TurnInput::ResponseItem(item) => {
+            // Fork: a workflow completion notification is also the run's terminal item in
+            // the turn that receives it (dynamic workflow, R8.3).
+            let workflow_item = crate::context::WorkflowNotification::turn_item(&item.item);
             sess.record_annotated_conversation_items(turn_context, model_info, vec![item])
                 .await;
+            if let Some(workflow_item) = workflow_item {
+                sess.emit_turn_item_started(turn_context, &workflow_item)
+                    .await;
+                sess.emit_turn_item_completed(turn_context, workflow_item)
+                    .await;
+            }
         }
         TurnInput::FunctionCallOutput(item) => {
             sess.record_annotated_conversation_items(turn_context, model_info, vec![item.clone()])

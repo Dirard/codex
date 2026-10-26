@@ -241,6 +241,8 @@ fn persisted_item_completed_event<'a>(
                 TurnItem::FunctionCallOutput(_)
                     | TurnItem::Plan(_)
                     | TurnItem::Extension(ExtensionItem::Sleep(_))
+                    // Fork: the start of a workflow run has no legacy event (R8.3).
+                    | TurnItem::Extension(ExtensionItem::Workflow(_))
             ) || matches!(
                 &event.item,
                 TurnItem::SubAgentActivity(item)

@@ -595,6 +595,48 @@ func (v ClientRequest) ThreadQueueStartParams() (ThreadQueueStartParams, bool, e
 	return params, true, nil
 }
 
+func (v ClientRequest) ThreadWorkflowListParams() (ThreadWorkflowListParams, bool, error) {
+	if v.Method != "thread/workflow/list" {
+		return ThreadWorkflowListParams{}, false, nil
+	}
+	var params ThreadWorkflowListParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) ThreadWorkflowReadParams() (ThreadWorkflowReadParams, bool, error) {
+	if v.Method != "thread/workflow/read" {
+		return ThreadWorkflowReadParams{}, false, nil
+	}
+	var params ThreadWorkflowReadParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) ThreadWorkflowCancelParams() (ThreadWorkflowCancelParams, bool, error) {
+	if v.Method != "thread/workflow/cancel" {
+		return ThreadWorkflowCancelParams{}, false, nil
+	}
+	var params ThreadWorkflowCancelParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
 func (v ClientRequest) ThreadMetadataUpdateParams() (ThreadMetadataUpdateParams, bool, error) {
 	if v.Method != "thread/metadata/update" {
 		return ThreadMetadataUpdateParams{}, false, nil
@@ -5295,6 +5337,20 @@ func (v ServerNotification) ThreadQueueChangedParams() (ThreadQueueChangedNotifi
 		return ThreadQueueChangedNotification{}, false, nil
 	}
 	var params ThreadQueueChangedNotification
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ServerNotification) ThreadWorkflowUpdatedParams() (ThreadWorkflowUpdatedNotification, bool, error) {
+	if v.Method != "thread/workflow/updated" {
+		return ThreadWorkflowUpdatedNotification{}, false, nil
+	}
+	var params ThreadWorkflowUpdatedNotification
 	if len(bytes.TrimSpace(v.Params)) == 0 {
 		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
 	}
@@ -23062,6 +23118,7 @@ type ThreadItem struct {
 	Model                 Optional[string]                             `json:"model,omitzero"`
 	Name                  OptionalNonNull[string]                      `json:"name,omitzero"`
 	Namespace             Optional[string]                             `json:"namespace,omitzero"`
+	Notification          Optional[string]                             `json:"notification,omitzero"`
 	Output                OptionalNonNull[FunctionCallOutputBody]      `json:"output,omitzero"`
 	Path                  OptionalNonNull[LegacyAppPathString]         `json:"path,omitzero"`
 	Phase                 Optional[MessagePhase]                       `json:"phase,omitzero"`
@@ -23077,6 +23134,7 @@ type ThreadItem struct {
 	Results               Optional[[]json.RawMessage]                  `json:"results,omitzero"`
 	Review                OptionalNonNull[string]                      `json:"review,omitzero"`
 	RevisedPrompt         Optional[string]                             `json:"revisedPrompt,omitzero"`
+	RunID                 OptionalNonNull[string]                      `json:"runId,omitzero"`
 	SavedPath             Optional[AbsolutePathBuf]                    `json:"savedPath,omitzero"`
 	ScriptPath            Optional[string]                             `json:"scriptPath,omitzero"`
 	SenderThreadID        OptionalNonNull[string]                      `json:"senderThreadId,omitzero"`
@@ -23124,6 +23182,7 @@ var threadItemSpec = objectSpec{
 		{name: "model"},
 		{name: "name", flags: fieldNonNullOptional},
 		{name: "namespace"},
+		{name: "notification"},
 		{name: "output", flags: fieldNonNullOptional},
 		{name: "path", flags: fieldNonNullOptional},
 		{name: "phase"},
@@ -23139,6 +23198,7 @@ var threadItemSpec = objectSpec{
 		{name: "results"},
 		{name: "review", flags: fieldNonNullOptional},
 		{name: "revisedPrompt"},
+		{name: "runId", flags: fieldNonNullOptional},
 		{name: "savedPath"},
 		{name: "scriptPath"},
 		{name: "senderThreadId", flags: fieldNonNullOptional},
@@ -23152,8 +23212,8 @@ var threadItemSpec = objectSpec{
 		{name: "transparentBackground"},
 		{name: "type", flags: fieldRequired | fieldRejectNull},
 	},
-	tag:  56,
-	tags: []string{"userMessage", "hookPrompt", "agentMessage", "functionCallOutput", "plan", "reasoning", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "subAgentActivity", "webSearch", "imageView", "sleep", "imageGeneration", "enteredReviewMode", "exitedReviewMode", "contextCompaction"},
+	tag:  58,
+	tags: []string{"userMessage", "hookPrompt", "agentMessage", "functionCallOutput", "plan", "reasoning", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "subAgentActivity", "webSearch", "imageView", "sleep", "imageGeneration", "workflow", "enteredReviewMode", "exitedReviewMode", "contextCompaction"},
 }
 
 func (v ThreadItem) MarshalJSON() ([]byte, error) {
@@ -23329,6 +23389,19 @@ func (v ThreadItem) MarshalJSON() ([]byte, error) {
 		taggedAnyOfVariant15Matches := (w.FileID.IsSet() && marshalsNonNull(w.FileID)) || (len(w.Result) > 0 && marshalsNonNull(w.Result))
 		if !taggedAnyOfVariant15Matches {
 			return nil, DecodeError{Field: "", Reason: "does not match any anyOf variant for type imageGeneration"}
+		}
+	case "workflow":
+		if !v.ID.IsSet() {
+			return nil, DecodeError{Field: "id", Reason: "missing required field for type workflow"}
+		}
+		if !v.Name.IsSet() {
+			return nil, DecodeError{Field: "name", Reason: "missing required field for type workflow"}
+		}
+		if !v.RunID.IsSet() {
+			return nil, DecodeError{Field: "runId", Reason: "missing required field for type workflow"}
+		}
+		if !v.Status.IsSet() {
+			return nil, DecodeError{Field: "status", Reason: "missing required field for type workflow"}
 		}
 	case "enteredReviewMode":
 		if !v.ID.IsSet() {
@@ -23669,6 +23742,31 @@ func (v *ThreadItem) UnmarshalJSON(data []byte) error {
 		taggedAnyOfVariant15Matches := (v.FileID.IsSet()) || (s.nonNull("result"))
 		if !taggedAnyOfVariant15Matches {
 			return DecodeError{Field: "", Reason: "does not match any anyOf variant for type imageGeneration"}
+		}
+	case "workflow":
+		if !s.has("id") {
+			return DecodeError{Field: "id", Reason: "missing required field for type workflow"}
+		}
+		if s.isNull("id") {
+			return DecodeError{Field: "id", Reason: "cannot be null"}
+		}
+		if !s.has("name") {
+			return DecodeError{Field: "name", Reason: "missing required field for type workflow"}
+		}
+		if s.isNull("name") {
+			return DecodeError{Field: "name", Reason: "cannot be null"}
+		}
+		if !s.has("runId") {
+			return DecodeError{Field: "runId", Reason: "missing required field for type workflow"}
+		}
+		if s.isNull("runId") {
+			return DecodeError{Field: "runId", Reason: "cannot be null"}
+		}
+		if !s.has("status") {
+			return DecodeError{Field: "status", Reason: "missing required field for type workflow"}
+		}
+		if s.isNull("status") {
+			return DecodeError{Field: "status", Reason: "cannot be null"}
 		}
 	case "enteredReviewMode":
 		if !s.has("id") {
@@ -27742,6 +27840,156 @@ func (v *ThreadUsageBreakdownGroup) UnmarshalJSON(data []byte) error {
 	return decodeObject(data, &threadUsageBreakdownGroupSpec, (*wire)(v))
 }
 
+type ThreadWorkflowCancelParams struct {
+	RunID    string `json:"runId"`
+	ThreadID string `json:"threadId"`
+}
+
+var threadWorkflowCancelParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "runId", flags: fieldRequired | fieldRejectNull},
+		{name: "threadId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadWorkflowCancelParams) MarshalJSON() ([]byte, error) {
+	type wire ThreadWorkflowCancelParams
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadWorkflowCancelParams) UnmarshalJSON(data []byte) error {
+	type wire ThreadWorkflowCancelParams
+	return decodeObject(data, &threadWorkflowCancelParamsSpec, (*wire)(v))
+}
+
+type ThreadWorkflowCancelResponse struct {
+	Run WorkflowRun `json:"run"`
+}
+
+var threadWorkflowCancelResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "run", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadWorkflowCancelResponse) MarshalJSON() ([]byte, error) {
+	type wire ThreadWorkflowCancelResponse
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadWorkflowCancelResponse) UnmarshalJSON(data []byte) error {
+	type wire ThreadWorkflowCancelResponse
+	return decodeObject(data, &threadWorkflowCancelResponseSpec, (*wire)(v))
+}
+
+type ThreadWorkflowListParams struct {
+	ThreadID string `json:"threadId"`
+}
+
+var threadWorkflowListParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "threadId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadWorkflowListParams) MarshalJSON() ([]byte, error) {
+	type wire ThreadWorkflowListParams
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadWorkflowListParams) UnmarshalJSON(data []byte) error {
+	type wire ThreadWorkflowListParams
+	return decodeObject(data, &threadWorkflowListParamsSpec, (*wire)(v))
+}
+
+type ThreadWorkflowListResponse struct {
+	Runs []WorkflowRun `json:"runs"`
+}
+
+var threadWorkflowListResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "runs", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadWorkflowListResponse) MarshalJSON() ([]byte, error) {
+	type wire ThreadWorkflowListResponse
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadWorkflowListResponse) UnmarshalJSON(data []byte) error {
+	type wire ThreadWorkflowListResponse
+	return decodeObject(data, &threadWorkflowListResponseSpec, (*wire)(v))
+}
+
+type ThreadWorkflowReadParams struct {
+	IncludeResult OptionalNonNull[bool] `json:"includeResult,omitzero"`
+	RunID         string                `json:"runId"`
+	ThreadID      string                `json:"threadId"`
+}
+
+var threadWorkflowReadParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "includeResult", flags: fieldNonNullOptional},
+		{name: "runId", flags: fieldRequired | fieldRejectNull},
+		{name: "threadId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadWorkflowReadParams) MarshalJSON() ([]byte, error) {
+	type wire ThreadWorkflowReadParams
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadWorkflowReadParams) UnmarshalJSON(data []byte) error {
+	type wire ThreadWorkflowReadParams
+	return decodeObject(data, &threadWorkflowReadParamsSpec, (*wire)(v))
+}
+
+type ThreadWorkflowReadResponse struct {
+	Result Optional[string] `json:"result,omitzero"`
+	Run    WorkflowRun      `json:"run"`
+}
+
+var threadWorkflowReadResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "result"},
+		{name: "run", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadWorkflowReadResponse) MarshalJSON() ([]byte, error) {
+	type wire ThreadWorkflowReadResponse
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadWorkflowReadResponse) UnmarshalJSON(data []byte) error {
+	type wire ThreadWorkflowReadResponse
+	return decodeObject(data, &threadWorkflowReadResponseSpec, (*wire)(v))
+}
+
+type ThreadWorkflowUpdatedNotification struct {
+	Run      WorkflowRun `json:"run"`
+	ThreadID string      `json:"threadId"`
+}
+
+var threadWorkflowUpdatedNotificationSpec = objectSpec{
+	fields: []objectField{
+		{name: "run", flags: fieldRequired | fieldRejectNull},
+		{name: "threadId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadWorkflowUpdatedNotification) MarshalJSON() ([]byte, error) {
+	type wire ThreadWorkflowUpdatedNotification
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadWorkflowUpdatedNotification) UnmarshalJSON(data []byte) error {
+	type wire ThreadWorkflowUpdatedNotification
+	return decodeObject(data, &threadWorkflowUpdatedNotificationSpec, (*wire)(v))
+}
+
 type TokenUsageBreakdown struct {
 	CacheWriteInputTokens OptionalNonNull[int64] `json:"cacheWriteInputTokens,omitzero"`
 	CachedInputTokens     int64                  `json:"cachedInputTokens"`
@@ -29218,6 +29466,232 @@ func (v *WindowsWorldWritableWarningNotification) UnmarshalJSON(data []byte) err
 	}
 	return nil
 }
+
+type WorkflowAgent struct {
+	AgentPath     Optional[string]   `json:"agentPath,omitzero"`
+	CachedTokens  uint64             `json:"cachedTokens"`
+	ChargedTokens uint64             `json:"chargedTokens"`
+	Label         Optional[string]   `json:"label,omitzero"`
+	Phase         Optional[string]   `json:"phase,omitzero"`
+	Reason        Optional[string]   `json:"reason,omitzero"`
+	Seq           uint64             `json:"seq"`
+	State         WorkflowAgentState `json:"state"`
+	ThreadID      Optional[string]   `json:"threadId,omitzero"`
+}
+
+var workflowAgentSpec = objectSpec{
+	fields: []objectField{
+		{name: "agentPath"},
+		{name: "cachedTokens", flags: fieldRequired | fieldRejectNull},
+		{name: "chargedTokens", flags: fieldRequired | fieldRejectNull},
+		{name: "label"},
+		{name: "phase"},
+		{name: "reason"},
+		{name: "seq", flags: fieldRequired | fieldRejectNull},
+		{name: "state", flags: fieldRequired | fieldRejectNull},
+		{name: "threadId"},
+	},
+}
+
+func (v WorkflowAgent) MarshalJSON() ([]byte, error) {
+	type wire WorkflowAgent
+	return json.Marshal(wire(v))
+}
+
+func (v *WorkflowAgent) UnmarshalJSON(data []byte) error {
+	type wire WorkflowAgent
+	var s objectScan
+	if _, err := s.begin(data, &workflowAgentSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if v.CachedTokens < 0 {
+		return DecodeError{Field: "cachedTokens", Reason: "below minimum 0"}
+	}
+	if v.ChargedTokens < 0 {
+		return DecodeError{Field: "chargedTokens", Reason: "below minimum 0"}
+	}
+	if v.Seq < 0 {
+		return DecodeError{Field: "seq", Reason: "below minimum 0"}
+	}
+	return nil
+}
+
+type WorkflowAgentCounts struct {
+	AwaitingApproval uint64 `json:"awaitingApproval"`
+	Completed        uint64 `json:"completed"`
+	Null             uint64 `json:"null"`
+	Queued           uint64 `json:"queued"`
+	Running          uint64 `json:"running"`
+}
+
+var workflowAgentCountsSpec = objectSpec{
+	fields: []objectField{
+		{name: "awaitingApproval", flags: fieldRequired | fieldRejectNull},
+		{name: "completed", flags: fieldRequired | fieldRejectNull},
+		{name: "null", flags: fieldRequired | fieldRejectNull},
+		{name: "queued", flags: fieldRequired | fieldRejectNull},
+		{name: "running", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v WorkflowAgentCounts) MarshalJSON() ([]byte, error) {
+	type wire WorkflowAgentCounts
+	return json.Marshal(wire(v))
+}
+
+func (v *WorkflowAgentCounts) UnmarshalJSON(data []byte) error {
+	type wire WorkflowAgentCounts
+	var s objectScan
+	if _, err := s.begin(data, &workflowAgentCountsSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if v.AwaitingApproval < 0 {
+		return DecodeError{Field: "awaitingApproval", Reason: "below minimum 0"}
+	}
+	if v.Completed < 0 {
+		return DecodeError{Field: "completed", Reason: "below minimum 0"}
+	}
+	if v.Null < 0 {
+		return DecodeError{Field: "null", Reason: "below minimum 0"}
+	}
+	if v.Queued < 0 {
+		return DecodeError{Field: "queued", Reason: "below minimum 0"}
+	}
+	if v.Running < 0 {
+		return DecodeError{Field: "running", Reason: "below minimum 0"}
+	}
+	return nil
+}
+
+type WorkflowAgentState = json.RawMessage
+
+type WorkflowPhase struct {
+	Finished uint64 `json:"finished"`
+	Started  uint64 `json:"started"`
+	Title    string `json:"title"`
+}
+
+var workflowPhaseSpec = objectSpec{
+	fields: []objectField{
+		{name: "finished", flags: fieldRequired | fieldRejectNull},
+		{name: "started", flags: fieldRequired | fieldRejectNull},
+		{name: "title", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v WorkflowPhase) MarshalJSON() ([]byte, error) {
+	type wire WorkflowPhase
+	return json.Marshal(wire(v))
+}
+
+func (v *WorkflowPhase) UnmarshalJSON(data []byte) error {
+	type wire WorkflowPhase
+	var s objectScan
+	if _, err := s.begin(data, &workflowPhaseSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if v.Finished < 0 {
+		return DecodeError{Field: "finished", Reason: "below minimum 0"}
+	}
+	if v.Started < 0 {
+		return DecodeError{Field: "started", Reason: "below minimum 0"}
+	}
+	return nil
+}
+
+type WorkflowRun struct {
+	AgentCounts   WorkflowAgentCounts       `json:"agentCounts"`
+	Agents        Optional[[]WorkflowAgent] `json:"agents,omitzero"`
+	BudgetTokens  Optional[uint64]          `json:"budgetTokens,omitzero"`
+	CachedTokens  uint64                    `json:"cachedTokens"`
+	ChargedTokens uint64                    `json:"chargedTokens"`
+	CurrentPhase  Optional[string]          `json:"currentPhase,omitzero"`
+	Description   string                    `json:"description"`
+	Error         Optional[string]          `json:"error,omitzero"`
+	FinishedAtMs  Optional[int64]           `json:"finishedAtMs,omitzero"`
+	LogsTail      []string                  `json:"logsTail"`
+	Name          string                    `json:"name"`
+	NullReasons   map[string]uint64         `json:"nullReasons"`
+	Phases        []WorkflowPhase           `json:"phases"`
+	ResultPreview Optional[string]          `json:"resultPreview,omitzero"`
+	Revision      uint64                    `json:"revision"`
+	RunID         string                    `json:"runId"`
+	StartedAtMs   int64                     `json:"startedAtMs"`
+	Status        WorkflowRunStatus         `json:"status"`
+}
+
+var workflowRunSpec = objectSpec{
+	fields: []objectField{
+		{name: "agentCounts", flags: fieldRequired | fieldRejectNull},
+		{name: "agents"},
+		{name: "budgetTokens"},
+		{name: "cachedTokens", flags: fieldRequired | fieldRejectNull},
+		{name: "chargedTokens", flags: fieldRequired | fieldRejectNull},
+		{name: "currentPhase"},
+		{name: "description", flags: fieldRequired | fieldRejectNull},
+		{name: "error"},
+		{name: "finishedAtMs"},
+		{name: "logsTail", flags: fieldRequired | fieldRejectNull},
+		{name: "name", flags: fieldRequired | fieldRejectNull},
+		{name: "nullReasons", flags: fieldRequired | fieldRejectNull},
+		{name: "phases", flags: fieldRequired | fieldRejectNull},
+		{name: "resultPreview"},
+		{name: "revision", flags: fieldRequired | fieldRejectNull},
+		{name: "runId", flags: fieldRequired | fieldRejectNull},
+		{name: "startedAtMs", flags: fieldRequired | fieldRejectNull},
+		{name: "status", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v WorkflowRun) MarshalJSON() ([]byte, error) {
+	type wire WorkflowRun
+	return json.Marshal(wire(v))
+}
+
+func (v *WorkflowRun) UnmarshalJSON(data []byte) error {
+	type wire WorkflowRun
+	var s objectScan
+	if _, err := s.begin(data, &workflowRunSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if valueBudgetTokens, ok := v.BudgetTokens.Value(); ok {
+		if valueBudgetTokens < 0 {
+			return DecodeError{Field: "budgetTokens", Reason: "below minimum 0"}
+		}
+	}
+	if v.CachedTokens < 0 {
+		return DecodeError{Field: "cachedTokens", Reason: "below minimum 0"}
+	}
+	if v.ChargedTokens < 0 {
+		return DecodeError{Field: "chargedTokens", Reason: "below minimum 0"}
+	}
+	if v.Revision < 0 {
+		return DecodeError{Field: "revision", Reason: "below minimum 0"}
+	}
+	return nil
+}
+
+type WorkflowRunStatus string
+
+const (
+	WorkflowRunStatusRunning     WorkflowRunStatus = "running"
+	WorkflowRunStatusCompleted   WorkflowRunStatus = "completed"
+	WorkflowRunStatusFailed      WorkflowRunStatus = "failed"
+	WorkflowRunStatusCancelled   WorkflowRunStatus = "cancelled"
+	WorkflowRunStatusInterrupted WorkflowRunStatus = "interrupted"
+)
 
 type WorkspaceMessage struct {
 	ArchivedAt  Optional[int64]      `json:"archivedAt,omitzero"`

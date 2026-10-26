@@ -6650,6 +6650,47 @@ class WindowsWorldWritableWarningNotification(BaseModel):
     sample_paths: Annotated[list[str], Field(alias="samplePaths")]
 
 
+class WorkflowAgentCounts(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    awaiting_approval: Annotated[int, Field(alias="awaitingApproval", ge=0)]
+    completed: Annotated[int, Field(ge=0)]
+    null: Annotated[int, Field(description="Calls that resolved to null.", ge=0)]
+    queued: Annotated[int, Field(ge=0)]
+    running: Annotated[int, Field(ge=0)]
+
+
+class WorkflowAgentStateValue(Enum):
+    queued = "queued"
+    running = "running"
+    awaiting_approval = "awaitingApproval"
+    completed = "completed"
+
+
+class WorkflowAgentState(RootModel[WorkflowAgentStateValue | Literal["null"]]):
+    root: Annotated[
+        WorkflowAgentStateValue | Literal["null"], Field(description="State of one `agent()` call.")
+    ]
+
+
+class WorkflowPhase(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    finished: Annotated[int, Field(ge=0)]
+    started: Annotated[int, Field(ge=0)]
+    title: str
+
+
+class WorkflowRunStatus(Enum):
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+    interrupted = "interrupted"
+
+
 class WorkspaceMessageType(Enum):
     headline = "headline"
     announcement = "announcement"
@@ -10104,6 +10145,23 @@ class WebSearchThreadItem(BaseModel):
     type: Annotated[Literal["webSearch"], Field(title="WebSearchThreadItemType")]
 
 
+class WorkflowThreadItem(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: str
+    name: str
+    notification: Annotated[
+        str | None,
+        Field(
+            description="Completion notification delivered to the model; set once the run is terminal."
+        ),
+    ] = None
+    run_id: Annotated[str, Field(alias="runId")]
+    status: WorkflowRunStatus
+    type: Annotated[Literal["workflow"], Field(title="WorkflowThreadItemType")]
+
+
 class ThreadListParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -10543,6 +10601,74 @@ class WindowsSandboxSetupCompletedNotification(BaseModel):
     error: str | None = None
     mode: WindowsSandboxSetupMode
     success: bool
+
+
+class WorkflowAgent(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    agent_path: Annotated[
+        str | None,
+        Field(alias="agentPath", description="Agent path of the child thread, once spawned."),
+    ] = None
+    cached_tokens: Annotated[int, Field(alias="cachedTokens", ge=0)]
+    charged_tokens: Annotated[int, Field(alias="chargedTokens", ge=0)]
+    label: str | None = None
+    phase: str | None = None
+    reason: Annotated[str | None, Field(description="Why the call resolved to null.")] = None
+    seq: Annotated[int, Field(description="Call number in the script, starting at 1.", ge=0)]
+    state: WorkflowAgentState
+    thread_id: Annotated[str | None, Field(alias="threadId")] = None
+
+
+class WorkflowRun(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    agent_counts: Annotated[
+        WorkflowAgentCounts,
+        Field(alias="agentCounts", description="`agent()` calls of the run by state."),
+    ]
+    agents: Annotated[
+        list[WorkflowAgent] | None,
+        Field(description="Every `agent()` call; returned only by `thread/workflow/read`."),
+    ] = None
+    budget_tokens: Annotated[int | None, Field(alias="budgetTokens", ge=0)] = None
+    cached_tokens: Annotated[int, Field(alias="cachedTokens", ge=0)]
+    charged_tokens: Annotated[
+        int,
+        Field(
+            alias="chargedTokens",
+            description="Non-cached input plus output tokens of the run's agents.",
+            ge=0,
+        ),
+    ]
+    current_phase: Annotated[str | None, Field(alias="currentPhase")] = None
+    description: str
+    error: str | None = None
+    finished_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="finishedAtMs",
+            description="Unix time in milliseconds; null while the run is active.",
+        ),
+    ] = None
+    logs_tail: Annotated[
+        list[str], Field(alias="logsTail", description="The last `log()` lines of the script.")
+    ]
+    name: str
+    null_reasons: Annotated[
+        dict[str, int],
+        Field(alias="nullReasons", description="Calls that resolved to null, by reason."),
+    ]
+    phases: list[WorkflowPhase]
+    result_preview: Annotated[str | None, Field(alias="resultPreview")] = None
+    revision: Annotated[int, Field(ge=0)]
+    run_id: Annotated[str, Field(alias="runId")]
+    started_at_ms: Annotated[
+        int, Field(alias="startedAtMs", description="Unix time in milliseconds.")
+    ]
+    status: WorkflowRunStatus
 
 
 class WorkspaceMessage(BaseModel):
@@ -11564,6 +11690,7 @@ class ThreadItem(
         | SleepThreadItem
         | FileIdThreadItem
         | ResultThreadItem
+        | WorkflowThreadItem
         | EnteredReviewModeThreadItem
         | ExitedReviewModeThreadItem
         | ContextCompactionThreadItem
@@ -11587,6 +11714,7 @@ class ThreadItem(
         | SleepThreadItem
         | FileIdThreadItem
         | ResultThreadItem
+        | WorkflowThreadItem
         | EnteredReviewModeThreadItem
         | ExitedReviewModeThreadItem
         | ContextCompactionThreadItem
@@ -11675,6 +11803,14 @@ class ThreadTimelineEntry(
         | TurnCompletedThreadTimelineEntry,
         Field(description="EXPERIMENTAL - one item or turn boundary in canonical rollout order."),
     ]
+
+
+class ThreadWorkflowUpdatedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    run: Annotated[WorkflowRun, Field(description="The run without `agents`.")]
+    thread_id: Annotated[str, Field(alias="threadId")]
 
 
 class Turn(BaseModel):
@@ -12096,6 +12232,23 @@ class ReviewStartResponse(BaseModel):
         ),
     ]
     turn: Turn
+
+
+class ThreadWorkflowUpdatedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    emitted_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="emittedAtMs",
+            description="Unix timestamp (in milliseconds) when app-server emitted this notification.",
+        ),
+    ] = None
+    method: Annotated[
+        Literal["thread/workflow/updated"], Field(title="Thread/workflow/updatedNotificationMethod")
+    ]
+    params: ThreadWorkflowUpdatedNotification
 
 
 class TurnStartedServerNotification(BaseModel):
@@ -13107,6 +13260,7 @@ class ServerNotification(
         | ThreadPredictionUpdatedServerNotification
         | ThreadGoalClearedServerNotification
         | ThreadQueueChangedServerNotification
+        | ThreadWorkflowUpdatedServerNotification
         | ProjectChangedServerNotification
         | ThreadProjectUpdatedServerNotification
         | ThreadEnvironmentConnectedServerNotification
@@ -13195,6 +13349,7 @@ class ServerNotification(
         | ThreadPredictionUpdatedServerNotification
         | ThreadGoalClearedServerNotification
         | ThreadQueueChangedServerNotification
+        | ThreadWorkflowUpdatedServerNotification
         | ProjectChangedServerNotification
         | ThreadProjectUpdatedServerNotification
         | ThreadEnvironmentConnectedServerNotification

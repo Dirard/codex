@@ -200,7 +200,8 @@ fn activity_summary(item: &ThreadItem) -> Option<String> {
         ThreadItem::UserMessage { .. }
         | ThreadItem::HookPrompt { .. }
         | ThreadItem::FunctionCallOutput { .. }
-        | ThreadItem::Sleep(_) => {
+        | ThreadItem::Sleep(_)
+        | ThreadItem::Workflow(_) => {
             return None;
         }
     };

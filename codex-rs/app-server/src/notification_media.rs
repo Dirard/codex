@@ -71,6 +71,7 @@ pub(crate) fn without_notification_media(notification: ServerNotification) -> Se
         | ServerNotification::ThreadPredictionUpdated(_)
         | ServerNotification::ThreadGoalCleared(_)
         | ServerNotification::ThreadQueueChanged(_)
+        | ServerNotification::ThreadWorkflowUpdated(_)
         | ServerNotification::ProjectChanged(_)
         | ServerNotification::ThreadProjectUpdated(_)
         | ServerNotification::EnvironmentConnected(_)
@@ -216,6 +217,7 @@ fn without_thread_item_media(mut item: ThreadItem) -> ThreadItem {
         | ThreadItem::WebSearch(_)
         | ThreadItem::ImageView { .. }
         | ThreadItem::Sleep(_)
+        | ThreadItem::Workflow(_)
         | ThreadItem::EnteredReviewMode { .. }
         | ThreadItem::ExitedReviewMode { .. }
         | ThreadItem::ContextCompaction { .. } => {}

@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "includeResult": {
+      "description": "When true, return the full result of a finished run.",
+      "type": "boolean"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "runId",
+    "threadId"
+  ],
+  "title": "ThreadWorkflowReadParams",
+  "type": "object"
+}

@@ -1,6 +1,7 @@
 use super::*;
 use crate::extensions::send_thread_warning;
 use codex_app_server_protocol::ThreadQueueChangedNotification;
+use codex_app_server_protocol::ThreadWorkflowUpdatedNotification;
 use codex_core::ThreadEvictionOutcome;
 use codex_extension_api::ThreadIdleCause;
 use codex_protocol::config_types::MultiAgentMode;
@@ -261,7 +262,7 @@ pub(super) async fn ensure_listener_task_running(
     let is_v2_child = conversation.multi_agent_version() == Some(MultiAgentVersion::V2)
         && matches!(config_snapshot.session_source, SessionSource::SubAgent(_));
     let thread_settings_baseline = thread_settings_from_config_snapshot(&config_snapshot);
-    let (mut listener_command_rx, listener_generation) = {
+    let (mut listener_command_rx, listener_generation, workflow_updates) = {
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_matches(&conversation) {
             return Ok(());
@@ -278,10 +279,15 @@ pub(super) async fn ensure_listener_task_running(
             );
             return Ok(());
         };
+        // Fork: forward workflow run snapshots for as long as this listener runs.
+        let workflow_updates = crate::workflow_updates::spawn_workflow_update_forwarder(
+            &conversation,
+            listener_command_tx.clone(),
+        );
         listener_task_context
             .thread_state_manager
             .register_listener_command_tx(conversation_id, listener_command_tx);
-        (listener_command_rx, listener_generation)
+        (listener_command_rx, listener_generation, workflow_updates)
     };
     let ListenerTaskContext {
         outgoing,
@@ -295,6 +301,8 @@ pub(super) async fn ensure_listener_task_running(
     } = listener_task_context;
     let outgoing_for_task = Arc::clone(&outgoing);
     tokio::spawn(async move {
+        // Dropped, and so stopped, on every exit of this task.
+        let _workflow_updates = workflow_updates;
         loop {
             tokio::select! {
                 biased;
@@ -402,7 +410,11 @@ pub(super) async fn ensure_listener_task_running(
                     if !unloading_state.should_unload_now() {
                         continue;
                     }
-                    if matches!(conversation.agent_status().await, AgentStatus::Running) {
+                    // Fork: unloading would interrupt active workflow runs (R9.3), so a
+                    // thread whose runs work in the background stays loaded.
+                    if matches!(conversation.agent_status().await, AgentStatus::Running)
+                        || !conversation.active_workflow_run_ids().is_empty()
+                    {
                         unloading_state.note_thread_activity_observed();
                         continue;
                     }
@@ -678,6 +690,24 @@ pub(super) async fn handle_thread_listener_command(
                 .send_server_notification(ServerNotification::ThreadQueueChanged(
                     ThreadQueueChangedNotification {
                         thread_id: conversation_id.to_string(),
+                    },
+                ))
+                .await;
+        }
+        ThreadListenerCommand::EmitThreadWorkflowUpdated { run } => {
+            let subscribed_connection_ids = thread_state_manager
+                .subscribed_connection_ids(conversation_id)
+                .await;
+            let outgoing = ThreadScopedOutgoingMessageSender::new(
+                Arc::clone(outgoing),
+                subscribed_connection_ids,
+                conversation_id,
+            );
+            outgoing
+                .send_server_notification(ServerNotification::ThreadWorkflowUpdated(
+                    ThreadWorkflowUpdatedNotification {
+                        thread_id: conversation_id.to_string(),
+                        run: *run,
                     },
                 ))
                 .await;

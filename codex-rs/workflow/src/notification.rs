@@ -1,9 +1,48 @@
 //! Text of the completion notification delivered to the parent thread (UC7, R7.1, R5.3).
 
 use crate::snapshot::RunSnapshot;
+use crate::snapshot::RunStatus;
 
 /// Null reasons named in the summary line.
 const TOP_NULL_REASONS: usize = 3;
+
+/// Tags around the notification in the parent's history (core `WorkflowNotification`).
+pub const NOTIFICATION_OPEN_TAG: &str = "<workflow_notification>";
+pub const NOTIFICATION_CLOSE_TAG: &str = "</workflow_notification>";
+
+/// The run named by a recorded completion notification (UC8, R8.3).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NotificationSummary {
+    pub run_id: String,
+    pub name: String,
+    /// Always terminal.
+    pub status: RunStatus,
+    /// The notification text without its tags.
+    pub text: String,
+}
+
+/// UC8, R8.3: read a recorded notification fragment, the text of
+/// [`render_notification`] between [`NOTIFICATION_OPEN_TAG`] and
+/// [`NOTIFICATION_CLOSE_TAG`], back into its run id, name and terminal status.
+pub fn parse_notification_fragment(fragment: &str) -> Option<NotificationSummary> {
+    let text = fragment
+        .trim()
+        .strip_prefix(NOTIFICATION_OPEN_TAG)?
+        .strip_suffix(NOTIFICATION_CLOSE_TAG)?
+        .trim();
+    // Names are letters, digits, `_` and `-`, so the quoted name ends at the first quote.
+    let header = text.lines().next()?.strip_prefix("Workflow \"")?;
+    let (name, rest) = header.split_once("\" (")?;
+    let (run_id, rest) = rest.split_once(") ")?;
+    let (status, _) = rest.split_once(" in ")?;
+    let status = RunStatus::parse(status).filter(|status| status.is_terminal())?;
+    Some(NotificationSummary {
+        run_id: run_id.to_string(),
+        name: name.to_string(),
+        status,
+        text: text.to_string(),
+    })
+}
 
 /// UC7: render the self-contained notification for a terminal run. `preview` is the
 /// already truncated result preview.
@@ -97,6 +136,47 @@ mod tests {
         assert_eq!(
             render_notification(&tracker.snapshot(false), Some("{\"bugs\":1}"), 99_000),
             "Workflow \"find-bugs\" (wf-0a1b2c3d) completed in 1m 24s: 4 agents (1 ok, 3 null: timeout 2, schema_invalid 1), 1500 tokens charged, 4000 cached input tokens.\nResult preview:\n{\"bugs\":1}\nFull result: call workflow_status with {\"run_id\": \"wf-0a1b2c3d\", \"include_result\": true}."
+        );
+    }
+
+    /// R8.3: a rendered notification wrapped in its tags reads back into the run it names.
+    #[test]
+    fn recorded_notification_names_its_run() {
+        let mut tracker = RunTracker::new(
+            "wf-0a1b2c3d".to_string(),
+            "find-bugs_2".to_string(),
+            "d".to_string(),
+            &[],
+            None,
+            0,
+        );
+        tracker.finish(
+            RunStatus::Failed,
+            1_000,
+            None,
+            Some("boom in 1s".to_string()),
+        );
+        let text = render_notification(&tracker.snapshot(false), Some("in (x) \"y\""), 2_000);
+        let fragment = format!("{NOTIFICATION_OPEN_TAG}\n{text}\n{NOTIFICATION_CLOSE_TAG}");
+        assert_eq!(
+            parse_notification_fragment(&fragment),
+            Some(NotificationSummary {
+                run_id: "wf-0a1b2c3d".to_string(),
+                name: "find-bugs_2".to_string(),
+                status: RunStatus::Failed,
+                text,
+            })
+        );
+        assert_eq!(
+            parse_notification_fragment("Workflow \"x\" (wf-1) completed in 1.0s."),
+            None
+        );
+        assert_eq!(
+            parse_notification_fragment(&format!(
+                "{NOTIFICATION_OPEN_TAG}\nWorkflow \"x\" (wf-1) running in 1.0s.\n{NOTIFICATION_CLOSE_TAG}"
+            )),
+            None,
+            "a running run is never notified"
         );
     }
 

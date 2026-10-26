@@ -9,6 +9,8 @@ use super::image_generation::ImageGenerationItem;
 use super::sleep::SleepItem;
 use super::web_search::WebSearchAction;
 use super::web_search::WebSearchItem;
+use super::workflow::WorkflowItem;
+use super::workflow::WorkflowRunStatus;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 fn completed_image_generation_item() -> ExtensionItem {
@@ -283,6 +285,51 @@ fn sleep_item_preserves_stable_wire_shape() {
     assert_eq!(
         serde_json::from_value::<ExtensionItem>(value).expect("deserialize extension item"),
         item
+    );
+}
+
+#[test]
+fn workflow_item_preserves_stable_wire_shape() {
+    let item = ExtensionItem::Workflow(WorkflowItem {
+        id: "call-1".to_string(),
+        run_id: "wf-0a1b2c3d".to_string(),
+        name: "find-bugs".to_string(),
+        status: WorkflowRunStatus::Completed,
+        notification: Some("Workflow \"find-bugs\" (wf-0a1b2c3d) completed in 1.0s".to_string()),
+    });
+    let value = serde_json::to_value(&item).expect("serialize extension item");
+
+    assert_eq!(
+        value,
+        json!({
+            "kind": "workflow.run",
+            "id": "call-1",
+            "runId": "wf-0a1b2c3d",
+            "name": "find-bugs",
+            "status": "completed",
+            "notification": "Workflow \"find-bugs\" (wf-0a1b2c3d) completed in 1.0s",
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<ExtensionItem>(value).expect("deserialize extension item"),
+        item
+    );
+    assert_eq!(
+        serde_json::from_value::<ExtensionItem>(json!({
+            "kind": "workflow.run",
+            "id": "call-1",
+            "runId": "wf-0a1b2c3d",
+            "name": "find-bugs",
+            "status": "running",
+        }))
+        .expect("deserialize a start item without a notification"),
+        ExtensionItem::Workflow(WorkflowItem {
+            id: "call-1".to_string(),
+            run_id: "wf-0a1b2c3d".to_string(),
+            name: "find-bugs".to_string(),
+            status: WorkflowRunStatus::Running,
+            notification: None,
+        })
     );
 }
 

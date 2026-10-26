@@ -1024,6 +1024,25 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadQueueStartResponse,
     },
+    // Fork: dynamic workflow runs of a loaded thread.
+    #[experimental("thread/workflow/list")]
+    ThreadWorkflowList => "thread/workflow/list" {
+        params: v2::ThreadWorkflowListParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadWorkflowListResponse,
+    },
+    #[experimental("thread/workflow/read")]
+    ThreadWorkflowRead => "thread/workflow/read" {
+        params: v2::ThreadWorkflowReadParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadWorkflowReadResponse,
+    },
+    #[experimental("thread/workflow/cancel")]
+    ThreadWorkflowCancel => "thread/workflow/cancel" {
+        params: v2::ThreadWorkflowCancelParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadWorkflowCancelResponse,
+    },
     ThreadMetadataUpdate => "thread/metadata/update" {
         params: v2::ThreadMetadataUpdateParams,
         inspect_params: true,
@@ -2447,6 +2466,9 @@ server_notification_definitions! {
     ThreadGoalCleared => "thread/goal/cleared" (v2::ThreadGoalClearedNotification),
     #[experimental("thread/queue/changed")]
     ThreadQueueChanged => "thread/queue/changed" (v2::ThreadQueueChangedNotification),
+    // Fork: a dynamic workflow run of the thread changed.
+    #[experimental("thread/workflow/updated")]
+    ThreadWorkflowUpdated => "thread/workflow/updated" (v2::ThreadWorkflowUpdatedNotification),
     #[experimental("project/changed")]
     ProjectChanged => "project/changed" (v2::ProjectChangedNotification),
     #[experimental("thread/project/updated")]

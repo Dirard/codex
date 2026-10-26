@@ -4,6 +4,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_extension_items::ExtensionItem;
+use codex_extension_items::workflow::WorkflowItem;
+use codex_extension_items::workflow::WorkflowRunStatus;
+use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::request_user_input::RequestUserInputArgs;
@@ -275,6 +279,16 @@ impl ToolExecutor<ToolInvocation> for WorkflowStartHandler {
                 },
             )
             .map_err(FunctionCallError::RespondToModel)?;
+            // R8.3: record the start in the launching turn for clients and replay.
+            let item = TurnItem::Extension(ExtensionItem::Workflow(WorkflowItem {
+                id: call_id,
+                run_id: run.id.clone(),
+                name: run.meta.name.clone(),
+                status: WorkflowRunStatus::Running,
+                notification: None,
+            }));
+            session.emit_turn_item_started(turn.as_ref(), &item).await;
+            session.emit_turn_item_completed(turn.as_ref(), item).await;
             Ok(json_output(&start_result(&run)))
         })
     }

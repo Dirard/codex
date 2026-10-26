@@ -1,0 +1,305 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WorkflowAgent": {
+      "description": "One `agent()` call of a run.",
+      "properties": {
+        "agentPath": {
+          "description": "Agent path of the child thread, once spawned.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cachedTokens": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "chargedTokens": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Why the call resolved to null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seq": {
+          "description": "Call number in the script, starting at 1.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/definitions/WorkflowAgentState"
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cachedTokens",
+        "chargedTokens",
+        "seq",
+        "state"
+      ],
+      "type": "object"
+    },
+    "WorkflowAgentCounts": {
+      "description": "`agent()` calls of a run by state.",
+      "properties": {
+        "awaitingApproval": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "completed": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "null": {
+          "description": "Calls that resolved to null.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "queued": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "running": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "awaitingApproval",
+        "completed",
+        "null",
+        "queued",
+        "running"
+      ],
+      "type": "object"
+    },
+    "WorkflowAgentState": {
+      "description": "State of one `agent()` call.",
+      "oneOf": [
+        {
+          "enum": [
+            "queued",
+            "running",
+            "awaitingApproval",
+            "completed"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Resolved to null; `reason` says why.",
+          "enum": [
+            "null"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "WorkflowPhase": {
+      "description": "`agent()` calls attributed to a phase.",
+      "properties": {
+        "finished": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "started": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "finished",
+        "started",
+        "title"
+      ],
+      "type": "object"
+    },
+    "WorkflowRun": {
+      "description": "Snapshot of a workflow run; `revision` grows on every change.",
+      "properties": {
+        "agentCounts": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkflowAgentCounts"
+            }
+          ],
+          "description": "`agent()` calls of the run by state."
+        },
+        "agents": {
+          "description": "Every `agent()` call; returned only by `thread/workflow/read`.",
+          "items": {
+            "$ref": "#/definitions/WorkflowAgent"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "budgetTokens": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cachedTokens": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "chargedTokens": {
+          "description": "Non-cached input plus output tokens of the run's agents.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "currentPhase": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "finishedAtMs": {
+          "description": "Unix time in milliseconds; null while the run is active.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "logsTail": {
+          "description": "The last `log()` lines of the script.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nullReasons": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "description": "Calls that resolved to null, by reason.",
+          "type": "object"
+        },
+        "phases": {
+          "items": {
+            "$ref": "#/definitions/WorkflowPhase"
+          },
+          "type": "array"
+        },
+        "resultPreview": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "startedAtMs": {
+          "description": "Unix time in milliseconds.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/definitions/WorkflowRunStatus"
+        }
+      },
+      "required": [
+        "agentCounts",
+        "cachedTokens",
+        "chargedTokens",
+        "description",
+        "logsTail",
+        "name",
+        "nullReasons",
+        "phases",
+        "revision",
+        "runId",
+        "startedAtMs",
+        "status"
+      ],
+      "type": "object"
+    },
+    "WorkflowRunStatus": {
+      "description": "Lifecycle status of a dynamic workflow run.",
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "run": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/WorkflowRun"
+        }
+      ],
+      "description": "The run after cancellation settled; a finished run is returned unchanged."
+    }
+  },
+  "required": [
+    "run"
+  ],
+  "title": "ThreadWorkflowCancelResponse",
+  "type": "object"
+}

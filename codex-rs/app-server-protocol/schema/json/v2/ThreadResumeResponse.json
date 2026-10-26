@@ -2502,6 +2502,47 @@
           "type": "object"
         },
         {
+          "description": "Start or completion of a dynamic workflow run.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "notification": {
+              "default": null,
+              "description": "Completion notification delivered to the model; set once the run is terminal.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "runId": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/WorkflowRunStatus"
+            },
+            "type": {
+              "enum": [
+                "workflow"
+              ],
+              "title": "WorkflowThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "runId",
+            "status",
+            "type"
+          ],
+          "title": "WorkflowThreadItem",
+          "type": "object"
+        },
+        {
           "properties": {
             "id": {
               "type": "string"
@@ -3176,6 +3217,17 @@
           "type": "object"
         }
       ]
+    },
+    "WorkflowRunStatus": {
+      "description": "Lifecycle status of a dynamic workflow run.",
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted"
+      ],
+      "type": "string"
     }
   },
   "properties": {

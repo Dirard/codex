@@ -1,6 +1,8 @@
 use codex_extension_items::ExtensionItem;
 use codex_extension_items::image_generation::GeneratedImageRef;
 use codex_extension_items::image_generation::ImageGenerationItem;
+use codex_extension_items::workflow::WorkflowItem;
+use codex_extension_items::workflow::WorkflowRunStatus;
 use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EventMsg;
@@ -114,4 +116,37 @@ fn inline_image_generation_result_is_preserved() {
             result: "base64-image".to_string(),
         })
     );
+}
+
+/// Fork: legacy rollouts keep the start item of a workflow run, which has no legacy event
+/// (dynamic workflow, R8.3).
+#[test]
+fn rollouts_keep_workflow_items() {
+    let event = EventMsg::ItemCompleted(ItemCompletedEvent {
+        thread_id: ThreadId::new(),
+        turn_id: "turn-1".to_string(),
+        item: TurnItem::Extension(ExtensionItem::Workflow(WorkflowItem {
+            id: "call-1".to_string(),
+            run_id: "wf-0a1b2c3d".to_string(),
+            name: "find-bugs".to_string(),
+            status: WorkflowRunStatus::Running,
+            notification: None,
+        })),
+        started_at_ms: Some(1),
+        completed_at_ms: 2,
+    });
+
+    for mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
+        let persisted = persisted_event_msg(&event, mode).expect("workflow item is persisted");
+        assert!(
+            matches!(
+                persisted.as_ref(),
+                EventMsg::ItemCompleted(ItemCompletedEvent {
+                    item: TurnItem::Extension(ExtensionItem::Workflow(_)),
+                    ..
+                })
+            ),
+            "{mode:?}"
+        );
+    }
 }

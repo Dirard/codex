@@ -112,6 +112,10 @@ pub const DEFAULT_IN_PROCESS_CHANNEL_CAPACITY: usize = CHANNEL_CAPACITY;
 type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorError>;
 
 fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
+    // Fork: the terminal snapshot of a workflow run is sent once (R8.2), so never drop it.
+    if let ServerNotification::ThreadWorkflowUpdated(update) = notification {
+        return update.run.status.is_terminal();
+    }
     matches!(
         notification,
         ServerNotification::TurnCompleted(_)
@@ -1093,6 +1097,32 @@ mod tests {
                 completed_at_ms: 0,
             })
         ));
+        // Fork: only the terminal workflow snapshot must not be dropped.
+        let mut tracker = codex_workflow::RunTracker::new(
+            "wf-1".to_string(),
+            "name".to_string(),
+            "description".to_string(),
+            &[],
+            /*budget_tokens*/ None,
+            /*started_at_ms*/ 0,
+        );
+        let workflow_update = |snapshot| {
+            ServerNotification::ThreadWorkflowUpdated(
+                codex_app_server_protocol::ThreadWorkflowUpdatedNotification {
+                    thread_id: "thread-1".to_string(),
+                    run: codex_app_server_protocol::WorkflowRun::from_snapshot(
+                        snapshot, /*include_agents*/ false,
+                    ),
+                },
+            )
+        };
+        assert!(!server_notification_requires_delivery(&workflow_update(
+            tracker.snapshot(/*include_agents*/ false)
+        )));
+        tracker.finish(codex_workflow::RunStatus::Completed, 1, None, None);
+        assert!(server_notification_requires_delivery(&workflow_update(
+            tracker.snapshot(/*include_agents*/ false)
+        )));
     }
 
     #[tokio::test]

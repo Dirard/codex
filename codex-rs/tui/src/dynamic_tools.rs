@@ -1020,6 +1020,10 @@ async fn execute_inner(
                                         "id": item.id, "turnId": turn.id, "type": "sleep",
                                         "name": "sleep", "status": null
                                     })),
+                                    ThreadItem::Workflow(item) => Some(json!({
+                                        "id": item.id, "turnId": turn.id, "type": "workflow",
+                                        "name": item.name, "status": item.status
+                                    })),
                                     ThreadItem::WebSearch(item) => Some(json!({
                                         "id": item.id, "turnId": turn.id, "type": "webSearch",
                                         "name": "webSearch", "status": null
@@ -1544,6 +1548,11 @@ fn turn_summary(turn: &Turn, include_outputs: bool, output_chars: usize) -> Valu
             }),
             ThreadItem::Sleep(item) => json!({
                 "type": "sleep", "id": item.id, "durationMs": item.duration_ms
+            }),
+            ThreadItem::Workflow(item) => json!({
+                "type": "workflow", "id": item.id, "runId": item.run_id, "name": item.name,
+                "status": item.status,
+                "notification": item.notification.as_deref().map(|text| truncate(text, DEFAULT_OUTPUT_CHARS))
             }),
             ThreadItem::ImageGeneration(item) => {
                 let mut image = json!({

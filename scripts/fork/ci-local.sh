@@ -73,6 +73,7 @@ go_dir="${repo_root}/sdk/go"
 # and map the crate directories to package names.
 fork_clippy_packages=(
   codex-agent-message-board-extension
+  codex-analytics
   codex-api
   codex-app-server
   codex-app-server-daemon
@@ -86,13 +87,16 @@ fork_clippy_packages=(
   codex-config
   codex-core
   codex-exec-server
+  codex-extension-items
   codex-features
   codex-history
   codex-linux-sandbox
   codex-models-manager
   codex-protocol
+  codex-rollout
   codex-rollout-trace
   codex-thread-manager-sample
+  codex-thread-store
   codex-tools
   codex-tui
   codex-utils-output-truncation

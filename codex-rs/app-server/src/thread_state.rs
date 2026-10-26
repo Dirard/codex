@@ -9,6 +9,7 @@ use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnItemsView;
+use codex_app_server_protocol::WorkflowRun;
 use codex_core::CodexThread;
 use codex_core::ThreadConfigSnapshot;
 use codex_file_watcher::WatchRegistration;
@@ -73,6 +74,10 @@ pub(crate) enum ThreadListenerCommand {
     },
     // EmitThreadQueueChanged orders durable queue updates with thread notifications.
     EmitThreadQueueChanged,
+    // Fork: EmitThreadWorkflowUpdated orders workflow run snapshots with thread notifications.
+    EmitThreadWorkflowUpdated {
+        run: Box<WorkflowRun>,
+    },
     // EmitWarning is used to order extension warnings with other thread notifications.
     EmitWarning {
         message: String,
