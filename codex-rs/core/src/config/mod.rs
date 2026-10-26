@@ -28,7 +28,6 @@ use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::CircuitBreakAction;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
-use codex_config::config_toml::OutputTruncationToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
@@ -64,9 +63,6 @@ use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_exec_server::ReadFileOptions;
-use codex_features::AgentIsolation;
-use codex_features::AgentWorktreeBase;
-use codex_features::AgentWorktreeIsolationConfigToml;
 use codex_features::CodeModeConfigToml;
 use codex_features::CurrentTimeReminderConfigToml;
 use codex_features::CurrentTimeReminderDeliveryMode;
@@ -77,7 +73,6 @@ use codex_features::FeatureOverrides;
 use codex_features::FeatureToml;
 use codex_features::Features;
 use codex_features::FeaturesToml;
-use codex_features::MultiAgentMessageDelivery;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_features::NetworkProxyConfigToml;
 use codex_features::SleepToolMode;
@@ -264,6 +259,7 @@ pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usize = 4;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
+// Fork: quiet waits stay inside the runtime (docs/fork/01-multi-agent-runtime.md).
 pub(crate) const DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS: i64 = 1_800_000;
 const DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE: &str = "collaboration";
 
@@ -271,7 +267,6 @@ pub(crate) const HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS: i64 = 0;
 pub(crate) const HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS: i64 =
     DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS;
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
-pub const DEFAULT_MAX_SPAWNED_THREADS_PER_TURN: usize = 16;
 const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
@@ -626,95 +621,9 @@ pub enum ThreadStoreConfig {
     InMemory { id: String },
 }
 
-/// Fork: whether a workflow run needs the user's approval before it starts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum WorkflowApproval {
-    /// Ask unless the approval policy is `never`.
-    #[default]
-    Auto,
-    Always,
-    Never,
-}
-
-/// Fork: resolved `[workflows]` limits (`specs/dynamic-workflow-2026-10-25.md`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WorkflowsConfig {
-    pub max_active_runs: usize,
-    pub max_concurrent_agents: usize,
-    pub max_agents_per_run: usize,
-    pub capacity_wait_ms: u64,
-    pub default_budget_tokens: Option<u64>,
-    pub notification_max_tokens: usize,
-    pub max_heap_bytes: usize,
-    pub exec_wait_timeout_ms: u64,
-    pub require_approval: WorkflowApproval,
-}
-
-impl WorkflowsConfig {
-    /// `min(16, max(1, available_parallelism - 2))`.
-    pub fn default_max_concurrent_agents() -> usize {
-        let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
-        cpus.saturating_sub(2).clamp(1, 16)
-    }
-
-    fn from_toml(toml: Option<&codex_config::config_toml::WorkflowsToml>) -> Self {
-        use codex_config::config_toml::WorkflowApprovalToml;
-        let defaults = Self::default();
-        let Some(toml) = toml else {
-            return defaults;
-        };
-        Self {
-            max_active_runs: toml
-                .max_active_runs
-                .unwrap_or(defaults.max_active_runs)
-                .max(1),
-            max_concurrent_agents: toml
-                .max_concurrent_agents
-                .unwrap_or(defaults.max_concurrent_agents)
-                .max(1),
-            max_agents_per_run: toml
-                .max_agents_per_run
-                .unwrap_or(defaults.max_agents_per_run),
-            capacity_wait_ms: toml.capacity_wait_ms.unwrap_or(defaults.capacity_wait_ms),
-            default_budget_tokens: toml.default_budget_tokens,
-            notification_max_tokens: toml
-                .notification_max_tokens
-                .unwrap_or(defaults.notification_max_tokens),
-            max_heap_bytes: toml.max_heap_bytes.unwrap_or(defaults.max_heap_bytes),
-            exec_wait_timeout_ms: toml
-                .exec_wait_timeout_ms
-                .unwrap_or(defaults.exec_wait_timeout_ms),
-            require_approval: match toml.require_approval.unwrap_or_default() {
-                WorkflowApprovalToml::Auto => WorkflowApproval::Auto,
-                WorkflowApprovalToml::Always => WorkflowApproval::Always,
-                WorkflowApprovalToml::Never => WorkflowApproval::Never,
-            },
-        }
-    }
-}
-
-impl Default for WorkflowsConfig {
-    fn default() -> Self {
-        Self {
-            max_active_runs: 3,
-            max_concurrent_agents: Self::default_max_concurrent_agents(),
-            max_agents_per_run: 1000,
-            capacity_wait_ms: 600_000,
-            default_budget_tokens: None,
-            notification_max_tokens: 2000,
-            max_heap_bytes: 256 * 1024 * 1024,
-            exec_wait_timeout_ms: 7_200_000,
-            require_approval: WorkflowApproval::Auto,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct OutputTruncationConfig {
-    pub max_bytes: Option<usize>,
-    pub max_lines: Option<usize>,
-    pub mcp_max_lines: Option<usize>,
-}
+// Fork: settings of the fork's features; `fork` keeps their `crate::config::*` paths.
+mod fork;
+pub use fork::*;
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -1062,20 +971,11 @@ pub struct Config {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
-    /// Limits applied when formatting tool and command output for model and UI consumption.
-    pub output_truncation: OutputTruncationConfig,
-
-    /// Fork: limits of background workflow runs (`[workflows]`).
-    pub workflows: WorkflowsConfig,
-
     /// Whether multi-agent tools are enabled through `[agents]`.
     pub agents_enabled: bool,
 
-    /// User-configured maximum number of agent threads that can be open concurrently.
+    /// User-configured maximum number of spawned agent threads per session.
     pub agent_max_threads: Option<usize>,
-
-    /// Maximum cumulative child threads created by one external root user input.
-    pub max_spawned_threads_per_turn: usize,
 
     /// Default model for spawned subagents when the spawn call does not select one.
     pub agent_default_subagent_model: Option<String>,
@@ -1249,13 +1149,23 @@ pub struct Config {
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
 
+    // Fork: settings of the fork's features (config/fork.rs).
+    /// Limits applied when formatting tool and command output for model and UI consumption.
+    pub output_truncation: OutputTruncationConfig,
+
+    /// Fork: limits of background workflow runs (`[workflows]`).
+    pub workflows: WorkflowsConfig,
+
+    /// Maximum cumulative child threads created by one external root user input.
+    pub max_spawned_threads_per_turn: usize,
+
     /// Fork: settings applied to `explorer` children while `explorer_profile` is enabled.
     pub explorer_profile: ExplorerProfileConfig,
 
     /// Fork: defaults for MultiAgentV2 children isolated in managed git worktrees.
     /// The `agent_worktree_isolation` feature flag gates the behavior itself.
     pub agent_worktree_isolation: AgentWorktreeIsolationConfig,
-
+    // Fork end
     /// Context-window token budget configuration, when enabled.
     pub token_budget: Option<TokenBudgetConfig>,
     /// Runtime snapshot of configured token-budget preferences before startup activation.
@@ -1488,54 +1398,6 @@ impl Default for CurrentTimeReminderConfig {
     }
 }
 
-/// Fork: resolved `[features.explorer_profile]` settings.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ExplorerProfileConfig {
-    /// Model for explorer children; `None` keeps the parent's model.
-    pub model: Option<String>,
-    /// Reasoning effort for explorer children; `None` selects the cheapest supported effort.
-    pub reasoning_effort: Option<ReasoningEffort>,
-    /// Largest explorer final answer, in tokens, delivered to the parent.
-    pub max_result_tokens: usize,
-}
-
-pub const DEFAULT_EXPLORER_PROFILE_MAX_RESULT_TOKENS: usize = 2_000;
-pub const MIN_EXPLORER_PROFILE_MAX_RESULT_TOKENS: usize = 200;
-
-impl Default for ExplorerProfileConfig {
-    fn default() -> Self {
-        Self {
-            model: None,
-            reasoning_effort: None,
-            max_result_tokens: DEFAULT_EXPLORER_PROFILE_MAX_RESULT_TOKENS,
-        }
-    }
-}
-
-/// Fork: resolved `[features.agent_worktree_isolation]` settings.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
-pub struct AgentWorktreeIsolationConfig {
-    /// Isolation used when `spawn_agent` omits `isolation`; role config files may set it.
-    pub default_isolation: AgentIsolation,
-    /// Commit an isolated child's worktree starts from.
-    pub base: AgentWorktreeBase,
-}
-
-impl AgentWorktreeIsolationConfig {
-    /// Resolves the settings from a features table, keeping defaults for omitted values.
-    pub(crate) fn from_features_toml(features: Option<&FeaturesToml>) -> Self {
-        let configured = agent_worktree_isolation_toml_config(features);
-        Self {
-            default_isolation: configured
-                .and_then(|config| config.default_isolation)
-                .unwrap_or_default(),
-            base: configured
-                .and_then(|config| config.base)
-                .unwrap_or_default(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MultiAgentV2Config {
     pub max_concurrent_threads_per_session: usize,
@@ -1549,7 +1411,7 @@ pub struct MultiAgentV2Config {
     pub preserve_fork_prefix: bool,
     pub multi_agent_mode_hint_text: Option<String>,
     pub tool_namespace: Option<String>,
-    pub message_delivery: MultiAgentMessageDelivery,
+    pub message_delivery: codex_features::MultiAgentMessageDelivery, // Fork
     pub hide_spawn_agent_metadata: bool,
     pub expose_spawn_agent_model_overrides: bool,
     pub wait_agent_enabled: bool,
@@ -1574,7 +1436,7 @@ impl MultiAgentV2Config {
             preserve_fork_prefix: true,
             multi_agent_mode_hint_text: None,
             tool_namespace: Some(DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE.to_string()),
-            message_delivery: MultiAgentMessageDelivery::Encrypted,
+            message_delivery: codex_features::MultiAgentMessageDelivery::Encrypted, // Fork
             hide_spawn_agent_metadata: true,
             expose_spawn_agent_model_overrides: true,
             wait_agent_enabled: true,
@@ -1823,6 +1685,7 @@ impl Config {
     }
 
     pub(crate) fn multi_agent_version_override(&self) -> Option<MultiAgentVersion> {
+        // Fork: `agents.enabled = false` wins over `features.multi_agent_v2`.
         if !self.agents_enabled {
             Some(MultiAgentVersion::Disabled)
         } else if self.features.enabled(Feature::MultiAgentV2) {
@@ -3061,6 +2924,7 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         .and_then(|config| config.tool_namespace.as_ref())
         .cloned()
         .or(default.tool_namespace);
+    // Fork: plaintext cross-provider agent messages.
     let message_delivery = base
         .and_then(|config| config.message_delivery)
         .unwrap_or(default.message_delivery);
@@ -3254,54 +3118,6 @@ fn code_mode_toml_config(features: Option<&FeaturesToml>) -> Option<&CodeModeCon
     }
 }
 
-fn explorer_profile_toml_config(
-    features: Option<&FeaturesToml>,
-) -> Option<&codex_features::ExplorerProfileConfigToml> {
-    match features?.explorer_profile.as_ref()? {
-        FeatureToml::Enabled(_) => None,
-        FeatureToml::Config(config) => Some(config),
-    }
-}
-
-fn resolve_explorer_profile_config(
-    config_toml: &ConfigToml,
-) -> std::io::Result<ExplorerProfileConfig> {
-    let Some(base) = explorer_profile_toml_config(config_toml.features.as_ref()) else {
-        return Ok(ExplorerProfileConfig::default());
-    };
-    let max_result_tokens = base
-        .max_result_tokens
-        .unwrap_or(DEFAULT_EXPLORER_PROFILE_MAX_RESULT_TOKENS);
-    if max_result_tokens < MIN_EXPLORER_PROFILE_MAX_RESULT_TOKENS {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "features.explorer_profile.max_result_tokens must be at least {MIN_EXPLORER_PROFILE_MAX_RESULT_TOKENS}"
-            ),
-        ));
-    }
-    let model = base
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-        .map(str::to_owned);
-    Ok(ExplorerProfileConfig {
-        model,
-        reasoning_effort: base.reasoning_effort.clone(),
-        max_result_tokens,
-    })
-}
-
-pub(crate) fn agent_worktree_isolation_toml_config(
-    features: Option<&FeaturesToml>,
-) -> Option<&AgentWorktreeIsolationConfigToml> {
-    match features?.agent_worktree_isolation.as_ref()? {
-        FeatureToml::Enabled(_) => None,
-        FeatureToml::Config(config) => Some(config),
-    }
-}
-
 fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiAgentV2ConfigToml> {
     match features?.multi_agent_v2.as_ref()? {
         FeatureToml::Enabled(_) => None,
@@ -3445,29 +3261,7 @@ fn validate_multi_agent_v2_wait_timeout(label: &str, value: i64) -> std::io::Res
     Ok(())
 }
 
-/// Fork: worktree isolation adds an `isolation` parameter to `spawn_agent`. The Responses
-/// backend checks the tools of the reserved default namespace against its own definitions
-/// and rejects every request that carries the extra parameter, so the feature needs a custom
-/// namespace (spec `specs/agent-worktree-isolation-2026-10-25.md`, R1.5).
-fn validate_agent_worktree_isolation_namespace(
-    isolation_enabled: bool,
-    namespace: Option<&str>,
-) -> std::io::Result<()> {
-    if isolation_enabled
-        && namespace.is_none_or(|namespace| namespace == DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE)
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "features.agent_worktree_isolation requires features.multi_agent_v2.tool_namespace to be set to a non-reserved namespace such as \"agents\"",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_multi_agent_v2_tool_namespace(
-    namespace: Option<&str>,
-    message_delivery: MultiAgentMessageDelivery,
-) -> std::io::Result<()> {
+fn validate_multi_agent_v2_tool_namespace(namespace: Option<&str>) -> std::io::Result<()> {
     const LABEL: &str = "features.multi_agent_v2.tool_namespace";
     const MAX_LEN: usize = 64;
     const RESERVED_RESPONSES_NAMESPACES: &[&str] = &[
@@ -3486,15 +3280,6 @@ fn validate_multi_agent_v2_tool_namespace(
         "tool_search",
         "web",
     ];
-
-    if message_delivery == MultiAgentMessageDelivery::Plaintext
-        && namespace.is_none_or(|namespace| namespace == DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE)
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "features.multi_agent_v2.message_delivery = \"plaintext\" requires features.multi_agent_v2.tool_namespace to be set to a non-reserved namespace",
-        ));
-    }
 
     let Some(namespace) = namespace else {
         return Ok(());
@@ -4204,9 +3989,7 @@ impl Config {
         };
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
-        let explorer_profile = resolve_explorer_profile_config(&cfg)?;
-        let agent_worktree_isolation =
-            AgentWorktreeIsolationConfig::from_features_toml(cfg.features.as_ref());
+        let (explorer_profile, agent_worktree_isolation) = fork::resolve_agent_profiles(&cfg)?;
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
         let rollout_budget = resolve_rollout_budget_config(&cfg, &features)?;
         let current_time_reminder = resolve_current_time_reminder_config(&cfg, &features)?;
@@ -4307,15 +4090,8 @@ impl Config {
                 "features.multi_agent_v2.default_wait_timeout_ms must be at most features.multi_agent_v2.max_wait_timeout_ms",
             ));
         }
-        validate_multi_agent_v2_tool_namespace(
-            multi_agent_v2.tool_namespace.as_deref(),
-            multi_agent_v2.message_delivery,
-        )?;
-        validate_agent_worktree_isolation_namespace(
-            features.enabled(Feature::MultiAgentV2)
-                && features.enabled(Feature::AgentWorktreeIsolation),
-            multi_agent_v2.tool_namespace.as_deref(),
-        )?;
+        validate_multi_agent_v2_tool_namespace(multi_agent_v2.tool_namespace.as_deref())?;
+        fork::validate_tool_namespace(&features, &multi_agent_v2)?;
         let agents_enabled = cfg
             .agents
             .as_ref()
@@ -4331,17 +4107,8 @@ impl Config {
                 "agents.max_concurrent_threads_per_session must be at least 1",
             ));
         }
-        let max_spawned_threads_per_turn = cfg
-            .agents
-            .as_ref()
-            .and_then(|agents| agents.max_spawned_threads_per_turn)
-            .unwrap_or(DEFAULT_MAX_SPAWNED_THREADS_PER_TURN);
-        if max_spawned_threads_per_turn == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "agents.max_spawned_threads_per_turn must be at least 1",
-            ));
-        }
+        let max_spawned_threads_per_turn =
+            fork::resolve_max_spawned_threads_per_turn(cfg.agents.as_ref())?;
         let agent_max_depth = cfg
             .agents
             .as_ref()
@@ -4836,22 +4603,8 @@ impl Config {
                 })
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
-            output_truncation: cfg.output_truncation.map_or_else(
-                OutputTruncationConfig::default,
-                |OutputTruncationToml {
-                     max_bytes,
-                     max_lines,
-                     mcp_max_lines,
-                 }| OutputTruncationConfig {
-                    max_bytes,
-                    max_lines,
-                    mcp_max_lines,
-                },
-            ),
-            workflows: WorkflowsConfig::from_toml(cfg.workflows.as_ref()),
             agents_enabled,
             agent_max_threads,
-            max_spawned_threads_per_turn,
             agent_default_subagent_model,
             agent_default_subagent_reasoning_effort,
             agent_max_depth,
@@ -4959,8 +4712,13 @@ impl Config {
             thread_unload_delay,
             ghost_snapshot,
             multi_agent_v2,
+            // Fork: settings of the fork's features (config/fork.rs).
+            output_truncation: fork::output_truncation_config(cfg.output_truncation),
+            workflows: WorkflowsConfig::from_toml(cfg.workflows.as_ref()),
+            max_spawned_threads_per_turn,
             explorer_profile,
             agent_worktree_isolation,
+            // Fork end
             token_budget,
             token_budget_startup_config: None,
             rollout_budget,

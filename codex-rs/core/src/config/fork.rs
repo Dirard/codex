@@ -1,0 +1,303 @@
+//! Fork: settings of the fork's features and their resolution, moved out of
+//! `config/mod.rs` unchanged. `config/mod.rs` re-exports this module, so the public
+//! paths (`crate::config::WorkflowsConfig`, ...) stay the same, and calls it once per
+//! setting from `Config::load_config_with_layer_stack` where the inline code was.
+//!
+//! - `[workflows]`: `specs/dynamic-workflow-2026-10-25.md`.
+//! - `[output_truncation]`: `docs/fork/02-compaction-context.md`.
+//! - `features.explorer_profile`: `specs/explorer-and-questions-2026-10-25.md`.
+//! - `features.agent_worktree_isolation`: `specs/agent-worktree-isolation-2026-10-25.md`.
+//! - `features.multi_agent_v2.message_delivery`, `agents.max_spawned_threads_per_turn`:
+//!   `docs/fork/01-multi-agent-runtime.md`, `docs/fork/03-tools-mcp-code-mode.md`.
+
+use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::OutputTruncationToml;
+use codex_features::AgentIsolation;
+// `config_tests.rs` names these two through `use super::*`.
+pub(super) use codex_features::AgentWorktreeBase;
+use codex_features::AgentWorktreeIsolationConfigToml;
+use codex_features::Feature;
+use codex_features::FeatureToml;
+use codex_features::Features;
+use codex_features::FeaturesToml;
+pub(super) use codex_features::MultiAgentMessageDelivery;
+use codex_protocol::openai_models::ReasoningEffort;
+use serde::Serialize;
+
+use super::DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE;
+use super::MultiAgentV2Config;
+
+pub const DEFAULT_MAX_SPAWNED_THREADS_PER_TURN: usize = 16;
+
+/// Fork: whether a workflow run needs the user's approval before it starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkflowApproval {
+    /// Ask unless the approval policy is `never`.
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+/// Fork: resolved `[workflows]` limits (`specs/dynamic-workflow-2026-10-25.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkflowsConfig {
+    pub max_active_runs: usize,
+    pub max_concurrent_agents: usize,
+    pub max_agents_per_run: usize,
+    pub capacity_wait_ms: u64,
+    pub default_budget_tokens: Option<u64>,
+    pub notification_max_tokens: usize,
+    pub max_heap_bytes: usize,
+    pub exec_wait_timeout_ms: u64,
+    pub require_approval: WorkflowApproval,
+}
+
+impl WorkflowsConfig {
+    /// `min(16, max(1, available_parallelism - 2))`.
+    pub fn default_max_concurrent_agents() -> usize {
+        let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+        cpus.saturating_sub(2).clamp(1, 16)
+    }
+
+    pub(super) fn from_toml(toml: Option<&codex_config::config_toml::WorkflowsToml>) -> Self {
+        use codex_config::config_toml::WorkflowApprovalToml;
+        let defaults = Self::default();
+        let Some(toml) = toml else {
+            return defaults;
+        };
+        Self {
+            max_active_runs: toml
+                .max_active_runs
+                .unwrap_or(defaults.max_active_runs)
+                .max(1),
+            max_concurrent_agents: toml
+                .max_concurrent_agents
+                .unwrap_or(defaults.max_concurrent_agents)
+                .max(1),
+            max_agents_per_run: toml
+                .max_agents_per_run
+                .unwrap_or(defaults.max_agents_per_run),
+            capacity_wait_ms: toml.capacity_wait_ms.unwrap_or(defaults.capacity_wait_ms),
+            default_budget_tokens: toml.default_budget_tokens,
+            notification_max_tokens: toml
+                .notification_max_tokens
+                .unwrap_or(defaults.notification_max_tokens),
+            max_heap_bytes: toml.max_heap_bytes.unwrap_or(defaults.max_heap_bytes),
+            exec_wait_timeout_ms: toml
+                .exec_wait_timeout_ms
+                .unwrap_or(defaults.exec_wait_timeout_ms),
+            require_approval: match toml.require_approval.unwrap_or_default() {
+                WorkflowApprovalToml::Auto => WorkflowApproval::Auto,
+                WorkflowApprovalToml::Always => WorkflowApproval::Always,
+                WorkflowApprovalToml::Never => WorkflowApproval::Never,
+            },
+        }
+    }
+}
+
+impl Default for WorkflowsConfig {
+    fn default() -> Self {
+        Self {
+            max_active_runs: 3,
+            max_concurrent_agents: Self::default_max_concurrent_agents(),
+            max_agents_per_run: 1000,
+            capacity_wait_ms: 600_000,
+            default_budget_tokens: None,
+            notification_max_tokens: 2000,
+            max_heap_bytes: 256 * 1024 * 1024,
+            exec_wait_timeout_ms: 7_200_000,
+            require_approval: WorkflowApproval::Auto,
+        }
+    }
+}
+
+/// Resolved `[output_truncation]` limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OutputTruncationConfig {
+    pub max_bytes: Option<usize>,
+    pub max_lines: Option<usize>,
+    pub mcp_max_lines: Option<usize>,
+}
+
+/// Fork: resolved `[features.explorer_profile]` settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExplorerProfileConfig {
+    /// Model for explorer children; `None` keeps the parent's model.
+    pub model: Option<String>,
+    /// Reasoning effort for explorer children; `None` selects the cheapest supported effort.
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// Largest explorer final answer, in tokens, delivered to the parent.
+    pub max_result_tokens: usize,
+}
+
+pub const DEFAULT_EXPLORER_PROFILE_MAX_RESULT_TOKENS: usize = 2_000;
+pub const MIN_EXPLORER_PROFILE_MAX_RESULT_TOKENS: usize = 200;
+
+impl Default for ExplorerProfileConfig {
+    fn default() -> Self {
+        Self {
+            model: None,
+            reasoning_effort: None,
+            max_result_tokens: DEFAULT_EXPLORER_PROFILE_MAX_RESULT_TOKENS,
+        }
+    }
+}
+
+/// Fork: resolved `[features.agent_worktree_isolation]` settings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct AgentWorktreeIsolationConfig {
+    /// Isolation used when `spawn_agent` omits `isolation`; role config files may set it.
+    pub default_isolation: AgentIsolation,
+    /// Commit an isolated child's worktree starts from.
+    pub base: AgentWorktreeBase,
+}
+
+impl AgentWorktreeIsolationConfig {
+    /// Resolves the settings from a features table, keeping defaults for omitted values.
+    pub(crate) fn from_features_toml(features: Option<&FeaturesToml>) -> Self {
+        let configured = agent_worktree_isolation_toml_config(features);
+        Self {
+            default_isolation: configured
+                .and_then(|config| config.default_isolation)
+                .unwrap_or_default(),
+            base: configured
+                .and_then(|config| config.base)
+                .unwrap_or_default(),
+        }
+    }
+}
+
+fn explorer_profile_toml_config(
+    features: Option<&FeaturesToml>,
+) -> Option<&codex_features::ExplorerProfileConfigToml> {
+    match features?.explorer_profile.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
+fn resolve_explorer_profile_config(
+    config_toml: &ConfigToml,
+) -> std::io::Result<ExplorerProfileConfig> {
+    let Some(base) = explorer_profile_toml_config(config_toml.features.as_ref()) else {
+        return Ok(ExplorerProfileConfig::default());
+    };
+    let max_result_tokens = base
+        .max_result_tokens
+        .unwrap_or(DEFAULT_EXPLORER_PROFILE_MAX_RESULT_TOKENS);
+    if max_result_tokens < MIN_EXPLORER_PROFILE_MAX_RESULT_TOKENS {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "features.explorer_profile.max_result_tokens must be at least {MIN_EXPLORER_PROFILE_MAX_RESULT_TOKENS}"
+            ),
+        ));
+    }
+    let model = base
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_owned);
+    Ok(ExplorerProfileConfig {
+        model,
+        reasoning_effort: base.reasoning_effort.clone(),
+        max_result_tokens,
+    })
+}
+
+pub(crate) fn agent_worktree_isolation_toml_config(
+    features: Option<&FeaturesToml>,
+) -> Option<&AgentWorktreeIsolationConfigToml> {
+    match features?.agent_worktree_isolation.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
+/// Fork: worktree isolation adds an `isolation` parameter to `spawn_agent`. The Responses
+/// backend checks the tools of the reserved default namespace against its own definitions
+/// and rejects every request that carries the extra parameter, so the feature needs a custom
+/// namespace (spec `specs/agent-worktree-isolation-2026-10-25.md`, R1.5).
+fn validate_agent_worktree_isolation_namespace(
+    isolation_enabled: bool,
+    namespace: Option<&str>,
+) -> std::io::Result<()> {
+    if isolation_enabled
+        && namespace.is_none_or(|namespace| namespace == DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.agent_worktree_isolation requires features.multi_agent_v2.tool_namespace to be set to a non-reserved namespace such as \"agents\"",
+        ));
+    }
+    Ok(())
+}
+
+/// `[output_truncation]` limits; omitted values keep the defaults.
+pub(super) fn output_truncation_config(
+    output_truncation: Option<OutputTruncationToml>,
+) -> OutputTruncationConfig {
+    output_truncation.map_or_else(
+        OutputTruncationConfig::default,
+        |OutputTruncationToml {
+             max_bytes,
+             max_lines,
+             mcp_max_lines,
+         }| OutputTruncationConfig {
+            max_bytes,
+            max_lines,
+            mcp_max_lines,
+        },
+    )
+}
+
+/// Explorer profile and worktree isolation settings of `cfg`.
+pub(super) fn resolve_agent_profiles(
+    cfg: &ConfigToml,
+) -> std::io::Result<(ExplorerProfileConfig, AgentWorktreeIsolationConfig)> {
+    let explorer_profile = resolve_explorer_profile_config(cfg)?;
+    let agent_worktree_isolation =
+        AgentWorktreeIsolationConfig::from_features_toml(cfg.features.as_ref());
+    Ok((explorer_profile, agent_worktree_isolation))
+}
+
+/// `agents.max_spawned_threads_per_turn`, at least 1.
+pub(super) fn resolve_max_spawned_threads_per_turn(
+    agents: Option<&codex_config::config_toml::AgentsToml>,
+) -> std::io::Result<usize> {
+    let max_spawned_threads_per_turn = agents
+        .and_then(|agents| agents.max_spawned_threads_per_turn)
+        .unwrap_or(DEFAULT_MAX_SPAWNED_THREADS_PER_TURN);
+    if max_spawned_threads_per_turn == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "agents.max_spawned_threads_per_turn must be at least 1",
+        ));
+    }
+    Ok(max_spawned_threads_per_turn)
+}
+
+/// Plaintext message delivery and worktree isolation need a tool namespace other than
+/// the reserved default. The upstream namespace checks accept exactly the namespaces
+/// these checks reject (none or the default), so their order does not matter.
+pub(super) fn validate_tool_namespace(
+    features: &Features,
+    multi_agent_v2: &MultiAgentV2Config,
+) -> std::io::Result<()> {
+    let namespace = multi_agent_v2.tool_namespace.as_deref();
+    if multi_agent_v2.message_delivery == MultiAgentMessageDelivery::Plaintext
+        && namespace.is_none_or(|namespace| namespace == DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.multi_agent_v2.message_delivery = \"plaintext\" requires features.multi_agent_v2.tool_namespace to be set to a non-reserved namespace",
+        ));
+    }
+    validate_agent_worktree_isolation_namespace(
+        features.enabled(Feature::MultiAgentV2)
+            && features.enabled(Feature::AgentWorktreeIsolation),
+        namespace,
+    )
+}
