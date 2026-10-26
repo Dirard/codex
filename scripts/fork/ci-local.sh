@@ -32,7 +32,11 @@
 #                         every test `go test -list` finds must pass
 #   scripts               shellcheck and the ci-local.sh / verify-release.sh /
 #                         release.sh / upstream-drift.sh self-tests
-#   all                   every command above except sandbox-check, in CI order
+#   fork-coverage UPSTREAM_REF
+#                         fail when a package the fork changes since its merge
+#                         base with UPSTREAM_REF lacks strict clippy or tests
+#   all                   every command above except sandbox-check and
+#                         fork-coverage, in CI order
 #
 # Environment:
 #   RUSTY_V8_ARCHIVE, RUSTY_V8_SRC_BINDING_PATH
@@ -68,10 +72,10 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 rust_dir="${repo_root}/codex-rs"
 go_dir="${repo_root}/sdk/go"
 
-# Crates the fork changes relative to upstream. Refresh after a rebase with
-#   git diff --name-only <fork base> HEAD -- codex-rs
-# and map the crate directories to package names.
+# Crates the fork changes relative to upstream. `fork-coverage UPSTREAM_REF`
+# lists the packages missing here.
 fork_clippy_packages=(
+  app_test_support
   codex-agent-message-board-extension
   codex-analytics
   codex-api
@@ -104,8 +108,11 @@ fork_clippy_packages=(
   codex-utils-string
   codex-workflow
   codex-worktree
+  core_test_support
 )
 
+# Every fork-touched package runs its tests here, except codex-app-server
+# (rust-app-server-test) and untested_fork_packages; `fork-coverage` checks it.
 default_test_packages=(
   codex-core
   codex-linux-sandbox
@@ -114,6 +121,39 @@ default_test_packages=(
   codex-worktree
   codex-exec
   codex-utils-string
+  app_test_support
+  codex-agent-message-board-extension
+  codex-analytics
+  codex-api
+  codex-app-server-daemon
+  codex-app-server-transport
+  codex-arg0
+  codex-client
+  codex-code-mode-host
+  codex-code-mode-protocol
+  codex-code-mode-runtime
+  codex-config
+  codex-exec-server
+  codex-extension-items
+  codex-features
+  codex-history
+  codex-models-manager
+  codex-protocol
+  codex-rollout
+  codex-rollout-trace
+  codex-thread-manager-sample
+  codex-thread-store
+  codex-tools
+  codex-utils-output-truncation
+  core_test_support
+)
+
+# Fork-touched packages whose tests do not run in fork CI yet, with the reason.
+# fork-coverage accepts them and prints them.
+untested_fork_packages=(
+  # 44 snapshot tests fail on codex/fork; fix them, then move this package to
+  # default_test_packages.
+  codex-tui
 )
 
 # Binaries that codex-core integration tests locate next to their test
@@ -632,6 +672,80 @@ cmd_go_auth_fixture() {
   log "${count} of ${count} TestAuthFixture tests passed"
 }
 
+# Package names of the Cargo manifests under codex-rs, as "<dir>\t<name>" lines.
+workspace_package_dirs() {
+  local manifest name
+  while IFS= read -r manifest; do
+    name="$(awk '
+      /^\[package\]/ { in_package = 1; next }
+      /^\[/ { in_package = 0 }
+      in_package && /^name[[:space:]]*=/ {
+        sub(/^name[[:space:]]*=[[:space:]]*"/, ""); sub(/".*/, ""); print; exit
+      }' "${repo_root}/${manifest}")"
+    [[ -n "${name}" ]] && printf '%s\t%s\n' "${manifest%/Cargo.toml}" "${name}"
+  done < <(git -C "${repo_root}" ls-files -- 'codex-rs/*Cargo.toml')
+}
+
+# Fails when a package that the fork changes relative to UPSTREAM_REF is missing
+# from fork_clippy_packages, or runs no tests in fork CI and is not listed in
+# untested_fork_packages.
+cmd_fork_coverage() {
+  [[ $# -eq 1 ]] || die "usage: ${0##*/} fork-coverage UPSTREAM_REF"
+  local upstream="$1" base
+  base="$(git -C "${repo_root}" merge-base HEAD "${upstream}")" ||
+    die "HEAD and ${upstream} have no common history"
+
+  local -A dir_package=() touched=() tested=() clippy=() untested=()
+  local dir name file package
+  while IFS=$'\t' read -r dir name; do
+    dir_package["${dir}"]="${name}"
+  done < <(workspace_package_dirs)
+  while IFS= read -r file; do
+    dir="${file%/*}"
+    while [[ "${dir}" == codex-rs/* ]]; do
+      if [[ -n "${dir_package[${dir}]:-}" ]]; then
+        touched["${dir_package[${dir}]}"]=1
+        break
+      fi
+      dir="${dir%/*}"
+    done
+  done < <(git -C "${repo_root}" diff --name-only "${base}" HEAD -- codex-rs)
+
+  for package in "${default_test_packages[@]}" codex-app-server; do tested["${package}"]=1; done
+  for package in "${fork_clippy_packages[@]}"; do clippy["${package}"]=1; done
+  for package in "${untested_fork_packages[@]}"; do untested["${package}"]=1; done
+
+  local missing_tests=() missing_clippy=() accepted=()
+  for package in $(printf '%s\n' "${!touched[@]}" | LC_ALL=C sort); do
+    if [[ -z "${tested[${package}]:-}" ]]; then
+      if [[ -n "${untested[${package}]:-}" ]]; then
+        accepted+=("${package}")
+      else
+        missing_tests+=("${package}")
+      fi
+    fi
+    [[ -n "${clippy[${package}]:-}" ]] || missing_clippy+=("${package}")
+  done
+
+  log "fork-coverage: ${#touched[@]} packages changed since $(git -C "${repo_root}" rev-parse --short "${base}")"
+  if [[ ${#accepted[@]} -gt 0 ]]; then
+    log "not tested in fork CI (untested_fork_packages): ${accepted[*]}"
+  fi
+  local status=0
+  if [[ ${#missing_tests[@]} -gt 0 ]]; then
+    printf 'error: fork-touched packages without tests in fork CI: %s\n' "${missing_tests[*]}" >&2
+    printf '       add them to default_test_packages or untested_fork_packages in %s\n' "${BASH_SOURCE[0]}" >&2
+    status=1
+  fi
+  if [[ ${#missing_clippy[@]} -gt 0 ]]; then
+    printf 'error: fork-touched packages without strict clippy: %s\n' "${missing_clippy[*]}" >&2
+    printf '       add them to fork_clippy_packages in %s\n' "${BASH_SOURCE[0]}" >&2
+    status=1
+  fi
+  [[ ${status} -eq 0 ]] && log "fork-coverage: every fork-touched package is covered"
+  return "${status}"
+}
+
 cmd_scripts() {
   if command -v shellcheck >/dev/null 2>&1; then
     log "shellcheck scripts/fork/*.sh"
@@ -695,6 +809,7 @@ main() {
     go-real-app-server) cmd_go_real_app_server "$@" ;;
     go-auth-fixture) cmd_go_auth_fixture "$@" ;;
     scripts) cmd_scripts "$@" ;;
+    fork-coverage) cmd_fork_coverage "$@" ;;
     all) cmd_all "$@" ;;
     -h | --help | help) usage ;;
     *)

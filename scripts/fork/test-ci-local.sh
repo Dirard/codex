@@ -459,5 +459,46 @@ check rusty-v8-present-lib-kept ok 'build test helpers' "${ci_local}" rust-helpe
 expect rusty-v8-present-build-kept test -f "${v8_target}/debug/build/v8-run1/output"
 expect rusty-v8-present-fingerprint-kept test -d "${v8_target}/debug/.fingerprint/v8-run1"
 
+# --- fork-coverage: every fork-touched package needs clippy and tests -------
+
+# A throwaway repository with a copy of ci-local.sh, so its package lists apply
+# to manifests made up here: codex-core and the nested codex-utils-string are
+# covered, codex-tui is accepted as untested, codex-newcrate is covered nowhere.
+cov="${work}/coverage-repo"
+git init -q -b main "${cov}"
+git -C "${cov}" config user.email coverage@example.invalid
+git -C "${cov}" config user.name coverage
+git -C "${cov}" config commit.gpgsign false
+mkdir -p "${cov}/scripts/fork"
+cp "${ci_local}" "${cov}/scripts/fork/ci-local.sh"
+manifest() {
+  mkdir -p "${cov}/codex-rs/$1/src"
+  printf '[package]\nname = "%s"\nversion = "0.0.0"\n' "$2" >"${cov}/codex-rs/$1/Cargo.toml"
+  printf '// upstream\n' >"${cov}/codex-rs/$1/src/lib.rs"
+}
+manifest core codex-core
+manifest tui codex-tui
+manifest utils/string codex-utils-string
+manifest newcrate codex-newcrate
+printf '[workspace]\n' >"${cov}/codex-rs/Cargo.toml"
+git -C "${cov}" add -A
+git -C "${cov}" commit -q -m upstream
+git -C "${cov}" branch upstream
+printf '// fork\n' >>"${cov}/codex-rs/core/src/lib.rs"
+printf '// fork\n' >>"${cov}/codex-rs/tui/src/lib.rs"
+printf '// fork\n' >>"${cov}/codex-rs/utils/string/src/lib.rs"
+printf '[workspace]\nmembers = []\n' >"${cov}/codex-rs/Cargo.toml"
+git -C "${cov}" commit -q -am 'fork changes covered packages'
+check fork-coverage-covered ok 'every fork-touched package is covered' \
+  "${cov}/scripts/fork/ci-local.sh" fork-coverage upstream
+expect fork-coverage-lists-untested grep -q 'untested_fork_packages): codex-tui$' "${work}/fork-coverage-covered.log"
+expect fork-coverage-counts-packages grep -q '3 packages changed since' "${work}/fork-coverage-covered.log"
+printf '// fork\n' >>"${cov}/codex-rs/newcrate/src/lib.rs"
+git -C "${cov}" commit -q -am 'fork changes an uncovered package'
+check fork-coverage-missing-tests fail 'without tests in fork CI: codex-newcrate$' \
+  "${cov}/scripts/fork/ci-local.sh" fork-coverage upstream
+expect fork-coverage-missing-clippy grep -q 'without strict clippy: codex-newcrate$' "${work}/fork-coverage-missing-tests.log"
+check fork-coverage-needs-ref fail 'usage: .*fork-coverage UPSTREAM_REF' "${ci_local}" fork-coverage
+
 echo "ci-local.sh self-test: ${passed} passed, ${failures} failed"
 [[ ${failures} -eq 0 ]]

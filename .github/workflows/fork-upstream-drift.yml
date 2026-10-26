@@ -6,6 +6,9 @@ name: fork-upstream-drift
 #   git fetch https://github.com/openai/codex.git main
 #   scripts/fork/upstream-drift.sh HEAD FETCH_HEAD
 #
+# A second step fails when a package the fork changes lacks strict clippy or
+# tests in fork CI (scripts/fork/ci-local.sh fork-coverage).
+#
 # A manual or scheduled run fails when an upstream sync is due, so GitHub
 # notifies the owner. A run for a push to codex/fork only reports. GitHub runs
 # `schedule` only from the default branch, so the same file also lives on
@@ -61,3 +64,7 @@ jobs:
             exit 0
           fi
           exit "${status}"
+
+      - name: Fork packages covered by fork CI
+        if: ${{ !cancelled() }}
+        run: scripts/fork/ci-local.sh fork-coverage FETCH_HEAD
