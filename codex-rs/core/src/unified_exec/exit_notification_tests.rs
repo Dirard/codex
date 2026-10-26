@@ -484,3 +484,40 @@ fn bounds_command_lines_and_utf8() {
     assert!(rendered.ends_with("line 49\n[end output abcd1234]"));
     assert!(!rendered.contains('\u{fffd}'));
 }
+
+// Moved from `head_tail_buffer_tests.rs` with `last_bytes`, which now reads the buffer
+// through its public API.
+#[test]
+fn last_bytes_reads_recent_output_without_draining() {
+    let last = |bytes: &[u8], readable_earlier, lost| LastBytes {
+        bytes: bytes.to_vec(),
+        readable_earlier,
+        lost,
+    };
+    let mut buf = crate::unified_exec::process::OutputBuffers::<10>::default();
+    buf.push_chunk(b"0123");
+    assert_eq!(last_bytes(&buf, 2), last(b"23", 2, 0));
+    assert_eq!(last_bytes(&buf, 10), last(b"0123", 0, 0));
+
+    // Head "01234" and tail "56789" are contiguous while nothing was omitted.
+    buf.push_chunk(b"456789");
+    assert_eq!(last_bytes(&buf, 7), last(b"3456789", 3, 0));
+
+    // After an omission the head is no longer contiguous with the tail. Fork (R2.9): the
+    // dropped bytes are lost; only the retained bytes before the tail are still readable.
+    buf.push_chunk(b"ab");
+    assert_eq!(buf.pending.omitted_bytes(), 2);
+    assert_eq!(last_bytes(&buf, 3), last(b"9ab", 7, 2));
+    assert_eq!(last_bytes(&buf, 8), last(b"789ab", 5, 2));
+    assert_eq!(buf.pending.retained_bytes(), 10);
+
+    // A merged buffer omits only once its head is full, so the same tail is contiguous.
+    let mut merged = crate::unified_exec::process::OutputBuffers::<10>::default();
+    merged.push_chunk(b"01");
+    let mut later = crate::unified_exec::process::OutputBuffers::<10>::default();
+    later.push_chunk(b"23456789ab");
+    merged.pending.push_buffer(later.pending);
+    assert_eq!(merged.pending.omitted_bytes(), 2);
+    assert_eq!(last_bytes(&merged, 3), last(b"9ab", 7, 2));
+    assert_eq!(last_bytes(&merged, 8), last(b"789ab", 5, 2));
+}

@@ -1,5 +1,4 @@
 use super::HeadTailBuffer;
-use super::LastBytes;
 
 use pretty_assertions::assert_eq;
 
@@ -89,29 +88,4 @@ fn empty_and_tiny_chunks_have_bounded_metadata() {
 
     assert_eq!(buf.retained_bytes(), 10);
     assert_eq!(buf.omitted_bytes(), 2);
-}
-
-#[test]
-fn last_bytes_reads_recent_output_without_draining() {
-    let last = |bytes: &[u8], readable_earlier, lost| LastBytes {
-        bytes: bytes.to_vec(),
-        readable_earlier,
-        lost,
-    };
-    let mut buf = HeadTailBuffer::<10>::default();
-    buf.push_chunk(b"0123");
-    assert_eq!(buf.last_bytes(2), last(b"23", 2, 0));
-    assert_eq!(buf.last_bytes(10), last(b"0123", 0, 0));
-
-    // Head "01234" and tail "56789" are contiguous while nothing was omitted.
-    buf.push_chunk(b"456789");
-    assert_eq!(buf.last_bytes(7), last(b"3456789", 3, 0));
-
-    // After an omission the head is no longer contiguous with the tail. Fork (R2.9): the
-    // dropped bytes are lost; only the retained bytes before the tail are still readable.
-    buf.push_chunk(b"ab");
-    assert_eq!(buf.omitted_bytes(), 2);
-    assert_eq!(buf.last_bytes(3), last(b"9ab", 7, 2));
-    assert_eq!(buf.last_bytes(8), last(b"789ab", 5, 2));
-    assert_eq!(buf.retained_bytes(), 10);
 }

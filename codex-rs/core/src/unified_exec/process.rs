@@ -53,9 +53,7 @@ impl<const MAX_BYTES: usize> OutputBuffers<MAX_BYTES> {
     pub(super) fn push_chunk(&mut self, chunk: &[u8]) {
         self.pending.push_chunk(chunk);
         self.transcript.push_chunk(chunk);
-        if !chunk.is_empty() {
-            self.last_output_at = Some(tokio::time::Instant::now());
-        }
+        self.note_output(chunk);
     }
 }
 

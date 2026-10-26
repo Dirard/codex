@@ -2,14 +2,6 @@ use crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_BYTES;
 use crate::unified_exec::format_output_omission_marker;
 use std::collections::VecDeque;
 
-/// Fork: the most recent output and what precedes it, see [`HeadTailBuffer::last_bytes`].
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct LastBytes {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) readable_earlier: usize,
-    pub(crate) lost: usize,
-}
-
 /// A capped buffer that preserves a stable prefix ("head") and suffix ("tail"),
 /// dropping the middle once it exceeds the configured maximum. The buffer is
 /// symmetric meaning 50% of the capacity is allocated to the head and 50% is
@@ -129,29 +121,6 @@ impl<const MAX_BYTES: usize> HeadTailBuffer<MAX_BYTES> {
         out.push(b'\n');
         out.extend(self.tail.iter().copied());
         out
-    }
-
-    /// Fork: returns up to `max_bytes` of the most recent contiguous output without
-    /// draining the buffer, with the retained bytes before it (a later drain still
-    /// returns them) and the bytes the cap already dropped (nothing returns them).
-    ///
-    /// After an omission only the tail is contiguous with the end of the output,
-    /// so the head is used only when nothing was omitted.
-    pub(crate) fn last_bytes(&self, max_bytes: usize) -> LastBytes {
-        let tail_len = self.tail.len().min(max_bytes);
-        let head_len = if self.omitted_bytes == 0 {
-            (max_bytes - tail_len).min(self.head.len())
-        } else {
-            0
-        };
-        let mut bytes = Vec::with_capacity(head_len.saturating_add(tail_len));
-        bytes.extend_from_slice(&self.head[self.head.len() - head_len..]);
-        bytes.extend(self.tail.iter().skip(self.tail.len() - tail_len).copied());
-        LastBytes {
-            readable_earlier: self.retained_bytes().saturating_sub(bytes.len()),
-            lost: self.omitted_bytes,
-            bytes,
-        }
     }
 
     /// Append a later buffer with the same budget. This preserves the summary

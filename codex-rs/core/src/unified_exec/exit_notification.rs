@@ -17,6 +17,7 @@ use codex_utils_string::untrusted::escape_tags;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
+use crate::session::session::Session;
 use crate::unified_exec::MAX_UNIFIED_EXEC_PROCESSES;
 
 pub(crate) const NOTIFICATION_COMMAND_MAX_BYTES: usize = 512;
@@ -463,6 +464,318 @@ fn bounded_tail(bytes: &[u8], earlier_bytes: usize, max_lines: usize) -> (String
         bytes = content;
     }
     (String::from_utf8_lossy(bytes).into_owned(), earlier_bytes)
+}
+
+// Hooks called from the upstream unified exec files (`mod.rs`, `process.rs`,
+// `async_watcher.rs`, `process_manager.rs`). They live here so those files keep only the
+// calls; see `specs/fork-rebase-sustainability-2026-10-26.md` UC2.
+
+/// What a shutdown owes the model about armed processes (R2.5).
+#[derive(Debug, Default)]
+pub(crate) struct TerminatedProcesses {
+    /// Armed processes the shutdown stopped before their exit was reported.
+    pub(crate) shutdown_notices: Vec<ShutdownNotice>,
+    /// Notifications on their way into the thread queue when the shutdown began.
+    pub(crate) deliveries_in_flight: Vec<Arc<ExitNotifier>>,
+}
+
+impl TerminatedProcesses {
+    /// Notices in session ID order, as `terminate_all_processes` returns them.
+    pub(crate) fn sorted(mut self) -> Self {
+        self.shutdown_notices
+            .sort_by_key(|notice| notice.process_id);
+        self
+    }
+}
+
+/// A live terminal whose exit will still be reported (R4.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PendingTerminal {
+    pub(crate) process_id: i32,
+    pub(crate) started_at: tokio::time::Instant,
+    pub(crate) last_output_at: Option<tokio::time::Instant>,
+}
+
+impl ExitNotifier {
+    /// The promise of an `exec_command` call: it exists only while the process is stored,
+    /// and it is armed once the call returns a session ID.
+    pub(crate) fn for_request(
+        process_stored: bool,
+        request: &super::ExecCommandRequest,
+        started_at: Instant,
+    ) -> Option<Arc<Self>> {
+        (process_stored && request.notify_on_exit)
+            .then(|| Self::new(request.process_id, request.hook_command.clone(), started_at))
+    }
+}
+
+impl super::ProcessEntry {
+    /// Tell a pending exit notification that Codex is stopping this process.
+    ///
+    /// A process that already exited on its own keeps its real exit status. A shutdown
+    /// settles notifiers through `ExitNotifier::settle_for_shutdown` instead.
+    pub(super) fn set_termination_cause(&self, cause: TerminationCause) {
+        if let Some(exit_notifier) = &self.exit_notifier
+            && !self.process.has_exited()
+        {
+            exit_notifier.set_termination_cause(cause);
+        }
+    }
+
+    /// Before `terminate_all_processes` stops this process: a shutdown records what the model
+    /// is still owed, any other cause tells the exit notification who stopped the process.
+    pub(super) fn settle_termination(
+        &self,
+        cause: TerminationCause,
+        terminated: &mut TerminatedProcesses,
+    ) {
+        match (cause, self.exit_notifier.as_ref()) {
+            (TerminationCause::Shutdown, Some(exit_notifier)) => {
+                match exit_notifier.settle_for_shutdown() {
+                    ShutdownSettle::Notice(notice) => terminated.shutdown_notices.push(notice),
+                    ShutdownSettle::DeliveryInFlight => terminated
+                        .deliveries_in_flight
+                        .push(Arc::clone(exit_notifier)),
+                    ShutdownSettle::Nothing => {}
+                }
+            }
+            _ => self.set_termination_cause(cause),
+        }
+    }
+
+    /// A client asked to terminate this process. Returns the notifier, so a stop that fails
+    /// can forget the cause again with [`clear_client_termination`].
+    pub(super) fn mark_client_termination(&self) -> Option<Arc<ExitNotifier>> {
+        self.set_termination_cause(TerminationCause::ClientRequest);
+        self.exit_notifier.clone()
+    }
+}
+
+/// The process keeps running, so its later exit keeps its real outcome (R2.11).
+pub(super) fn clear_client_termination(exit_notifier: Option<Arc<ExitNotifier>>) {
+    if let Some(exit_notifier) = exit_notifier {
+        exit_notifier.clear_termination_cause(TerminationCause::ClientRequest);
+    }
+}
+
+impl<const MAX_BYTES: usize> super::process::OutputBuffers<MAX_BYTES> {
+    /// Remember when the process last produced output, for `wait_agent` snapshots (R4.5).
+    pub(super) fn note_output(&mut self, chunk: &[u8]) {
+        if !chunk.is_empty() {
+            self.last_output_at = Some(tokio::time::Instant::now());
+        }
+    }
+}
+
+/// The most recent output and what precedes it, see [`last_bytes`].
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LastBytes {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) readable_earlier: usize,
+    pub(crate) lost: usize,
+}
+
+/// Returns up to `max_bytes` of the most recent contiguous pending output without draining
+/// it, with the retained bytes before it (a later drain still returns them) and the bytes
+/// the cap already dropped (nothing returns them).
+///
+/// Only the public API of the head/tail buffer is used. While nothing was omitted, head and
+/// tail are contiguous. After an omission only the tail is contiguous with the end of the
+/// output: an omission happens only once the head holds its full half of the budget, so the
+/// retained bytes past `MAX_BYTES / 2` are the tail.
+pub(crate) fn last_bytes<const MAX_BYTES: usize>(
+    output: &super::process::OutputBuffers<MAX_BYTES>,
+    max_bytes: usize,
+) -> LastBytes {
+    let retained = output.pending.to_bytes();
+    let lost = output.pending.omitted_bytes();
+    let contiguous_start = if lost == 0 {
+        0
+    } else {
+        (MAX_BYTES / 2).min(retained.len())
+    };
+    let start = retained
+        .len()
+        .saturating_sub(max_bytes)
+        .max(contiguous_start);
+    LastBytes {
+        bytes: retained[start..].to_vec(),
+        readable_earlier: start,
+        lost,
+    }
+}
+
+type SharedOutputBuffers = Arc<tokio::sync::Mutex<super::process::OutputBuffers>>;
+
+/// What the exit watcher needs to report the exit of an armed process. It is captured
+/// before the session and the output buffer move into the end event.
+pub(crate) struct ExitWatch(Option<(Arc<ExitNotifier>, Arc<Session>, SharedOutputBuffers)>);
+
+impl ExitWatch {
+    pub(crate) fn new(
+        exit_notifier: Option<Arc<ExitNotifier>>,
+        session: &Arc<Session>,
+        output_buffer: &SharedOutputBuffers,
+    ) -> Self {
+        Self(
+            exit_notifier
+                .map(|notifier| (notifier, Arc::clone(session), Arc::clone(output_buffer))),
+        )
+    }
+
+    /// Settle the notification of the stopped process. The exit watcher calls this under the
+    /// interaction lock, so a concurrent `write_stdin` either observed this exit already or
+    /// runs after the notification is queued and can withdraw it (R2.10). Only the wake runs
+    /// as a separate task.
+    pub(crate) async fn report(self, process: &super::UnifiedExecProcess, duration: Duration) {
+        let Some((exit_notifier, session, output_buffer)) = self.0 else {
+            return;
+        };
+        let report = exit_report(process, &output_buffer, duration).await;
+        if let Some(pending) = exit_notifier.on_exit(report) {
+            session
+                .deliver_background_terminal_notification(&exit_notifier, pending)
+                .await;
+        }
+    }
+}
+
+/// Describe the stopped process for its exit notification without draining output.
+async fn exit_report(
+    process: &super::UnifiedExecProcess,
+    output_buffer: &tokio::sync::Mutex<super::process::OutputBuffers>,
+    duration: Duration,
+) -> ExitReport {
+    let LastBytes {
+        bytes: unread_tail,
+        readable_earlier: unread_earlier_bytes,
+        lost: unread_lost_bytes,
+    } = last_bytes(&*output_buffer.lock().await, NOTIFICATION_TAIL_MAX_BYTES);
+    let failure_message = process.failure_message();
+    let sandbox_denied = failure_message.is_none()
+        && !process.termination_requested.load(Ordering::Acquire)
+        && process
+            .check_for_sandbox_denial_with_text(&String::from_utf8_lossy(&unread_tail))
+            .await
+            .is_err();
+    let outcome = match failure_message {
+        Some(message) => ExitOutcome::Failed { message },
+        None => ExitOutcome::Exited {
+            exit_code: process.exit_code(),
+        },
+    };
+    ExitReport {
+        outcome,
+        duration,
+        unread_tail,
+        unread_earlier_bytes,
+        unread_lost_bytes,
+        sandbox_denied,
+    }
+}
+
+impl super::UnifiedExecContext {
+    /// `exec_command` returned a session ID, so the exit is reported later. A process that
+    /// already exited is queued before this call returns (R2.1).
+    pub(crate) async fn arm_exit_notification(
+        &self,
+        response_process_id: Option<i32>,
+        exit_notifier: Option<&Arc<ExitNotifier>>,
+    ) {
+        if response_process_id.is_some()
+            && let Some(exit_notifier) = exit_notifier
+            && let Some(pending) = exit_notifier.arm()
+        {
+            self.session
+                .deliver_background_terminal_notification(exit_notifier, pending)
+                .await;
+        }
+    }
+
+    /// A `write_stdin` response shows the exit or failure of this process, so its exit
+    /// notification is settled and, when it was already queued, withdrawn (R2.2, R2.10).
+    pub(crate) async fn observe_exit(&self, exit_notifier: Option<&ExitNotifier>) {
+        if let Some(key) = exit_notifier.and_then(ExitNotifier::observe) {
+            self.session
+                .input_queue
+                .withdraw_background_notification(key)
+                .await;
+        }
+    }
+}
+
+impl super::UnifiedExecProcessManager {
+    /// Whether an armed exit notification still waits for its live process or is on its
+    /// way into the thread queue.
+    pub(crate) async fn has_pending_exit_notifications(&self) -> bool {
+        self.process_store
+            .lock()
+            .await
+            .processes
+            .values()
+            .any(|entry| {
+                entry
+                    .exit_notifier
+                    .as_ref()
+                    .is_some_and(|notifier| notifier.is_pending())
+            })
+    }
+
+    /// The terminals whose exit will still be reported, by session ID (R4.5).
+    pub(crate) async fn pending_exit_notifications(&self) -> Vec<PendingTerminal> {
+        let pending: Vec<(Arc<ExitNotifier>, SharedOutputBuffers)> = self
+            .process_store
+            .lock()
+            .await
+            .processes
+            .values()
+            .filter_map(|entry| {
+                let notifier = entry.exit_notifier.as_ref()?;
+                notifier.is_pending().then(|| {
+                    (
+                        Arc::clone(notifier),
+                        Arc::clone(&entry.process.output_handles().output_buffer),
+                    )
+                })
+            })
+            .collect();
+        let mut terminals = Vec::with_capacity(pending.len());
+        for (notifier, output_buffer) in pending {
+            terminals.push(PendingTerminal {
+                process_id: notifier.process_id(),
+                started_at: notifier.started_at(),
+                last_output_at: output_buffer.lock().await.last_output_at,
+            });
+        }
+        terminals.sort_by_key(|terminal| terminal.process_id);
+        terminals
+    }
+
+    /// Free a process whose notification left nothing for `write_stdin` to read (R2.12).
+    /// Only the entry that `exit_notifier` belongs to is removed, and only once its process
+    /// exited and the initial `exec_command` returned.
+    pub(crate) async fn release_after_notification(&self, exit_notifier: &ExitNotifier) {
+        let removed = {
+            let mut store = self.process_store.lock().await;
+            let process_id = exit_notifier.process_id();
+            let releasable = store.processes.get(&process_id).is_some_and(|entry| {
+                entry
+                    .exit_notifier
+                    .as_ref()
+                    .is_some_and(|notifier| std::ptr::eq(notifier.as_ref(), exit_notifier))
+                    && entry.process.has_exited()
+                    && !entry.initial_exec_command_active.load(Ordering::Acquire)
+            });
+            if !releasable {
+                return;
+            }
+            store.remove(process_id)
+        };
+        if let Some(entry) = removed {
+            entry.process.cancellation_token().cancel();
+            super::process_manager::unregister_network_approval_for_entry(&entry).await;
+        }
+    }
 }
 
 #[cfg(test)]

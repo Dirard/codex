@@ -46,17 +46,13 @@ use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::unified_exec::ExecCommandRequest;
-use crate::unified_exec::ExitNotifier;
 use crate::unified_exec::MAX_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::MAX_YIELD_TIME_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::unified_exec::MIN_YIELD_TIME_MS;
-use crate::unified_exec::PendingTerminal;
 use crate::unified_exec::ProcessEntry;
 use crate::unified_exec::ProcessStore;
 use crate::unified_exec::TerminalSession;
-use crate::unified_exec::TerminatedProcesses;
-use crate::unified_exec::TerminationCause;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
@@ -67,7 +63,6 @@ use crate::unified_exec::async_watcher::emit_failed_exec_end_for_unified_exec;
 use crate::unified_exec::async_watcher::spawn_exit_watcher;
 use crate::unified_exec::async_watcher::start_streaming_output;
 use crate::unified_exec::clamp_yield_time;
-use crate::unified_exec::exit_notification::ShutdownSettle;
 use crate::unified_exec::generate_chunk_id;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 use crate::unified_exec::process::OutputBuffers;
@@ -272,7 +267,7 @@ struct PreparedProcessHandles {
     hook_command: String,
     process_id: i32,
     tty: bool,
-    exit_notifier: Option<Arc<ExitNotifier>>,
+    exit_notifier: Option<Arc<crate::unified_exec::ExitNotifier>>,
 }
 
 struct InitialExecCommandGuard {
@@ -305,7 +300,7 @@ impl Drop for InitialExecCommandGuard {
     }
 }
 
-async fn unregister_network_approval_for_entry(entry: &ProcessEntry) {
+pub(super) async fn unregister_network_approval_for_entry(entry: &ProcessEntry) {
     if let Some(network_approval) = entry.network_approval.as_ref()
         && let Some(session) = entry.session.upgrade()
     {
@@ -385,21 +380,6 @@ async fn finish_deferred_network_approval_after_process_exit_for_session(
     )
     .await;
     finish_deferred_network_approval_for_session(session, deferred).await
-}
-
-/// Fork: a `write_stdin` response shows the exit or failure of this process, so its exit
-/// notification is settled and, when it was already queued, withdrawn (R2.2, R2.10).
-async fn observe_exit_in_response(
-    exit_notifier: Option<&ExitNotifier>,
-    context: &UnifiedExecContext,
-) {
-    if let Some(key) = exit_notifier.and_then(ExitNotifier::observe) {
-        context
-            .session
-            .input_queue
-            .withdraw_background_notification(key)
-            .await;
-    }
 }
 
 fn fail_process_with_message(process: &UnifiedExecProcess, message: String) -> UnifiedExecError {
@@ -650,9 +630,9 @@ impl UnifiedExecProcessManager {
             metrics_sidecar,
             collection_finished: process.output_handles().collection_finished.clone(),
         };
-        // Fork: the promise exists only while the process is stored; it is armed below.
-        let exit_notifier = (process_stored && request.notify_on_exit)
-            .then(|| ExitNotifier::new(request.process_id, request.hook_command.clone(), start));
+        // Fork: an exit notification promise for a stored process (background-exec-notifications).
+        let exit_notifier =
+            crate::unified_exec::ExitNotifier::for_request(process_stored, &request, start);
         if process_stored {
             let initial_exec_command_active = Arc::new(AtomicBool::new(true));
             initial_exec_command_guard.active = Some(Arc::clone(&initial_exec_command_active));
@@ -779,19 +759,7 @@ impl UnifiedExecProcessManager {
                     exit_code,
                     process_id,
                     ..
-                } => {
-                    // Fork: the model learns the session ID now, so the exit is reported later.
-                    // A process that already exited is queued before this call returns.
-                    if let Some(exit_notifier) = exit_notifier.as_ref()
-                        && let Some(pending) = exit_notifier.arm()
-                    {
-                        context
-                            .session
-                            .deliver_background_terminal_notification(exit_notifier, pending)
-                            .await;
-                    }
-                    (Some(process_id), exit_code)
-                }
+                } => (Some(process_id), exit_code),
                 ProcessStatus::Exited { exit_code, entry } => {
                     entry.process.cancellation_token().cancel();
                     if let Err(message) =
@@ -893,6 +861,10 @@ impl UnifiedExecProcessManager {
                 })?;
             (None, exit_code)
         };
+        // Fork: the model learns the session ID now, so the exit is reported later.
+        context
+            .arm_exit_notification(response_process_id, exit_notifier.as_ref())
+            .await;
 
         let response = ExecCommandToolOutput {
             event_call_id: context.call_id.clone(),
@@ -1107,7 +1079,7 @@ impl UnifiedExecProcessManager {
                     .await;
             self.release_process(process_id, Some(locked_process)).await;
             // Fork: this error response tells the model about the failure (R2.10).
-            observe_exit_in_response(exit_notifier.as_deref(), context).await;
+            context.observe_exit(exit_notifier.as_deref()).await;
             return Err(fail_process_with_message(process.as_ref(), message));
         }
         if let Some(message) = process.failure_message() {
@@ -1117,7 +1089,7 @@ impl UnifiedExecProcessManager {
             )
             .await;
             self.release_process(process_id, Some(locked_process)).await;
-            observe_exit_in_response(exit_notifier.as_deref(), context).await;
+            context.observe_exit(exit_notifier.as_deref()).await;
             if let Err(message) = finish_result {
                 return Err(fail_process_with_message(process.as_ref(), message));
             }
@@ -1157,7 +1129,7 @@ impl UnifiedExecProcessManager {
         // lock is still held, so the exit watcher either already queued its notification,
         // which is withdrawn here (R2.10), or sees this.
         if process_id.is_none() {
-            observe_exit_in_response(exit_notifier.as_deref(), context).await;
+            context.observe_exit(exit_notifier.as_deref()).await;
         }
         let response = ExecCommandToolOutput {
             event_call_id,
@@ -1301,7 +1273,7 @@ impl UnifiedExecProcessManager {
         metrics_sidecar: Option<PluginMetricsSidecar>,
         output_buffer: Arc<tokio::sync::Mutex<OutputBuffers>>,
         initial_exec_command_active: Arc<AtomicBool>,
-        exit_notifier: Option<Arc<ExitNotifier>>,
+        exit_notifier: Option<Arc<crate::unified_exec::ExitNotifier>>,
     ) {
         let plugin_metrics_sidecar =
             metrics_sidecar.map(|sidecar| Arc::new(std::sync::Mutex::new(Some(sidecar))));
@@ -1343,7 +1315,7 @@ impl UnifiedExecProcessManager {
         // Install the watcher before cancellable cleanup, and outside the process-store lock.
         if let Some(pruned_entry) = pruned_entry {
             unregister_network_approval_for_entry(&pruned_entry).await;
-            pruned_entry.set_termination_cause(TerminationCause::ProcessLimit);
+            pruned_entry.set_termination_cause(crate::unified_exec::TerminationCause::ProcessLimit);
             pruned_entry.process.terminate();
         }
     }
@@ -1628,14 +1600,8 @@ impl UnifiedExecProcessManager {
             .run(&mut runtime, &req, &tool_ctx)
             .await
             .map(|result| (result.output, result.deferred_network_approval))
-            .map_err(|tool_error| {
-                let err = match &tool_error {
-                    ToolError::Codex(err) => err,
-                    ToolError::Rejected(_) => {
-                        return UnifiedExecError::create_process(format!("{tool_error:?}"));
-                    }
-                };
-                match err.details() {
+            .map_err(|err| match err {
+                ToolError::Codex(err) => match err.details() {
                     CodexErrorDetails::Sandbox(SandboxErr::Denied { output, .. }) => {
                         let output = output.as_ref().clone();
                         let message = if output.aggregated_output.text.is_empty() {
@@ -1647,7 +1613,8 @@ impl UnifiedExecProcessManager {
                         UnifiedExecError::sandbox_denied(message, output)
                     }
                     _ => UnifiedExecError::create_process(format!("{err:?}")),
-                }
+                },
+                other => UnifiedExecError::create_process(format!("{other:?}")),
             });
         let outcome = match &result {
             Ok(_) => "completed",
@@ -1892,15 +1859,13 @@ impl UnifiedExecProcessManager {
             .map(|(process_id, _, _)| process_id)
     }
 
-    /// Terminate every process; `cause` tells exit notifications who stopped them.
-    ///
-    /// For a shutdown, returns what the model is still owed (R2.5): a notice for every
-    /// armed process that it stops, and the notifiers whose delivery is in flight.
+    /// Fork: `cause` tells exit notifications who stopped the processes; a shutdown returns
+    /// what the model is still owed (background-exec-notifications R2.5).
     pub(crate) async fn terminate_all_processes(
         &self,
-        cause: TerminationCause,
-    ) -> TerminatedProcesses {
-        let mut terminated = TerminatedProcesses::default();
+        cause: crate::unified_exec::TerminationCause,
+    ) -> crate::unified_exec::TerminatedProcesses {
+        let mut terminated = crate::unified_exec::TerminatedProcesses::default();
         let entries: Vec<ProcessEntry> = {
             let mut processes = self.process_store.lock().await;
             let entries: Vec<ProcessEntry> = processes
@@ -1914,96 +1879,10 @@ impl UnifiedExecProcessManager {
 
         for entry in entries {
             unregister_network_approval_for_entry(&entry).await;
-            match (cause, entry.exit_notifier.as_ref()) {
-                (TerminationCause::Shutdown, Some(exit_notifier)) => {
-                    match exit_notifier.settle_for_shutdown() {
-                        ShutdownSettle::Notice(notice) => terminated.shutdown_notices.push(notice),
-                        ShutdownSettle::DeliveryInFlight => terminated
-                            .deliveries_in_flight
-                            .push(Arc::clone(exit_notifier)),
-                        ShutdownSettle::Nothing => {}
-                    }
-                }
-                _ => entry.set_termination_cause(cause),
-            }
+            entry.settle_termination(cause, &mut terminated);
             entry.process.terminate();
         }
-        terminated
-            .shutdown_notices
-            .sort_by_key(|notice| notice.process_id);
-        terminated
-    }
-
-    /// Fork: whether an armed exit notification still waits for its live process or is on
-    /// its way into the thread queue.
-    pub(crate) async fn has_pending_exit_notifications(&self) -> bool {
-        self.process_store
-            .lock()
-            .await
-            .processes
-            .values()
-            .any(|entry| {
-                entry
-                    .exit_notifier
-                    .as_ref()
-                    .is_some_and(|notifier| notifier.is_pending())
-            })
-    }
-
-    /// Fork: the terminals whose exit will still be reported, by session ID (R4.5).
-    pub(crate) async fn pending_exit_notifications(&self) -> Vec<PendingTerminal> {
-        let pending: Vec<(Arc<ExitNotifier>, Arc<tokio::sync::Mutex<OutputBuffers>>)> = self
-            .process_store
-            .lock()
-            .await
-            .processes
-            .values()
-            .filter_map(|entry| {
-                let notifier = entry.exit_notifier.as_ref()?;
-                notifier.is_pending().then(|| {
-                    (
-                        Arc::clone(notifier),
-                        Arc::clone(&entry.process.output_handles().output_buffer),
-                    )
-                })
-            })
-            .collect();
-        let mut terminals = Vec::with_capacity(pending.len());
-        for (notifier, output_buffer) in pending {
-            terminals.push(PendingTerminal {
-                process_id: notifier.process_id(),
-                started_at: notifier.started_at(),
-                last_output_at: output_buffer.lock().await.last_output_at,
-            });
-        }
-        terminals.sort_by_key(|terminal| terminal.process_id);
-        terminals
-    }
-
-    /// Fork: free a process whose notification left nothing for `write_stdin` to read
-    /// (R2.12). Only the entry that `exit_notifier` belongs to is removed, and only once its
-    /// process exited and the initial `exec_command` returned.
-    pub(crate) async fn release_after_notification(&self, exit_notifier: &ExitNotifier) {
-        let removed = {
-            let mut store = self.process_store.lock().await;
-            let process_id = exit_notifier.process_id();
-            let releasable = store.processes.get(&process_id).is_some_and(|entry| {
-                entry
-                    .exit_notifier
-                    .as_ref()
-                    .is_some_and(|notifier| std::ptr::eq(notifier.as_ref(), exit_notifier))
-                    && entry.process.has_exited()
-                    && !entry.initial_exec_command_active.load(Ordering::Acquire)
-            });
-            if !releasable {
-                return;
-            }
-            store.remove(process_id)
-        };
-        if let Some(entry) = removed {
-            entry.process.cancellation_token().cancel();
-            unregister_network_approval_for_entry(&entry).await;
-        }
+        terminated.sorted()
     }
 
     pub(crate) async fn resolve_terminal(
@@ -2043,27 +1922,22 @@ impl UnifiedExecProcessManager {
     }
 
     pub(crate) async fn terminate_process(&self, process_id: i32) -> bool {
-        let (process, already_exited, exit_notifier) = {
+        // Fork: the exit notification learns that a client stopped the process (R2.4).
+        let exit_notifier;
+        let (process, already_exited) = {
             let store = self.process_store.lock().await;
             let Some(entry) = store.processes.get(&process_id) else {
                 return false;
             };
-            entry.set_termination_cause(TerminationCause::ClientRequest);
-            (
-                Arc::clone(&entry.process),
-                entry.process.has_exited(),
-                entry.exit_notifier.clone(),
-            )
+            exit_notifier = entry.mark_client_termination();
+            (Arc::clone(&entry.process), entry.process.has_exited())
         };
 
         if already_exited {
             // Stop the output producer even when only its inherited pipes remain open.
             process.terminate();
         } else if process.terminate_confirmed().await.is_err() {
-            // Fork: the process keeps running, so its later exit keeps its real outcome.
-            if let Some(exit_notifier) = exit_notifier {
-                exit_notifier.clear_termination_cause(TerminationCause::ClientRequest);
-            }
+            crate::unified_exec::exit_notification::clear_client_termination(exit_notifier);
             return false;
         }
 

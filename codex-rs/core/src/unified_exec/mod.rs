@@ -48,11 +48,6 @@ use codex_core_plugins::PluginMetricsSidecar;
 
 mod async_watcher;
 mod errors;
-mod exit_notification;
-pub(crate) use exit_notification::ExitNotifier;
-pub(crate) use exit_notification::PendingExitNotification;
-pub(crate) use exit_notification::ShutdownNotice;
-pub(crate) use exit_notification::TerminationCause;
 mod head_tail_buffer;
 mod oneshot;
 mod process;
@@ -70,6 +65,10 @@ pub(crate) use errors::UnifiedExecError;
 pub(crate) use process::UnifiedExecProcess;
 pub(crate) use stdin_approval::TerminalPermissions;
 pub(crate) use stdin_approval::TerminalSandboxSource;
+
+// Fork: exit notifications of background terminals (background-exec-notifications spec).
+mod exit_notification;
+pub(crate) use exit_notification::*;
 
 pub(crate) const MIN_YIELD_TIME_MS: u64 = 250;
 pub(crate) const WINDOWS_INITIAL_EXEC_YIELD_TIME_FLOOR_MS: u64 = 10_000;
@@ -215,37 +214,6 @@ struct ProcessEntry {
     last_used: tokio::time::Instant,
     /// Fork: present when `exec_command` asked for `notify_on_exit`.
     exit_notifier: Option<Arc<ExitNotifier>>,
-}
-
-impl ProcessEntry {
-    /// Fork: tell a pending exit notification that Codex is stopping this process.
-    ///
-    /// A process that already exited on its own keeps its real exit status. A shutdown
-    /// settles notifiers through `ExitNotifier::settle_for_shutdown` instead.
-    fn set_termination_cause(&self, cause: TerminationCause) {
-        if let Some(exit_notifier) = &self.exit_notifier
-            && !self.process.has_exited()
-        {
-            exit_notifier.set_termination_cause(cause);
-        }
-    }
-}
-
-/// Fork: what a shutdown owes the model about armed processes (R2.5).
-#[derive(Debug, Default)]
-pub(crate) struct TerminatedProcesses {
-    /// Armed processes the shutdown stopped before their exit was reported.
-    pub(crate) shutdown_notices: Vec<ShutdownNotice>,
-    /// Notifications on their way into the thread queue when the shutdown began.
-    pub(crate) deliveries_in_flight: Vec<Arc<ExitNotifier>>,
-}
-
-/// Fork: a live terminal whose exit will still be reported (R4.5).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PendingTerminal {
-    pub(crate) process_id: i32,
-    pub(crate) started_at: tokio::time::Instant,
-    pub(crate) last_output_at: Option<tokio::time::Instant>,
 }
 
 type SharedPluginMetricsSidecar = Arc<std::sync::Mutex<Option<PluginMetricsSidecar>>>;
