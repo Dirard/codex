@@ -771,19 +771,12 @@ fn finalize_exec_result(
 ) -> Result<ExecToolCallOutput> {
     match raw_output_result {
         Ok(raw_output) => {
-            let RawExecToolCallOutput {
-                exit_status,
-                stdout,
-                stderr,
-                aggregated_output,
-                timed_out,
-            } = raw_output;
             #[allow(unused_mut)]
-            let mut timed_out = timed_out;
+            let mut timed_out = raw_output.timed_out;
 
             #[cfg(target_family = "unix")]
             {
-                if let Some(signal) = exit_status.signal() {
+                if let Some(signal) = raw_output.exit_status.signal() {
                     if signal == TIMEOUT_CODE {
                         timed_out = true;
                     } else {
@@ -792,14 +785,14 @@ fn finalize_exec_result(
                 }
             }
 
-            let mut exit_code = exit_status.code().unwrap_or(-1);
+            let mut exit_code = raw_output.exit_status.code().unwrap_or(-1);
             if timed_out {
                 exit_code = EXEC_TIMEOUT_EXIT_CODE;
             }
 
-            let stdout = stdout.from_utf8_lossy();
-            let stderr = stderr.from_utf8_lossy();
-            let aggregated_output = aggregated_output.from_utf8_lossy();
+            let stdout = raw_output.stdout.from_utf8_lossy();
+            let stderr = raw_output.stderr.from_utf8_lossy();
+            let aggregated_output = raw_output.aggregated_output.from_utf8_lossy();
             let exec_output = ExecToolCallOutput {
                 exit_code,
                 stdout,
@@ -1088,6 +1081,27 @@ async fn consume_output(
         }
     };
 
+    // We need mutable bindings so we can `abort()` them on timeout.
+    use tokio::task::JoinHandle;
+
+    async fn await_output(
+        handle: &mut JoinHandle<std::io::Result<StreamOutput<Vec<u8>>>>,
+        timeout: Duration,
+        cancellation: &CancellationToken,
+    ) -> std::io::Result<StreamOutput<Vec<u8>>> {
+        match tokio::time::timeout(timeout, &mut *handle).await {
+            Ok(join_res) => match join_res {
+                Ok(io_res) => io_res,
+                Err(join_err) => Err(std::io::Error::other(join_err)),
+            },
+            Err(_elapsed) => {
+                // Fork: stop the reader and keep the output it captured (see `exec_fork.rs`).
+                cancellation.cancel();
+                (&mut *handle).await.map_err(std::io::Error::other)?
+            }
+        }
+    }
+
     let mut stdout_handle = stdout_handle;
     let mut stderr_handle = stderr_handle;
 
@@ -1184,19 +1198,9 @@ async fn consume_output(
     })
 }
 
-async fn await_output(
-    handle: &mut tokio::task::JoinHandle<io::Result<StreamOutput<Vec<u8>>>>,
-    timeout: Duration,
-    cancellation: &CancellationToken,
-) -> io::Result<StreamOutput<Vec<u8>>> {
-    match tokio::time::timeout(timeout, &mut *handle).await {
-        Ok(joined) => joined.map_err(io::Error::other)?,
-        Err(_) => {
-            cancellation.cancel();
-            (&mut *handle).await.map_err(io::Error::other)?
-        }
-    }
-}
+// Fork: an I/O drain timeout keeps the output the readers captured.
+#[path = "exec_fork.rs"]
+mod fork;
 
 async fn read_output<R: AsyncRead + Unpin + Send + 'static>(
     mut reader: R,
@@ -1212,24 +1216,13 @@ async fn read_output<R: AsyncRead + Unpin + Send + 'static>(
     );
     let mut tmp = [0u8; READ_CHUNK_SIZE];
     let mut emitted_deltas: usize = 0;
+
     loop {
-        let n = tokio::select! {
-            _ = cancellation.cancelled() => {
-                return Ok(StreamOutput {
-                    text: buf,
-                    truncated_after_lines: None,
-                });
-            }
-            read = reader.read(&mut tmp) => read?,
-        };
+        let n = fork::read_unless_cancelled(reader.read(&mut tmp), &cancellation).await?;
         if n == 0 {
             break;
         }
-        if let Some(max_bytes) = max_bytes {
-            append_capped(&mut buf, &tmp[..n], max_bytes);
-        } else {
-            buf.extend_from_slice(&tmp[..n]);
-        }
+        let mut cancelled = false;
 
         if let Some(stream) = &stream
             && emitted_deltas < MAX_EXEC_OUTPUT_DELTAS_PER_CALL
@@ -1248,18 +1241,19 @@ async fn read_output<R: AsyncRead + Unpin + Send + 'static>(
                 id: stream.sub_id.clone(),
                 msg,
             };
-            tokio::select! {
-                _ = cancellation.cancelled() => {
-                    return Ok(StreamOutput {
-                        text: buf,
-                        truncated_after_lines: None,
-                    });
-                }
-                _ = stream.tx_event.send(event) => {}
-            }
+            cancelled =
+                !fork::send_unless_cancelled(stream.tx_event.send(event), &cancellation).await;
             emitted_deltas += 1;
         }
 
+        if let Some(max_bytes) = max_bytes {
+            append_capped(&mut buf, &tmp[..n], max_bytes);
+        } else {
+            buf.extend_from_slice(&tmp[..n]);
+        }
+        if cancelled {
+            break;
+        }
         // Continue reading to EOF to avoid back-pressure
     }
 
