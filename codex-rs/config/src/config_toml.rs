@@ -162,54 +162,10 @@ pub struct FeatureToggleToml {
     pub enabled: Option<bool>,
 }
 
-/// Limits applied when formatting tool and command output for model and UI consumption.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct OutputTruncationToml {
-    /// Maximum bytes retained in formatted output.
-    pub max_bytes: Option<usize>,
-    /// Maximum lines retained in formatted output.
-    pub max_lines: Option<usize>,
-    /// Overrides max_lines for MCP tool output and entire emitted Code Mode cells.
-    pub mcp_max_lines: Option<usize>,
-}
-
-/// Approval of a workflow run before it starts.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkflowApprovalToml {
-    /// Ask unless the approval policy is `never`.
-    #[default]
-    Auto,
-    Always,
-    Never,
-}
-
-/// Fork: limits and defaults of background workflow runs (`features.workflows`).
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct WorkflowsToml {
-    /// Non-terminal runs allowed per thread. Default: 3.
-    pub max_active_runs: Option<usize>,
-    /// Agents of one run that work at the same time. Default: min(16, CPUs - 2).
-    pub max_concurrent_agents: Option<usize>,
-    /// Agents one run may start. Default: 1000.
-    pub max_agents_per_run: Option<usize>,
-    /// How long a call waits for agent capacity before resolving to null, in milliseconds.
-    /// Default: 600000.
-    pub capacity_wait_ms: Option<u64>,
-    /// Token budget of a run without `budget_tokens`, as non-cached input plus output.
-    pub default_budget_tokens: Option<u64>,
-    /// Token limit of the result preview in the completion notification. Default: 2000.
-    pub notification_max_tokens: Option<usize>,
-    /// V8 heap limit of a run's script cell, in bytes. Default: 268435456.
-    pub max_heap_bytes: Option<usize>,
-    /// How long `codex exec` waits for active runs before cancelling them, in milliseconds.
-    /// Default: 7200000.
-    pub exec_wait_timeout_ms: Option<u64>,
-    /// Whether the user approves a run before it starts. Default: `auto`.
-    pub require_approval: Option<WorkflowApprovalToml>,
-}
+// Fork: `[output_truncation]` and `[workflows]` tables (docs/fork/02-compaction-context.md,
+// specs/dynamic-workflow-2026-10-25.md).
+mod fork;
+pub use fork::*;
 
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
@@ -393,12 +349,13 @@ pub struct ConfigToml {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
+    // Fork: output truncation and workflow limits.
     /// Limits applied when formatting tool and command output for model and UI consumption.
     pub output_truncation: Option<OutputTruncationToml>,
 
     /// Fork: limits of background workflow runs.
     pub workflows: Option<WorkflowsToml>,
-
+    // Fork end
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).
     pub background_terminal_max_timeout: Option<u64>,
@@ -819,6 +776,7 @@ pub struct GoalsToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AgentsToml {
+    // Fork: `enabled = false` wins over `features.multi_agent_v2` (docs/fork/01-multi-agent-runtime.md).
     /// Whether multi-agent tools are enabled. Defaults to true.
     /// Setting this to false is an absolute runtime gate for all multi-agent tools.
     pub enabled: Option<bool>,
@@ -827,6 +785,7 @@ pub struct AgentsToml {
     #[serde(alias = "max_threads")]
     #[schemars(range(min = 1))]
     pub max_concurrent_threads_per_session: Option<usize>,
+    // Fork: bounded delegation per root input (docs/fork/01-multi-agent-runtime.md).
     /// Maximum cumulative child threads created by one external root user input.
     /// Defaults to 16. Automatic follow-ups share the same budget.
     #[schemars(range(min = 1))]
