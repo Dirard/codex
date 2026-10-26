@@ -1314,3 +1314,129 @@ async fn on_request_approval_asks_before_starting_the_run() -> Result<()> {
     assert!(test.codex.workflow_runs().is_empty());
     Ok(())
 }
+
+const RUNS_MARKER: &str = "<workflow_runs>";
+const COMPACT_PROMPT: &str = "WORKFLOW-TEST-COMPACT-PROMPT";
+
+/// R11.1, R11.2: the world state lists the active run; manual compaction leaves the run
+/// running and the section is rendered again in the next turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn active_runs_survive_compaction_in_world_state() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    responses.parent_runs_workflow(ONE_SLOW_AGENT, Value::Null);
+    responses.rule(
+        "compact",
+        1,
+        Duration::ZERO,
+        |body| is_parent(body) && body.contains(COMPACT_PROMPT),
+        message("resp-compact", "Summary: a workflow run is in progress."),
+    );
+    responses.rule(
+        "after_compact",
+        1,
+        Duration::ZERO,
+        |body| is_parent(body) && body.contains("anything new?"),
+        message("resp-after-compact", "Still running."),
+    );
+    responses.agent_with_delay("TASK-ONE", "late", (0, 0, 0), Duration::from_secs(60));
+    let mut provider =
+        codex_model_provider_info::built_in_model_providers(/*openai_base_url*/ None)["openai"]
+            .clone();
+    provider.name = "OpenAI (test)".into();
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider.supports_websockets = false;
+    let test = build(&server, move |config| {
+        config.model_provider = provider;
+        config.compact_prompt = Some(COMPACT_PROMPT.to_string());
+    })
+    .await?;
+
+    test.submit_turn("run it").await?;
+    let after_tool = &responses.served("parent_after_tool")[0];
+    let run_id = started_run_id(after_tool);
+    assert!(after_tool.contains(RUNS_MARKER), "{after_tool}");
+    assert!(after_tool.contains(&run_id));
+
+    test.codex
+        .submit(codex_protocol::protocol::Op::Compact)
+        .await?;
+    wait_for_turns(&test, 1).await;
+    assert_eq!(responses.served("compact").len(), 1);
+    assert_eq!(test.codex.workflow_runs()[0].status, RunStatus::Running);
+
+    test.submit_turn("anything new?").await?;
+    let after_compact = &responses.served("after_compact")[0];
+    assert!(after_compact.contains(RUNS_MARKER), "{after_compact}");
+    assert!(after_compact.contains(&format!("{run_id} \\\"one\\\": running")));
+    let snapshot = test.codex.cancel_workflow_run(&run_id).await.expect("run");
+    assert_eq!(snapshot.status, RunStatus::Cancelled);
+    Ok(())
+}
+
+/// R10.1, R10.2: agents inherit the parent's approval policy and sandbox; an agent waiting
+/// for an approval shows as `awaiting_approval`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agent_approval_requests_show_in_the_snapshot() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    let script = "export const meta = { name: 'asks', description: 'd' };\nreturn await agent('TASK-ESCALATE');\n";
+    responses.parent_runs_workflow(script, Value::Null);
+    let exec_arguments = json!({
+        "cmd": "touch escalated.txt",
+        "yield_time_ms": 1000,
+        "sandbox_permissions": "require_escalated",
+        "justification": "the test needs an approval",
+    })
+    .to_string();
+    responses.rule(
+        "agent_exec",
+        1,
+        Duration::ZERO,
+        |body| body.contains(AGENT_MARKER) && body.contains("TASK-ESCALATE"),
+        sse(vec![
+            ev_response_created("resp-agent-exec"),
+            ev_function_call("agent-exec", "exec_command", &exec_arguments),
+            completed("resp-agent-exec", 0, 0, 0),
+        ]),
+    );
+    let test = build(&server, |_| {}).await?;
+
+    let (sandbox_policy, permission_profile) =
+        core_test_support::test_codex::turn_permission_fields(
+            codex_protocol::models::PermissionProfile::read_only(),
+            test.config.cwd.as_path(),
+        );
+    test.codex
+        .start_or_steer_turn(user_turn("run it").with_thread_settings(
+            codex_protocol::protocol::ThreadSettingsOverrides {
+                approval_policy: Some(codex_protocol::protocol::AskForApproval::OnRequest),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                ..Default::default()
+            },
+        ))
+        .await?;
+    let deadline = tokio::time::Instant::now() + RUN_TIMEOUT;
+    loop {
+        if let Some(run) = test.codex.workflow_runs().first()
+            && run.agents.awaiting_approval == 1
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no approval wait: {:?}",
+            test.codex.workflow_runs()
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let run_id = test.codex.workflow_runs()[0].run_id.clone();
+    let snapshot = test.codex.cancel_workflow_run(&run_id).await.expect("run");
+    assert_eq!(snapshot.status, RunStatus::Cancelled);
+    assert_eq!(snapshot.agents.awaiting_approval, 0);
+    assert!(!test.config.cwd.as_path().join("escalated.txt").exists());
+    Ok(())
+}
