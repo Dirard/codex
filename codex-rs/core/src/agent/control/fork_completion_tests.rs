@@ -1,8 +1,34 @@
 //! Fork: completion watchers of legacy children (`fork_completion.rs`).
 
 use super::*;
+use futures::future::AbortHandle;
 use pretty_assertions::assert_eq;
 use std::sync::PoisonError;
+
+impl LocalAgentControl {
+    /// Prepares and starts a follow-up watcher, as a wake that keeps its reservation does.
+    pub(super) async fn start_followup_completion_watcher(
+        &self,
+        child_thread_id: ThreadId,
+        session_source: SessionSource,
+        child_reference: String,
+        child_agent_path: Option<AgentPath>,
+        status_updates: StatusSubscription,
+    ) {
+        if let Some(watcher) = self
+            .prepare_followup_completion_watcher(
+                child_thread_id,
+                session_source,
+                child_reference,
+                child_agent_path,
+                status_updates,
+            )
+            .await
+        {
+            watcher.start();
+        }
+    }
+}
 
 /// The task id of the recorded completion watcher of `child_thread_id`.
 fn recorded_watcher(
@@ -114,4 +140,167 @@ async fn replaced_completion_watcher_keeps_the_newer_record() {
     assert!(history_contains_text(history.raw_items(), "second watcher"));
     assert!(!history_contains_text(history.raw_items(), "first watcher"));
     wait_until_no_recorded_watcher(&harness.control, child_thread_id).await;
+}
+
+/// H3: a wake that loses its turn reservation while it prepares the follow-up watcher starts
+/// no watcher. A watcher left behind would report a turn the wake did not start and would
+/// hold up the watcher of the next follow-up.
+#[tokio::test]
+async fn wake_that_loses_its_reservation_starts_no_followup_watcher() {
+    let server = MockServer::start().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("second-response"),
+            responses::ev_assistant_message("second-message", "second completion"),
+            responses::ev_completed("second-response"),
+        ]),
+    )
+    .await;
+    let (home, mut config) = test_config().await;
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    config.model_provider.supports_websockets = false;
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let mut parent_config = harness.config.clone();
+    let _ = parent_config.features.enable(Feature::MultiAgentV2);
+    let parent = harness
+        .manager
+        .start_thread(StartThreadOptions::new(parent_config))
+        .await
+        .expect("parent thread should start");
+    let parent_thread_id = parent.thread_id;
+    let parent_thread = parent.thread;
+    let child_path = AgentPath::root().join("reviewer").expect("child path");
+    let child_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id,
+        depth: 1,
+        agent_path: Some(child_path.clone()),
+        agent_nickname: None,
+        agent_role: Some("reviewer".to_string()),
+    });
+    let mut child_config = harness.config.clone();
+    child_config.agents_enabled = false;
+    let child = harness
+        .manager
+        .start_thread(StartThreadOptions {
+            session_source: Some(child_source),
+            ..StartThreadOptions::new(child_config)
+        })
+        .await
+        .expect("child thread should start");
+    let child_thread_id = child.thread_id;
+    let child_thread = child.thread;
+
+    let first_turn = child_thread.session.new_default_turn().await;
+    child_thread
+        .session
+        .send_event(
+            first_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                root_turn_id: None,
+                turn_id: first_turn.sub_id.clone(),
+                started_at: None,
+                last_agent_message: Some("first completion".to_string()),
+                error: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        )
+        .await;
+    assert_eq!(
+        child_thread.agent_status().await,
+        AgentStatus::Completed(Some("first completion".to_string()))
+    );
+
+    // The watcher of the first turn ends only when the test releases it, so the wake waits
+    // for it after it reserved its turn.
+    let control = child_thread
+        .session
+        .services
+        .local_agent_runtime
+        .control(child_thread.session.session_id());
+    let (release_previous_watcher, previous_watcher_released) = oneshot::channel::<()>();
+    let previous_watcher = tokio::spawn(async move {
+        let _ = previous_watcher_released.await;
+    });
+    control
+        .runtime
+        .completion_watchers
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(
+            child_thread_id,
+            (AbortHandle::new_pair().0, previous_watcher),
+        );
+    child_thread
+        .session
+        .input_queue
+        .enqueue_mailbox_communication(
+            InterAgentCommunication::new(
+                AgentPath::root(),
+                child_path.clone(),
+                Vec::new(),
+                "lost follow up".to_string(),
+                /*trigger_turn*/ true,
+            )
+            .into(),
+            TurnStartOptions::default(),
+            /*turn_spawn_budget*/ None,
+        )
+        .await;
+    let session = Arc::clone(&child_thread.session);
+    let wake = tokio::spawn(async move {
+        session
+            .maybe_start_turn_for_pending_work_with_sub_id("lost-wake".to_string())
+            .await;
+    });
+    wait_until_no_recorded_watcher(&control, child_thread_id).await;
+
+    // An interrupt takes the reservation before the wake starts its turn.
+    child_thread
+        .session
+        .abort_all_tasks(TurnAbortReason::Interrupted)
+        .await;
+    release_previous_watcher
+        .send(())
+        .expect("the previous watcher should wait for its release");
+    timeout(Duration::from_secs(5), wake)
+        .await
+        .expect("the wake should end")
+        .expect("the wake should not panic");
+    assert_eq!(recorded_watcher(&control, child_thread_id), None);
+
+    // The next follow-up starts its turn and reports it.
+    harness
+        .control
+        .send_inter_agent_communication(
+            child_thread_id,
+            InterAgentCommunication::new(
+                AgentPath::root(),
+                child_path,
+                Vec::new(),
+                "follow up".to_string(),
+                /*trigger_turn*/ true,
+            ),
+            AgentCommunicationContext::new(AgentCommunicationKind::Followup, parent_thread_id),
+            TurnStartOptions {
+                parent_turn_id: Some("parent-turn".to_string()),
+                root_turn_id: Some("parent-turn".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("follow-up should be accepted");
+    timeout(Duration::from_secs(10), async {
+        while !history_contains_text(
+            parent_thread.session.clone_history().await.raw_items(),
+            "second completion",
+        ) {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the next follow-up should reach the parent");
+    response_mock.single_request();
 }

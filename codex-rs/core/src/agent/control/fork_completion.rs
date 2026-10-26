@@ -1,8 +1,9 @@
 //! Fork: completion watchers of legacy (non-V2) children.
 //!
 //! A follow-up turn of a finished child gets its own watcher, which replaces the watcher of
-//! the previous turn (`tasks/mod.rs` starts it). A watcher drops its record when it ends
-//! (B9 in `docs/fork/01-multi-agent-runtime.md`). Explorer results are capped like the
+//! the previous turn: `tasks/mod.rs` prepares it before the wake's reservation check and
+//! starts it with the turn (H3 in `docs/fork/01-multi-agent-runtime.md`). A watcher drops its
+//! record when it ends (B9). Explorer results are capped like the
 //! completion mail of V2 children (`specs/explorer-and-questions-2026-10-25.md`).
 
 use super::*;
@@ -126,28 +127,28 @@ impl LocalAgentControl {
         }
     }
 
-    pub(crate) async fn start_followup_completion_watcher(
+    /// Prepares the watcher of a follow-up turn of a finished child. The child's previous
+    /// watcher ends first: it reports the previous turn, or it is aborted after an interrupted
+    /// turn, whose final status the follow-up turn will produce.
+    pub(crate) async fn prepare_followup_completion_watcher(
         &self,
         child_thread_id: ThreadId,
         session_source: SessionSource,
         child_reference: String,
         child_agent_path: Option<AgentPath>,
         mut status_updates: StatusSubscription,
-    ) {
+    ) -> Option<FollowupCompletionWatcher> {
         let Some(Ok(initial_snapshot)) = status_updates.next().await else {
-            return;
+            return None;
         };
-        let Some(initial_status) = initial_snapshot.status() else {
-            return;
-        };
-        let previous_watcher_action = match initial_status {
+        let previous_watcher_action = match initial_snapshot.status()? {
             AgentStatus::Completed(_) | AgentStatus::Errored(_) => PreviousWatcherAction::Wait,
             AgentStatus::Interrupted => PreviousWatcherAction::Abort,
             AgentStatus::PendingInit | AgentStatus::Running => {
                 // The first or still-active turn already owns its completion watcher.
-                return;
+                return None;
             }
-            AgentStatus::Shutdown | AgentStatus::NotFound => return,
+            AgentStatus::Shutdown | AgentStatus::NotFound => return None,
         };
         let previous_watcher = self
             .runtime
@@ -162,12 +163,40 @@ impl LocalAgentControl {
             }
             let _ = completion.await;
         }
-        self.start_completion_watcher(
+        Some(FollowupCompletionWatcher {
+            control: self.clone(),
             child_thread_id,
-            Some(session_source),
+            session_source,
             child_reference,
             child_agent_path,
-            CompletionWatcherStart::AfterCurrentTurn(status_updates),
+            status_updates,
+        })
+    }
+}
+
+/// The watcher of a follow-up turn, prepared before the turn starts (H3 in
+/// `docs/fork/01-multi-agent-runtime.md`). A wake starts it only while it still owns its
+/// turn reservation: a watcher of a wake that lost it would report a later turn the wake did
+/// not start and would hold up the watcher of the next follow-up.
+pub(crate) struct FollowupCompletionWatcher {
+    control: LocalAgentControl,
+    child_thread_id: ThreadId,
+    session_source: SessionSource,
+    child_reference: String,
+    child_agent_path: Option<AgentPath>,
+    status_updates: StatusSubscription,
+}
+
+impl FollowupCompletionWatcher {
+    /// Watches for the final status of the turn that starts next. It does not wait, so the
+    /// caller's reservation check still holds when the turn starts.
+    pub(crate) fn start(self) {
+        self.control.start_completion_watcher(
+            self.child_thread_id,
+            Some(self.session_source),
+            self.child_reference,
+            self.child_agent_path,
+            CompletionWatcherStart::AfterCurrentTurn(self.status_updates),
         );
     }
 }

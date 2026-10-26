@@ -14,12 +14,14 @@ use codex_protocol::turn_input::TurnStartOptions;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 
+use super::TurnInput;
 use super::handlers;
 use super::new_submission_id;
 use super::session::Session;
 use super::turn_context::TurnContext;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
+use crate::agent::control::fork_completion::FollowupCompletionWatcher;
 
 impl Session {
     pub(crate) fn enqueue_inter_agent_communication(
@@ -64,31 +66,45 @@ impl Session {
     }
 
     /// Fork: a V1 child's turn started by mail that asks for a turn reports its completion to
-    /// the parent through the legacy follow-up completion watcher.
-    pub(crate) async fn fork_start_followup_completion_watcher(
+    /// the parent through the legacy follow-up completion watcher. The wake prepares it before
+    /// it checks that its turn reservation still holds (H3).
+    pub(crate) async fn fork_followup_watcher(
         &self,
         turn_context: &TurnContext,
-        has_trigger_turn: bool,
-    ) {
+        input: &[TurnInput],
+    ) -> Option<FollowupCompletionWatcher> {
+        let has_trigger_turn = input.iter().any(
+            |item| matches!(item, TurnInput::InterAgentCommunication(mail) if mail.trigger_turn),
+        );
+        if !has_trigger_turn || turn_context.multi_agent_version == MultiAgentVersion::V2 {
+            return None;
+        }
         let local_agent_control = self.services.local_agent_runtime.control(self.session_id());
-        if has_trigger_turn
-            && turn_context.multi_agent_version != MultiAgentVersion::V2
-            && let Ok(status_rx) = local_agent_control.subscribe_status(self.thread_id).await
-        {
-            let child_agent_path = turn_context.session_source.get_agent_path();
-            let child_reference = child_agent_path
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| self.thread_id.to_string());
-            local_agent_control
-                .start_followup_completion_watcher(
-                    self.thread_id,
-                    turn_context.session_source.clone(),
-                    child_reference,
-                    child_agent_path,
-                    status_rx,
-                )
-                .await;
+        let status_rx = local_agent_control
+            .subscribe_status(self.thread_id)
+            .await
+            .ok()?;
+        let child_agent_path = turn_context.session_source.get_agent_path();
+        let child_reference = child_agent_path
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| self.thread_id.to_string());
+        local_agent_control
+            .prepare_followup_completion_watcher(
+                self.thread_id,
+                turn_context.session_source.clone(),
+                child_reference,
+                child_agent_path,
+                status_rx,
+            )
+            .await
+    }
+
+    /// Fork (H3): only a wake that still owns its turn reservation starts its follow-up
+    /// watcher, right before the turn.
+    pub(crate) fn fork_start_followup_watcher(&self, watcher: Option<FollowupCompletionWatcher>) {
+        if let Some(watcher) = watcher {
+            watcher.start();
         }
     }
 }

@@ -555,8 +555,7 @@ impl Session {
         if let Some(id) = start_options.root_turn_id {
             turn_context.turn_metadata_state.set_root_turn_id(id);
         }
-        self.fork_start_followup_completion_watcher(&turn_context, has_trigger_turn)
-            .await;
+        let followup_watcher = self.fork_followup_watcher(&turn_context, &input).await;
         self.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
             .await;
         // Task completion must still save this mail if pre-turn compaction fails.
@@ -574,6 +573,7 @@ impl Session {
         {
             return;
         }
+        self.fork_start_followup_watcher(followup_watcher);
         self.start_task(turn_context, Vec::new(), RegularTask::new())
             .await;
     }

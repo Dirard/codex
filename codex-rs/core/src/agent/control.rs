@@ -93,7 +93,7 @@ mod user_authorization;
 mod watch;
 
 // Fork: workflow children, worktree isolation, result delivery and legacy follow-up watchers.
-mod fork_completion;
+pub(crate) mod fork_completion;
 mod fork_delivery;
 mod fork_worktree;
 pub(crate) mod workflow_children;
