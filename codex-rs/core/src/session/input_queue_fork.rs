@@ -1,5 +1,5 @@
-//! Fork: the thread queue of background notifications (terminal exits and finished workflow
-//! runs) and the model-step rule of turn input. A child of `input_queue`, so it reaches the
+//! Fork: the thread queue of background notifications (terminal exits, output watch events and
+//! finished workflow runs) and the model-step rule of turn input. A child of `input_queue`, so it reaches the
 //! queue's private fields (specs/background-exec-notifications-2026-10-25.md UC2-UC3,
 //! specs/dynamic-workflow-2026-10-25.md UC7, specs/blocked-batch-turn-input-2026-10-25.md).
 
@@ -49,11 +49,12 @@ impl TurnInput {
     }
 }
 
-/// Fork: queued terminal notifications beyond this count omit their output tail. Workflow
-/// notifications in the same queue do not count (dynamic workflow R7.8).
+/// Fork: queued terminal notifications beyond this count omit their output tail. Workflow and
+/// output watch notifications in the same queue do not count (dynamic workflow R7.8, R6.10).
 pub(crate) const DETAILED_PENDING_BACKGROUND_NOTIFICATIONS: usize = 8;
 /// Fork: queued terminal notifications beyond this count collapse into one summary line.
-/// Workflow notifications in the same queue do not count and are never dropped (R7.8).
+/// Workflow and output watch notifications in the same queue do not count and are never
+/// dropped (R7.8, R6.10).
 pub(crate) const MAX_PENDING_BACKGROUND_NOTIFICATIONS: usize = 32;
 /// Fork: the summary line names at most this many dropped session IDs.
 const MAX_LISTED_DROPPED_SESSIONS: usize = 16;
@@ -100,9 +101,11 @@ pub(super) struct BackgroundNotificationQueue {
 struct BackgroundNotificationEntry {
     item: ResponseItem,
     wakes: bool,
-    /// A workflow run notification rather than a background terminal one.
-    workflow: bool,
-    /// The `ExitNotifier` key, so a poll that shows the exit can withdraw it (R2.10).
+    /// A background terminal exit notification, which the limits of R3.4 count; workflow
+    /// and output watch notifications are not counted (R7.8, R6.10).
+    counted: bool,
+    /// The `ExitNotifier` key, so a poll that shows the exit can withdraw it (R2.10), or the
+    /// `OutputWatch` key, so later events join the queued notification (R6.7).
     key: Option<u64>,
     on_sampled: Option<SampledCallback>,
 }
@@ -114,7 +117,7 @@ impl BackgroundNotificationQueue {
 
     /// Queued background terminal notifications, which the terminal limits count (R7.8).
     fn terminal_count(&self) -> usize {
-        self.items.iter().filter(|entry| !entry.workflow).count()
+        self.items.iter().filter(|entry| entry.counted).count()
     }
 
     fn wakes(&self) -> bool {
@@ -193,7 +196,7 @@ impl InputQueue {
                 queue.items.push_back(BackgroundNotificationEntry {
                     item,
                     wakes,
-                    workflow: false,
+                    counted: true,
                     key,
                     on_sampled,
                 });
@@ -203,6 +206,42 @@ impl InputQueue {
         self.activity_tx
             .send_replace(InputQueueActivity::BackgroundTerminal);
         outcome
+    }
+
+    /// Fork: put the events of an output watch in the queue (R6.7, R6.10). `render` learns
+    /// whether the watch's previous notification still waits there and returns the text to
+    /// put in its place, a new notification, or nothing. Returns whether the queue changed.
+    pub(crate) async fn offer_output_notification(
+        &self,
+        key: u64,
+        render: impl FnOnce(/*queued*/ bool) -> Option<ResponseItem>,
+    ) -> bool {
+        let changed = {
+            let mut queue = self.background_notifications.lock().await;
+            let position = queue.items.iter().position(|entry| entry.key == Some(key));
+            match (render(position.is_some()), position) {
+                (None, _) => false,
+                (Some(item), Some(position)) => {
+                    queue.items[position].item = item;
+                    true
+                }
+                (Some(item), None) => {
+                    queue.items.push_back(BackgroundNotificationEntry {
+                        item,
+                        wakes: true,
+                        counted: false,
+                        key: Some(key),
+                        on_sampled: None,
+                    });
+                    true
+                }
+            }
+        };
+        if changed {
+            self.activity_tx
+                .send_replace(InputQueueActivity::BackgroundTerminal);
+        }
+        changed
     }
 
     /// Fork: remove a queued notification that a tool response made redundant (R2.10).
@@ -237,7 +276,7 @@ impl InputQueue {
                 queue.items.push_front(BackgroundNotificationEntry {
                     item,
                     wakes: workflow,
-                    workflow,
+                    counted: !workflow,
                     key: None,
                     on_sampled: None,
                 });
@@ -315,7 +354,7 @@ impl InputQueue {
             .push_back(BackgroundNotificationEntry {
                 item,
                 wakes: true,
-                workflow: true,
+                counted: false,
                 key: None,
                 on_sampled: None,
             });

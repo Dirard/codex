@@ -15,7 +15,11 @@ pub struct CommandToolOptions {
 /// Fork: `exec_command` parameter description for exit notifications.
 pub(crate) const NOTIFY_ON_EXIT_DESCRIPTION: &str = "When true and the command is still running when this call returns, Codex notifies you once it exits (exit code or failure, duration and the tail of unread output), even after your turn has ended. Use it for builds, tests and other long commands, then continue other work or end your turn instead of polling write_stdin. Combine with a short yield_time_ms to background the command right away. Do not use it for servers or REPLs that are meant to keep running.";
 /// Fork: `write_stdin` description addition when exit notifications are enabled.
-pub(crate) const WRITE_STDIN_EXIT_NOTIFICATION_GUIDANCE: &str = " Sessions started with notify_on_exit report their exit automatically; do not poll them just to wait for completion.";
+pub(crate) const WRITE_STDIN_EXIT_NOTIFICATION_GUIDANCE: &str = " Sessions started with notify_on_exit or notify_on_output report their exit (and matching output) automatically; do not poll them just to wait.";
+/// Fork: `exec_command` parameter description for output watches (UC6).
+pub(crate) const NOTIFY_ON_OUTPUT_DESCRIPTION: &str = "Regular expression (Rust regex syntax, at most 256 bytes). While the command keeps running after this call returns, Codex notifies you of new output lines that match it, even after your turn has ended, and also reports the exit as notify_on_exit does. Matches within 0.5 s arrive together, a new notification follows at most every 5 s, and a watch stops after 10 notifications. Use it for servers, watchers and long jobs, e.g. \"ready|listening|error|FAIL\" (include failure patterns), instead of polling write_stdin, and stop the process once you no longer need it.";
+/// Fork: `write_stdin` parameter description for output watches (UC6).
+pub(crate) const WRITE_STDIN_NOTIFY_ON_OUTPUT_DESCRIPTION: &str = "Regular expression that starts watching this session's new output lines as exec_command notify_on_output does, replacing its previous watch and arming its exit notification. An empty string stops the watch.";
 
 #[cfg(test)]
 pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
@@ -96,6 +100,10 @@ pub(crate) fn create_exec_command_tool_with_environment_id(
             "notify_on_exit".to_string(),
             JsonSchema::boolean(Some(NOTIFY_ON_EXIT_DESCRIPTION.to_string())),
         );
+        properties.insert(
+            "notify_on_output".to_string(),
+            JsonSchema::string(Some(NOTIFY_ON_OUTPUT_DESCRIPTION.to_string())),
+        );
     }
 
     ToolSpec::Function(ResponsesApiTool {
@@ -121,7 +129,7 @@ pub(crate) fn create_exec_command_tool_with_environment_id(
 }
 
 pub fn create_write_stdin_tool(exit_notifications: bool) -> ToolSpec {
-    let properties = BTreeMap::from([
+    let mut properties = BTreeMap::from([
         (
             "session_id".to_string(),
             JsonSchema::number(Some(
@@ -147,6 +155,12 @@ pub fn create_write_stdin_tool(exit_notifications: bool) -> ToolSpec {
             )),
         ),
     ]);
+    if exit_notifications {
+        properties.insert(
+            "notify_on_output".to_string(),
+            JsonSchema::string(Some(WRITE_STDIN_NOTIFY_ON_OUTPUT_DESCRIPTION.to_string())),
+        );
+    }
 
     ToolSpec::Function(ResponsesApiTool {
         name: "write_stdin".to_string(),

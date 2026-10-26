@@ -29,6 +29,9 @@ struct WriteStdinArgs {
     yield_time_ms: u64,
     #[serde(default)]
     max_output_tokens: Option<usize>,
+    /// Fork: start, replace or stop the output watch of the session (UC6).
+    #[serde(default)]
+    notify_on_output: Option<String>,
 }
 
 impl WriteStdinArgs {
@@ -91,6 +94,12 @@ impl WriteStdinHandler {
             ));
         };
         let args = WriteStdinArgs::parse(&payload)?;
+        // Fork: a bad `notify_on_output` is rejected before any input is written (R6.2).
+        let output_watch = crate::unified_exec::OutputWatchChange::for_write_stdin(
+            &session,
+            args.notify_on_output.as_deref(),
+        )
+        .map_err(FunctionCallError::RespondToModel)?;
         let truncation = step_context.output_truncation();
         let context =
             UnifiedExecContext::new(session.clone(), step_context, cancellation_token, call_id);
@@ -109,6 +118,7 @@ impl WriteStdinHandler {
                         session: &session,
                         turn: &turn,
                     }),
+                    output_watch,
                 },
             )
             .await

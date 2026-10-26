@@ -313,7 +313,7 @@ mod rollout_reconstruction_tests;
 
 // Fork: session modules of the fork; the hot files keep thin hooks into them
 // (specs/fork-rebase-sustainability-2026-10-26.md, UC2).
-mod background_terminal;
+pub(crate) mod background_terminal;
 pub(crate) use background_terminal::BACKGROUND_TERMINAL_TURN_TRIGGER;
 mod fork_agent_delivery;
 pub(crate) mod fork_background;

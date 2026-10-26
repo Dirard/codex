@@ -2,7 +2,8 @@
 //!
 //! Realizes UC2 of `specs/background-exec-notifications-2026-10-25.md`: the exit of an
 //! armed process becomes at most one bounded, honest report for the thread, and command
-//! output inside it cannot pass for words of the user or of Codex (R2.8).
+//! output inside it cannot pass for words of the user or of Codex (R2.8). Output watches
+//! (UC6, `notify_on_output`) live in the child module `output_watch`.
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -28,6 +29,16 @@ pub(crate) const NOTIFICATION_TAIL_MAX_LINES: usize = 40;
 const OUTPUT_LABEL: &str = "output";
 
 static NEXT_NOTIFIER_KEY: AtomicU64 = AtomicU64::new(1);
+
+#[path = "output_watch.rs"]
+mod output_watch;
+pub(crate) use output_watch::*;
+
+/// A key for a queued notification (an exit notifier or an output watch); unlike a process
+/// ID it is never reused.
+fn next_notification_key() -> u64 {
+    NEXT_NOTIFIER_KEY.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Why Codex itself stopped a process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,6 +82,8 @@ struct NotifierState {
     delivered: bool,
     report: Option<ExitReport>,
     cause: Option<TerminationCause>,
+    /// The output watch of the process, if one is on (UC6).
+    output_watch: Option<Arc<OutputWatch>>,
 }
 
 /// What a shutdown found for one notifier.
@@ -95,6 +108,8 @@ pub(crate) struct ExitNotifier {
     process_id: i32,
     command: String,
     started_at: Instant,
+    /// The starting call asked for a report; otherwise only a later subscription arms it.
+    requested: bool,
     state: Mutex<NotifierState>,
     delivery_done: Notify,
 }
@@ -109,12 +124,24 @@ impl std::fmt::Debug for ExitNotifier {
 }
 
 impl ExitNotifier {
+    /// A notifier whose starting call asked for the exit report.
+    #[cfg(test)]
     pub(crate) fn new(process_id: i32, command: String, started_at: Instant) -> Arc<Self> {
+        Self::with_request(process_id, command, started_at, /*requested*/ true)
+    }
+
+    fn with_request(
+        process_id: i32,
+        command: String,
+        started_at: Instant,
+        requested: bool,
+    ) -> Arc<Self> {
         Arc::new(Self {
-            key: NEXT_NOTIFIER_KEY.fetch_add(1, Ordering::Relaxed),
+            key: next_notification_key(),
             process_id,
             command,
             started_at,
+            requested,
             state: Mutex::new(NotifierState::default()),
             delivery_done: Notify::new(),
         })
@@ -130,6 +157,44 @@ impl ExitNotifier {
 
     pub(crate) fn started_at(&self) -> Instant {
         self.started_at
+    }
+
+    pub(crate) fn command(&self) -> &str {
+        &self.command
+    }
+
+    pub(crate) fn is_armed(&self) -> bool {
+        self.lock().armed
+    }
+
+    /// Whether the exit watcher must build the exit report: the notification is armed, or
+    /// the starting call asked for it and may arm it once it returns (R6.3).
+    pub(crate) fn wants_report(&self) -> bool {
+        self.requested || self.lock().armed
+    }
+
+    /// The exit report waits for `arm`: the process exited before its `exec_command` call
+    /// returned the session ID.
+    pub(crate) fn awaits_arming(&self) -> bool {
+        let state = self.lock();
+        !state.armed && !state.settled && state.report.is_some()
+    }
+
+    /// The output watch of the process while it is on (UC6).
+    pub(crate) fn output_watch(&self) -> Option<Arc<OutputWatch>> {
+        self.lock()
+            .output_watch
+            .as_ref()
+            .filter(|watch| !watch.is_stopped())
+            .cloned()
+    }
+
+    /// Replace the output watch of the process and stop the previous one.
+    pub(crate) fn set_output_watch(&self, watch: Option<Arc<OutputWatch>>) {
+        let previous = std::mem::replace(&mut self.lock().output_watch, watch);
+        if let Some(previous) = previous {
+            previous.stop();
+        }
     }
 
     /// Arm the notification once `exec_command` has returned a session ID.
@@ -172,6 +237,9 @@ impl ExitNotifier {
     /// Settle the promise because the session shuts down (R2.5).
     pub(crate) fn settle_for_shutdown(&self) -> ShutdownSettle {
         let mut state = self.lock();
+        if let Some(watch) = state.output_watch.take() {
+            watch.stop();
+        }
         if state.cause.is_none() {
             state.cause = Some(TerminationCause::Shutdown);
         }
@@ -488,24 +556,73 @@ impl TerminatedProcesses {
     }
 }
 
-/// A live terminal whose exit will still be reported (R4.5).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A live terminal whose exit will still be reported (R4.5, R7.4).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingTerminal {
     pub(crate) process_id: i32,
+    pub(crate) command: String,
     pub(crate) started_at: tokio::time::Instant,
     pub(crate) last_output_at: Option<tokio::time::Instant>,
+    /// The pattern of the output watch, if one is on.
+    pub(crate) output_watch: Option<String>,
+}
+
+/// What `exec_command` asks of the notifications of its process (R1.2, R6.3).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct NotifyRequest {
+    /// Exit notifications are enabled for this interactive call, so the process gets a
+    /// notifier that `write_stdin` can arm later.
+    pub(crate) enabled: bool,
+    /// `notify_on_exit`.
+    pub(crate) exit: bool,
+    /// `notify_on_output`, validated.
+    pub(crate) output: Option<Arc<OutputPattern>>,
+}
+
+impl NotifyRequest {
+    /// Validates the notification arguments of an `exec_command` call before it runs (R6.2);
+    /// without the feature or for a one-shot call they are ignored (R1.4, R6.1).
+    pub(crate) fn for_exec_command(
+        enabled: bool,
+        notify_on_exit: bool,
+        notify_on_output: Option<&str>,
+    ) -> Result<Self, String> {
+        if !enabled {
+            return Ok(Self::default());
+        }
+        let output = match notify_on_output {
+            None | Some("") => None,
+            Some(source) => Some(OutputPattern::parse(source)?),
+        };
+        Ok(Self {
+            enabled,
+            exit: notify_on_exit,
+            output,
+        })
+    }
+
+    fn requested(&self) -> bool {
+        self.exit || self.output.is_some()
+    }
 }
 
 impl ExitNotifier {
     /// The promise of an `exec_command` call: it exists only while the process is stored,
-    /// and it is armed once the call returns a session ID.
+    /// and it is armed once the call returns a session ID. With the feature enabled every
+    /// stored process gets one, so `write_stdin` can subscribe to it later (R6.3).
     pub(crate) fn for_request(
         process_stored: bool,
         request: &super::ExecCommandRequest,
         started_at: Instant,
     ) -> Option<Arc<Self>> {
-        (process_stored && request.notify_on_exit)
-            .then(|| Self::new(request.process_id, request.hook_command.clone(), started_at))
+        (process_stored && request.notify.enabled).then(|| {
+            Self::with_request(
+                request.process_id,
+                request.hook_command.clone(),
+                started_at,
+                request.notify.requested(),
+            )
+        })
     }
 }
 
@@ -559,11 +676,10 @@ pub(super) fn clear_client_termination(exit_notifier: Option<Arc<ExitNotifier>>)
 }
 
 impl<const MAX_BYTES: usize> super::process::OutputBuffers<MAX_BYTES> {
-    /// Remember when the process last produced output, for `wait_agent` snapshots (R4.5).
+    /// Remember when the process last produced output, for `wait_agent` snapshots (R4.5),
+    /// and match new lines against the output watch (R6.5).
     pub(super) fn note_output(&mut self, chunk: &[u8]) {
-        if !chunk.is_empty() {
-            self.last_output_at = Some(tokio::time::Instant::now());
-        }
+        self.fork.note_output(chunk);
     }
 }
 
@@ -627,17 +743,48 @@ impl ExitWatch {
     /// interaction lock, so a concurrent `write_stdin` either observed this exit already or
     /// runs after the notification is queued and can withdraw it (R2.10). Only the wake runs
     /// as a separate task.
+    ///
+    /// The output watch of the process ends here: its undelivered events go to the thread
+    /// right before the exit notification, or are dropped when no exit notification
+    /// follows (R6.9).
     pub(crate) async fn report(self, process: &super::UnifiedExecProcess, duration: Duration) {
         let Some((exit_notifier, session, output_buffer)) = self.0 else {
             return;
         };
-        let report = exit_report(process, &output_buffer, duration).await;
-        if let Some(pending) = exit_notifier.on_exit(report) {
-            session
-                .deliver_background_terminal_notification(&exit_notifier, pending)
-                .await;
+        if exit_notifier.wants_report() {
+            let report = exit_report(process, &output_buffer, duration).await;
+            if let Some(pending) = exit_notifier.on_exit(report) {
+                let watch = output_buffer.lock().await.fork.watch.take();
+                deliver_exit(&session, &exit_notifier, pending, watch.as_deref()).await;
+                return;
+            }
+            if exit_notifier.awaits_arming() {
+                // `exec_command` arms it right after; that delivers the watch's final batch.
+                return;
+            }
+        }
+        if let Some(watch) = output_buffer.lock().await.fork.watch.take() {
+            watch.stop();
         }
     }
+}
+
+/// The final batch of the output watch, then the exit notification (R6.9).
+async fn deliver_exit(
+    session: &Arc<Session>,
+    exit_notifier: &Arc<ExitNotifier>,
+    pending: PendingExitNotification,
+    watch: Option<&OutputWatch>,
+) {
+    if let Some(watch) = watch {
+        session
+            .deliver_output_watch_notification(watch, /*exited*/ true)
+            .await;
+        watch.stop();
+    }
+    session
+        .deliver_background_terminal_notification(exit_notifier, pending)
+        .await;
 }
 
 /// Describe the stopped process for its exit notification without draining output.
@@ -675,21 +822,136 @@ async fn exit_report(
 }
 
 impl super::UnifiedExecContext {
-    /// `exec_command` returned a session ID, so the exit is reported later. A process that
-    /// already exited is queued before this call returns (R2.1).
+    /// `exec_command` returned a session ID, so the exit is reported later and, with
+    /// `notify_on_output`, the output watch starts now. A process that already exited is
+    /// queued before this call returns (R2.1, R6.3, R6.9).
     pub(crate) async fn arm_exit_notification(
         &self,
         response_process_id: Option<i32>,
         exit_notifier: Option<&Arc<ExitNotifier>>,
-    ) {
-        if response_process_id.is_some()
-            && let Some(exit_notifier) = exit_notifier
-            && let Some(pending) = exit_notifier.arm()
-        {
-            self.session
-                .deliver_background_terminal_notification(exit_notifier, pending)
-                .await;
+        process: &super::UnifiedExecProcess,
+        notify: &NotifyRequest,
+    ) -> ArmedNotifications {
+        let (Some(_), Some(exit_notifier)) = (response_process_id, exit_notifier) else {
+            return ArmedNotifications::default();
+        };
+        let output_watch = match &notify.output {
+            Some(pattern) => {
+                self.start_output_watch(exit_notifier, process, pattern)
+                    .await
+            }
+            None => OutputWatchState::Unchanged,
+        };
+        let watching = matches!(output_watch, OutputWatchState::On(_));
+        if notify.exit || watching {
+            self.arm(exit_notifier, process).await;
         }
+        ArmedNotifications {
+            exit: notify.exit || watching,
+            output_watch,
+        }
+    }
+
+    /// Arm the exit notification. A process that already exited is reported now, after the
+    /// final batch of its output watch.
+    async fn arm(&self, exit_notifier: &Arc<ExitNotifier>, process: &super::UnifiedExecProcess) {
+        if let Some(pending) = exit_notifier.arm() {
+            let watch = process
+                .output_handles()
+                .output_buffer
+                .lock()
+                .await
+                .fork
+                .watch
+                .take();
+            deliver_exit(&self.session, exit_notifier, pending, watch.as_deref()).await;
+        }
+    }
+
+    /// `write_stdin` with `notify_on_output` starts, replaces or stops the output watch of a
+    /// live process; a started watch arms the exit notification (R6.3, R6.4). The caller
+    /// holds the interaction lock, so the exit watcher reports only after this.
+    pub(crate) async fn change_output_watch(
+        &self,
+        response_process_id: Option<i32>,
+        process: &super::UnifiedExecProcess,
+        exit_notifier: Option<&Arc<ExitNotifier>>,
+        change: Option<OutputWatchChange>,
+    ) -> ArmedNotifications {
+        let (Some(_), Some(exit_notifier), Some(change)) =
+            (response_process_id, exit_notifier, change)
+        else {
+            return ArmedNotifications::default();
+        };
+        if process.has_exited() {
+            return ArmedNotifications::default();
+        }
+        let output_watch = match change {
+            OutputWatchChange::Stop => {
+                let watch = process
+                    .output_handles()
+                    .output_buffer
+                    .lock()
+                    .await
+                    .fork
+                    .watch
+                    .take();
+                if let Some(watch) = watch {
+                    watch.stop();
+                }
+                exit_notifier.set_output_watch(/*watch*/ None);
+                OutputWatchState::Off
+            }
+            OutputWatchChange::Watch(pattern) => {
+                let output_watch = self
+                    .start_output_watch(exit_notifier, process, &pattern)
+                    .await;
+                if matches!(output_watch, OutputWatchState::On(_)) {
+                    self.arm(exit_notifier, process).await;
+                }
+                output_watch
+            }
+        };
+        ArmedNotifications {
+            exit: exit_notifier.is_armed(),
+            output_watch,
+        }
+    }
+
+    /// Start a watch unless the thread already runs the most watches (R6.8). Unread output
+    /// that arrived after the call collected its response is matched right away: the
+    /// response already showed everything before it.
+    async fn start_output_watch(
+        &self,
+        exit_notifier: &Arc<ExitNotifier>,
+        process: &super::UnifiedExecProcess,
+        pattern: &Arc<OutputPattern>,
+    ) -> OutputWatchState {
+        let others = self
+            .session
+            .services
+            .unified_exec_manager
+            .active_output_watches(exit_notifier.process_id())
+            .await;
+        if others >= OUTPUT_WATCH_MAX_ACTIVE {
+            return OutputWatchState::NotStarted;
+        }
+        let watch = OutputWatch::new(
+            exit_notifier.process_id(),
+            exit_notifier.command().to_string(),
+            Arc::clone(pattern),
+        );
+        {
+            let mut output = process.output_handles().output_buffer.lock().await;
+            if let Some(previous) = output.fork.watch.replace(Arc::clone(&watch)) {
+                previous.stop();
+            }
+            let unread = output.pending.to_bytes();
+            watch.observe_chunk(&unread);
+        }
+        exit_notifier.set_output_watch(Some(Arc::clone(&watch)));
+        spawn_delivery(watch, &self.session, process.cancellation_token());
+        OutputWatchState::On(pattern.source().to_string())
     }
 
     /// A `write_stdin` response shows the exit or failure of this process, so its exit
@@ -743,12 +1005,33 @@ impl super::UnifiedExecProcessManager {
         for (notifier, output_buffer) in pending {
             terminals.push(PendingTerminal {
                 process_id: notifier.process_id(),
+                command: notifier.command().to_string(),
                 started_at: notifier.started_at(),
-                last_output_at: output_buffer.lock().await.last_output_at,
+                last_output_at: output_buffer.lock().await.fork.last_output_at,
+                output_watch: notifier
+                    .output_watch()
+                    .map(|watch| watch.pattern().to_string()),
             });
         }
         terminals.sort_by_key(|terminal| terminal.process_id);
         terminals
+    }
+
+    /// Output watches that are on, except the one of `process_id` (R6.8).
+    pub(crate) async fn active_output_watches(&self, process_id: i32) -> usize {
+        self.process_store
+            .lock()
+            .await
+            .processes
+            .values()
+            .filter(|entry| {
+                entry.process_id != process_id
+                    && entry
+                        .exit_notifier
+                        .as_ref()
+                        .is_some_and(|notifier| notifier.output_watch().is_some())
+            })
+            .count()
     }
 
     /// Free a process whose notification left nothing for `write_stdin` to read (R2.12).

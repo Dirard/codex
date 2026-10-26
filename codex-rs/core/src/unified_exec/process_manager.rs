@@ -862,8 +862,13 @@ impl UnifiedExecProcessManager {
             (None, exit_code)
         };
         // Fork: the model learns the session ID now, so the exit is reported later.
-        context
-            .arm_exit_notification(response_process_id, exit_notifier.as_ref())
+        let armed_notifications = context
+            .arm_exit_notification(
+                response_process_id,
+                exit_notifier.as_ref(),
+                &process,
+                &request.notify,
+            )
             .await;
 
         let response = ExecCommandToolOutput {
@@ -878,7 +883,7 @@ impl UnifiedExecProcessManager {
             original_token_count: Some(original_token_count),
             output_omitted_bytes,
             hook_command: Some(request.hook_command.clone()),
-            exit_notification_armed: response_process_id.is_some() && exit_notifier.is_some(),
+            armed_notifications,
         };
 
         Ok(response)
@@ -1131,6 +1136,15 @@ impl UnifiedExecProcessManager {
         if process_id.is_none() {
             context.observe_exit(exit_notifier.as_deref()).await;
         }
+        // Fork: `notify_on_output` starts or stops the output watch of a live process (UC6).
+        let armed_notifications = context
+            .change_output_watch(
+                process_id,
+                &process,
+                exit_notifier.as_ref(),
+                request.output_watch,
+            )
+            .await;
         let response = ExecCommandToolOutput {
             event_call_id,
             chunk_id,
@@ -1143,7 +1157,7 @@ impl UnifiedExecProcessManager {
             original_token_count: Some(original_token_count),
             output_omitted_bytes,
             hook_command: Some(hook_command),
-            exit_notification_armed: false,
+            armed_notifications,
         };
 
         let should_emit_interaction = !request.input.is_empty() || response.process_id.is_some();

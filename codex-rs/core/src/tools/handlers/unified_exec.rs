@@ -86,6 +86,9 @@ pub(crate) struct ExecCommandArgs {
     /// Fork: report the exit of a process that outlives this call.
     #[serde(default)]
     notify_on_exit: bool,
+    /// Fork: report new output lines matching this pattern (UC6).
+    #[serde(default)]
+    notify_on_output: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

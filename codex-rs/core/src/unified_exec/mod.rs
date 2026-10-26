@@ -127,8 +127,8 @@ pub(crate) struct ExecCommandRequest {
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
     pub prefix_rule: Option<Vec<String>>,
-    /// Fork: arm an exit notification if the process outlives this call.
-    pub notify_on_exit: bool,
+    /// Fork: exit notification and output watch if the process outlives this call.
+    pub notify: NotifyRequest,
 }
 
 /// The process and environment behind a terminal session ID at the time of lookup.
@@ -148,6 +148,8 @@ pub(crate) struct WriteStdinRequest<'a> {
     pub max_output_tokens: Option<usize>,
     pub truncation: OutputTruncation,
     pub interaction_event: Option<WriteStdinInteractionEvent<'a>>,
+    /// Fork: `notify_on_output` starts, replaces or stops the output watch.
+    pub output_watch: Option<OutputWatchChange>,
 }
 
 pub(crate) struct WriteStdinInteractionEvent<'a> {
@@ -211,7 +213,7 @@ struct ProcessEntry {
     network_approval: Option<DeferredNetworkApproval>,
     session: Weak<Session>,
     last_used: tokio::time::Instant,
-    /// Fork: present when `exec_command` asked for `notify_on_exit`.
+    /// Fork: present while exit notifications are enabled (`notify_on_exit`, UC6).
     exit_notifier: Option<Arc<ExitNotifier>>,
 }
 

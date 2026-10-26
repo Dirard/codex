@@ -19,6 +19,8 @@ use serde_json::Value as JsonValue;
 use super::ExecCommandToolOutput;
 use super::McpToolOutput;
 use super::format_output_omission_marker;
+use crate::unified_exec::OUTPUT_WATCH_MAX_ACTIVE;
+use crate::unified_exec::OutputWatchState;
 
 /// Header line telling the model that the exit will be reported without polling.
 pub(super) const EXIT_NOTIFICATION_ARMED_LINE: &str = "Exit notification: on (Codex will report when this process exits while this Codex session is running; do not poll for completion)";
@@ -69,10 +71,32 @@ fn mcp_text_content_for_line_limit(result: &CallToolResult) -> Option<String> {
 }
 
 impl ExecCommandToolOutput {
-    /// The process outlived this call and will report its exit to the thread.
-    pub(super) fn fork_exit_notification_line(&self) -> Option<String> {
-        self.exit_notification_armed
-            .then(|| EXIT_NOTIFICATION_ARMED_LINE.to_string())
+    /// The process outlived this call and will report its exit (R1.2) and matching output
+    /// (R6.3, R6.4, R6.8) to the thread.
+    pub(super) fn fork_notification_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        if self.armed_notifications.exit {
+            lines.push(EXIT_NOTIFICATION_ARMED_LINE.to_string());
+        }
+        match &self.armed_notifications.output_watch {
+            OutputWatchState::Unchanged => {}
+            OutputWatchState::On(pattern) => lines.push(format!(
+                "Output watch: on for lines matching \"{pattern}\" (Codex reports new matching lines while this Codex session is running; do not poll for them)"
+            )),
+            OutputWatchState::Off => lines.push("Output watch: off".to_string()),
+            OutputWatchState::NotStarted => lines.push(format!(
+                "Output watch: not started (at most {OUTPUT_WATCH_MAX_ACTIVE} terminals can watch their output at a time; stop a watch with write_stdin notify_on_output \"\")"
+            )),
+        }
+        lines
+    }
+
+    /// The pattern of a running session's output watch for the Code Mode result.
+    pub(super) fn fork_code_mode_output_watch(&self) -> Option<String> {
+        match &self.armed_notifications.output_watch {
+            OutputWatchState::On(pattern) if self.process_id.is_some() => Some(pattern.clone()),
+            _ => None,
+        }
     }
 
     /// The hook payload: the history line limits apply before `policy`.

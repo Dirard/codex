@@ -45,8 +45,8 @@ const REMOTE_OUTPUT_DRAIN_GRACE: Duration = Duration::from_secs(5);
 pub(crate) struct OutputBuffers<const MAX_BYTES: usize = UNIFIED_EXEC_OUTPUT_MAX_BYTES> {
     pub(super) pending: HeadTailBuffer<MAX_BYTES>,
     pub(super) transcript: HeadTailBuffer<MAX_BYTES>,
-    /// Fork: when the process last produced output, for `wait_agent` snapshots (R4.5).
-    pub(super) last_output_at: Option<tokio::time::Instant>,
+    /// Fork: when the process last produced output (R4.5) and its output watch (UC6).
+    pub(super) fork: super::OutputBuffersFork,
 }
 
 impl<const MAX_BYTES: usize> OutputBuffers<MAX_BYTES> {

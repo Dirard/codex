@@ -8,13 +8,17 @@ use std::time::Duration;
 use codex_protocol::models::ResponseItem;
 
 use super::session::Session;
+use crate::codex_thread::CodexThread;
 use crate::context::BackgroundTerminalNotification;
 use crate::context::ContextualUserFragment;
 use crate::session::input_queue::QueuedBackgroundNotification;
 use crate::session::input_queue::SampledCallback;
 use crate::unified_exec::ExitNotifier;
+use crate::unified_exec::OutputWatch;
 use crate::unified_exec::PendingExitNotification;
+use crate::unified_exec::PendingTerminal;
 use crate::unified_exec::TerminatedProcesses;
+use codex_utils_string::untrusted::UntrustedBoundary;
 
 /// Turn trigger recorded for a turn started by a background terminal exit.
 pub(crate) const BACKGROUND_TERMINAL_TURN_TRIGGER: &str = "background_terminal";
@@ -58,6 +62,38 @@ impl Session {
             .await;
         exit_notifier.finish_delivery();
         if wakes && !self.state.lock().await.shutting_down {
+            let session = Arc::clone(self);
+            tokio::spawn(async move {
+                session.maybe_start_turn_for_pending_work().await;
+            });
+        }
+    }
+
+    /// Deliver the due events of an output watch (UC6, R6.7, R6.10).
+    ///
+    /// The events join the watch's notification while it still waits in the thread queue;
+    /// otherwise they become a new notification once the interval allows it. Like an exit
+    /// notification, a new one starts a turn for an idle thread; a session that is shutting
+    /// down queues it without a wake, and the shutdown records it (R2.5). `exited` takes the
+    /// final batch of a process that exited (R6.9).
+    pub(crate) async fn deliver_output_watch_notification(
+        self: &Arc<Self>,
+        watch: &OutputWatch,
+        exited: bool,
+    ) {
+        let now = tokio::time::Instant::now();
+        let boundary = UntrustedBoundary::random();
+        let changed = self
+            .input_queue
+            .offer_output_notification(watch.key(), |queued| {
+                watch
+                    .take_for_queue(queued, now, exited, &boundary)
+                    .map(|text| {
+                        ContextualUserFragment::into(BackgroundTerminalNotification::new(text))
+                    })
+            })
+            .await;
+        if changed && !self.state.lock().await.shutting_down {
             let session = Arc::clone(self);
             tokio::spawn(async move {
                 session.maybe_start_turn_for_pending_work().await;
@@ -147,5 +183,72 @@ impl Session {
         let turn_context = self.new_inject_items_context().await;
         self.record_conversation_items(&turn_context, turn_context.model_info(), &items)
             .await;
+    }
+}
+
+/// What a thread still owes the model from background terminals (UC7, R7.4).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PendingBackgroundTerminals {
+    /// Live terminals whose exit Codex will still report, by session ID.
+    pub terminals: Vec<PendingBackgroundTerminal>,
+    /// A queued background notification will start a turn.
+    pub notification_queued: bool,
+    /// The turn running on the thread, if any.
+    pub active_turn_id: Option<String>,
+    /// A turn was reserved for pending work and is about to start.
+    pub turn_starting: bool,
+}
+
+/// A live terminal whose exit Codex will still report.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingBackgroundTerminal {
+    pub process_id: i32,
+    pub command: String,
+    pub running_for: Duration,
+    /// The pattern of its output watch, if one is on.
+    pub output_watch: Option<String>,
+}
+
+impl From<PendingTerminal> for PendingBackgroundTerminal {
+    fn from(terminal: PendingTerminal) -> Self {
+        Self {
+            process_id: terminal.process_id,
+            command: terminal.command,
+            running_for: tokio::time::Instant::now().saturating_duration_since(terminal.started_at),
+            output_watch: terminal.output_watch,
+        }
+    }
+}
+
+impl CodexThread {
+    /// Fork: what the thread still owes the model from background terminals, so that
+    /// `codex exec` can wait for it (UC7, R7.1, R7.4). The process store is read before the
+    /// queue, as for eviction: a notification on its way into the queue still counts as a
+    /// pending terminal. A turn that is only finishing counts as neither running nor
+    /// starting.
+    pub async fn pending_background_terminals(&self) -> PendingBackgroundTerminals {
+        let terminals = self
+            .session
+            .services
+            .unified_exec_manager
+            .pending_exit_notifications()
+            .await
+            .into_iter()
+            .map(PendingBackgroundTerminal::from)
+            .collect();
+        let notification_queued = self.session.should_wake_on_background_notifications().await;
+        let (active_turn_id, turn_starting) = match self.session.active_turn.lock().await.as_ref() {
+            Some(turn) => match &turn.task {
+                Some(task) => (Some(task.turn_context.sub_id.clone()), false),
+                None => (None, turn.finishing.is_none()),
+            },
+            None => (None, false),
+        };
+        PendingBackgroundTerminals {
+            terminals,
+            notification_queued,
+            active_turn_id,
+            turn_starting,
+        }
     }
 }

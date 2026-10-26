@@ -216,7 +216,7 @@ async fn exec_command_with_tty(
         original_token_count: Some(original_token_count),
         output_omitted_bytes,
         hook_command: Some(cmd.to_string()),
-        exit_notification_armed: false,
+        armed_notifications: Default::default(),
     })
 }
 
@@ -335,6 +335,7 @@ async fn write_stdin(
                 max_output_tokens: None,
                 truncation: OutputTruncation::new(TruncationPolicy::Tokens(10_000), None),
                 interaction_event: None,
+                output_watch: None,
             },
         )
         .await
@@ -1038,6 +1039,7 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
                 max_output_tokens: None,
                 truncation: OutputTruncation::new(TruncationPolicy::Tokens(10_000), None),
                 interaction_event: None,
+                output_watch: None,
             },
         )
         .await;
@@ -1091,6 +1093,7 @@ async fn stdin_approval_observes_strict_review_enabled_while_queued() -> anyhow:
             max_output_tokens: None,
             truncation: OutputTruncation::new(TruncationPolicy::Tokens(10_000), None),
             interaction_event: None,
+            output_watch: None,
         },
     ));
     let mut task_context = std::task::Context::from_waker(futures::task::noop_waker_ref());

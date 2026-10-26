@@ -295,12 +295,18 @@ impl ExecCommandHandler {
             justification,
             prefix_rule,
             notify_on_exit,
+            notify_on_output,
             ..
         } = args;
-        // Fork: the handler decides from live session state, not from the advertised schema.
-        let notify_on_exit = notify_on_exit
-            && matches!(self.lifetime, ExecCommandLifetime::Interactive)
-            && session.features().enabled(Feature::ExecExitNotifications);
+        // Fork: the handler decides from live session state, not from the advertised schema;
+        // a bad `notify_on_output` is rejected before anything runs (R6.2).
+        let notify = crate::unified_exec::NotifyRequest::for_exec_command(
+            matches!(self.lifetime, ExecCommandLifetime::Interactive)
+                && session.features().enabled(Feature::ExecExitNotifications),
+            notify_on_exit,
+            notify_on_output.as_deref(),
+        )
+        .map_err(FunctionCallError::RespondToModel)?;
         let completion_timeout = match self.lifetime {
             ExecCommandLifetime::Interactive => None,
             ExecCommandLifetime::OneShot => {
@@ -392,7 +398,7 @@ impl ExecCommandHandler {
                 original_token_count: None,
                 output_omitted_bytes: None,
                 hook_command: None,
-                exit_notification_armed: false,
+                armed_notifications: Default::default(),
             }));
         }
 
@@ -426,7 +432,7 @@ impl ExecCommandHandler {
                 .permissions_preapproved,
             justification,
             prefix_rule,
-            notify_on_exit,
+            notify,
         };
         let result = match completion_timeout {
             Some(timeout) => {
@@ -460,7 +466,7 @@ impl ExecCommandHandler {
                     original_token_count: Some(original_token_count),
                     output_omitted_bytes,
                     hook_command: Some(hook_command),
-                    exit_notification_armed: false,
+                    armed_notifications: Default::default(),
                 }))
             }
             Err(err) => {
@@ -487,6 +493,7 @@ fn one_shot_exec_command_spec(spec: ToolSpec) -> ToolSpec {
     properties.remove("tty");
     properties.remove("yield_time_ms");
     properties.remove("notify_on_exit");
+    properties.remove("notify_on_output");
     properties.insert(
         "timeout_ms".to_string(),
         JsonSchema::number(Some(

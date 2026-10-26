@@ -464,6 +464,85 @@ async fn workflow_notifications_do_not_count_toward_terminal_limits() {
     assert_eq!(items.last(), Some(&background_notification("exited")));
 }
 
+/// Fork (R6.7, R6.10): an output watch keeps one notification in the queue and later events
+/// replace it; it wakes the thread, is never dropped and does not count toward the limits
+/// of exit notifications.
+#[tokio::test]
+async fn output_watch_notifications_replace_their_queued_entry_and_are_not_counted() {
+    let input_queue = InputQueue::new();
+    for index in 0..MAX_PENDING_BACKGROUND_NOTIFICATIONS - 1 {
+        input_queue
+            .enqueue_background_notification(
+                /*key*/ None,
+                Some(1000 + i32::try_from(index).expect("small index")),
+                /*wakes*/ false,
+                |_| background_notification(&format!("exited {index}")),
+            )
+            .await;
+    }
+    let mut seen = Vec::new();
+    let changed = input_queue
+        .offer_output_notification(/*key*/ 7, |queued| {
+            seen.push(queued);
+            Some(background_notification("ready"))
+        })
+        .await;
+    assert!(changed);
+    assert!(input_queue.has_waking_background_notifications().await);
+    let changed = input_queue
+        .offer_output_notification(/*key*/ 7, |queued| {
+            seen.push(queued);
+            Some(background_notification("ready, then ERROR"))
+        })
+        .await;
+    assert!(changed);
+    let unchanged = input_queue
+        .offer_output_notification(/*key*/ 7, |queued| {
+            seen.push(queued);
+            None
+        })
+        .await;
+    assert!(!unchanged);
+    assert_eq!(seen, vec![false, true, true]);
+
+    // Only exit notifications count: the last free place still takes one, the next drops.
+    for (session_id, expected) in [
+        (2000, BackgroundNotificationEnqueue::Queued),
+        (2001, BackgroundNotificationEnqueue::Dropped),
+    ] {
+        let outcome = input_queue
+            .enqueue_background_notification(
+                /*key*/ None,
+                Some(session_id),
+                /*wakes*/ false,
+                |_| background_notification("exited"),
+            )
+            .await;
+        assert_eq!(outcome, expected);
+    }
+
+    let (items, _, _) = input_queue.drain_mailbox_input_items().await;
+    let output_items = items
+        .iter()
+        .filter(|item| {
+            matches!(item, TurnInput::ResponseItem(envelope)
+                if envelope.item == background_notification("ready, then ERROR"))
+        })
+        .count();
+    assert_eq!(output_items, 1);
+    assert_eq!(items.len(), MAX_PENDING_BACKGROUND_NOTIFICATIONS + 2);
+
+    // Once a turn took it, the next events make a new notification.
+    let mut queued_after_drain = None;
+    input_queue
+        .offer_output_notification(/*key*/ 7, |queued| {
+            queued_after_drain = Some(queued);
+            Some(background_notification("ERROR again"))
+        })
+        .await;
+    assert_eq!(queued_after_drain, Some(false));
+}
+
 #[tokio::test]
 async fn turn_local_background_notification_reports_its_activity() {
     let input_queue = InputQueue::new();

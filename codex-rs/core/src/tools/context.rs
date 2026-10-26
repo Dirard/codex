@@ -447,8 +447,8 @@ pub struct ExecCommandToolOutput {
     /// Bytes omitted by the output collection cap before model-facing truncation.
     pub output_omitted_bytes: Option<NonZeroUsize>,
     pub hook_command: Option<String>,
-    /// Fork: the process outlived this call and will report its exit to the thread.
-    pub exit_notification_armed: bool,
+    /// Fork: what the running process will report to the thread (exit, output watch).
+    pub armed_notifications: crate::unified_exec::ArmedNotifications,
 }
 
 impl ToolOutput for ExecCommandToolOutput {
@@ -518,6 +518,9 @@ impl ToolOutput for ExecCommandToolOutput {
             /// Fork: the exit of this running session will be reported to the thread.
             #[serde(skip_serializing_if = "std::ops::Not::not")]
             exit_notification: bool,
+            /// Fork: the pattern of the output watch this call started (UC6).
+            #[serde(skip_serializing_if = "Option::is_none")]
+            output_watch: Option<String>,
             output: String,
         }
 
@@ -527,7 +530,8 @@ impl ToolOutput for ExecCommandToolOutput {
             exit_code: self.exit_code,
             session_id: self.process_id,
             original_token_count: self.original_token_count,
-            exit_notification: self.process_id.is_some() && self.exit_notification_armed,
+            exit_notification: self.process_id.is_some() && self.armed_notifications.exit,
+            output_watch: self.fork_code_mode_output_watch(),
             output: match self.max_output_tokens {
                 Some(max_tokens) => self.truncated_output(max_tokens),
                 None => String::from_utf8_lossy(&self.raw_output).to_string(),
@@ -599,7 +603,7 @@ impl ExecCommandToolOutput {
 
         if let Some(process_id) = &self.process_id {
             sections.push(format!("Process running with session ID {process_id}"));
-            sections.extend(self.fork_exit_notification_line());
+            sections.extend(self.fork_notification_lines());
         }
 
         if let Some(original_token_count) = self.original_token_count {

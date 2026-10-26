@@ -1,6 +1,8 @@
 use super::*;
 use crate::context_manager::ContextManager;
 use crate::tools::registry::AnyToolResult;
+use crate::unified_exec::ArmedNotifications;
+use crate::unified_exec::OutputWatchState;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
@@ -615,7 +617,7 @@ fn exec_command_tool_output_formats_truncated_response() {
         original_token_count: Some(10),
         output_omitted_bytes: None,
         hook_command: None,
-        exit_notification_armed: false,
+        armed_notifications: Default::default(),
     };
     assert_eq!(
         output.log_output(),
@@ -673,7 +675,7 @@ fn exec_command_tool_output_reserves_metadata_budget_and_preserves_policy_units(
             original_token_count: Some(123),
             output_omitted_bytes: None,
             hook_command: None,
-            exit_notification_armed: false,
+            armed_notifications: Default::default(),
         }
         .to_response_item("call-42", &payload);
 
@@ -718,7 +720,7 @@ fn exec_command_tool_output_preserves_omission_metadata_when_truncated() {
         original_token_count: Some(42_000),
         output_omitted_bytes: NonZeroUsize::new(/*n*/ 123_456),
         hook_command: None,
-        exit_notification_armed: false,
+        armed_notifications: Default::default(),
     };
     let expected_header = "Chunk ID: abc123\nWall time: 1.2500 seconds\nProcess exited with code 0\nOriginal token count: 42000\nOutput:\n";
     assert_eq!(
@@ -769,7 +771,7 @@ fn exec_command_tool_output_applies_line_limit_once_when_recorded() {
         original_token_count: None,
         output_omitted_bytes: None,
         hook_command: None,
-        exit_notification_armed: false,
+        armed_notifications: Default::default(),
     }
     .to_response_item("call-42", &payload);
     let item = ResponseItem::from(response);
@@ -813,7 +815,7 @@ fn exec_command_code_mode_result_ignores_model_line_limit() {
         original_token_count: None,
         output_omitted_bytes: None,
         hook_command: None,
-        exit_notification_armed: false,
+        armed_notifications: Default::default(),
     };
 
     let result = output.code_mode_result(&payload);
@@ -827,22 +829,13 @@ fn exec_command_output_reports_armed_exit_notification() {
     let payload = ToolPayload::Function {
         arguments: "{}".to_string(),
     };
-    let output = |exit_notification_armed| ExecCommandToolOutput {
-        event_call_id: "call-43".to_string(),
-        chunk_id: String::new(),
-        wall_time: std::time::Duration::from_millis(250),
-        raw_output: b"started\n".to_vec(),
-        truncation: OutputTruncation::new(TruncationPolicy::Bytes(10_000), /*max_lines*/ None),
-        max_output_tokens: None,
-        process_id: Some(1000),
-        exit_code: None,
-        original_token_count: None,
-        output_omitted_bytes: None,
-        hook_command: None,
-        exit_notification_armed,
-    };
-
-    let armed = output(/*exit_notification_armed*/ true);
+    let armed = armed_output(
+        Some(1000),
+        ArmedNotifications {
+            exit: true,
+            output_watch: OutputWatchState::Unchanged,
+        },
+    );
     assert!(
         armed.response_text().contains(&format!(
             "Process running with session ID 1000\n{EXIT_NOTIFICATION_ARMED_LINE}\n"
@@ -855,7 +848,7 @@ fn exec_command_output_reports_armed_exit_notification() {
         serde_json::json!(true)
     );
 
-    let unarmed = output(/*exit_notification_armed*/ false);
+    let unarmed = armed_output(Some(1000), ArmedNotifications::default());
     assert!(
         !unarmed
             .response_text()
@@ -865,6 +858,98 @@ fn exec_command_output_reports_armed_exit_notification() {
         unarmed
             .code_mode_result(&payload)
             .get("exit_notification")
+            .is_none()
+    );
+}
+
+fn armed_output(
+    process_id: Option<i32>,
+    armed_notifications: ArmedNotifications,
+) -> ExecCommandToolOutput {
+    ExecCommandToolOutput {
+        event_call_id: "call-43".to_string(),
+        chunk_id: String::new(),
+        wall_time: std::time::Duration::from_millis(250),
+        raw_output: b"started\n".to_vec(),
+        truncation: OutputTruncation::new(TruncationPolicy::Bytes(10_000), /*max_lines*/ None),
+        max_output_tokens: None,
+        process_id,
+        exit_code: process_id.is_none().then_some(0),
+        original_token_count: None,
+        output_omitted_bytes: None,
+        hook_command: None,
+        armed_notifications,
+    }
+}
+
+/// Fork (UC6, R6.3, R6.4, R6.8): the header names the output watch a call started,
+/// stopped or could not start, and Code Mode sees the pattern of a running session.
+#[test]
+fn exec_command_output_reports_the_output_watch() {
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+    let watching = armed_output(
+        Some(1000),
+        ArmedNotifications {
+            exit: true,
+            output_watch: OutputWatchState::On("ready|ERROR".to_string()),
+        },
+    );
+    let text = watching.response_text();
+    assert!(
+        text.contains(&format!(
+            "{EXIT_NOTIFICATION_ARMED_LINE}\nOutput watch: on for lines matching \"ready|ERROR\" (Codex reports new matching lines while this Codex session is running; do not poll for them)\n"
+        )),
+        "{text}"
+    );
+    assert_eq!(
+        watching.code_mode_result(&payload)["output_watch"],
+        serde_json::json!("ready|ERROR")
+    );
+
+    let stopped = armed_output(
+        Some(1000),
+        ArmedNotifications {
+            exit: true,
+            output_watch: OutputWatchState::Off,
+        },
+    );
+    assert!(stopped.response_text().contains("Output watch: off\n"));
+    assert!(
+        stopped
+            .code_mode_result(&payload)
+            .get("output_watch")
+            .is_none()
+    );
+
+    let refused = armed_output(
+        Some(1000),
+        ArmedNotifications {
+            exit: false,
+            output_watch: OutputWatchState::NotStarted,
+        },
+    );
+    let text = refused.response_text();
+    assert!(
+        text.contains("Output watch: not started (at most 8 terminals"),
+        "{text}"
+    );
+    assert!(!text.contains(EXIT_NOTIFICATION_ARMED_LINE), "{text}");
+
+    // An exited process has no session, so nothing is promised.
+    let exited = armed_output(
+        None,
+        ArmedNotifications {
+            exit: true,
+            output_watch: OutputWatchState::On("ready".to_string()),
+        },
+    );
+    assert!(!exited.response_text().contains("Output watch"));
+    assert!(
+        exited
+            .code_mode_result(&payload)
+            .get("output_watch")
             .is_none()
     );
 }
