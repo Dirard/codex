@@ -522,6 +522,7 @@ impl Session {
         };
         let (input, mut start_options, turn_spawn_budget) =
             self.input_queue.get_pending_input(&self.active_turn).await;
+        // Fork: a triggered wake keeps the spawn budget of its mail and starts a V1 watcher.
         let has_trigger_turn = input.iter().any(
             |item| matches!(item, TurnInput::InterAgentCommunication(mail) if mail.trigger_turn),
         );
@@ -587,26 +588,8 @@ impl Session {
         if let Some(id) = start_options.root_turn_id {
             turn_context.turn_metadata_state.set_root_turn_id(id);
         }
-        let local_agent_control = self.services.local_agent_runtime.control(self.session_id());
-        if has_trigger_turn
-            && turn_context.multi_agent_version != MultiAgentVersion::V2
-            && let Ok(status_rx) = local_agent_control.subscribe_status(self.thread_id).await
-        {
-            let child_agent_path = turn_context.session_source.get_agent_path();
-            let child_reference = child_agent_path
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| self.thread_id.to_string());
-            local_agent_control
-                .start_followup_completion_watcher(
-                    self.thread_id,
-                    turn_context.session_source.clone(),
-                    child_reference,
-                    child_agent_path,
-                    status_rx,
-                )
-                .await;
-        }
+        self.fork_start_followup_completion_watcher(&turn_context, has_trigger_turn)
+            .await;
         self.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
             .await;
         // Task completion must still save this mail if pre-turn compaction fails.

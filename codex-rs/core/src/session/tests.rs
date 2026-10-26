@@ -12410,7 +12410,7 @@ async fn private_event_delivery_preserves_observer_order_and_host_status(
                 private.deliver_event_raw(event.clone()).await;
             } else {
                 private
-                    .send_event_raw_with_persistence(
+                    .send_event_raw_with_persistence_and_status(
                         event.clone(),
                         /*persist*/ false,
                         supplied_status.clone(),

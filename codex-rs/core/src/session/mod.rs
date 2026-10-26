@@ -315,6 +315,7 @@ mod rollout_reconstruction_tests;
 
 // Fork: session modules of the fork; the hot files keep thin hooks into them
 // (specs/fork-rebase-sustainability-2026-10-26.md, UC2).
+mod fork_agent_delivery;
 mod fork_spawn_budget;
 // Fork end
 
@@ -2535,25 +2536,6 @@ impl Session {
             .await;
     }
 
-    pub(crate) fn enqueue_inter_agent_communication(
-        self: &Arc<Self>,
-        communication: crate::PendingAgentMessage,
-    ) -> BoxFuture<'_, String> {
-        async move {
-            let id = new_submission_id();
-            handlers::inter_agent_communication(
-                self,
-                id.clone(),
-                communication,
-                TurnStartOptions::default(),
-                /*turn_spawn_budget*/ None,
-            )
-            .await;
-            id
-        }
-        .boxed()
-    }
-
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
@@ -2597,10 +2579,11 @@ impl Session {
                 .analytics_events_client
                 .track_guardian_session_event(self.thread_id, &event);
         }
-        let status = self
-            .maybe_notify_parent_of_terminal_turn(turn_context, &legacy_source)
+        // Fork: the child's status is published only after its parent's mail (B4).
+        let mut status = fork_agent_delivery::event_status(turn_context, &legacy_source);
+        self.maybe_notify_parent_of_terminal_turn(turn_context, &legacy_source, &mut status)
             .await;
-        self.send_event_raw_with_persistence(event, /*persist*/ true, status)
+        self.send_event_raw_with_persistence_and_status(event, /*persist*/ true, status)
             .await;
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
             .await;
@@ -2621,15 +2604,20 @@ impl Session {
     }
 
     /// Forwards terminal turn events from spawned MultiAgentV2 children to their direct parent.
-    /// Returns the child's status, which may differ from the parent notification status.
+    /// Fork: a terminal error goes to `published_status`, which the caller publishes after
+    /// the parent's mail (B4).
     async fn maybe_notify_parent_of_terminal_turn(
         &self,
         turn_context: &TurnContext,
         msg: &EventMsg,
-    ) -> Option<AgentStatus> {
-        let event_status = agent_status_from_event(msg);
+        published_status: &mut Option<AgentStatus>,
+    ) {
         if turn_context.multi_agent_version != MultiAgentVersion::V2 {
-            return event_status;
+            return;
+        }
+
+        if !matches!(msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
+            return;
         }
 
         let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -2637,31 +2625,14 @@ impl Session {
             ..
         }) = &turn_context.session_source
         else {
-            return event_status;
+            return;
         };
 
-        if matches!(
-            msg,
-            EventMsg::Error(error)
-                if error
-                    .codex_error_info
-                    .as_ref()
-                    .is_some_and(CodexErrorInfo::affects_turn_status)
-        ) {
-            return None;
-        }
-
-        if !matches!(msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
-            return event_status;
-        }
-
-        let mut child_status = event_status.clone();
         let mut error_info = None;
         let status = match turn_context.terminal_error.lock().await.take() {
             Some(error) => {
-                // The caller publishes `child_status` after the parent mailbox delivery.
                 let status = AgentStatus::Errored(error.message);
-                child_status = Some(status.clone());
+                *published_status = Some(status.clone()); // Fork: published after the mail
                 status
             }
             None => {
@@ -2675,12 +2646,15 @@ impl Session {
                     error_info = error.codex_error_info.clone();
                     AgentStatus::Errored(error.message.clone())
                 } else {
-                    event_status?
+                    let Some(status) = agent_status_from_event(msg) else {
+                        return;
+                    };
+                    status
                 }
             }
         };
         if !is_final(&status) {
-            return Some(status);
+            return;
         }
 
         self.services
@@ -2695,17 +2669,13 @@ impl Session {
                         .turn_metadata_state
                         .initiating_agent_path()
                         .cloned(),
-                    status: status.clone(),
+                    status,
                     error_info,
-                    result_max_tokens: crate::agent::explorer_profile::result_max_tokens(
-                        &turn_context.config,
-                        &turn_context.session_source,
-                    ),
+                    result_max_tokens: fork_agent_delivery::result_max_tokens(turn_context),
                 },
                 &self.services.rollout_thread_trace,
             )
             .await;
-        child_status
     }
 
     async fn maybe_mirror_event_text_to_realtime(&self, msg: &EventMsg) {
@@ -2769,14 +2739,12 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
-        let status = agent_status_from_event(&event.msg);
-        self.send_event_raw_with_persistence(event, /*persist*/ true, status)
+        self.send_event_raw_with_persistence(event, /*persist*/ true)
             .await;
     }
 
     /// Delivers an event without creating a local rollout for a thread that has not materialized.
     pub(crate) async fn send_event_raw_without_materializing_rollout(&self, event: Event) {
-        let status = agent_status_from_event(&event.msg);
         let persist = match self.current_rollout_path().await {
             Ok(Some(path)) => codex_rollout::existing_rollout_path(&path).await.is_some(),
             Ok(None) => true,
@@ -2785,11 +2753,12 @@ impl Session {
                 true
             }
         };
-        self.send_event_raw_with_persistence(event, persist, status)
-            .await;
+        self.send_event_raw_with_persistence(event, persist).await;
     }
 
-    async fn send_event_raw_with_persistence(
+    /// Fork: `send_event_raw_with_persistence` (fork_agent_delivery.rs) publishes the status of
+    /// the event itself; `send_event` passes the one it publishes after the parent's mail (B4).
+    async fn send_event_raw_with_persistence_and_status(
         &self,
         event: Event,
         persist: bool,
@@ -2842,10 +2811,11 @@ impl Session {
         if flush_guardian_completion && let Err(err) = self.flush_rollout().await {
             warn!("failed to flush completed Guardian review: {err}");
         }
-        self.send_event_raw_with_status(event, status).await;
+        self.deliver_event_raw_with_status(event, status).await;
     }
 
-    async fn send_event_raw_with_status(&self, event: Event, status: Option<AgentStatus>) {
+    /// Fork: `deliver_event_raw` (fork_agent_delivery.rs) publishes the status of the event.
+    async fn deliver_event_raw_with_status(&self, event: Event, status: Option<AgentStatus>) {
         if let Some(parent_tx) = self.parent_observer_event_tx.get() {
             let forwarded = match &event.msg {
                 EventMsg::RawResponseItem(item) => {
@@ -2870,17 +2840,13 @@ impl Session {
                     .await;
             }
         }
+        // Record the last known agent status.
         if let Some(status) = status {
             self.agent_status.send_replace(status);
         }
-        if let Err(error) = self.tx_event.send(event).await {
-            debug!("dropping event because channel is closed: {error}");
+        if let Err(e) = self.tx_event.send(event).await {
+            debug!("dropping event because channel is closed: {e}");
         }
-    }
-
-    async fn deliver_event_raw(&self, event: Event) {
-        let status = agent_status_from_event(&event.msg);
-        self.send_event_raw_with_status(event, status).await;
     }
 
     pub(crate) async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
