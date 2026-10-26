@@ -63,15 +63,22 @@ case "$1" in
         tool_config="${args[i + 1]#*:}"
       fi
     done
+    # Like nextest: the store is <workspace>/target/nextest unless a config
+    # sets [store] dir; CARGO_TARGET_DIR does not move it.
+    store="${PWD}/target/nextest"
+    if [[ -n "${tool_config}" ]] && grep -q "^dir = '" "${tool_config}"; then
+      store="$(sed -n "s/^dir = '\(.*\)'$/\1/p" "${tool_config}")"
+    fi
+    printf 'nextest-store %s\n' "${store}" >>"${state}/calls"
     if [[ ! -f "${state}/no-junit" ]]; then
-      mkdir -p "${target}/nextest/${profile}"
+      mkdir -p "${store}/${profile}"
       if [[ -n "${tool_config}" ]] &&
         grep -qx "\[profile\.${profile}\.junit\]" "${tool_config}" &&
         grep -qx 'store-success-output = true' "${tool_config}"; then
-        cp "${state}/junit.xml" "${target}/nextest/${profile}/junit.xml"
+        cp "${state}/junit.xml" "${store}/${profile}/junit.xml"
       elif [[ "${profile}" == default ]]; then
         grep -E '<testsuites|<testsuite |<testcase|</testcase>|</testsuite>|</testsuites>' \
-          "${state}/junit.xml" >"${target}/nextest/${profile}/junit.xml"
+          "${state}/junit.xml" >"${store}/${profile}/junit.xml"
       fi
     fi
     exit "$(cat "${state}/nextest-status")"
@@ -233,6 +240,10 @@ export STUB_STATE
 check rust-test-clean ok 'nextest run' "${ci_local}" rust-test -p codex-core
 expect helpers-include-streamable-http calls_contain '^cargo build .*-p codex-rmcp-client --bin test_stdio_server --bin test_streamable_http_server'
 expect nextest-gets-tool-config calls_contain '^cargo nextest run .*--tool-config-file fork-ci:'
+# CARGO_TARGET_DIR is outside the workspace here; without the pinned store
+# nextest would write the report under <workspace>/target and the guard would
+# not find it.
+expect nextest-store-follows-target-dir calls_contain "^nextest-store ${STUB_STATE}/target/nextest\$"
 
 STUB_STATE="$(new_state)"
 junit "${STUB_STATE}" suite::rmcp_client::streamable_http_with_oauth_round_trip \

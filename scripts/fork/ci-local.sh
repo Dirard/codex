@@ -377,13 +377,18 @@ cmd_rust_test() {
   # Keep the output of passed tests in the JUnit report, so skip messages are
   # visible. A tool config sits below .config/nextest.toml, which stays as
   # upstream has it, and also gives a JUnit report to profiles without one.
-  local tool_dir junit
+  # nextest keeps its store under <workspace>/target/nextest even when
+  # CARGO_TARGET_DIR points elsewhere, so the store is pinned next to the
+  # target directory the guard reads.
+  local tool_dir junit store
   tool_dir="$(mktemp -d "${TMPDIR:-/tmp}/fork-ci-nextest.XXXXXX")"
   cleanup_paths+=("${tool_dir}")
   tool_dir="$(cd -- "${tool_dir}" && pwd)"
-  printf '[profile.%s.junit]\npath = "junit.xml"\nstore-success-output = true\n' "${profile}" \
-    >"${tool_dir}/fork-ci.toml"
-  junit="$(target_dir)/nextest/${profile}/junit.xml"
+  store="$(target_dir)/nextest"
+  [[ "${store}" != *"'"* ]] || die "target directory must not contain a single quote: ${store}"
+  printf "[store]\ndir = '%s'\n\n[profile.%s.junit]\npath = \"junit.xml\"\nstore-success-output = true\n" \
+    "${store}" "${profile}" >"${tool_dir}/fork-ci.toml"
+  junit="${store}/${profile}/junit.xml"
   rm -f -- "${junit}"
 
   local nextest_args=(nextest run --locked --no-fail-fast "${package_args[@]}"
