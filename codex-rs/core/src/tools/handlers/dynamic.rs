@@ -143,6 +143,15 @@ impl DynamicToolHandler {
         };
 
         let args: Value = parse_arguments(&arguments)?;
+        // Fork: client tools run without the Codex sandbox and carry no read-only annotation,
+        // so a read-only explorer does not call them (explorer-and-questions spec, R2.8).
+        if let Some(denial) = crate::agent::explorer_profile::dynamic_tool_denial(
+            &turn.config,
+            &turn.session_source,
+            &crate::tools::flat_tool_name(&self.tool_name),
+        ) {
+            return Err(FunctionCallError::RespondToModel(denial));
+        }
         let response = request_dynamic_tool(
             &session,
             turn.as_ref(),

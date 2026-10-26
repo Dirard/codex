@@ -44,12 +44,6 @@ pub(crate) fn applies_to_source(config: &Config, source: &SessionSource) -> bool
     enabled(config) && source.get_agent_role().as_deref() == Some(EXPLORER_ROLE_NAME)
 }
 
-/// Explorer sessions keep their sandbox for every command: an exec-policy `allow` rule
-/// skips approval but neither bypasses nor widens the read-only sandbox (review P1).
-pub(crate) fn forbids_sandbox_bypass(config: &Config, source: &SessionSource) -> bool {
-    applies_to_source(config, source)
-}
-
 /// Narrows a permission profile to read-only access, keeping its denied reads.
 /// Externally sandboxed profiles become Codex's managed read-only profile.
 pub(crate) fn read_only_ceiling(profile: &PermissionProfile) -> PermissionProfile {
@@ -109,6 +103,15 @@ pub(crate) fn enforce_read_only_session_config(config: &mut Config) -> CodexResu
     .map_err(|err| CodexErr::InvalidRequest(format!("explorer_profile: {err}")))?;
     // Requirements may pin the tool on; approval `never` still denies its requests.
     let _ = config.features.disable(Feature::RequestPermissionsTool);
+    append_developer_instructions(config);
+    Ok(())
+}
+
+/// Appends the explorer instructions to `config.developer_instructions` once.
+///
+/// Spawn calls this before a full-history fork captures the child's developer instructions
+/// (review P2); session start calls it again for reload and resume, which keeps one copy.
+pub(crate) fn append_developer_instructions(config: &mut Config) {
     let instructions = developer_instructions(&config.explorer_profile);
     config.developer_instructions = match config.developer_instructions.take() {
         Some(existing) if existing.contains(INSTRUCTIONS_HEADING) => Some(existing),
@@ -117,7 +120,158 @@ pub(crate) fn enforce_read_only_session_config(config: &mut Config) -> CodexResu
         }
         _ => Some(instructions),
     };
+}
+
+/// Removes the explorer instructions that [`append_developer_instructions`] added.
+fn strip_developer_instructions(config: &mut Config) {
+    let Some(existing) = config.developer_instructions.take() else {
+        return;
+    };
+    let instructions = developer_instructions(&config.explorer_profile);
+    let stripped = existing
+        .replace(&format!("\n\n{instructions}"), "")
+        .replace(&instructions, "");
+    config.developer_instructions = (!stripped.trim().is_empty()).then_some(stripped);
+}
+
+/// Explorer sessions keep their sandbox for every command: an exec-policy `allow` rule
+/// skips approval but neither bypasses nor widens the read-only sandbox (review P1).
+pub(crate) fn forbids_sandbox_bypass(config: &Config, source: &SessionSource) -> bool {
+    applies_to_source(config, source)
+}
+
+/// Config for reloading another agent from an explorer's message (review P9).
+///
+/// The reload keeps the explorer's runtime authority (read-only, approval `never`), as the
+/// upstream rule "reload with the sender's permissions" requires, but not the explorer's
+/// locks or instructions: those belong to the explorer, not to the agent it wakes up. The
+/// configuration requirements bound later changes again, as they do for any agent.
+pub(crate) fn release_session_locks_for_message_resume(config: &mut Config) -> Result<(), String> {
+    let requirements = config.config_layer_stack.requirements();
+    let mut approval_policy = requirements.approval_policy.value.clone();
+    let permission_profile_requirement = requirements.permission_profile.value.clone();
+    approval_policy
+        .set(config.permissions.approval_policy.value())
+        .map_err(|err| format!("approval_policy is invalid: {err}"))?;
+    let permission_profile_state =
+        crate::config::PermissionProfileState::from_constrained_snapshot(
+            permission_profile_requirement,
+            config.permissions.permission_profile_state().snapshot(),
+        )
+        .map_err(|err| format!("permission_profile is invalid: {err}"))?;
+    config.permissions.approval_policy = approval_policy;
+    config
+        .permissions
+        .set_permission_profile_state(permission_profile_state);
+    strip_developer_instructions(config);
     Ok(())
+}
+
+/// Per-turn budget shared by an explorer's messages to other agents (review P3).
+#[derive(Debug)]
+pub(crate) struct ExplorerMessageBudget {
+    remaining_tokens: std::sync::Mutex<usize>,
+}
+
+impl ExplorerMessageBudget {
+    pub(crate) fn new(max_tokens: usize) -> Self {
+        Self {
+            remaining_tokens: std::sync::Mutex::new(max_tokens),
+        }
+    }
+
+    /// Caps `message` to the budget left in this turn and charges it.
+    ///
+    /// Returns the delivered text, truncated with a note when it exceeds the remaining
+    /// budget, or an error for the model once the budget is spent.
+    pub(crate) fn take(&self, message: String, max_tokens: usize) -> Result<String, String> {
+        let mut remaining = self
+            .remaining_tokens
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *remaining == 0 {
+            return Err(format!(
+                "explorer_profile: your messages to other agents already used this turn's budget of about {max_tokens} tokens, so this message was not sent. Put the rest of your conclusions in your final answer."
+            ));
+        }
+        let tokens = approx_token_count(&message);
+        if tokens <= *remaining {
+            *remaining -= tokens;
+            return Ok(message);
+        }
+        let limit = *remaining;
+        *remaining = 0;
+        let truncated = truncate_text(&message, TruncationPolicy::Tokens(limit));
+        Ok(format!(
+            "{truncated}\n\n[explorer_profile: this message was truncated to about {limit} tokens. The explorer's messages share a budget of about {max_tokens} tokens per turn; ask it a narrower follow-up question for the omitted part.]"
+        ))
+    }
+}
+
+/// Limits an explorer's message to another agent; other senders pass through unchanged.
+pub(crate) fn cap_outgoing_message(
+    config: &Config,
+    source: &SessionSource,
+    turn_data: &codex_extension_api::ExtensionData,
+    message: String,
+) -> Result<String, String> {
+    if !applies_to_source(config, source) {
+        return Ok(message);
+    }
+    let max_tokens = config.explorer_profile.max_result_tokens;
+    turn_data
+        .get_or_init(|| ExplorerMessageBudget::new(max_tokens))
+        .take(message, max_tokens)
+}
+
+/// Explorer sessions call only MCP tools annotated `readOnlyHint: true` (review P4).
+///
+/// MCP servers run outside the Codex sandbox, and a tool that needs no approval (an
+/// auto-approved server, a non-destructive hint, a remembered approval) would otherwise run
+/// with the server's own access. A tool without the annotation counts as writing.
+pub(crate) fn mcp_tool_denial(
+    config: &Config,
+    source: &SessionSource,
+    server: &str,
+    tool: &str,
+    annotations: Option<&rmcp::model::ToolAnnotations>,
+) -> Option<String> {
+    let read_only = annotations.and_then(|annotations| annotations.read_only_hint) == Some(true);
+    (applies_to_source(config, source) && !read_only).then(|| {
+        format!(
+            "explorer_profile: MCP tool `{server}/{tool}` is not annotated read-only (readOnlyHint), so a read-only explorer cannot call it. Report what you need to your parent instead."
+        )
+    })
+}
+
+/// Explorer sessions do not call client-defined dynamic tools, which run in the client
+/// without the Codex sandbox and carry no read-only annotation (review P4).
+pub(crate) fn dynamic_tool_denial(
+    config: &Config,
+    source: &SessionSource,
+    tool: &str,
+) -> Option<String> {
+    applies_to_source(config, source).then(|| {
+        format!(
+            "explorer_profile: client tool `{tool}` is not available to a read-only explorer. Report what you need to your parent instead."
+        )
+    })
+}
+
+/// Default worktree isolation does not apply to explorers: they never write, so a worktree
+/// would only cost a checkout (review P7). An explicit request still isolates them.
+pub(crate) fn skips_default_isolation(config: &Config, role_name: Option<&str>) -> bool {
+    applies_to_role(config, role_name)
+}
+
+/// Narrows every ready environment of a snapshot to read-only access for an explorer, so the
+/// worktree note judges the parent checkout by the access the explorer actually gets.
+pub(crate) fn clamp_environment_snapshot(
+    environments: &crate::environment_selection::TurnEnvironmentSnapshot,
+) -> crate::environment_selection::TurnEnvironmentSnapshot {
+    environments.with_environment_configs(|config| {
+        clamp_environment_permission_profile(&mut config.permission_profile);
+    })
 }
 
 /// Explorer sessions: narrow an owner-provided environment configuration to read-only access.
@@ -189,26 +343,33 @@ pub(crate) fn cap_result(message: &str, max_tokens: usize) -> String {
 pub(crate) fn developer_instructions(profile: &ExplorerProfileConfig) -> String {
     let max_result_tokens = profile.max_result_tokens;
     format!(
-        "{INSTRUCTIONS_HEADING}\nYou are a read-only explorer working for a parent agent. Your sandbox cannot write files and you cannot request escalated or additional permissions, so do not try to create, edit, move or delete files.\nAnswer the parent's question with conclusions, not raw material:\n- Lead with the direct answer, then the evidence that supports it.\n- Cite evidence as `path:line` or `path:start-end` references instead of pasting file contents; quote at most a few lines when a quote is essential.\n- Do not dump whole files, long command output, search results or directory listings.\n- Read excerpts (search, then targeted line ranges) instead of whole files.\n- Keep your final answer under about {max_result_tokens} tokens. The parent receives at most that much; a longer answer is truncated.\n- If the codebase cannot answer the question, say what is missing instead of guessing."
+        "{INSTRUCTIONS_HEADING}\nYou are a read-only explorer working for a parent agent. Your sandbox cannot write files anywhere, including any worktree you run in, and you cannot request escalated or additional permissions, so do not try to create, edit, move or delete files. Only MCP tools annotated read-only are available to you; client-defined tools are not.\nAnswer the parent's question with conclusions, not raw material:\n- Lead with the direct answer, then the evidence that supports it.\n- Cite evidence as `path:line` or `path:start-end` references instead of pasting file contents; quote at most a few lines when a quote is essential.\n- Do not dump whole files, long command output, search results or directory listings.\n- Read excerpts (search, then targeted line ranges) instead of whole files.\n- Keep your final answer under about {max_result_tokens} tokens. The parent receives at most that much; a longer answer is truncated.\n- Messages you send to other agents share one budget of about {max_result_tokens} tokens per turn and are truncated past it; put your conclusions in your final answer.\n- If the codebase cannot answer the question, say what is missing instead of guessing."
     )
 }
 
 /// Spawn-tool role entry for the built-in explorer while the profile is enabled.
-pub(crate) fn role_description(profile: &ExplorerProfileConfig) -> String {
+///
+/// `default_subagent_model` is `[agents] default_subagent_model`, which an explorer uses
+/// when the profile names no model.
+pub(crate) fn role_description(
+    profile: &ExplorerProfileConfig,
+    default_subagent_model: Option<&str>,
+) -> String {
     let model = profile
         .model
         .as_deref()
+        .or(default_subagent_model)
         .map(|model| format!("model `{model}`"))
         .unwrap_or_else(|| "your model".to_string());
     let effort = profile
         .reasoning_effort
         .as_ref()
         .map(|effort| format!("`{effort}` reasoning effort"))
-        .unwrap_or_else(|| "its cheapest reasoning effort".to_string());
+        .unwrap_or_else(|| "the model's cheapest reasoning effort (not below `low`)".to_string());
     let max_result_tokens = profile.max_result_tokens;
     format!(
         r#"Use `explorer` for specific, well-scoped questions about the codebase when you need the conclusion, not the file contents.
-Explorers are read-only: they cannot edit files or request escalated permissions. They run on {model} at {effort}, start without your conversation history unless you pass `fork_turns="all"` (put every needed detail in the message), and return a conclusion with `path:line` references capped at about {max_result_tokens} tokens.
+Explorers are read-only: they cannot edit workspace files, run commands outside their read-only sandbox (command allow rules do not lift it), request escalated permissions, or call MCP tools that are not annotated read-only. Unless you pass `model` or `reasoning_effort`, they run on {model} at {effort}. They start without your conversation history unless you pass `fork_turns="all"` (put every needed detail in the message), and return a conclusion with `path:line` references capped at about {max_result_tokens} tokens; their messages to other agents share the same cap per turn.
 Rules:
 - Ask one specific question per explorer. Spawn several explorers in parallel for independent questions and keep working on other things while they run.
 - Trust explorer results; read the cited lines yourself only for details the answer does not cover.
@@ -220,7 +381,7 @@ Rules:
 /// Summary appended to a user-defined `explorer` role while the profile is enabled.
 pub(crate) fn role_profile_summary(profile: &ExplorerProfileConfig) -> String {
     format!(
-        "Explorer profile: read-only without escalation, cheaper model or reasoning effort, starts without your history unless `fork_turns=\"all\"`, result capped at about {} tokens.",
+        "Explorer profile: read-only without escalation (command allow rules keep the sandbox; only MCP tools annotated read-only), a cheaper reasoning effort by default, starts without your history unless `fork_turns=\"all\"`, result and messages to other agents capped at about {} tokens.",
         profile.max_result_tokens
     )
 }

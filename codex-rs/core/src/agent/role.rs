@@ -328,11 +328,15 @@ pub(crate) mod spawn_tool_spec {
     pub(crate) fn build_with_explorer_profile(
         user_defined_agent_roles: &BTreeMap<String, AgentRoleConfig>,
         profile: &crate::config::ExplorerProfileConfig,
+        default_subagent_model: Option<&str>,
     ) -> String {
         let explorer = crate::agent::explorer_profile::EXPLORER_ROLE_NAME;
         let mut built_in_roles = built_in::configs().clone();
         if let Some(role) = built_in_roles.get_mut(explorer) {
-            role.description = Some(crate::agent::explorer_profile::role_description(profile));
+            role.description = Some(crate::agent::explorer_profile::role_description(
+                profile,
+                default_subagent_model,
+            ));
         }
         let mut user_defined_roles = user_defined_agent_roles.clone();
         if let Some(role) = user_defined_roles.get_mut(explorer) {

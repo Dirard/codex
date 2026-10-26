@@ -443,6 +443,17 @@ impl SessionConfiguration {
         if let Some(environments) = &updates.environments {
             next_configuration.legacy_fallback_cwd = environments.legacy_fallback_cwd.clone();
             next_configuration.environments = environments.environments.clone();
+            // Fork: an owner's ready environment config cannot widen an explorer
+            // (explorer-and-questions spec, R2.5).
+            if crate::agent::explorer_profile::applies_to_source(
+                &self.original_config_do_not_use,
+                &self.session_source,
+            ) {
+                next_configuration
+                    .environments
+                    .iter_mut()
+                    .for_each(crate::agent::explorer_profile::clamp_environment_selection);
+            }
         }
         let cwd_changed = next_configuration.legacy_fallback_cwd != current_cwd;
         if let Some(runtime_workspace_roots) = &updates.runtime_workspace_roots {

@@ -866,6 +866,7 @@ fn agent_type_description(
         crate::agent::role::spawn_tool_spec::build_with_explorer_profile(
             &turn_context.config.agent_roles,
             &turn_context.config.explorer_profile,
+            turn_context.config.agent_default_subagent_model.as_deref(),
         )
     } else {
         crate::agent::role::spawn_tool_spec::build(&turn_context.config.agent_roles)

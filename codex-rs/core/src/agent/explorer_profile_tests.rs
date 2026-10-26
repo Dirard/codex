@@ -305,16 +305,246 @@ fn cap_result_keeps_short_answers_and_marks_truncation() {
 
 #[test]
 fn role_description_names_profile_settings() {
-    let description = role_description(&ExplorerProfileConfig {
-        model: Some("cheap-model".to_string()),
-        reasoning_effort: Some(ReasoningEffort::Low),
-        max_result_tokens: 1_500,
-    });
+    let description = role_description(
+        &ExplorerProfileConfig {
+            model: Some("cheap-model".to_string()),
+            reasoning_effort: Some(ReasoningEffort::Low),
+            max_result_tokens: 1_500,
+        },
+        Some("subagent-model"),
+    );
     assert!(description.contains("read-only"));
     assert!(description.contains("model `cheap-model` at `low` reasoning effort"));
+    assert!(description.contains("Unless you pass `model` or `reasoning_effort`"));
     assert!(description.contains("fork_turns=\"all\""));
     assert!(description.contains("about 1500 tokens"));
 
-    let description = role_description(&ExplorerProfileConfig::default());
-    assert!(description.contains("your model at its cheapest reasoning effort"));
+    // Review P10: without a profile model the explorer runs on `default_subagent_model`.
+    let description = role_description(&ExplorerProfileConfig::default(), Some("subagent-model"));
+    assert!(
+        description.contains("model `subagent-model` at the model's cheapest reasoning effort"),
+        "{description}"
+    );
+    let description = role_description(&ExplorerProfileConfig::default(), None);
+    assert!(
+        description
+            .contains("your model at the model's cheapest reasoning effort (not below `low`)"),
+        "{description}"
+    );
+}
+
+// Review P4: the role must not promise more than the profile enforces.
+#[test]
+fn role_texts_describe_the_enforced_limits() {
+    let profile = ExplorerProfileConfig::default();
+    let description = role_description(&profile, /*default_subagent_model*/ None);
+    for promised in [
+        "cannot edit workspace files",
+        "command allow rules do not lift it",
+        "MCP tools that are not annotated read-only",
+        "their messages to other agents share the same cap",
+    ] {
+        assert!(description.contains(promised), "{promised}: {description}");
+    }
+    let summary = role_profile_summary(&profile);
+    assert!(
+        summary.contains("only MCP tools annotated read-only"),
+        "{summary}"
+    );
+    assert!(
+        summary.contains("messages to other agents capped"),
+        "{summary}"
+    );
+    let instructions = developer_instructions(&profile);
+    assert!(instructions.contains("Only MCP tools annotated read-only are available to you"));
+    assert!(instructions.contains("including any worktree you run in"));
+    assert!(instructions.contains("Messages you send to other agents share one budget"));
+}
+
+#[tokio::test]
+async fn sandbox_bypass_and_tool_denials_apply_only_to_explorers() {
+    let (_home, enabled_config) =
+        config_with(&[("features.explorer_profile", TomlValue::Boolean(true))]).await;
+    let (_home, disabled) = config_with(&[]).await;
+    let explorer = explorer_source(Some("explorer"));
+    let worker = explorer_source(Some("worker"));
+
+    assert!(forbids_sandbox_bypass(&enabled_config, &explorer));
+    assert!(!forbids_sandbox_bypass(&enabled_config, &worker));
+    assert!(!forbids_sandbox_bypass(&disabled, &explorer));
+
+    let read_only = rmcp::model::ToolAnnotations::new().read_only(true);
+    let not_destructive = rmcp::model::ToolAnnotations::new()
+        .read_only(false)
+        .destructive(false);
+    assert_eq!(
+        mcp_tool_denial(&enabled_config, &explorer, "srv", "peek", Some(&read_only)),
+        None
+    );
+    for annotations in [Some(&not_destructive), None] {
+        let denial = mcp_tool_denial(&enabled_config, &explorer, "srv", "poke", annotations)
+            .expect("an explorer cannot call a tool that is not annotated read-only");
+        assert!(
+            denial.contains("`srv/poke`") && denial.contains("readOnlyHint"),
+            "{denial}"
+        );
+        assert_eq!(
+            mcp_tool_denial(&enabled_config, &worker, "srv", "poke", annotations),
+            None
+        );
+        assert_eq!(
+            mcp_tool_denial(&disabled, &explorer, "srv", "poke", annotations),
+            None
+        );
+    }
+    assert!(dynamic_tool_denial(&enabled_config, &explorer, "client_echo").is_some());
+    assert_eq!(
+        dynamic_tool_denial(&enabled_config, &worker, "client_echo"),
+        None
+    );
+    assert!(skips_default_isolation(&enabled_config, Some("explorer")));
+    assert!(!skips_default_isolation(&enabled_config, Some("worker")));
+    assert!(!skips_default_isolation(&disabled, Some("explorer")));
+}
+
+#[test]
+fn message_budget_caps_then_refuses() {
+    let budget = ExplorerMessageBudget::new(200);
+    assert_eq!(
+        budget.take("short note".to_string(), 200),
+        Ok("short note".to_string())
+    );
+
+    let long = "message line\n".repeat(2_000);
+    let capped = budget
+        .take(long.clone(), 200)
+        .expect("a long message is capped to the remaining budget");
+    assert!(capped.len() < long.len() / 4, "{}", capped.len());
+    assert!(capped.starts_with("message line"));
+    assert!(
+        capped.contains("explorer_profile: this message was truncated to about"),
+        "{capped}"
+    );
+
+    let refused = budget
+        .take("one more".to_string(), 200)
+        .expect_err("the spent budget refuses further messages");
+    assert!(refused.contains("about 200 tokens"), "{refused}");
+    assert!(refused.contains("final answer"), "{refused}");
+}
+
+#[tokio::test]
+async fn message_resume_config_keeps_authority_without_explorer_locks() {
+    let (_home, mut config) = config_with(&[
+        ("features.explorer_profile", TomlValue::Boolean(true)),
+        (
+            "sandbox_mode",
+            TomlValue::String("danger-full-access".to_string()),
+        ),
+        (
+            "developer_instructions",
+            TomlValue::String("Parent rules.".to_string()),
+        ),
+    ])
+    .await;
+    enforce_read_only_session_config(&mut config).expect("enforce explorer profile");
+    assert!(
+        config
+            .permissions
+            .approval_policy
+            .can_set(&AskForApproval::OnRequest)
+            .is_err(),
+        "the explorer itself stays locked"
+    );
+
+    release_session_locks_for_message_resume(&mut config).expect("release explorer locks");
+
+    // The reloaded agent keeps the explorer's authority...
+    assert_eq!(
+        config.permissions.permission_profile(),
+        &PermissionProfile::read_only()
+    );
+    assert_eq!(
+        config.permissions.approval_policy.value(),
+        AskForApproval::Never
+    );
+    // ...without its locks or instructions (review P9).
+    assert!(
+        config
+            .permissions
+            .approval_policy
+            .can_set(&AskForApproval::OnRequest)
+            .is_ok()
+    );
+    assert!(
+        config
+            .permissions
+            .can_set_permission_profile(&PermissionProfile::Disabled)
+            .is_ok()
+    );
+    assert_eq!(
+        config.developer_instructions.as_deref(),
+        Some("Parent rules.")
+    );
+
+    // Instructions that were only the explorer block disappear entirely.
+    let (_home, mut bare) =
+        config_with(&[("features.explorer_profile", TomlValue::Boolean(true))]).await;
+    append_developer_instructions(&mut bare);
+    append_developer_instructions(&mut bare);
+    assert_eq!(
+        bare.developer_instructions
+            .as_deref()
+            .map(|text| text.matches("# Explorer profile").count()),
+        Some(1)
+    );
+    strip_developer_instructions(&mut bare);
+    assert_eq!(bare.developer_instructions, None);
+}
+
+#[tokio::test]
+async fn message_resume_config_keeps_requirement_constraints() {
+    let (_home, mut config) =
+        config_with(&[("features.explorer_profile", TomlValue::Boolean(true))]).await;
+    // Requirements that forbid `on-request` must still bind the reloaded agent.
+    let mut requirements = config.config_layer_stack.requirements().clone();
+    requirements.approval_policy.value = Constrained::new(AskForApproval::Never, |candidate| {
+        if *candidate == AskForApproval::OnRequest {
+            Err(ConstraintError::InvalidValue {
+                field_name: "approval_policy",
+                candidate: format!("{candidate}"),
+                allowed: "[never, untrusted]".to_string(),
+                requirement_source: RequirementSource::Unknown,
+            })
+        } else {
+            Ok(())
+        }
+    })
+    .expect("requirement constraint");
+    config.config_layer_stack = codex_config::ConfigLayerStack::new(
+        config
+            .config_layer_stack
+            .all_layers_low_to_high()
+            .cloned()
+            .collect(),
+        requirements,
+        config.config_layer_stack.requirements_toml().clone(),
+    )
+    .expect("replace test requirements");
+    enforce_read_only_session_config(&mut config).expect("enforce explorer profile");
+    release_session_locks_for_message_resume(&mut config).expect("release explorer locks");
+    assert!(
+        config
+            .permissions
+            .approval_policy
+            .can_set(&AskForApproval::OnRequest)
+            .is_err()
+    );
+    assert!(
+        config
+            .permissions
+            .approval_policy
+            .can_set(&AskForApproval::UnlessTrusted)
+            .is_ok()
+    );
 }

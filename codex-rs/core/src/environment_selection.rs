@@ -1485,6 +1485,28 @@ impl TurnEnvironmentSnapshot {
         }
         Ok(Self { environments })
     }
+
+    /// Fork: a copy whose ready environments have `update` applied to their resolved
+    /// configuration; starting and failed environments are kept as they are.
+    ///
+    /// Used by `explorer_profile` to judge a worktree by the explorer's read-only access.
+    pub(crate) fn with_environment_configs(&self, update: impl Fn(&mut EnvironmentConfig)) -> Self {
+        let environments = self
+            .environments
+            .iter()
+            .map(|environment| match environment {
+                TurnEnvironmentState::Ready(ready) => {
+                    let mut ready = ready.clone();
+                    if let EnvironmentConfigState::Ready(config) = &mut ready.selection.config {
+                        update(config);
+                    }
+                    TurnEnvironmentState::Ready(ready)
+                }
+                other => other.clone(),
+            })
+            .collect();
+        Self { environments }
+    }
 }
 
 #[cfg(test)]

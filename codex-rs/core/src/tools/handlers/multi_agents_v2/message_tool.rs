@@ -9,7 +9,7 @@ use crate::TurnStartOptions;
 use crate::agent::api::AgentInput;
 use crate::agent::api::AgentTarget;
 use crate::agent::api::SendRequest;
-use crate::agent::child_config::build_agent_resume_config;
+use crate::agent::child_config::build_agent_message_resume_config;
 use crate::agent::types::MessageDeliveryMode;
 use crate::tools::context::FunctionToolOutput;
 
@@ -57,8 +57,16 @@ pub(super) async fn handle_message_string_tool(
     } = invocation;
     let receiver_thread_id = resolve_agent_target(&session, &turn, &target).await?;
     analytics.set_receiver(receiver_thread_id);
+    // Fork: an explorer's messages share its result limit (explorer-and-questions spec, R5.5).
+    let message = crate::agent::explorer_profile::cap_outgoing_message(
+        &turn.config,
+        &turn.session_source,
+        &turn.extension_data,
+        message,
+    )
+    .map_err(FunctionCallError::RespondToModel)?;
     let resume_config =
-        build_agent_resume_config(&turn).map_err(FunctionCallError::RespondToModel)?;
+        build_agent_message_resume_config(&turn).map_err(FunctionCallError::RespondToModel)?;
     let receipt = session
         .services
         .agent_control

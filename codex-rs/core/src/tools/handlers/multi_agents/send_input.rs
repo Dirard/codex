@@ -1,6 +1,6 @@
 use super::*;
 use crate::agent::api::AgentTarget;
-use crate::agent::child_config::build_agent_resume_config;
+use crate::agent::child_config::build_agent_message_resume_config;
 use crate::agent::control::render_input_preview;
 use crate::tools::handlers::multi_agents_spec::create_send_input_tool_v1;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -56,7 +56,7 @@ impl Handler {
             .control(session.session_id());
         let receiver_agent = local_agent_control.get_agent_metadata(receiver_thread_id);
         let residency_pin = if receiver_agent.is_some() {
-            let resume_config = build_agent_resume_config(turn.as_ref())
+            let resume_config = build_agent_message_resume_config(turn.as_ref())
                 .map_err(FunctionCallError::RespondToModel)?;
             local_agent_control
                 .ensure_v2_agent_loaded(

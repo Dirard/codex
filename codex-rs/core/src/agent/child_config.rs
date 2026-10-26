@@ -61,13 +61,14 @@ pub(crate) async fn prepare_agent_spawn_config(
     if options.version == SpawnConfigVersion::V1 && options.full_history_fork {
         reject_full_fork_agent_type_override(options.role_name)?;
     }
+    let explorer = explorer_profile::applies_to_role(&turn.config, options.role_name);
     apply_requested_spawn_agent_model_overrides(
         session,
         step_context,
         &mut config,
         options.model,
         options.reasoning_effort,
-        explorer_profile::applies_to_role(&turn.config, options.role_name),
+        explorer,
     )
     .await?;
     if !options.full_history_fork
@@ -82,6 +83,11 @@ pub(crate) async fn prepare_agent_spawn_config(
                 .developer_instructions
                 .clone_from(&turn.developer_instructions);
         }
+    }
+    // Fork: a full-history fork reuses the parent's context and takes the child's developer
+    // instructions from this config, before the session adds the explorer block (R5.1).
+    if explorer {
+        explorer_profile::append_developer_instructions(&mut config);
     }
     apply_spawn_agent_service_tier(session, &mut config).await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn)?;
@@ -128,6 +134,18 @@ pub(crate) fn build_agent_resume_config(turn: &TurnContext) -> Result<Config, St
     // For resume, keep base instructions sourced from rollout/session metadata.
     config.base_instructions = None;
     config.base_instructions_provenance = None;
+    Ok(config)
+}
+
+/// Resume config for an agent that a message from this turn may reload.
+///
+/// Fork: an explorer's locks and instructions stay with the explorer; the reloaded agent
+/// keeps the explorer's runtime authority without them (R10.1).
+pub(crate) fn build_agent_message_resume_config(turn: &TurnContext) -> Result<Config, String> {
+    let mut config = build_agent_resume_config(turn)?;
+    if explorer_profile::applies_to_source(&turn.config, &turn.session_source) {
+        explorer_profile::release_session_locks_for_message_resume(&mut config)?;
+    }
     Ok(config)
 }
 
@@ -218,6 +236,15 @@ async fn apply_requested_spawn_agent_model_overrides(
     // Fork: a configured explorer model is a user setting, so name it in errors.
     let explorer_model_configured = requested_model.is_none()
         && explorer_profile.is_some_and(|profile| profile.model.is_some());
+    let explorer_effort_configured = requested_reasoning_effort.is_none()
+        && explorer_profile.is_some_and(|profile| profile.reasoning_effort.is_some());
+    let name_explorer_effort = |err: String| {
+        if explorer_effort_configured {
+            format!("{err} (configured by features.explorer_profile.reasoning_effort)")
+        } else {
+            err
+        }
+    };
     let requested_model = requested_model
         .or_else(|| explorer_profile.and_then(|profile| profile.model.as_deref()))
         .or(turn.config.agent_default_subagent_model.as_deref());
@@ -262,7 +289,8 @@ async fn apply_requested_spawn_agent_model_overrides(
                 &selected_model_name,
                 &selected_model_info.supported_reasoning_levels,
                 &reasoning_effort,
-            )?;
+            )
+            .map_err(name_explorer_effort)?;
             config.model_reasoning_effort = Some(reasoning_effort);
         } else if explorer {
             config.model_reasoning_effort = explorer_profile::cheapest_reasoning_effort(
@@ -290,7 +318,8 @@ async fn apply_requested_spawn_agent_model_overrides(
             &step_context.settings.model_info.slug,
             &step_context.settings.model_info.supported_reasoning_levels,
             &reasoning_effort,
-        )?;
+        )
+        .map_err(name_explorer_effort)?;
         config.model_reasoning_effort = Some(reasoning_effort);
     }
 

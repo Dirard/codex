@@ -117,8 +117,15 @@ pub(crate) async fn spawn(
         .map_err(ThreadSpawnError::Preparation)?;
     // Fork: resolve isolation after the role config file has shaped the child config, then
     // move the child into its own worktree before anything captures its cwd (spec UC1, UC2).
-    let isolation =
-        resolve_isolation(isolation, &config).map_err(ThreadSpawnError::IsolationUnavailable)?;
+    // Fork: a read-only explorer gets a worktree only when the spawn asks for one explicitly
+    // (explorer-and-questions spec, R9.1).
+    let explorer = crate::agent::explorer_profile::skips_default_isolation(&turn.config, role_name);
+    let isolation = match isolation {
+        None if explorer => AgentIsolation::None,
+        isolation => {
+            resolve_isolation(isolation, &config).map_err(ThreadSpawnError::IsolationUnavailable)?
+        }
+    };
     let prepared_worktree = if isolation == AgentIsolation::Worktree {
         if !session.services.agent_control.supports_worktree_isolation() {
             return Err(ThreadSpawnError::IsolationUnavailable(
@@ -126,15 +133,18 @@ pub(crate) async fn spawn(
             ));
         }
         let thread_id = session.services.local_agent_runtime.generate_thread_id();
-        Some(
-            prepare_agent_worktree(
-                thread_id,
+        // An explorer's worktree note judges the parent checkout by its read-only access.
+        let inherited_environments = if explorer {
+            crate::agent::explorer_profile::clamp_environment_snapshot(
                 &step_context.inherited_environments,
-                &mut config,
-                &task_name,
             )
-            .await
-            .map_err(ThreadSpawnError::IsolationUnavailable)?,
+        } else {
+            step_context.inherited_environments.clone()
+        };
+        Some(
+            prepare_agent_worktree(thread_id, &inherited_environments, &mut config, &task_name)
+                .await
+                .map_err(ThreadSpawnError::IsolationUnavailable)?,
         )
     } else {
         None

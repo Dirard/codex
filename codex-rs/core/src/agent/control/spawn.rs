@@ -547,6 +547,16 @@ impl LocalAgentControl {
             .await?;
         let parent = match (worktree.as_ref(), parent) {
             (Some(binding), Some((parent, environments))) => {
+                // Fork: a reloaded explorer's worktree note judges the parent checkout by its
+                // read-only access (explorer-and-questions spec, R9.2).
+                let environments = if crate::agent::explorer_profile::applies_to_source(
+                    &config,
+                    &session_source,
+                ) {
+                    crate::agent::explorer_profile::clamp_environment_snapshot(&environments)
+                } else {
+                    environments
+                };
                 let environments = crate::agent::worktree_isolation::prepare_reload(
                     binding,
                     &mut config,
