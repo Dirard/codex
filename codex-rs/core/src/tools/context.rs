@@ -1,4 +1,3 @@
-use crate::context_manager::truncate_function_output_payload;
 use crate::original_image_detail::sanitize_original_image_detail;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
@@ -17,11 +16,12 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_tools::LoadableToolSpec;
 use codex_tools::ToolName;
-use codex_utils_output_truncation::OutputTruncation;
+use codex_utils_audio::estimate_audio_token_count;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
-use codex_utils_output_truncation::formatted_truncate_text_with_config;
-use codex_utils_output_truncation::truncate_text_with_config;
+use codex_utils_output_truncation::formatted_truncate_text;
+use codex_utils_output_truncation::truncate_function_output_payload;
+use codex_utils_output_truncation::truncate_text;
 use codex_utils_output_truncation::with_serialization_allowance;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -232,20 +232,8 @@ impl ToolOutput for McpToolOutput {
 impl McpToolOutput {
     fn response_payload(&self) -> FunctionCallOutputPayload {
         let mut payload = self.result.as_function_call_output_payload();
-        if self.truncation.mcp_max_lines.is_some()
-            && !payload.content_items().is_some_and(|items| {
-                items.iter().any(|item| {
-                    matches!(item, FunctionCallOutputContentItem::EncryptedContent { .. })
-                })
-            })
-            && let Some(text_content) = mcp_text_content_for_line_limit(&self.result)
-        {
-            payload = FunctionCallOutputPayload {
-                body: FunctionCallOutputBody::Text(text_content),
-                success: Some(self.result.success()),
-            };
-        }
-
+        // Fork: with `mcp_max_lines`, a text-only result is cut as one text in history.
+        self.join_text_for_mcp_line_limit(&mut payload);
         if let Some(items) = payload.content_items_mut() {
             sanitize_original_image_detail(self.original_image_detail_supported, items);
         }
@@ -266,41 +254,13 @@ impl McpToolOutput {
             }
         }
 
-        // Keep the existing byte/token bound for raw events and traces. Only history
-        // applies line limits: repeating those here would truncate the omission marker.
-        // Code-mode consumers still get the raw `CallToolResult`.
+        // History receives this budget in tokens. Code Mode keeps the raw result.
         truncate_function_output_payload(
-            &payload,
-            OutputTruncation::new(
-                with_serialization_allowance(self.truncation.policy),
-                /*max_lines*/ None,
-            ),
-        )
-    }
-}
-
-fn mcp_text_content_for_line_limit(result: &CallToolResult) -> Option<String> {
-    if result
-        .structured_content
-        .as_ref()
-        .is_some_and(|structured_content| !structured_content.is_null())
-    {
-        return None;
-    }
-
-    let mut text_segments = Vec::new();
-    for content in &result.content {
-        let object = content.as_object()?;
-        if object.get("type").and_then(JsonValue::as_str)? != "text" {
-            return None;
-        }
-        text_segments.push(object.get("text").and_then(JsonValue::as_str)?.to_string());
-    }
-
-    if text_segments.is_empty() {
-        None
-    } else {
-        Some(text_segments.join("\n"))
+            &mut payload,
+            with_serialization_allowance(self.truncation.policy),
+            estimate_audio_token_count,
+        );
+        payload
     }
 }
 
@@ -466,8 +426,11 @@ impl ToolOutput for AbortedToolOutput {
     }
 }
 
-/// Fork: header line telling the model that the exit will be reported without polling.
-pub(crate) const EXIT_NOTIFICATION_ARMED_LINE: &str = "Exit notification: on (Codex will report when this process exits while this Codex session is running; do not poll for completion)";
+// Fork: output line limits (docs/fork/03-tools-mcp-code-mode.md F1, F3) and exit
+// notifications (specs/background-exec-notifications-2026-10-25.md).
+#[path = "context_fork.rs"]
+mod fork;
+use fork::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecCommandToolOutput {
@@ -535,9 +498,9 @@ impl ToolOutput for ExecCommandToolOutput {
             return None;
         }
 
-        Some(JsonValue::String(self.truncated_output_with_config(
-            self.truncation.with_policy(self.model_output_policy()),
-        )))
+        Some(JsonValue::String(
+            self.fork_truncated_with_lines(self.model_output_policy()),
+        ))
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
@@ -587,24 +550,18 @@ impl ExecCommandToolOutput {
         }
     }
 
-    /// Truncates by tokens only: line limits apply to model-visible history, not tool data.
     pub(crate) fn truncated_output(&self, max_tokens: usize) -> String {
-        self.truncated_output_with_config(OutputTruncation {
-            policy: TruncationPolicy::Tokens(max_tokens),
-            max_lines: None,
-            ..self.truncation
-        })
+        self.truncated_output_with_policy(TruncationPolicy::Tokens(max_tokens))
     }
 
-    fn truncated_output_with_config(&self, truncation: OutputTruncation) -> String {
+    fn truncated_output_with_policy(&self, policy: TruncationPolicy) -> String {
         let text = String::from_utf8_lossy(&self.raw_output).to_string();
         let Some(omitted_bytes) = self.output_omitted_bytes else {
-            return formatted_truncate_text_with_config(&text, truncation);
+            return formatted_truncate_text(&text, policy);
         };
 
         let marker = format_output_omission_marker(omitted_bytes.get());
-        let truncated = truncate_text_with_config(&text, truncation);
-        if truncated == text {
+        if text.len() <= policy.byte_budget() {
             return if text.contains(&marker) {
                 text
             } else {
@@ -615,6 +572,7 @@ impl ExecCommandToolOutput {
         let original_token_count = self
             .original_token_count
             .unwrap_or_else(|| approx_token_count(&text));
+        let truncated = truncate_text(&text, policy);
         let omission_notice = if truncated.contains(&marker) {
             String::new()
         } else {
@@ -641,9 +599,7 @@ impl ExecCommandToolOutput {
 
         if let Some(process_id) = &self.process_id {
             sections.push(format!("Process running with session ID {process_id}"));
-            if self.exit_notification_armed {
-                sections.push(EXIT_NOTIFICATION_ARMED_LINE.to_string());
-            }
+            sections.extend(self.fork_exit_notification_line());
         }
 
         if let Some(original_token_count) = self.original_token_count {
@@ -656,16 +612,11 @@ impl ExecCommandToolOutput {
 
     fn response_text(&self) -> String {
         let header = self.response_header();
-        let output_budget = (self.truncation.policy * 1.2)
+        let output_budget = with_serialization_allowance(self.truncation.policy)
             .byte_budget()
             .saturating_sub(header.len().saturating_add(/*rhs*/ 1));
         let mut policy = self.model_output_policy();
-        let response_truncation = |policy| OutputTruncation {
-            policy,
-            max_lines: None,
-            ..self.truncation
-        };
-        let mut output = self.truncated_output_with_config(response_truncation(policy));
+        let mut output = self.truncated_output_with_policy(policy);
 
         // History applies this same serialization budget to the complete response.
         // Reserve room for metadata, warning headers, and the truncation marker so
@@ -680,7 +631,7 @@ impl ExecCommandToolOutput {
                     tokens.saturating_sub(TruncationPolicy::Bytes(excess_bytes).token_budget()),
                 ),
             };
-            output = self.truncated_output_with_config(response_truncation(policy));
+            output = self.truncated_output_with_policy(policy);
         }
 
         format!("{header}\n{output}")

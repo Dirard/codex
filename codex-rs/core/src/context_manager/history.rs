@@ -43,7 +43,6 @@ use codex_history::RetainedContext;
 use codex_history::RetainedContextEntry;
 use codex_history::RetainedContextEvent;
 use codex_history::RetainedInputSource;
-use codex_history::RetainedSource;
 use codex_prompts::render_model_instructions;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::items::TurnItem;
@@ -52,7 +51,6 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
@@ -66,13 +64,11 @@ use codex_protocol::protocol::WorldStateItem;
 use codex_utils_audio::estimate_audio_token_count;
 use codex_utils_cache::BlockingLruCache;
 use codex_utils_cache::sha1_digest;
-use codex_utils_output_truncation::OutputTruncation;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
-use codex_utils_output_truncation::truncate_function_output_items_with_config;
-use codex_utils_output_truncation::truncate_text_with_config;
+use codex_utils_output_truncation::truncate_function_output_payload;
 use codex_utils_output_truncation::with_serialization_allowance;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
@@ -508,14 +504,15 @@ impl ContextManager {
     }
 
     /// `items` is ordered from oldest to newest.
-    pub(crate) fn record_items<I>(&mut self, items: I, truncation: impl Into<OutputTruncation>)
+    pub(crate) fn record_items<I, P>(&mut self, items: I, policy: P)
     where
         I: IntoIterator,
         I::Item: Deref<Target = ResponseItem>,
+        P: Into<codex_utils_output_truncation::OutputTruncation>, // Fork: adds line limits.
     {
-        let truncation = truncation.into();
+        let policy = policy.into();
         for item in items {
-            self.record_item_with_metadata(&item, /*metadata*/ None, truncation);
+            self.record_item_with_metadata(&item, /*metadata*/ None, policy);
         }
     }
 
@@ -524,15 +521,13 @@ impl ContextManager {
     pub(crate) fn record_annotated_items(
         &mut self,
         items: &mut [ResponseItemEnvelope],
-        truncation: impl Into<OutputTruncation>,
+        policy: impl Into<codex_utils_output_truncation::OutputTruncation>, // Fork: line limits.
     ) {
-        let truncation = truncation.into();
+        let policy = policy.into();
         for envelope in items {
-            if let Some((_, Some(source))) = self.record_item_with_metadata(
-                &envelope.item,
-                envelope.metadata.as_ref(),
-                truncation,
-            ) {
+            if let Some(source) =
+                self.record_item_with_metadata(&envelope.item, envelope.metadata.as_ref(), policy)
+            {
                 envelope.metadata.get_or_insert_default().retained_source = Some(source);
             }
         }
@@ -542,15 +537,11 @@ impl ContextManager {
     pub(crate) fn replay_annotated_item(
         &mut self,
         envelope: &ResponseItemEnvelope,
-        truncation: impl Into<OutputTruncation>,
+        policy: impl Into<codex_utils_output_truncation::OutputTruncation>, // Fork: line limits.
     ) {
-        let captured = self
-            .record_item_with_metadata(
-                &envelope.item,
-                envelope.metadata.as_ref(),
-                truncation.into(),
-            )
-            .and_then(|(_, retained_source)| retained_source);
+        let policy = policy.into();
+        let captured =
+            self.record_item_with_metadata(&envelope.item, envelope.metadata.as_ref(), policy);
         if let Some(source) = envelope
             .metadata
             .as_ref()
@@ -569,16 +560,28 @@ impl ContextManager {
         &mut self,
         item: &ResponseItem,
         metadata: Option<&CodexHarnessMetadata>,
-        truncation: OutputTruncation,
-    ) -> Option<(ResponseItemEnvelope, Option<RetainedSource>)> {
+        truncation: codex_utils_output_truncation::OutputTruncation,
+    ) -> Option<codex_history::RetainedSource> {
         if !is_api_message(item, metadata) {
             return None;
         }
-        let item_truncation = truncation_from_metadata(metadata, truncation);
         let mut processed = ResponseItemEnvelope {
-            item: Self::process_item(item, item_truncation),
+            item: item.clone(),
             metadata: metadata.cloned(),
         };
+        if let ResponseItem::FunctionCallOutput { output, .. }
+        | ResponseItem::CustomToolCallOutput { output, .. } = &mut processed.item
+        {
+            // The override already includes the tool's serialization allowance.
+            let policy = metadata
+                .and_then(|metadata| metadata.history_truncation_token_limit)
+                .map(TruncationPolicy::Tokens)
+                .unwrap_or_else(|| with_serialization_allowance(truncation.policy));
+            // Fork: so does a recorded originating policy; recorded line limits apply first.
+            let policy =
+                super::fork_truncation::apply_recorded_lines(output, metadata, truncation, policy);
+            truncate_function_output_payload(output, policy, estimate_audio_token_count);
+        }
         if let Some(review_history) = &mut self.review_history
             && !is_guardian_context_message(item)
         {
@@ -597,8 +600,8 @@ impl ContextManager {
         if let Some(source) = &source {
             processed.metadata.get_or_insert_default().retained_source = Some(source.clone());
         }
-        Arc::make_mut(&mut self.items).push(processed.clone());
-        Some((processed, source))
+        Arc::make_mut(&mut self.items).push(processed);
+        source
     }
 
     /// Returns the history prepared for sending to the model. This applies a proper
@@ -971,54 +974,6 @@ impl ContextManager {
         normalize::strip_audio_when_unsupported(input_modalities, items);
     }
 
-    fn process_item(item: &ResponseItem, truncation: OutputTruncation) -> ResponseItem {
-        match item {
-            ResponseItem::FunctionCallOutput {
-                id,
-                call_id,
-                name,
-                namespace,
-                output,
-                internal_chat_message_metadata_passthrough: metadata,
-            } => ResponseItem::FunctionCallOutput {
-                id: id.clone(),
-                call_id: call_id.clone(),
-                name: name.clone(),
-                namespace: namespace.clone(),
-                output: truncate_function_output_payload(output, truncation),
-                internal_chat_message_metadata_passthrough: metadata.clone(),
-            },
-            ResponseItem::CustomToolCallOutput {
-                id,
-                call_id,
-                name,
-                output,
-                internal_chat_message_metadata_passthrough: metadata,
-            } => ResponseItem::CustomToolCallOutput {
-                id: id.clone(),
-                call_id: call_id.clone(),
-                name: name.clone(),
-                output: truncate_function_output_payload(output, truncation),
-                internal_chat_message_metadata_passthrough: metadata.clone(),
-            },
-            ResponseItem::AdditionalTools { .. }
-            | ResponseItem::Message { .. }
-            | ResponseItem::AgentMessage { .. }
-            | ResponseItem::Reasoning { .. }
-            | ResponseItem::LocalShellCall { .. }
-            | ResponseItem::FunctionCall { .. }
-            | ResponseItem::ToolSearchCall { .. }
-            | ResponseItem::ToolSearchOutput { .. }
-            | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::ImageGenerationCall { .. }
-            | ResponseItem::CustomToolCall { .. }
-            | ResponseItem::Compaction { .. }
-            | ResponseItem::CompactionTrigger { .. }
-            | ResponseItem::ContextCompaction { .. }
-            | ResponseItem::ConfigurationUpdate { .. }
-            | ResponseItem::Other => item.clone(),
-        }
-    }
     /// Walk backward from a rollback cut and trim contiguous pre-turn context-update items.
     ///
     /// Returns the adjusted cut index after removing contextual developer/user items immediately
@@ -1067,36 +1022,6 @@ impl ContextManager {
     }
 }
 
-fn truncation_from_metadata(
-    metadata: Option<&CodexHarnessMetadata>,
-    fallback: OutputTruncation,
-) -> OutputTruncation {
-    let Some(metadata) = metadata else {
-        return fallback.with_policy(with_serialization_allowance(fallback.policy));
-    };
-
-    let policy = metadata
-        .history_truncation_policy
-        .or_else(|| {
-            metadata
-                .history_truncation_token_limit
-                .map(TruncationPolicy::Tokens)
-        })
-        .unwrap_or_else(|| with_serialization_allowance(fallback.policy));
-    if metadata.history_truncation_policy.is_some()
-        || metadata.history_truncation_max_lines.is_some()
-        || metadata.history_truncation_mcp_max_lines.is_some()
-    {
-        return OutputTruncation::new_with_mcp_max_lines(
-            policy,
-            metadata.history_truncation_max_lines,
-            metadata.history_truncation_mcp_max_lines,
-        );
-    }
-
-    fallback.with_policy(policy)
-}
-
 pub(crate) fn estimate_history_token_count(
     items: &[ResponseItemEnvelope],
     base_instructions: &BaseInstructions,
@@ -1115,29 +1040,6 @@ pub(crate) fn estimate_history_token_count(
         .iter()
         .map(|envelope| estimate_item_token_count(&envelope.item))
         .fold(base_tokens, i64::saturating_add)
-}
-
-pub(crate) fn truncate_function_output_payload(
-    output: &FunctionCallOutputPayload,
-    truncation: OutputTruncation,
-) -> FunctionCallOutputPayload {
-    let body = match &output.body {
-        FunctionCallOutputBody::Text(content) => {
-            FunctionCallOutputBody::Text(truncate_text_with_config(content.as_str(), truncation))
-        }
-        FunctionCallOutputBody::ContentItems(items) => {
-            FunctionCallOutputBody::ContentItems(truncate_function_output_items_with_config(
-                items.as_slice(),
-                truncation,
-                estimate_audio_token_count,
-            ))
-        }
-    };
-
-    FunctionCallOutputPayload {
-        body,
-        success: output.success,
-    }
 }
 
 /// Configuration updates require harness provenance; raw system messages are never retained.
