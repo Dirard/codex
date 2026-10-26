@@ -2331,10 +2331,21 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
 /// Fork R7 (docs/fork/02-compaction-context.md): a provider that reports partial usage, or no
 /// usage at all, must not leave mid-turn auto-compaction blind to a context over the limit.
-#[test_case::test_case(Some(json!({"input_tokens": 60_000})); "partial usage")]
-#[test_case::test_case(None; "no usage")]
+/// Zero usage counted nothing, and usage without output did not count the response's own
+/// output (review R7-3, R7-4 in docs/fork/reviews/2026-10-26-sandbox-compaction-review.md).
+#[test_case::test_case(Some(json!({"input_tokens": 60_000})), false; "partial usage")]
+#[test_case::test_case(None, false; "no usage")]
+#[test_case::test_case(
+    Some(json!({"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})),
+    false;
+    "zero usage"
+)]
+#[test_case::test_case(Some(json!({"input_tokens": 1_000})), true; "usage without output")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn auto_compact_runs_without_complete_usage(usage: Option<Value>) -> Result<()> {
+async fn auto_compact_runs_without_complete_usage(
+    usage: Option<Value>,
+    large_reply: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -2347,10 +2358,17 @@ async fn auto_compact_runs_without_complete_usage(usage: Option<Value>) -> Resul
     }
     // The assistant message ends the sampled items, so before the fix only the stale usage
     // (none) counted and the large user message was invisible to the token check.
+    // About 60k tokens by the byte estimate, over the 50k limit: the user message, or the
+    // reply to a short one.
+    let (user_text, reply) = if large_reply {
+        ("draft the notes".to_string(), "long answer ".repeat(20_000))
+    } else {
+        ("large ".repeat(40_000), FIRST_REPLY.to_string())
+    };
     let request_log = mount_sse_sequence(
         &server,
         vec![
-            sse(vec![ev_assistant_message("m1", FIRST_REPLY), completed]),
+            sse(vec![ev_assistant_message("m1", &reply), completed]),
             sse(vec![
                 ev_assistant_message("m2", AUTO_SUMMARY_TEXT),
                 ev_completed_with_tokens("r2", /*total_tokens*/ 200),
@@ -2373,10 +2391,9 @@ async fn auto_compact_runs_without_complete_usage(usage: Option<Value>) -> Resul
         .await?
         .codex;
 
-    // About 60k tokens by the byte estimate, over the 50k limit.
     codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "large ".repeat(40_000),
+            text: user_text,
             text_elements: Vec::new(),
         }]))
         .await?;

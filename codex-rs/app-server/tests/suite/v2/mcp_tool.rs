@@ -327,7 +327,8 @@ async fn model_mcp_tool_call_uses_session_client_extensions() -> Result<()> {
                 TEST_TOOL_NAME,
                 &serde_json::to_string(&json!({"message": "capabilities"}))?,
             ),
-            responses::ev_completed("resp-capabilities"),
+            // Fork R7: zero usage of this provider is estimated, over AUTO_COMPACT_LIMIT.
+            responses::ev_completed_with_tokens("resp-capabilities", /*total_tokens*/ 100),
         ]),
         create_final_assistant_message_sse_response("done")?,
     ];
@@ -1125,7 +1126,8 @@ async fn mcp_tool_call_hint_survives_mid_call_thread_read_and_resume() -> Result
                     "message": ELICITATION_TRIGGER_MESSAGE,
                 }))?,
             ),
-            responses::ev_completed("resp-mid-flight"),
+            // Fork R7: zero usage of this provider is estimated, over AUTO_COMPACT_LIMIT.
+            responses::ev_completed_with_tokens("resp-mid-flight", /*total_tokens*/ 100),
         ]),
         create_final_assistant_message_sse_response("done")?,
     ];

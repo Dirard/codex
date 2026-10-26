@@ -5,6 +5,7 @@
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -63,63 +64,96 @@ impl Session {
     }
 
     /// Fork R7 (docs/fork/02-compaction-context.md): the sampling step's hook after a response
-    /// records its usage. A response without usable usage still grows the context, but the
-    /// token check would keep the last reported usage and add only the items after the latest
-    /// model output, leaving auto-compaction blind to a context over the limit. So the context
-    /// is estimated as the next request sends it. Like server usage, the recorded usage covers
-    /// the history up to the latest model output; the token check adds the items after it,
-    /// such as tool outputs recorded later, exactly once.
+    /// records its usage. A response whose usage does not tell the context size still grows
+    /// the context, but the token check would keep the last reported usage and add only the
+    /// items after the latest model output, leaving auto-compaction blind to a context over
+    /// the limit. So the context is estimated as the next request sends it. Like server usage,
+    /// the recorded usage covers the history up to the latest model output; the token check
+    /// adds the items after it, such as tool outputs recorded later, exactly once.
+    ///
+    /// The usage tells the context size unless it is missing, or, from a provider other than
+    /// the first-party one, it reports no input (no real request has zero input, so zero
+    /// usage counted nothing) or no output (every real response has output, so its output was
+    /// not counted). Then the reported input stays and the estimated output of the response is
+    /// added. First-party usage is complete by contract and stays as upstream reads it,
+    /// including the zero usage of test fixtures. The reported counters stay for spending;
+    /// only the context size is estimated.
     ///
     /// Unlike `recompute_token_usage` this emits no `TokenCount`, which the sampling step sends
-    /// after its tools resolve, and keeps a window prefill that is already set, because the
-    /// prefill marks where the auto-compact scope of the window starts.
+    /// after its tools resolve. The `body_after_prefix` baseline of the window is the estimate
+    /// of the request the response answered (`request_input`), once per window, so the
+    /// response's output is growth and tool declarations are not
+    /// (`SessionState::rebase_estimated_auto_compact_prefill`).
     pub(crate) async fn fork_estimate_usage(
         &self,
         step_context: &StepContext,
         token_usage: &Option<TokenUsage>,
+        request_input: &[ResponseItem],
     ) {
-        if token_usage.is_some() {
-            return;
-        }
         let turn_context = step_context.turn.as_ref();
+        let reported_input = match token_usage {
+            None => None,
+            Some(_) if turn_context.provider.info().is_openai() => return,
+            Some(usage) if usage.input_tokens <= 0 => None,
+            Some(usage) if usage.output_tokens <= 0 => Some(usage.input_tokens),
+            Some(_) => return,
+        };
         let base_instructions = self.get_base_instructions().await;
         let tool_declaration_tokens =
             crate::compact_remote_v2::tool_declaration_tokens(step_context);
+        let model_info = &step_context.settings.model_info;
+        let estimate = |items: &[ResponseItemEnvelope]| {
+            crate::compact_remote_v2::estimate_candidate_request_tokens(
+                items,
+                &base_instructions,
+                model_info,
+                tool_declaration_tokens,
+            )
+            .max(0)
+        };
+        let request_tokens = || {
+            let items = request_input
+                .iter()
+                .cloned()
+                .map(ResponseItemEnvelope::new)
+                .collect::<Vec<_>>();
+            estimate(&items)
+        };
         let mut state = self.state.lock().await;
-        let estimated_tokens = crate::compact_remote_v2::estimate_candidate_request_tokens(
-            state.history.annotated_items(),
-            &base_instructions,
-            &step_context.settings.model_info,
-            tool_declaration_tokens,
-        )
-        .max(0);
-        let tail_tokens = state
-            .history
-            .estimated_tokens_after_last_model_generated_item();
+        let context_tokens = estimate(state.history.annotated_items())
+            .saturating_sub(
+                state
+                    .history
+                    .estimated_tokens_after_last_model_generated_item(),
+            )
+            .max(0);
         let mut info = state.token_info().unwrap_or(TokenUsageInfo {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             model_context_window: None,
         });
-        info.last_token_usage = TokenUsage {
-            total_tokens: estimated_tokens.saturating_sub(tail_tokens).max(0),
-            ..TokenUsage::default()
+        info.last_token_usage = token_usage.clone().unwrap_or_default();
+        info.last_token_usage.total_tokens = match reported_input {
+            // The response's output is what the history gained over the request it answered.
+            Some(input) => {
+                input.saturating_add(context_tokens.saturating_sub(request_tokens()).max(0))
+            }
+            None => context_tokens,
         };
         if let Some(model_context_window) = turn_context.model_context_window() {
             info.model_context_window = Some(model_context_window);
         }
         state.set_token_info(Some(info));
+        if reported_input.is_some() {
+            return;
+        }
         // The local estimate already includes every retained reasoning item.
         state.set_server_reasoning_included(/*included*/ true);
         if matches!(
             turn_context.config.model_auto_compact_token_limit_scope,
             AutoCompactTokenLimitScope::BodyAfterPrefix
-        ) && state
-            .auto_compact_window_snapshot()
-            .prefill_input_tokens
-            .is_none()
-        {
-            state.set_auto_compact_window_estimated_prefill(estimated_tokens);
+        ) {
+            state.rebase_estimated_auto_compact_prefill(request_tokens);
         }
     }
 }

@@ -3136,6 +3136,9 @@ async fn production_turn_keeps_rebalanced_catalogs_stable_after_compaction_and_r
             ..StartThreadOptions::new(test.config.clone())
         })
         .await?;
+    // Fork R7 (docs/fork/02-compaction-context.md): a provider other than the first-party one
+    // that reports zero usage counted nothing, so its context is estimated and would cross the
+    // threshold of this small window at once. Report the small usage of a real provider.
     let response = responses::mount_sse_sequence(
         &server,
         vec![
@@ -3146,9 +3149,12 @@ async fn production_turn_keeps_rebalanced_catalogs_stable_after_compaction_and_r
                     "wait_for_environment",
                     &json!({ "environment_id": pending_selection.environment_id }).to_string(),
                 ),
-                ev_completed("resp-1"),
+                responses::ev_completed_with_tokens("resp-1", /*total_tokens*/ 1_000),
             ]),
-            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                responses::ev_completed_with_tokens("resp-2", /*total_tokens*/ 1_000),
+            ]),
             // Cross the post-turn threshold only after the allocation has stabilized.
             sse(vec![
                 ev_response_created("resp-3"),
@@ -3157,7 +3163,7 @@ async fn production_turn_keeps_rebalanced_catalogs_stable_after_compaction_and_r
             sse(vec![
                 ev_response_created("compact"),
                 responses::ev_assistant_message("summary", "The available skills were inspected."),
-                ev_completed("compact"),
+                responses::ev_completed_with_tokens("compact", /*total_tokens*/ 1_000),
             ]),
             sse(vec![
                 ev_response_created("resp-4"),
@@ -3166,9 +3172,12 @@ async fn production_turn_keeps_rebalanced_catalogs_stable_after_compaction_and_r
                     "wait_for_environment",
                     &json!({ "environment_id": pending_selection.environment_id }).to_string(),
                 ),
-                ev_completed("resp-4"),
+                responses::ev_completed_with_tokens("resp-4", /*total_tokens*/ 1_000),
             ]),
-            sse(vec![ev_response_created("resp-5"), ev_completed("resp-5")]),
+            sse(vec![
+                ev_response_created("resp-5"),
+                responses::ev_completed_with_tokens("resp-5", /*total_tokens*/ 1_000),
+            ]),
         ],
     )
     .await;

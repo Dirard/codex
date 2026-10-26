@@ -105,7 +105,7 @@ pub(crate) struct SessionState {
     pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
     next_turn_is_first: bool,
     initial_settings_pending: bool,
-    turn_spawn_budget: Option<crate::agent::control::TurnSpawnBudget>, // Fork: session_fork.rs
+    fork: fork::SessionStateFork, // Fork: session_fork.rs
 }
 
 impl SessionState {
@@ -149,7 +149,7 @@ impl SessionState {
             pending_session_start_sources: VecDeque::new(),
             next_turn_is_first: true,
             initial_settings_pending: true,
-            turn_spawn_budget: None,
+            fork: fork::SessionStateFork::default(),
         }
     }
 
