@@ -40,6 +40,8 @@ fn determinism_rule_ignores_strings_and_comments() {
         ("const t = new Date();", "new Date()"),
         ("const t = new Date;", "new Date"),
         ("const t = Date();", "Date()"),
+        // Without `new`, Date returns the current time whatever its arguments are.
+        ("const t = Date(1);", "Date()"),
         ("const t = `${Date.now()}`;", "Date.now()"),
     ] {
         let script = format!("{}\n\n{line}\n", VALID.trim_end());

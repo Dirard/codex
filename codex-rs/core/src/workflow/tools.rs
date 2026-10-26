@@ -90,6 +90,10 @@ pub(crate) fn add_workflow_tools(
         WorkflowStartHandler {
             max_concurrent_agents: workflows.max_concurrent_agents,
             max_agents_per_run: workflows.max_agents_per_run,
+            worktree_isolation: turn_context
+                .config
+                .features
+                .enabled(codex_features::Feature::AgentWorktreeIsolation),
         },
         ToolExposure::DirectModelOnly,
     );
@@ -125,15 +129,25 @@ fn any_json(description: &str) -> JsonSchema {
     }
 }
 
-/// R1.7: the `workflow` tool description, within 1500 tokens.
-fn workflow_description(max_concurrent_agents: usize, max_agents_per_run: usize) -> String {
+/// R1.7: the `workflow` tool description, within 1500 tokens. It names the `isolation`
+/// option of `agent()` only when agent worktree isolation is enabled.
+fn workflow_description(
+    max_concurrent_agents: usize,
+    max_agents_per_run: usize,
+    worktree_isolation: bool,
+) -> String {
+    let isolation_option = if worktree_isolation {
+        ", `isolation: \"worktree\"` (the agent works in its own git worktree; the run log reports its changes)"
+    } else {
+        ""
+    };
     format!(
         r#"Run a JavaScript workflow script in the background: it orchestrates many sub-agents deterministically while you keep working, and agent answers go to the script instead of your context. Use it for large fan-out work (many files, many findings to verify) or when the user asks for a workflow; delegate small tasks directly.
 
 The script starts with `export const meta = {{ name, description, phases }};` (name: letters, digits, `_`, `-`), followed by a body that may use `await` and `return`. The returned JSON value is the run result.
 
 Globals:
-- `agent(prompt, opts?)` starts a fresh agent with your tools, permissions and working directory and resolves to its final message, or to the parsed object when `opts.schema` is given. It resolves to null on any failure (error, timeout, cancellation, budget, limits, answer not matching the schema) instead of throwing. Options: `schema` (strict JSON schema: object root; every object has `additionalProperties: false` and lists all properties in `required`; otherwise the call throws `WorkflowSchemaError`), `label`, `phase`, `agent_type`, `model`, `effort`, `timeout_ms`.
+- `agent(prompt, opts?)` starts a fresh agent with your tools, permissions and working directory and resolves to its final message, or to the parsed object when `opts.schema` is given. It resolves to null on any failure (error, timeout, cancellation, budget, limits, answer not matching the schema) instead of throwing. Options: `schema` (strict JSON schema: object root; every object has `additionalProperties: false` and lists all properties in `required`; otherwise the call throws `WorkflowSchemaError`), `label`, `phase`, `agent_type`, `model`, `effort`, `timeout_ms`{isolation_option}.
 - `parallel(thunks)` runs functions such as `() => agent(...)` concurrently and resolves to their results in order; a thunk that throws yields null. At most 4096.
 - `pipeline(items, ...stages)` passes each item through async stages independently, with no barrier between stages; a stage that throws or returns null ends that item with null.
 - `phase(title)` attributes later agents to a phase; `log(...values)` records a progress line.
@@ -168,6 +182,8 @@ To loop until dry, repeat rounds of agents while they find new items and `((awai
 struct WorkflowStartHandler {
     max_concurrent_agents: usize,
     max_agents_per_run: usize,
+    /// `agent_worktree_isolation` is enabled for the turn (R1.7).
+    worktree_isolation: bool,
 }
 
 #[derive(Deserialize)]
@@ -222,7 +238,11 @@ impl ToolExecutor<ToolInvocation> for WorkflowStartHandler {
         ]);
         function_tool(
             WORKFLOW_TOOL,
-            workflow_description(self.max_concurrent_agents, self.max_agents_per_run),
+            workflow_description(
+                self.max_concurrent_agents,
+                self.max_agents_per_run,
+                self.worktree_isolation,
+            ),
             JsonSchema::object(
                 properties,
                 Some(vec!["script".to_string()]),
@@ -586,4 +606,33 @@ pub(crate) async fn cancel_run(run: &WorkflowRun) -> RunSnapshot {
         let _ = tokio::time::timeout(CANCEL_WAIT, run.wait_finished()).await;
     }
     run.snapshot(/*include_agents*/ false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_utils_string::approx_token_count;
+
+    /// R1.7: the description names the `isolation` option only when agent worktree
+    /// isolation is enabled, and both variants stay within 1500 tokens.
+    #[test]
+    fn description_names_isolation_only_when_enabled() {
+        let without = workflow_description(
+            /*max_concurrent_agents*/ 16, /*max_agents_per_run*/ 1000,
+            /*worktree_isolation*/ false,
+        );
+        let with = workflow_description(
+            /*max_concurrent_agents*/ 16, /*max_agents_per_run*/ 1000,
+            /*worktree_isolation*/ true,
+        );
+        assert!(!without.contains("isolation"), "{without}");
+        assert!(with.contains("`isolation: \"worktree\"`"), "{with}");
+        for description in [&without, &with] {
+            assert!(
+                approx_token_count(description) <= 1500,
+                "{} tokens",
+                approx_token_count(description)
+            );
+        }
+    }
 }
