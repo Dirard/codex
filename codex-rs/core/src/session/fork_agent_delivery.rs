@@ -22,6 +22,7 @@ use super::turn_context::TurnContext;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::agent::control::fork_completion::FollowupCompletionWatcher;
+use crate::state::TurnState;
 
 impl Session {
     pub(crate) fn enqueue_inter_agent_communication(
@@ -98,6 +99,33 @@ impl Session {
                 status_rx,
             )
             .await
+    }
+
+    /// Fork (H5): a wake whose turn reservation is gone puts the input it took back in the
+    /// thread queues instead of dropping it with the reservation's turn state. Mail keeps the
+    /// start options the wake gave its turn context.
+    pub(crate) async fn fork_requeue_input(
+        &self,
+        turn_state: &tokio::sync::Mutex<TurnState>,
+        turn_context: &TurnContext,
+    ) {
+        let input = self
+            .input_queue
+            .take_pending_input_for_turn_state(turn_state)
+            .await;
+        let metadata = &turn_context.turn_metadata_state;
+        let start_options = TurnStartOptions {
+            turn_trigger: metadata.current_turn_trigger(),
+            final_output_json_schema: turn_context.final_output_json_schema.clone(),
+            parent_turn_id: metadata.parent_turn_id(),
+            initiating_agent_path: metadata.initiating_agent_path().cloned(),
+            root_turn_id: metadata.root_turn_id(),
+            cyber_access_program: turn_context.cyber_access_program,
+            ..Default::default()
+        };
+        self.input_queue
+            .requeue_lost_wake_input(input, start_options)
+            .await;
     }
 
     /// Fork (H3): only a wake that still owns its turn reservation starts its follow-up

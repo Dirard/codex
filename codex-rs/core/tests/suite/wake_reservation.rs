@@ -5,6 +5,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
+use codex_core::NotSubmittedReason;
+use codex_core::StartIfIdleSubmission;
 use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_extension_api::ExtensionFuture;
@@ -204,6 +206,131 @@ async fn interrupt_during_wake_context_construction_does_not_start_turn() -> any
 
     assert_eq!(sleeping_turn.started.load(Ordering::SeqCst), 1);
     requests.single_request();
+    codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+/// The mail a wake took before an interrupt invalidated it waits for the next turn instead of
+/// going away with the wake's turn state.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupt_during_wake_context_construction_keeps_mail_for_the_next_turn()
+-> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let initial = responses::mount_sse_once(&server, responses::sse_completed("initial")).await;
+    let models = Arc::new(GatedModelsManager {
+        inner: StaticModelsManager::new(/*auth_manager*/ None, bundled_models_response()?),
+        gate_next_lookup: AtomicBool::new(/*v*/ false),
+        context_build: Gate::default(),
+    });
+    let sleeping_turn = Arc::new(SleepingTurn::default());
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.turn_lifecycle_contributor(sleeping_turn.clone());
+    let test = test_codex()
+        .with_models_manager(models.clone())
+        .with_extensions(Arc::new(extensions.build()))
+        .build_with_auto_env(&server)
+        .await?;
+    let codex = &test.codex;
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "wait for the worker".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    sleeping_turn.stop.entered.notified().await;
+    codex
+        .submit(Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                AgentPath::try_from("/root/worker").expect("valid worker path"),
+                AgentPath::root(),
+                Vec::new(),
+                "worker completed".to_string(),
+                /*trigger_turn*/ false,
+            ),
+            start_options: Default::default(),
+        })
+        .await?;
+    codex.submit(Op::RealtimeConversationListVoices).await?;
+    wait_for_event(codex, |event| {
+        matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
+    })
+    .await;
+    models
+        .gate_next_lookup
+        .store(/*val*/ true, Ordering::SeqCst);
+    sleeping_turn.stop.release.notify_one();
+
+    // The wake has taken the mail when it builds its turn context; interrupt it there.
+    models.context_build.entered.notified().await;
+    codex.submit(Op::Interrupt).await?;
+    codex.submit(Op::RealtimeConversationListVoices).await?;
+    wait_for_event(codex, |event| {
+        matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
+    })
+    .await;
+    models.context_build.release.notify_one();
+    sleeping_turn.finished.notified().await;
+    initial.single_request();
+
+    // The mail reaches the model with an explicit turn: a follow-up step of the first one or,
+    // when that turn defers queue-only mail, the next turn.
+    let mut explicit = Vec::new();
+    for index in 0..4 {
+        explicit.push(
+            responses::mount_sse_once(
+                &server,
+                responses::sse_completed(&format!("explicit-{index}")),
+            )
+            .await,
+        );
+    }
+    let mail = serde_json::json!([{"type": "input_text", "text": "worker completed"}]);
+    let mail_reached_model = || {
+        explicit
+            .iter()
+            .flat_map(responses::ResponseMock::requests)
+            .any(|request| {
+                request
+                    .inputs_of_type("agent_message")
+                    .iter()
+                    .any(|message| message["content"] == mail)
+            })
+    };
+    for text in ["continue", "read the worker update"] {
+        // A finishing turn is not idle yet; acceptance proves the previous turn ended.
+        let turn_id = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                match codex
+                    .start_turn_if_idle(TurnInputRequest::user_input(vec![UserInput::Text {
+                        text: text.to_string(),
+                        text_elements: Vec::new(),
+                    }]))
+                    .await?
+                {
+                    StartIfIdleSubmission::Started { turn_id, .. } => {
+                        return Ok::<_, anyhow::Error>(turn_id);
+                    }
+                    StartIfIdleSubmission::NotSubmitted {
+                        reason: NotSubmittedReason::NotIdle,
+                    } => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+                    other => anyhow::bail!("unexpected explicit turn result: {other:?}"),
+                }
+            }
+        })
+        .await??;
+        wait_for_event(
+            codex,
+            |event| matches!(event, EventMsg::TurnComplete(complete) if complete.turn_id == turn_id),
+        )
+        .await;
+        if mail_reached_model() {
+            break;
+        }
+    }
+    assert!(
+        mail_reached_model(),
+        "the mail the interrupted wake took should reach the model in an explicit turn"
+    );
     codex.shutdown_and_wait().await?;
     Ok(())
 }

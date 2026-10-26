@@ -11,10 +11,12 @@ use codex_protocol::turn_input::TurnStartOptions;
 
 use super::InputQueue;
 use super::InputQueueActivity;
+use super::PendingMailboxCommunication;
 use super::TurnInput;
 use super::TurnInputQueue;
 /// The parent names the spawn budget of queued mail through `fork::*`, without a `use`.
 pub(super) use crate::agent::types::TurnSpawnBudget;
+use crate::agent_communication::PENDING_MAILBOX_MESSAGES;
 use crate::context::BackgroundTerminalNotification;
 use crate::context::ContextualUserFragment;
 use crate::context::WorkflowNotification;
@@ -246,6 +248,47 @@ impl InputQueue {
         } else {
             InputQueueActivity::BackgroundTerminal
         });
+    }
+
+    /// Fork (H5 in `docs/fork/01-multi-agent-runtime.md`): a wake that lost its turn
+    /// reservation before its turn started puts the input it took back in front of the thread
+    /// queues; nothing else would deliver it. Mail that asks for a turn gets the start options
+    /// of the wake (queue-only mail has none), without a spawn budget; background
+    /// notifications go back as an abort returns them. Other input of the reservation is
+    /// dropped, as `clear_pending` drops it.
+    pub(crate) async fn requeue_lost_wake_input(
+        &self,
+        input: Vec<TurnInput>,
+        start_options: TurnStartOptions,
+    ) {
+        let (notifications, rest) = take_background_notification_items(input);
+        let mails: Vec<_> = rest
+            .into_iter()
+            .filter_map(|item| match item {
+                TurnInput::InterAgentCommunication(communication) => Some(communication),
+                // Dropped before any queue lock is taken.
+                _ => None,
+            })
+            .collect();
+        if !mails.is_empty() {
+            let mut pending = self.mailbox_pending_mails.lock().await;
+            for communication in mails.into_iter().rev() {
+                let start_options = if communication.trigger_turn {
+                    start_options.clone()
+                } else {
+                    TurnStartOptions::default()
+                };
+                pending.push_front(PendingMailboxCommunication {
+                    communication,
+                    start_options,
+                    turn_spawn_budget: None,
+                    _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
+                });
+            }
+            drop(pending);
+            self.activity_tx.send_replace(InputQueueActivity::Mailbox);
+        }
+        self.requeue_background_notifications(notifications).await;
     }
 
     /// Fork: take every queued notification, with the overflow summary, for a shutdown

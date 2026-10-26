@@ -571,6 +571,7 @@ impl Session {
             .as_ref()
             .is_none_or(|turn| !Arc::ptr_eq(&turn.turn_state, &turn_state))
         {
+            self.fork_requeue_input(&turn_state, &turn_context).await;
             return;
         }
         self.fork_start_followup_watcher(followup_watcher);

@@ -481,3 +481,99 @@ async fn turn_local_background_notification_reports_its_activity() {
         Some(InputQueueActivity::BackgroundTerminal)
     );
 }
+
+/// Fork (H5): a wake that lost its turn reservation puts its mail and background
+/// notifications back in front of the thread queues. Mail that asks for a turn carries the
+/// wake's start options; other input of the reservation is dropped.
+#[tokio::test]
+async fn lost_wake_input_returns_to_the_front_of_the_thread_queues() {
+    let input_queue = InputQueue::new();
+    let later_mail = make_mail(
+        AgentPath::root(),
+        AgentPath::root(),
+        "later mail",
+        /*trigger_turn*/ false,
+    );
+    input_queue
+        .enqueue_mailbox_communication(
+            later_mail.clone().into(),
+            Default::default(),
+            /*turn_spawn_budget*/ None,
+        )
+        .await;
+    input_queue
+        .enqueue_background_notification(
+            /*key*/ None,
+            /*session_id*/ None,
+            /*wakes*/ false,
+            |_| background_notification("later notification"),
+        )
+        .await;
+    let lost_trigger_mail = make_mail(
+        AgentPath::root(),
+        AgentPath::root(),
+        "lost trigger mail",
+        /*trigger_turn*/ true,
+    );
+    let lost_queued_mail = make_mail(
+        AgentPath::root(),
+        AgentPath::root(),
+        "lost queue-only mail",
+        /*trigger_turn*/ false,
+    );
+
+    input_queue
+        .requeue_lost_wake_input(
+            vec![
+                TurnInput::InterAgentCommunication(lost_trigger_mail.clone().into()),
+                TurnInput::ResponseItem(ResponseItemEnvelope::new(background_notification(
+                    "lost notification",
+                ))),
+                TurnInput::InterAgentCommunication(lost_queued_mail.clone().into()),
+                TurnInput::UserInput {
+                    content: vec![UserInput::Text {
+                        text: "dropped".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    client_id: None,
+                    metadata: UserInputMetadata::default(),
+                },
+            ],
+            TurnStartOptions {
+                turn_trigger: Some("agent_message".to_string()),
+                parent_turn_id: Some("parent-turn".to_string()),
+                root_turn_id: Some("root-turn".to_string()),
+                ..Default::default()
+            },
+        )
+        .await;
+
+    assert!(input_queue.has_trigger_turn_mailbox_items().await);
+    let (items, start_options, _) = input_queue.drain_mailbox_input_items().await;
+    assert_eq!(
+        items,
+        vec![
+            TurnInput::InterAgentCommunication(lost_trigger_mail.into()),
+            TurnInput::InterAgentCommunication(lost_queued_mail.into()),
+            TurnInput::InterAgentCommunication(later_mail.into()),
+            TurnInput::ResponseItem(ResponseItemEnvelope::new(background_notification(
+                "lost notification"
+            ))),
+            TurnInput::ResponseItem(ResponseItemEnvelope::new(background_notification(
+                "later notification"
+            ))),
+        ]
+    );
+    assert_eq!(
+        (
+            start_options.turn_trigger.as_deref(),
+            start_options.parent_turn_id.as_deref(),
+            start_options.root_turn_id.as_deref(),
+        ),
+        (
+            Some("agent_message"),
+            Some("parent-turn"),
+            Some("root-turn")
+        )
+    );
+}
