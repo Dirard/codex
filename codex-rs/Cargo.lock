@@ -3006,6 +3006,7 @@ dependencies = [
  "codex-utils-cache",
  "codex-utils-cargo-bin",
  "codex-utils-git-discovery",
+ "codex-utils-head-tail-buffer",
  "codex-utils-home-dir",
  "codex-utils-image",
  "codex-utils-output-truncation",
@@ -5187,6 +5188,13 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "codex-utils-head-tail-buffer"
+version = "0.164.0"
+dependencies = [
+ "pretty_assertions",
 ]
 
 [[package]]
