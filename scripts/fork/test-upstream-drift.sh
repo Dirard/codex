@@ -72,7 +72,7 @@ git add upstream.txt
 git_at $((t0 + 2 * day)) commit -q -m 'upstream change'
 
 check behind-recent 0 '^behind:    1 commits, since .* \(3 days\)$' $((t0 + 5 * day)) fork main
-check behind-due 3 '^rebase due: behind for 10 days, limit 7$' $((t0 + 12 * day)) fork main
+check behind-due 3 '^sync due: behind for 10 days, limit 7$' $((t0 + 12 * day)) fork main
 check behind-custom-limit 0 '^behind:    1 commits' $((t0 + 12 * day)) --max-age-days 30 fork main
 
 git checkout -q fork
@@ -88,9 +88,9 @@ check conflict-listed 0 '^  shared.txt$' $((t0 + 5 * day)) fork main
 check conflict-counted 0 '^conflicts: 1 files$' $((t0 + 5 * day)) fork main
 
 summary="${work}/summary.md"
-check summary-written 3 'rebase due' $((t0 + 20 * day)) --summary "${summary}" fork main
+check summary-written 3 'sync due' $((t0 + 20 * day)) --summary "${summary}" fork main
 # shellcheck disable=SC2016 # a Markdown code span, not a substitution
-if grep -q '^- `shared.txt`$' "${summary}" && grep -q '^\*\*Rebase due:\*\*' "${summary}"; then
+if grep -q '^- `shared.txt`$' "${summary}" && grep -q '^\*\*Sync due:\*\*' "${summary}"; then
   echo "ok   summary-content"
   passed=$((passed + 1))
 else

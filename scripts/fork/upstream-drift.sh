@@ -10,7 +10,7 @@
 # --summary the same report is appended to FILE as Markdown.
 #
 # Exit status: 0 when the fork is current or behind for less than N days
-# (default 7), 3 when a rebase is due, 2 on usage or git errors.
+# (default 7), 3 when an upstream sync is due, 2 on usage or git errors.
 # UPSTREAM_DRIFT_NOW (seconds since the epoch) replaces the current time.
 
 set -euo pipefail
@@ -99,7 +99,7 @@ report() {
     printf '  %s\n' "${file}"
   done
   if [[ ${due} -eq 1 ]]; then
-    printf 'rebase due: behind for %s days, limit %s\n' "${age_days}" "${max_age_days}"
+    printf 'sync due: behind for %s days, limit %s\n' "${age_days}" "${max_age_days}"
   fi
 }
 
@@ -124,7 +124,7 @@ if [[ -n "${summary}" ]]; then
       printf -- '- `%s`\n' "${file}"
     done
     if [[ ${due} -eq 1 ]]; then
-      printf '\n**Rebase due:** the fork has been behind upstream for %s days (limit %s).\n' "${age_days}" "${max_age_days}"
+      printf '\n**Sync due:** the fork has been behind upstream for %s days (limit %s).\n' "${age_days}" "${max_age_days}"
     fi
   } >>"${summary}"
 fi

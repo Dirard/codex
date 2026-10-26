@@ -6,10 +6,12 @@ name: fork-upstream-drift
 #   git fetch https://github.com/openai/codex.git main
 #   scripts/fork/upstream-drift.sh HEAD FETCH_HEAD
 #
-# A manual or scheduled run fails when a rebase is due, so GitHub notifies the
-# owner. A run for a push to codex/fork only reports. GitHub runs `schedule`
-# only from the default branch; on codex/fork the trigger stays inert until
-# the default branch carries it or dispatches this workflow.
+# A manual or scheduled run fails when an upstream sync is due, so GitHub
+# notifies the owner. A run for a push to codex/fork only reports. GitHub runs
+# `schedule` only from the default branch, so the same file also lives on
+# main (the openai/codex mirror): there the schedule fires and the job checks
+# out codex/fork. Keep both copies identical, so syncing main into codex/fork
+# merges cleanly.
 on:
   push:
     branches: [codex/fork]
@@ -18,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       max_age_days:
-        description: Days the fork may stay behind upstream before a rebase is due
+        description: Days the fork may stay behind upstream before a sync is due
         required: false
         default: "7"
 
@@ -32,6 +34,8 @@ concurrency:
 jobs:
   drift:
     name: Upstream drift
+    # Upstream and other forks carry no codex/fork branch.
+    if: github.repository == 'Dirard/codex'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -53,7 +57,7 @@ jobs:
           scripts/fork/upstream-drift.sh --max-age-days "${MAX_AGE_DAYS}" \
             --summary "${GITHUB_STEP_SUMMARY}" HEAD FETCH_HEAD || status=$?
           if [[ ${status} -eq 3 && "${EVENT}" == push ]]; then
-            echo "::notice::A rebase onto openai/codex main is due; see the job summary."
+            echo "::notice::An upstream sync of codex/fork is due; see the job summary."
             exit 0
           fi
           exit "${status}"
