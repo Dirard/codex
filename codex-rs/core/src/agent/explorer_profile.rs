@@ -336,6 +336,20 @@ fn is_read_only(annotations: Option<&rmcp::model::ToolAnnotations>) -> bool {
     annotations.and_then(|annotations| annotations.read_only_hint) == Some(true)
 }
 
+/// MCP servers that offer a tool without annotations, sorted and deduplicated (R2.9).
+///
+/// A cached catalog carries no annotations, so these are the servers an explorer must reach
+/// live before it can tell their read-only tools apart.
+pub(crate) fn servers_without_annotations(tools: &[codex_mcp::ToolInfo]) -> Vec<String> {
+    tools
+        .iter()
+        .filter(|tool| tool.tool.annotations.is_none())
+        .map(|tool| tool.server_name.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 /// Worktree note of an explorer in an isolated worktree (spec UC9, R9.3).
 ///
 /// The note of other children asks them to keep their edits in the worktree and says Codex

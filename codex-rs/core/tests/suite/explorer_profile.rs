@@ -1574,3 +1574,91 @@ async fn explorer_calls_only_read_only_mcp_tools(explorer_profile: bool) -> Resu
     }
     Ok(())
 }
+
+const SPAWNED_SEARCH_CALL_ID: &str = "spawned-explorer-probe-search";
+
+// R2.9 on the real spawn path: an explorer that a parent spawns (not a thread started with an
+// explorer source) finds the parent's read-only MCP tool through `tool_search`, and only it.
+#[test_case(true; "profile_enabled")]
+#[test_case(false; "profile_disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawned_explorer_finds_only_read_only_mcp_tools(explorer_profile: bool) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    core_test_support::skip_if_wine_exec!(
+        Ok(()),
+        "the MCP fixture requires a host Python interpreter"
+    );
+
+    let server = start_mock_server().await;
+    mount_parent_spawn(
+        &server,
+        json!({
+            "message": CHILD_PROMPT,
+            "task_name": "scout",
+            "agent_type": "explorer",
+            "fork_turns": "none",
+        }),
+    )
+    .await?;
+    mount_sse_once_match(
+        &server,
+        child_request_without(CHILD_PROMPT, &[SPAWNED_SEARCH_CALL_ID]),
+        sse(vec![
+            ev_response_created("resp-child-1"),
+            core_test_support::responses::ev_tool_search_call(
+                SPAWNED_SEARCH_CALL_ID,
+                &json!({ "query": "probe peek poke plain", "limit": 8 }),
+            ),
+            ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+    let after_search = mount_sse_once_match(
+        &server,
+        child_request_containing(SPAWNED_SEARCH_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-child-2"),
+            ev_assistant_message("msg-child-2", "explorer done"),
+            ev_completed("resp-child-2"),
+        ]),
+    )
+    .await;
+
+    let test = build_test(explorer_profile, |config| {
+        config
+            .mcp_servers
+            .set(
+                serde_json::from_value(json!({
+                    "probe": {
+                        "command": if cfg!(windows) { "python" } else { "python3" },
+                        "args": ["-u", "-c", MCP_PROBE_SERVER],
+                        "default_tools_approval_mode": "approve"
+                    }
+                }))
+                .expect("probe MCP server config"),
+            )
+            .expect("test config should accept the probe MCP server");
+    })
+    .build(&server)
+    .await?;
+    test.submit_turn_with_approval_and_permission_profile(
+        PARENT_PROMPT,
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+    let child = wait_for_child(&test).await?;
+    wait_for_event(&child, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let request = wait_for_request(&after_search).await?;
+    let searched = searched_tool_names(&request, SPAWNED_SEARCH_CALL_ID);
+    assert!(searched.iter().any(|name| name == "peek"), "{searched:?}");
+    for hidden in ["poke", "plain"] {
+        assert_eq!(
+            searched.iter().any(|name| name == hidden),
+            !explorer_profile,
+            "{hidden}: {searched:?}"
+        );
+    }
+    Ok(())
+}

@@ -459,10 +459,9 @@ impl Session {
             .chain(&recovered_oauth_servers)
             .cloned()
             .collect::<Vec<_>>();
+        // Fork: a read-only explorer needs live MCP tool annotations (explorer_profile).
         if let Some(binding) = self
-            .services
-            .mcp_runtime
-            .current_binding_with_requirements(&required_servers, required_plugins)
+            .fork_binding_with_requirements(turn_context, &required_servers, required_plugins)
             .await
         {
             return binding;
