@@ -75,6 +75,8 @@ pub fn is_structured_feature_path<S: AsRef<str>>(path: &[S]) -> bool {
                 | "network_proxy"
                 | "sleep_tool"
                 | "runtime_agent_instances"
+                // Fork: explorer profile settings (specs/explorer-and-questions-2026-10-25.md).
+                | "explorer_profile"
         )
 }
 

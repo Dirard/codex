@@ -101,6 +101,42 @@ async fn profile_config_defaults_and_rejects_tiny_result_limit() {
     );
 }
 
+/// R1.5: a boolean toggle (`--enable`, `-c`, `/experimental`) sets only `enabled` of the
+/// `[features.explorer_profile]` table and keeps its settings.
+#[tokio::test]
+async fn profile_table_survives_boolean_toggles() {
+    assert!(codex_config::is_structured_feature_path(&[
+        "features",
+        "explorer_profile"
+    ]));
+
+    let home = TempDir::new().expect("create temp dir");
+    std::fs::write(
+        home.path().join("config.toml"),
+        "[features.explorer_profile]\nenabled = false\nmodel = \"cheap-model\"\nreasoning_effort = \"low\"\nmax_result_tokens = 500\n",
+    )
+    .expect("write config.toml");
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .cli_overrides(vec![(
+            "features.explorer_profile".to_string(),
+            TomlValue::Boolean(true),
+        )])
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("load test config");
+    assert!(enabled(&config));
+    assert_eq!(
+        config.explorer_profile,
+        ExplorerProfileConfig {
+            model: Some("cheap-model".to_string()),
+            reasoning_effort: Some(ReasoningEffort::Low),
+            max_result_tokens: 500,
+        }
+    );
+}
+
 #[tokio::test]
 async fn profile_applies_only_to_explorer_role_when_enabled() {
     let (_home, disabled) = config_with(&[]).await;
