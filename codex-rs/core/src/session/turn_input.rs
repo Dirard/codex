@@ -61,6 +61,10 @@ use uuid::Uuid;
 #[path = "turn_input_tests.rs"]
 mod tests;
 
+// Fork: automatic turns for waking background notifications.
+#[path = "turn_input_fork.rs"]
+mod fork;
+
 /// Why input is starting a turn; shared by admission and input delivery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TurnStartKind {
@@ -774,22 +778,6 @@ impl Session {
             return None;
         }
         Some(configuration.clone())
-    }
-
-    /// Fork: a waking background terminal notification starts an automatic turn unless the
-    /// user interrupted the last turn or Plan mode forbids automatic work (UC3, R3.1, R3.3).
-    pub(crate) async fn should_wake_on_background_notifications(&self) -> bool {
-        if self.is_interrupted() || !self.input_queue.has_waking_background_notifications().await {
-            return false;
-        }
-        let state = self.state.lock().await;
-        TurnStartKind::Automatic.permits_mode(
-            state
-                .session_configuration
-                .step_settings
-                .collaboration_mode
-                .mode,
-        )
     }
 
     async fn should_wake_on_agent_messages(&self) -> bool {

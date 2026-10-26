@@ -1,10 +1,5 @@
 use crate::agent::api::AgentControl;
-use crate::agent::types::TurnSpawnBudget;
 use crate::agent_communication::PENDING_MAILBOX_MESSAGES;
-use crate::context::BackgroundTerminalNotification;
-use crate::context::ContextualUserFragment;
-use crate::context::WorkflowNotification;
-use crate::context::is_background_notification_item;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
 use crate::state::TurnState;
@@ -23,6 +18,11 @@ use tokio::sync::Mutex;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
+
+// Fork: background notifications and the model-step rule of turn input.
+#[path = "input_queue_fork.rs"]
+mod fork;
+pub(crate) use fork::*;
 
 /// Host capture metadata belonging to one input, including steers within another turn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,29 +50,6 @@ pub enum TurnInput {
     // through the in-memory queue.
     ResponseItem(#[serde(with = "turn_input_response_item")] ResponseItemEnvelope),
     InterAgentCommunication(crate::PendingAgentMessage),
-}
-
-impl TurnInput {
-    /// Fork: whether this input needs a model step of its own, so that a prompt blocked beside
-    /// it cannot end the turn. Tool output, including a late code-mode `notify` result, needs
-    /// one, and so does mail that asks for a turn or a background terminal exit notification.
-    /// Messages such as additional context or hook context and queue-only mail only join the
-    /// next model request.
-    pub(crate) fn needs_model_step(&self) -> bool {
-        match self {
-            TurnInput::UserInput { content, .. } => !content.is_empty(),
-            TurnInput::FunctionCallOutput(_) => true,
-            TurnInput::ResponseItem(envelope) => {
-                matches!(
-                    envelope.item,
-                    ResponseItem::FunctionCallOutput { .. }
-                        | ResponseItem::CustomToolCallOutput { .. }
-                        | ResponseItem::ToolSearchOutput { .. }
-                ) || is_background_notification_item(&envelope.item)
-            }
-            TurnInput::InterAgentCommunication(mail) => mail.trigger_turn,
-        }
-    }
 }
 
 mod turn_input_response_item {
@@ -117,122 +94,6 @@ pub(crate) enum InputQueueActivity {
     Workflow,
 }
 
-/// Fork: queued terminal notifications beyond this count omit their output tail. Workflow
-/// notifications in the same queue do not count (dynamic workflow R7.8).
-pub(crate) const DETAILED_PENDING_BACKGROUND_NOTIFICATIONS: usize = 8;
-/// Fork: queued terminal notifications beyond this count collapse into one summary line.
-/// Workflow notifications in the same queue do not count and are never dropped (R7.8).
-pub(crate) const MAX_PENDING_BACKGROUND_NOTIFICATIONS: usize = 32;
-/// Fork: the summary line names at most this many dropped session IDs.
-const MAX_LISTED_DROPPED_SESSIONS: usize = 16;
-
-/// Fork: runs once the model's input took a queued notification (R2.12).
-pub(crate) type SampledCallback = Box<dyn FnOnce() + Send>;
-
-/// Fork: a background terminal notification as the queue stores it.
-pub(crate) struct QueuedBackgroundNotification {
-    pub(crate) item: ResponseItem,
-    /// Called when a turn drains the notification; dropped when it is withdrawn.
-    pub(crate) on_sampled: Option<SampledCallback>,
-}
-
-impl From<ResponseItem> for QueuedBackgroundNotification {
-    fn from(item: ResponseItem) -> Self {
-        Self {
-            item,
-            on_sampled: None,
-        }
-    }
-}
-
-/// Fork: whether the queue kept a background terminal notification.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BackgroundNotificationEnqueue {
-    Queued,
-    /// Over the cap: only the summary line names the session (R3.4).
-    Dropped,
-}
-
-/// Fork: background terminal exit notifications waiting for a model step.
-///
-/// They wait at thread level, like mail, so a turn that already decided to finish cannot
-/// record one without sampling it; the next turn drains them.
-#[derive(Default)]
-struct BackgroundNotificationQueue {
-    items: VecDeque<BackgroundNotificationEntry>,
-    dropped: usize,
-    dropped_session_ids: Vec<i32>,
-    dropped_wakes: bool,
-}
-
-struct BackgroundNotificationEntry {
-    item: ResponseItem,
-    wakes: bool,
-    /// A workflow run notification rather than a background terminal one.
-    workflow: bool,
-    /// The `ExitNotifier` key, so a poll that shows the exit can withdraw it (R2.10).
-    key: Option<u64>,
-    on_sampled: Option<SampledCallback>,
-}
-
-impl BackgroundNotificationQueue {
-    fn is_empty(&self) -> bool {
-        self.items.is_empty() && self.dropped == 0
-    }
-
-    /// Queued background terminal notifications, which the terminal limits count (R7.8).
-    fn terminal_count(&self) -> usize {
-        self.items.iter().filter(|entry| !entry.workflow).count()
-    }
-
-    fn wakes(&self) -> bool {
-        self.dropped_wakes || self.items.iter().any(|entry| entry.wakes)
-    }
-
-    /// Takes every notification and the callbacks to run once the lock is released.
-    fn drain(&mut self) -> (Vec<TurnInput>, Vec<SampledCallback>) {
-        let mut sampled = Vec::new();
-        let mut items: Vec<TurnInput> = self
-            .items
-            .drain(..)
-            .map(|entry| {
-                sampled.extend(entry.on_sampled);
-                TurnInput::ResponseItem(ResponseItemEnvelope::new(entry.item))
-            })
-            .collect();
-        if self.dropped > 0 {
-            let summary = BackgroundTerminalNotification::new(dropped_summary(
-                self.dropped,
-                &self.dropped_session_ids,
-            ));
-            items.push(TurnInput::ResponseItem(ResponseItemEnvelope::new(
-                ContextualUserFragment::into(summary),
-            )));
-        }
-        self.dropped = 0;
-        self.dropped_session_ids.clear();
-        self.dropped_wakes = false;
-        (items, sampled)
-    }
-}
-
-/// Fork: the overflow summary names the dropped sessions (R3.4).
-fn dropped_summary(dropped: usize, session_ids: &[i32]) -> String {
-    let listed = session_ids
-        .iter()
-        .take(MAX_LISTED_DROPPED_SESSIONS)
-        .map(i32::to_string)
-        .collect::<Vec<_>>();
-    let sessions = match dropped.saturating_sub(listed.len()) {
-        _ if listed.is_empty() => String::new(),
-        0 => format!(" (sessions {})", listed.join(", ")),
-        unlisted => format!(" (sessions {} and {unlisted} more)", listed.join(", ")),
-    };
-    format!(
-        "{dropped} more background terminals stopped while too many notifications were pending{sessions}; call write_stdin with one of these session IDs to read the exit code and output of a terminal that exited on its own."
-    )
-}
-
 /// Turn-local pending input storage owned by the input queue flow.
 #[derive(Default)]
 pub(crate) struct TurnInputQueue {
@@ -246,13 +107,13 @@ pub(crate) struct InputQueue {
     activity_tx: watch::Sender<InputQueueActivity>,
     controller: Option<(ThreadId, Arc<dyn AgentControl>, watch::Receiver<bool>)>,
     mailbox_pending_mails: Mutex<VecDeque<PendingMailboxCommunication>>,
-    background_notifications: Mutex<BackgroundNotificationQueue>,
+    background_notifications: Mutex<BackgroundNotificationQueue>, // Fork: input_queue_fork.rs
 }
 
 pub(crate) struct PendingMailboxCommunication {
     pub(crate) communication: crate::PendingAgentMessage,
     start_options: TurnStartOptions,
-    turn_spawn_budget: Option<TurnSpawnBudget>,
+    turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>, // Fork: spawn budget
     _diagnostics_guard: GaugeGuard,
 }
 
@@ -316,22 +177,8 @@ impl InputQueue {
         };
         let pending_activity = if let Some(activity) = turn_activity {
             Some(activity)
-        } else if self.has_background_notifications().await {
-            // Fork: a queued workflow notification names its own activity.
-            let workflow = self
-                .background_notifications
-                .lock()
-                .await
-                .items
-                .iter()
-                .any(|entry| {
-                    crate::context::WorkflowNotification::is_notification_item(&entry.item)
-                });
-            Some(if workflow {
-                InputQueueActivity::Workflow
-            } else {
-                InputQueueActivity::BackgroundTerminal
-            })
+        } else if let Some(activity) = self.fork_background_activity().await {
+            Some(activity)
         } else if self.has_pending_mailbox_items().await {
             Some(InputQueueActivity::Mailbox)
         } else {
@@ -376,7 +223,7 @@ impl InputQueue {
         &self,
         communication: crate::PendingAgentMessage,
         start_options: TurnStartOptions,
-        turn_spawn_budget: Option<TurnSpawnBudget>,
+        turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
     ) {
         let mut pending = self.mailbox_pending_mails.lock().await;
         // Mail retained while unloaded precedes new submissions to the loaded session.
@@ -398,136 +245,6 @@ impl InputQueue {
                 .is_some_and(|(_, _, updates)| *updates.borrow())
     }
 
-    /// Fork: queue a background terminal exit notification for the next model step.
-    ///
-    /// `render` receives whether the notification may include its output tail. `key`
-    /// identifies the notification for `withdraw_background_notification`.
-    pub(crate) async fn enqueue_background_notification<R: Into<QueuedBackgroundNotification>>(
-        &self,
-        key: Option<u64>,
-        session_id: Option<i32>,
-        wakes: bool,
-        render: impl FnOnce(/*with_output*/ bool) -> R,
-    ) -> BackgroundNotificationEnqueue {
-        let outcome = {
-            let mut queue = self.background_notifications.lock().await;
-            let terminals = queue.terminal_count();
-            if terminals >= MAX_PENDING_BACKGROUND_NOTIFICATIONS {
-                queue.dropped += 1;
-                if queue.dropped_session_ids.len() < MAX_LISTED_DROPPED_SESSIONS {
-                    queue.dropped_session_ids.extend(session_id);
-                }
-                queue.dropped_wakes |= wakes;
-                BackgroundNotificationEnqueue::Dropped
-            } else {
-                let with_output = terminals < DETAILED_PENDING_BACKGROUND_NOTIFICATIONS;
-                let QueuedBackgroundNotification { item, on_sampled } = render(with_output).into();
-                queue.items.push_back(BackgroundNotificationEntry {
-                    item,
-                    wakes,
-                    workflow: false,
-                    key,
-                    on_sampled,
-                });
-                BackgroundNotificationEnqueue::Queued
-            }
-        };
-        self.activity_tx
-            .send_replace(InputQueueActivity::BackgroundTerminal);
-        outcome
-    }
-
-    /// Fork: remove a queued notification that a tool response made redundant (R2.10).
-    pub(crate) async fn withdraw_background_notification(&self, key: u64) -> bool {
-        // Dropping a withdrawn entry drops its release callback: the poll that showed the
-        // exit already removed the process entry.
-        let withdrawn: VecDeque<BackgroundNotificationEntry> = {
-            let mut queue = self.background_notifications.lock().await;
-            let (withdrawn, kept) = std::mem::take(&mut queue.items)
-                .into_iter()
-                .partition(|entry| entry.key == Some(key));
-            queue.items = kept;
-            withdrawn
-        };
-        !withdrawn.is_empty()
-    }
-
-    /// Fork: put notifications that an aborted turn or task took back in front of the
-    /// thread queue (R3.7). A background terminal notification no longer wakes the thread;
-    /// a workflow notification still asks for a turn, which the user's interrupt or Plan
-    /// mode hold back like any wake (dynamic workflow R7.7).
-    pub(crate) async fn requeue_background_notifications(&self, items: Vec<ResponseItem>) {
-        if items.is_empty() {
-            return;
-        }
-        let mut workflow_requeued = false;
-        {
-            let mut queue = self.background_notifications.lock().await;
-            for item in items.into_iter().rev() {
-                let workflow = WorkflowNotification::is_notification_item(&item);
-                workflow_requeued |= workflow;
-                queue.items.push_front(BackgroundNotificationEntry {
-                    item,
-                    wakes: workflow,
-                    workflow,
-                    key: None,
-                    on_sampled: None,
-                });
-            }
-        }
-        self.activity_tx.send_replace(if workflow_requeued {
-            InputQueueActivity::Workflow
-        } else {
-            InputQueueActivity::BackgroundTerminal
-        });
-    }
-
-    /// Fork: take every queued notification, with the overflow summary, for a shutdown
-    /// that records them in the thread history (R2.5).
-    pub(crate) async fn take_background_notifications(&self) -> Vec<ResponseItem> {
-        // The shutdown already stopped every process, so nothing is left to release.
-        let (items, _sampled) = self.background_notifications.lock().await.drain();
-        items
-            .into_iter()
-            .filter_map(|input| match input {
-                TurnInput::ResponseItem(envelope) => Some(envelope.item),
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// Fork: queue the completion notification of a workflow run. It always asks for a turn
-    /// and is never dropped: a thread has few runs (dynamic workflow, UC7, R7.1).
-    pub(crate) async fn enqueue_workflow_notification(&self, item: ResponseItem) {
-        self.background_notifications
-            .lock()
-            .await
-            .items
-            .push_back(BackgroundNotificationEntry {
-                item,
-                wakes: true,
-                workflow: true,
-                key: None,
-                on_sampled: None,
-            });
-        self.activity_tx.send_replace(InputQueueActivity::Workflow);
-    }
-
-    /// Fork: whether any background terminal notification is queued.
-    pub(crate) async fn has_background_notifications(&self) -> bool {
-        !self.background_notifications.lock().await.is_empty()
-    }
-
-    /// Fork: whether a queued background terminal notification asks for a turn.
-    pub(crate) async fn has_waking_background_notifications(&self) -> bool {
-        self.background_notifications.lock().await.wakes()
-    }
-
-    /// Fork: mail or background terminal notifications wait for the next model step.
-    pub(crate) async fn has_pending_queued_input(&self) -> bool {
-        self.has_background_notifications().await || self.has_pending_mailbox_items().await
-    }
-
     pub(crate) async fn has_trigger_turn_mailbox_items(&self) -> bool {
         self.mailbox_pending_mails
             .lock()
@@ -542,23 +259,15 @@ impl InputQueue {
         pending.drain(..).collect()
     }
 
-    pub(crate) async fn drain_mailbox_input_items(
-        &self,
-    ) -> (Vec<TurnInput>, TurnStartOptions, Option<TurnSpawnBudget>) {
-        self.drain_mailbox_input_items_for_task(/*take_background_notifications*/ true)
-            .await
-    }
-
-    /// Drains mail and, when `take_background_notifications`, the queued background
-    /// notifications.
-    ///
-    /// Fork: a task other than a regular turn leaves background notifications queued with
-    /// their wake, withdrawal key and release callback, so a waking notification still
-    /// starts its own turn after that task (background-exec R3.8, dynamic workflow R7.7).
+    /// Fork: `drain_mailbox_input_items` (input_queue_fork.rs) drains background notifications too.
     pub(crate) async fn drain_mailbox_input_items_for_task(
         &self,
         take_background_notifications: bool,
-    ) -> (Vec<TurnInput>, TurnStartOptions, Option<TurnSpawnBudget>) {
+    ) -> (
+        Vec<TurnInput>,
+        TurnStartOptions,
+        Option<crate::agent::types::TurnSpawnBudget>,
+    ) {
         let pending_mails = self.drain_mailbox().await;
         // A later follow-up supersedes the earlier choice, including an omitted choice.
         let turn_spawn_budget = pending_mails
@@ -590,17 +299,12 @@ impl InputQueue {
                     .filter(|id| !id.trim().is_empty())
             })
             .map(str::to_string);
-        let mut items: Vec<TurnInput> = pending_mails
+        let mut items = pending_mails
             .into_iter()
             .map(|mail| TurnInput::InterAgentCommunication(mail.communication))
             .collect();
-        if take_background_notifications {
-            let (notifications, sampled) = self.background_notifications.lock().await.drain();
-            items.extend(notifications);
-            for callback in sampled {
-                callback();
-            }
-        }
+        self.fork_take_background_notifications(take_background_notifications, &mut items)
+            .await;
         (items, start_options, turn_spawn_budget)
     }
 
@@ -643,21 +347,15 @@ impl InputQueue {
     }
 
     /// Clear any pending waiters and input buffered for the current turn.
-    ///
-    /// Fork: background notifications in that input, terminal exits and finished workflow
-    /// runs alike, go back to the thread queue, so an abort before the turn sampled them
-    /// does not lose them (R3.7, dynamic workflow R7.7).
     pub(crate) async fn clear_pending(&self, active_turn: &ActiveTurn) {
-        let pending_input = {
-            let mut turn_state = active_turn.turn_state.lock().await;
-            turn_state.clear_pending_waiters();
-            std::mem::take(&mut turn_state.pending_input)
-        };
+        let mut turn_state = active_turn.turn_state.lock().await;
+        turn_state.clear_pending_waiters();
         // Pending mail can own extension attachments whose destructors need the lock released.
-        let (notifications, pending_input) =
-            take_background_notification_items(pending_input.items);
-        drop(pending_input);
-        self.requeue_background_notifications(notifications).await;
+        let pending_input = std::mem::take(&mut turn_state.pending_input);
+        drop(turn_state);
+        // Fork: drops the rest of the input, then requeues its background notifications.
+        self.fork_requeue_background_notifications(pending_input)
+            .await;
     }
 
     pub(crate) async fn defer_mailbox_delivery_to_next_turn(
@@ -744,7 +442,11 @@ impl InputQueue {
     pub(crate) async fn get_pending_input(
         &self,
         active_turn: &Mutex<Option<ActiveTurn>>,
-    ) -> (Vec<TurnInput>, TurnStartOptions, Option<TurnSpawnBudget>) {
+    ) -> (
+        Vec<TurnInput>,
+        TurnStartOptions,
+        Option<crate::agent::types::TurnSpawnBudget>,
+    ) {
         let (pending_input, accepts_mailbox_delivery) = {
             let mut active = active_turn.lock().await;
             match active.as_mut() {
@@ -800,28 +502,8 @@ impl InputQueue {
         if has_turn_pending_input {
             return true;
         }
-        self.has_pending_queued_input().await
+        self.has_pending_queued_input().await // Fork: background notifications count too
     }
-}
-
-/// Fork: split background notifications (terminal exits and finished workflow runs) from
-/// other turn input, keeping order (R3.7, dynamic workflow R7.7).
-fn take_background_notification_items(
-    items: Vec<TurnInput>,
-) -> (Vec<ResponseItem>, Vec<TurnInput>) {
-    let mut notifications = Vec::new();
-    let mut rest = Vec::with_capacity(items.len());
-    for item in items {
-        match item {
-            TurnInput::ResponseItem(envelope)
-                if is_background_notification_item(&envelope.item) =>
-            {
-                notifications.push(envelope.item);
-            }
-            item => rest.push(item),
-        }
-    }
-    (notifications, rest)
 }
 
 impl TurnInputQueue {
@@ -845,22 +527,8 @@ impl TurnInputQueue {
             })
         {
             Some(InputQueueActivity::Steer)
-        } else if self.items.iter().any(|input| {
-            matches!(
-                input,
-                TurnInput::ResponseItem(envelope)
-                    if crate::context::WorkflowNotification::is_notification_item(&envelope.item)
-            )
-        }) {
-            Some(InputQueueActivity::Workflow)
-        } else if self.items.iter().any(|input| {
-            matches!(
-                input,
-                TurnInput::ResponseItem(envelope)
-                    if is_background_notification_item(&envelope.item)
-            )
-        }) {
-            Some(InputQueueActivity::BackgroundTerminal)
+        } else if let Some(activity) = self.fork_notification_activity() {
+            Some(activity)
         } else if self
             .items
             .iter()
@@ -880,78 +548,6 @@ mod tests {
     use codex_protocol::AgentPath;
     use codex_protocol::user_input::UserInput;
     use pretty_assertions::assert_eq;
-
-    /// Fork: the one rule for which input keeps a batch with a blocked prompt going.
-    #[test]
-    fn needs_model_step_covers_prompts_tool_output_and_turn_mail() {
-        let prompt = |content: Vec<UserInput>| TurnInput::UserInput {
-            content,
-            client_id: None,
-            metadata: UserInputMetadata::default(),
-        };
-        let item = |value: serde_json::Value| {
-            ResponseItemEnvelope::new(serde_json::from_value(value).expect("response item"))
-        };
-        let mail = |trigger_turn| {
-            TurnInput::InterAgentCommunication(
-                make_mail(AgentPath::root(), AgentPath::root(), "task", trigger_turn).into(),
-            )
-        };
-        let cases = [
-            (
-                "prompt",
-                prompt(vec![UserInput::Text {
-                    text: "hello".to_string(),
-                    text_elements: Vec::new(),
-                }]),
-                true,
-            ),
-            ("empty prompt", prompt(Vec::new()), false),
-            (
-                "standalone tool output",
-                TurnInput::FunctionCallOutput(item(serde_json::json!({
-                    "type": "function_call_output", "name": "send", "output": "done",
-                }))),
-                true,
-            ),
-            (
-                "late function output",
-                TurnInput::ResponseItem(item(serde_json::json!({
-                    "type": "function_call_output", "call_id": "call", "output": "done",
-                }))),
-                true,
-            ),
-            (
-                "code-mode notify output",
-                TurnInput::ResponseItem(item(serde_json::json!({
-                    "type": "custom_tool_call_output", "call_id": "call", "name": "exec",
-                    "output": "progress",
-                }))),
-                true,
-            ),
-            (
-                "tool search output",
-                TurnInput::ResponseItem(item(serde_json::json!({
-                    "type": "tool_search_output", "call_id": "call", "execution": "client",
-                    "status": "completed", "tools": [],
-                }))),
-                true,
-            ),
-            (
-                "additional context",
-                TurnInput::ResponseItem(item(serde_json::json!({
-                    "type": "message", "role": "developer",
-                    "content": [{"type": "input_text", "text": "context"}],
-                }))),
-                false,
-            ),
-            ("mail that asks for a turn", mail(true), true),
-            ("queue-only mail", mail(false), false),
-        ];
-        for (name, input, expected) in cases {
-            assert_eq!(input.needs_model_step(), expected, "{name}");
-        }
-    }
 
     #[test_case::test_case("ResponseItem", TurnInput::ResponseItem)]
     #[test_case::test_case("FunctionCallOutput", TurnInput::FunctionCallOutput)]
@@ -1310,395 +906,5 @@ mod tests {
             )
             .await;
         assert!(input_queue.has_trigger_turn_mailbox_items().await);
-    }
-
-    fn background_notification(body: &str) -> ResponseItem {
-        ContextualUserFragment::into(BackgroundTerminalNotification::new(body))
-    }
-
-    /// Fork: background terminal notifications wait at thread level and wake waits.
-    #[tokio::test]
-    async fn background_notifications_queue_after_mail_and_report_activity() {
-        let input_queue = InputQueue::new();
-        let (mut activity_rx, pending_activity) =
-            input_queue.subscribe_activity(/*turn_state*/ None).await;
-        assert_eq!(pending_activity, None);
-        assert!(!input_queue.has_pending_queued_input().await);
-
-        let mail = make_mail(
-            AgentPath::try_from("/root/worker").expect("agent path"),
-            AgentPath::root(),
-            "mail",
-            /*trigger_turn*/ false,
-        );
-        input_queue
-            .enqueue_background_notification(
-                /*key*/ None,
-                /*session_id*/ None,
-                /*wakes*/ false,
-                |with_output| {
-                    assert!(with_output);
-                    background_notification("passive")
-                },
-            )
-            .await;
-        input_queue
-            .enqueue_mailbox_communication(
-                mail.clone().into(),
-                Default::default(),
-                /*turn_spawn_budget*/ None,
-            )
-            .await;
-        activity_rx.changed().await.expect("activity");
-        assert!(input_queue.has_pending_queued_input().await);
-        assert!(!input_queue.has_waking_background_notifications().await);
-        assert!(!input_queue.has_trigger_turn_mailbox_items().await);
-        assert_eq!(
-            input_queue.subscribe_activity(/*turn_state*/ None).await.1,
-            Some(InputQueueActivity::BackgroundTerminal)
-        );
-
-        input_queue
-            .enqueue_background_notification(
-                /*key*/ None,
-                /*session_id*/ None,
-                /*wakes*/ true,
-                |_| background_notification("waking"),
-            )
-            .await;
-        assert!(input_queue.has_waking_background_notifications().await);
-
-        let (items, _, _) = input_queue.drain_mailbox_input_items().await;
-        assert_eq!(
-            items,
-            vec![
-                TurnInput::InterAgentCommunication(mail.into()),
-                TurnInput::ResponseItem(ResponseItemEnvelope::new(background_notification(
-                    "passive"
-                ))),
-                TurnInput::ResponseItem(ResponseItemEnvelope::new(background_notification(
-                    "waking"
-                ))),
-            ]
-        );
-        assert!(items[1].needs_model_step());
-        assert!(!input_queue.has_pending_queued_input().await);
-        assert!(!input_queue.has_waking_background_notifications().await);
-    }
-
-    /// Fork: many pending notifications drop their output, then collapse into a summary.
-    #[tokio::test]
-    async fn background_notifications_are_bounded() {
-        let input_queue = InputQueue::new();
-        let mut with_output_flags = Vec::new();
-        let mut outcomes = Vec::new();
-        for index in 0..MAX_PENDING_BACKGROUND_NOTIFICATIONS + 2 {
-            let session_id = 1000 + i32::try_from(index).expect("small index");
-            outcomes.push(
-                input_queue
-                    .enqueue_background_notification(
-                        /*key*/ None,
-                        Some(session_id),
-                        /*wakes*/ index == MAX_PENDING_BACKGROUND_NOTIFICATIONS + 1,
-                        |with_output| {
-                            with_output_flags.push(with_output);
-                            background_notification(&format!("notification {index}"))
-                        },
-                    )
-                    .await,
-            );
-        }
-        assert_eq!(
-            outcomes[MAX_PENDING_BACKGROUND_NOTIFICATIONS - 1..],
-            [
-                BackgroundNotificationEnqueue::Queued,
-                BackgroundNotificationEnqueue::Dropped,
-                BackgroundNotificationEnqueue::Dropped,
-            ]
-        );
-        assert_eq!(
-            with_output_flags.len(),
-            MAX_PENDING_BACKGROUND_NOTIFICATIONS
-        );
-        assert_eq!(
-            with_output_flags.iter().filter(|flag| **flag).count(),
-            DETAILED_PENDING_BACKGROUND_NOTIFICATIONS
-        );
-        // The dropped notification still asks for a turn.
-        assert!(input_queue.has_waking_background_notifications().await);
-
-        let (items, _, _) = input_queue.drain_mailbox_input_items().await;
-        assert_eq!(items.len(), MAX_PENDING_BACKGROUND_NOTIFICATIONS + 1);
-        assert_eq!(
-            items.last(),
-            Some(&TurnInput::ResponseItem(ResponseItemEnvelope::new(
-                background_notification(
-                    "2 more background terminals stopped while too many notifications were pending (sessions 1032, 1033); call write_stdin with one of these session IDs to read the exit code and output of a terminal that exited on its own."
-                )
-            )))
-        );
-        assert!(!input_queue.has_pending_queued_input().await);
-    }
-
-    /// Fork (R3.4): the summary lists a bounded number of dropped sessions.
-    #[test]
-    fn dropped_summary_lists_a_bounded_number_of_sessions() {
-        let ids = (1000..1000 + MAX_LISTED_DROPPED_SESSIONS as i32).collect::<Vec<_>>();
-        let summary = dropped_summary(MAX_LISTED_DROPPED_SESSIONS + 3, &ids);
-        assert!(
-            summary.starts_with("19 more background terminals stopped while too many notifications were pending (sessions 1000, 1001,"),
-            "{summary}"
-        );
-        assert!(
-            summary.contains("1015 and 3 more); call write_stdin"),
-            "{summary}"
-        );
-        assert_eq!(
-            dropped_summary(2, &[]),
-            "2 more background terminals stopped while too many notifications were pending; call write_stdin with one of these session IDs to read the exit code and output of a terminal that exited on its own."
-        );
-    }
-
-    /// Fork (R2.10): a poll that showed the exit withdraws exactly its own notification.
-    #[tokio::test]
-    async fn withdraw_removes_only_the_keyed_notification() {
-        let input_queue = InputQueue::new();
-        for (key, body) in [(Some(7), "seven"), (Some(8), "eight"), (None, "summary")] {
-            input_queue
-                .enqueue_background_notification(
-                    key,
-                    /*session_id*/ None,
-                    /*wakes*/ true,
-                    |_| background_notification(body),
-                )
-                .await;
-        }
-        assert!(input_queue.withdraw_background_notification(7).await);
-        assert!(!input_queue.withdraw_background_notification(7).await);
-        assert_eq!(
-            input_queue.take_background_notifications().await,
-            vec![
-                background_notification("eight"),
-                background_notification("summary")
-            ]
-        );
-    }
-
-    /// Fork (R2.12): a turn that drains a notification runs its release callback; a
-    /// withdrawn notification drops it unrun.
-    #[tokio::test]
-    async fn draining_a_notification_runs_its_release_callback() {
-        let input_queue = InputQueue::new();
-        let released = Arc::new(std::sync::Mutex::new(Vec::new()));
-        for (key, body) in [(1, "sampled"), (2, "withdrawn")] {
-            let released = Arc::clone(&released);
-            input_queue
-                .enqueue_background_notification(
-                    Some(key),
-                    /*session_id*/ None,
-                    /*wakes*/ true,
-                    move |_| QueuedBackgroundNotification {
-                        item: background_notification(body),
-                        on_sampled: Some(Box::new(move || {
-                            released.lock().expect("released").push(key);
-                        })),
-                    },
-                )
-                .await;
-        }
-        assert!(input_queue.withdraw_background_notification(2).await);
-        assert!(released.lock().expect("released").is_empty());
-        let (items, _, _) = input_queue.drain_mailbox_input_items().await;
-        assert_eq!(items.len(), 1);
-        assert_eq!(*released.lock().expect("released"), vec![1]);
-    }
-
-    /// Fork (R3.7): an abort returns the turn's background terminal notifications to the
-    /// thread queue without a wake and drops the rest of its input as before.
-    #[tokio::test]
-    async fn clear_pending_returns_background_notifications_to_the_thread_queue() {
-        let input_queue = InputQueue::new();
-        input_queue
-            .enqueue_background_notification(
-                /*key*/ None,
-                /*session_id*/ None,
-                /*wakes*/ false,
-                |_| background_notification("still queued"),
-            )
-            .await;
-        let active_turn = ActiveTurn::default();
-        input_queue
-            .extend_pending_input_for_turn_state(
-                active_turn.turn_state.as_ref(),
-                vec![
-                    TurnInput::ResponseItem(ResponseItemEnvelope::new(background_notification(
-                        "taken by the aborted turn",
-                    ))),
-                    TurnInput::UserInput {
-                        content: vec![UserInput::Text {
-                            text: "dropped".to_string(),
-                            text_elements: Vec::new(),
-                        }],
-                        client_id: None,
-                        metadata: UserInputMetadata::default(),
-                    },
-                ],
-            )
-            .await;
-
-        input_queue.clear_pending(&active_turn).await;
-
-        assert!(active_turn.turn_state.lock().await.pending_input.is_empty());
-        assert!(!input_queue.has_waking_background_notifications().await);
-        assert_eq!(
-            input_queue.take_background_notifications().await,
-            vec![
-                background_notification("taken by the aborted turn"),
-                background_notification("still queued"),
-            ]
-        );
-    }
-
-    fn workflow_notification(body: &str) -> ResponseItem {
-        ContextualUserFragment::into(crate::context::WorkflowNotification::new(body))
-    }
-
-    /// Fork (dynamic workflow R7.7, B14): an abort returns a workflow notification from the
-    /// turn's input too, as waking, and names the workflow activity; a background terminal
-    /// notification still returns without a wake.
-    #[tokio::test]
-    async fn clear_pending_returns_workflow_notifications_as_waking() {
-        let input_queue = InputQueue::new();
-        let (mut activity_rx, _) = input_queue.subscribe_activity(/*turn_state*/ None).await;
-        let active_turn = ActiveTurn::default();
-        input_queue
-            .extend_pending_input_for_turn_state(
-                active_turn.turn_state.as_ref(),
-                vec![
-                    TurnInput::ResponseItem(ResponseItemEnvelope::new(workflow_notification(
-                        "Workflow \"x\" (wf-1) completed in 1.0s.",
-                    ))),
-                    TurnInput::ResponseItem(ResponseItemEnvelope::new(background_notification(
-                        "exited",
-                    ))),
-                ],
-            )
-            .await;
-
-        input_queue.clear_pending(&active_turn).await;
-
-        activity_rx.changed().await.expect("activity");
-        assert_eq!(*activity_rx.borrow(), InputQueueActivity::Workflow);
-        assert!(input_queue.has_waking_background_notifications().await);
-        assert_eq!(
-            input_queue.take_background_notifications().await,
-            vec![
-                workflow_notification("Workflow \"x\" (wf-1) completed in 1.0s."),
-                background_notification("exited"),
-            ]
-        );
-    }
-
-    /// Fork (R3.8, dynamic workflow R7.7): a task other than a regular turn takes mail but
-    /// leaves background notifications queued with their wake, key and release callback.
-    #[tokio::test]
-    async fn non_regular_tasks_leave_background_notifications_queued() {
-        let input_queue = InputQueue::new();
-        let released = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let release_flag = Arc::clone(&released);
-        input_queue
-            .enqueue_background_notification(Some(7), Some(1000), /*wakes*/ true, move |_| {
-                QueuedBackgroundNotification {
-                    item: background_notification("exited"),
-                    on_sampled: Some(Box::new(move || {
-                        release_flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                    })),
-                }
-            })
-            .await;
-        input_queue
-            .enqueue_workflow_notification(workflow_notification(
-                "Workflow \"x\" (wf-1) completed in 1.0s.",
-            ))
-            .await;
-        let mail = make_mail(
-            AgentPath::try_from("/root/worker").expect("agent path"),
-            AgentPath::root(),
-            "mail",
-            /*trigger_turn*/ false,
-        );
-        input_queue
-            .enqueue_mailbox_communication(
-                mail.clone().into(),
-                Default::default(),
-                /*turn_spawn_budget*/ None,
-            )
-            .await;
-
-        let (items, _, _) = input_queue
-            .drain_mailbox_input_items_for_task(/*take_background_notifications*/ false)
-            .await;
-        assert_eq!(items, vec![TurnInput::InterAgentCommunication(mail.into())]);
-        assert!(input_queue.has_waking_background_notifications().await);
-        assert!(!released.load(std::sync::atomic::Ordering::SeqCst));
-        // The withdrawal key survived.
-        assert!(input_queue.withdraw_background_notification(7).await);
-
-        let (items, _, _) = input_queue.drain_mailbox_input_items().await;
-        assert_eq!(
-            items,
-            vec![TurnInput::ResponseItem(ResponseItemEnvelope::new(
-                workflow_notification("Workflow \"x\" (wf-1) completed in 1.0s.")
-            ))]
-        );
-    }
-
-    /// Fork (dynamic workflow R7.8): workflow notifications do not count toward the limits
-    /// of background terminal notifications.
-    #[tokio::test]
-    async fn workflow_notifications_do_not_count_toward_terminal_limits() {
-        let input_queue = InputQueue::new();
-        for index in 0..MAX_PENDING_BACKGROUND_NOTIFICATIONS {
-            input_queue
-                .enqueue_workflow_notification(workflow_notification(&format!(
-                    "Workflow \"w{index}\" (wf-{index}) completed in 1.0s."
-                )))
-                .await;
-        }
-        let mut with_output = None;
-        let outcome = input_queue
-            .enqueue_background_notification(
-                /*key*/ None,
-                Some(1000),
-                /*wakes*/ true,
-                |output| {
-                    with_output = Some(output);
-                    background_notification("exited")
-                },
-            )
-            .await;
-        assert_eq!(outcome, BackgroundNotificationEnqueue::Queued);
-        assert_eq!(with_output, Some(true));
-        let items = input_queue.take_background_notifications().await;
-        assert_eq!(items.len(), MAX_PENDING_BACKGROUND_NOTIFICATIONS + 1);
-        assert_eq!(items.last(), Some(&background_notification("exited")));
-    }
-
-    #[tokio::test]
-    async fn turn_local_background_notification_reports_its_activity() {
-        let input_queue = InputQueue::new();
-        let turn_state = Mutex::new(TurnState::default());
-        input_queue
-            .extend_pending_input_for_turn_state(
-                &turn_state,
-                vec![TurnInput::ResponseItem(ResponseItemEnvelope::new(
-                    background_notification("exited"),
-                ))],
-            )
-            .await;
-        assert_eq!(
-            input_queue.subscribe_activity(Some(&turn_state)).await.1,
-            Some(InputQueueActivity::BackgroundTerminal)
-        );
     }
 }
