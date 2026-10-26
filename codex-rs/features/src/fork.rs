@@ -27,3 +27,7 @@ impl FeaturesToml {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "fork_tests.rs"]
+mod tests;

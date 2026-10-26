@@ -1572,7 +1572,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ExplorerProfile,
         key: "explorer_profile",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Read-only explorer subagents",
+            menu_description: "Explorer subagents only read, start without your conversation, use a low reasoning effort and return short answers with file:line references.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {
