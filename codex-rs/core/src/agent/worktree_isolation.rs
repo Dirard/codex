@@ -9,6 +9,7 @@
 
 use crate::config::Config;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::environment_selection::TurnEnvironmentState;
 use crate::session::turn_context::TurnEnvironment;
 use codex_features::AgentIsolation;
 use codex_features::AgentWorktreeBase;
@@ -22,6 +23,7 @@ use codex_protocol::models::ProfileWorkspaceRoot;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxKind;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use codex_worktree::AgentWorktreeBaseKind;
@@ -525,6 +527,69 @@ pub(crate) fn rebase_workspace_roots(
         rebased.push(worktree_root.clone());
     }
     rebased
+}
+
+impl TurnEnvironmentSnapshot {
+    /// Moves one ready environment onto an agent worktree: its cwd becomes `cwd`, and its
+    /// workspace roots and permissions inside the parent's repository move to the worktree.
+    /// Other environments stay unchanged.
+    ///
+    /// Spec `agent-worktree-isolation` UC3 step "rebase the environments onto the worktree".
+    pub(crate) fn rebase_onto_worktree(
+        &self,
+        environment_id: &str,
+        source_root: &AbsolutePathBuf,
+        worktree_root: &AbsolutePathBuf,
+        cwd: &AbsolutePathBuf,
+    ) -> Result<Self, String> {
+        let mut found = false;
+        let environments = self
+            .environments
+            .iter()
+            .map(|environment| match environment {
+                TurnEnvironmentState::Ready(ready)
+                    if ready.selection.environment_id == environment_id =>
+                {
+                    found = true;
+                    let mut ready = ready.clone();
+                    let selection = &mut ready.selection;
+                    selection.cwd = PathUri::from_abs_path(cwd);
+                    selection.workspace_roots = rebase_workspace_root_uris(
+                        &selection.workspace_roots,
+                        source_root,
+                        worktree_root,
+                    )?;
+                    if let EnvironmentConfigState::Ready(config) = &mut selection.config {
+                        config.workspace_roots = rebase_workspace_root_uris(
+                            &config.workspace_roots,
+                            source_root,
+                            worktree_root,
+                        )?;
+                        config.permission_profile = rebase_permission_snapshot(
+                            &config.permission_profile,
+                            source_root,
+                            worktree_root,
+                        )?;
+                    }
+                    Ok(TurnEnvironmentState::Ready(ready))
+                }
+                TurnEnvironmentState::Starting(starting)
+                    if starting.selection.environment_id == environment_id =>
+                {
+                    Err(format!(
+                        "environment {environment_id} is still starting; retry once it is ready"
+                    ))
+                }
+                other => Ok(other.clone()),
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        if !found {
+            return Err(format!(
+                "environment {environment_id} is not available for the agent worktree"
+            ));
+        }
+        Ok(Self { environments })
+    }
 }
 
 pub(crate) fn rebase_workspace_root_uris(

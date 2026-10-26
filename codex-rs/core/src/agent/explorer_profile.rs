@@ -6,6 +6,8 @@
 
 use crate::config::Config;
 use crate::config::ExplorerProfileConfig;
+use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::environment_selection::TurnEnvironmentState;
 use codex_config::Constrained;
 use codex_config::ConstraintError;
 use codex_config::RequirementSource;
@@ -17,6 +19,7 @@ use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -262,6 +265,30 @@ pub(crate) fn dynamic_tool_denial(
 /// would only cost a checkout (review P7). An explicit request still isolates them.
 pub(crate) fn skips_default_isolation(config: &Config, role_name: Option<&str>) -> bool {
     applies_to_role(config, role_name)
+}
+
+impl TurnEnvironmentSnapshot {
+    /// A copy whose ready environments have `update` applied to their resolved
+    /// configuration; starting and failed environments are kept as they are.
+    ///
+    /// Used by `explorer_profile` to judge a worktree by the explorer's read-only access.
+    pub(crate) fn with_environment_configs(&self, update: impl Fn(&mut EnvironmentConfig)) -> Self {
+        let environments = self
+            .environments
+            .iter()
+            .map(|environment| match environment {
+                TurnEnvironmentState::Ready(ready) => {
+                    let mut ready = ready.clone();
+                    if let EnvironmentConfigState::Ready(config) = &mut ready.selection.config {
+                        update(config);
+                    }
+                    TurnEnvironmentState::Ready(ready)
+                }
+                other => other.clone(),
+            })
+            .collect();
+        Self { environments }
+    }
 }
 
 /// Narrows every ready environment of a snapshot to read-only access for an explorer, so the
