@@ -1,0 +1,59 @@
+name: fork-upstream-drift
+
+# Reports how far codex/fork lags behind openai/codex main: commits behind,
+# since when, and the files a merge would conflict on. The report goes to the
+# job summary; the same command runs locally as
+#   git fetch https://github.com/openai/codex.git main
+#   scripts/fork/upstream-drift.sh HEAD FETCH_HEAD
+#
+# A manual or scheduled run fails when a rebase is due, so GitHub notifies the
+# owner. A run for a push to codex/fork only reports. GitHub runs `schedule`
+# only from the default branch; on codex/fork the trigger stays inert until
+# the default branch carries it or dispatches this workflow.
+on:
+  push:
+    branches: [codex/fork]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      max_age_days:
+        description: Days the fork may stay behind upstream before a rebase is due
+        required: false
+        default: "7"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    name: Upstream drift
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: codex/fork
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch openai/codex main
+        run: git fetch --no-tags https://github.com/openai/codex.git main
+
+      - name: Measure drift
+        env:
+          EVENT: ${{ github.event_name }}
+          MAX_AGE_DAYS: ${{ inputs.max_age_days || '7' }}
+        run: |
+          status=0
+          scripts/fork/upstream-drift.sh --max-age-days "${MAX_AGE_DAYS}" \
+            --summary "${GITHUB_STEP_SUMMARY}" HEAD FETCH_HEAD || status=$?
+          if [[ ${status} -eq 3 && "${EVENT}" == push ]]; then
+            echo "::notice::A rebase onto openai/codex main is due; see the job summary."
+            exit 0
+          fi
+          exit "${status}"

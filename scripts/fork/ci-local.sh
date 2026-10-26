@@ -31,7 +31,7 @@
 #   go-auth-fixture       TestAuthFixture* (Linux only) against codex-app-server;
 #                         every test `go test -list` finds must pass
 #   scripts               shellcheck and the ci-local.sh / verify-release.sh /
-#                         release.sh self-tests
+#                         release.sh / upstream-drift.sh self-tests
 #   all                   every command above except sandbox-check, in CI order
 #
 # Environment:
@@ -656,6 +656,8 @@ cmd_scripts() {
   "${selftest[@]}"
   log "release.sh self-test (stub gh)"
   "${repo_root}/scripts/fork/test-release.sh"
+  log "upstream-drift.sh self-test (throwaway repository)"
+  "${repo_root}/scripts/fork/test-upstream-drift.sh"
 }
 
 cmd_all() {
