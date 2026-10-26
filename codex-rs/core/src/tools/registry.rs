@@ -14,7 +14,6 @@ use crate::memory_usage::shell_script_for_invocation;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
-use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolCallState;
 use crate::tools::context::ToolEnvironments;
 use crate::tools::context::ToolInvocation;
@@ -288,6 +287,11 @@ pub(crate) struct AnyToolResult {
     pub(crate) post_tool_use_payload: Option<PostToolUsePayload>,
 }
 
+// Fork: originating truncation metadata and direct-only tools in Code Mode
+// (docs/fork/03-tools-mcp-code-mode.md F2, F7).
+#[path = "registry_fork.rs"]
+mod fork;
+
 impl AnyToolResult {
     pub(crate) fn into_response(self) -> ResponseItemEnvelope {
         let Self {
@@ -296,17 +300,14 @@ impl AnyToolResult {
             result,
             ..
         } = self;
+        let history_truncation_token_limit = result.history_truncation_override();
         ResponseItemEnvelope {
             item: result.to_response_item(&call_id, &payload).into(),
-            metadata: result
-                .history_truncation_override()
-                .map(|truncation| CodexHarnessMetadata {
-                    history_truncation_token_limit: Some(truncation.policy.token_budget()),
-                    history_truncation_policy: Some(truncation.policy),
-                    history_truncation_max_lines: truncation.max_lines,
-                    history_truncation_mcp_max_lines: truncation.mcp_max_lines,
-                    ..Default::default()
-                }),
+            metadata: history_truncation_token_limit.map(|limit| CodexHarnessMetadata {
+                history_truncation_token_limit: Some(limit.policy.token_budget()),
+                // Fork: the originating policy and line limits travel with the output.
+                ..fork::truncation_metadata(limit)
+            }),
         }
     }
 
@@ -730,7 +731,7 @@ impl ToolRegistry {
         }
 
         let dispatch_trace = ToolDispatchTrace::start(&invocation);
-        let registered_tool = match self.tools.get(&tool_name.clone().with_default_namespace()) {
+        let tool = match self.tool(&tool_name) {
             Some(tool) => tool,
             None => {
                 let message = unsupported_tool_call_message(&invocation.payload, &tool_name);
@@ -752,38 +753,8 @@ impl ToolRegistry {
                 return Err(err);
             }
         };
-        if matches!(&invocation.source, ToolCallSource::CodeMode { .. })
-            && registered_tool.exposure == ToolExposure::DirectModelOnly
-        {
-            let code_mode_name = codex_tools::code_mode_name_for_tool_name(&tool_name);
-            let message = serde_json::json!({
-                "error": {
-                    "code": "direct_tool_required",
-                    "tool": code_mode_name,
-                    "message": format!(
-                        "Call `{code_mode_name}` directly; it cannot be invoked through `exec` or `tools.*`."
-                    ),
-                }
-            })
-            .to_string();
-            let log_payload = tool_log_payload(&invocation.payload, &invocation.source);
-            let mut tool_result_tags = Vec::with_capacity(2);
-            sandbox_tags.append_metric_tags(&mut tool_result_tags);
-            otel.tool_result_with_tags(
-                &tool_name,
-                &call_id_owned,
-                log_payload.as_ref(),
-                Duration::ZERO,
-                /*success*/ false,
-                &message,
-                &tool_result_tags,
-                /*extra_trace_fields*/ &[],
-            );
-            let err = FunctionCallError::RespondToModel(message);
-            dispatch_trace.record_failed(&err);
-            return Err(err);
-        }
-        let tool = Arc::clone(&registered_tool.runtime);
+        // Fork: Code Mode cannot route around a direct-only tool.
+        self.fork_reject_direct_only(&invocation, &otel, sandbox_tags, &dispatch_trace)?;
         let telemetry_tags = tool.telemetry_tags(&invocation);
         let mut tool_result_tags = Vec::with_capacity(2 + telemetry_tags.len() + 1);
         let mut extra_trace_fields = Vec::new();
