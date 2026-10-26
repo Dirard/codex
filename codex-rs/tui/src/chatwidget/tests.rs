@@ -245,7 +245,6 @@ mod computer_activity_tests;
 mod config_errors;
 #[path = "tests/copy_export_picker_tests.rs"]
 mod copy_export_picker_tests;
-// Fork: workflow display.
 #[path = "tests/dynamic_activity_tests.rs"]
 mod dynamic_activity_tests;
 mod exec_flow;
@@ -308,6 +307,7 @@ mod terminal_title;
 #[path = "tests/tool_activity_tests.rs"]
 mod tool_activity_tests;
 mod usage;
+// Fork: workflow display.
 #[path = "tests/workflow_tests.rs"]
 mod workflow_tests;
 #[path = "tests/worktree_picker_tests.rs"]

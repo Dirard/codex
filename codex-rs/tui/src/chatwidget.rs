@@ -289,8 +289,8 @@ mod input_restore;
 mod input_submission;
 mod interrupts;
 mod questions;
-// Fork: workflow progress and history cells.
 mod startup_submission;
+// Fork: workflow progress and history cells.
 mod workflow;
 use self::interrupts::InterruptManager;
 mod keymap_picker;
