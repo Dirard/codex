@@ -2704,6 +2704,8 @@ async fn nested_workflows_share_the_run_limits() -> Result<()> {
         "{logs}"
     );
     assert!(logs.contains("fails.js:2"), "{logs}");
+    // The log names the author's files, as the journal does (review finding 7).
+    assert!(!logs.contains("exec_main.mjs"), "{logs}");
     let kinds: Vec<String> = journal_records(&test, &run.run_id)
         .iter()
         .map(|record| record["kind"].as_str().unwrap_or_default().to_string())
@@ -3030,5 +3032,425 @@ async fn workflow_runs_on_the_grpc_code_mode_host() -> Result<()> {
     assert_eq!(run.agents.completed, 3);
     wait_for_turns(&test, 1).await;
     assert_eq!(responses.served("parent_notified").len(), 1);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------
+// Fixes of the stage 2 review (`docs/fork/reviews/2026-10-26-workflow-stage2-review.md`).
+// ---------------------------------------------------------------------------------------
+
+const ISOLATED_SCRIPT: &str = "export const meta = { name: 'isolated', description: 'd' };\nreturn await agent('TASK-ISOLATED', { isolation: 'worktree' });\n";
+const OLD_RUN_ID: &str = "wf-0000c0de";
+
+/// The id of a run that is not one of `known`, once the thread has one.
+async fn new_run_id(codex: &CodexThread, known: &[&str]) -> String {
+    let deadline = tokio::time::Instant::now() + RUN_TIMEOUT;
+    loop {
+        if let Some(run) = codex
+            .workflow_runs()
+            .into_iter()
+            .find(|run| !known.contains(&run.run_id.as_str()))
+        {
+            return run.run_id;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no new workflow run: {:?}",
+            codex.workflow_runs()
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+/// The run directory `run_id` of the test's thread.
+fn run_dir(test: &TestCodex, run_id: &str) -> std::path::PathBuf {
+    test.codex_home_path()
+        .join("workflows")
+        .join(test.session_configured.thread_id.to_string())
+        .join(run_id)
+}
+
+/// A run directory written by a version whose journal does not record the worktree of an
+/// isolated agent: `TASK-ISOLATED` answered `old answer`.
+fn write_old_isolated_run(test: &TestCodex) -> Result<()> {
+    let Value::Object(opts) = json!({ "isolation": "worktree" }) else {
+        unreachable!("an object");
+    };
+    let key = codex_workflow::call_key("TASK-ISOLATED", &opts);
+    let dir = run_dir(test, OLD_RUN_ID);
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("script.js"), ISOLATED_SCRIPT)?;
+    std::fs::write(dir.join("args.json"), "null")?;
+    let records = [
+        json!({"seq": 1, "kind": "run_started", "run_id": OLD_RUN_ID, "name": "isolated", "script_sha256": "s", "args_sha256": "a", "parent_turn_id": "t", "resume_from": null}),
+        json!({"seq": 2, "kind": "agent_started", "key": key, "ordinal": 0, "label": null, "phase": null, "thread_id": "t-old", "agent_path": "/root/wf_old"}),
+        json!({"seq": 3, "kind": "agent_finished", "key": key, "ordinal": 0, "ok": true, "value": "old answer", "reason": null, "tokens": {"charged": 0, "cached": 0}}),
+        json!({"seq": 4, "kind": "run_finished", "status": "completed", "result_bytes": 12, "tokens": {"charged": 0, "cached": 0}, "error": null}),
+    ];
+    std::fs::write(
+        dir.join("journal.jsonl"),
+        records
+            .iter()
+            .map(|record| format!("{record}\n"))
+            .collect::<String>(),
+    )?;
+    Ok(())
+}
+
+/// R6.3, R3.8 (review finding 4): an isolated agent's answer reused by `resume_from` keeps
+/// the trace of its changes: the resumed run logs the source agent's worktree report from
+/// the journal, which records it, and says so explicitly when an older journal does not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resumed_isolated_answers_keep_their_worktree_report() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    responses.parent_calls(
+        "parent_start",
+        "workflow",
+        &workflow_arguments(ISOLATED_SCRIPT),
+        WORKFLOW_CALL_ID,
+    );
+    responses.rule_with(
+        "parent_resume",
+        1,
+        Duration::ZERO,
+        |body| {
+            is_parent(body) && body.contains("resume it") && !has_call_output(body, RESUME_CALL_ID)
+        },
+        |body| {
+            let arguments = json!({ "resume_from": run_id_of_call(body, WORKFLOW_CALL_ID) });
+            sse(vec![
+                ev_response_created("resp-resume"),
+                ev_function_call(RESUME_CALL_ID, "workflow", &arguments.to_string()),
+                completed("resp-resume", 0, 0, 0),
+            ])
+        },
+    );
+    responses.rule(
+        "parent_resume_old",
+        1,
+        Duration::ZERO,
+        |body| {
+            is_parent(body)
+                && body.contains("resume the old one")
+                && !has_call_output(body, "wf-call-3")
+        },
+        sse(vec![
+            ev_response_created("resp-resume-old"),
+            ev_function_call(
+                "wf-call-3",
+                "workflow",
+                &json!({ "resume_from": OLD_RUN_ID }).to_string(),
+            ),
+            completed("resp-resume-old", 0, 0, 0),
+        ]),
+    );
+    // Runs answered from a journal end at once, so their notifications may join any turn.
+    responses.rule(
+        "parent_other",
+        usize::MAX,
+        Duration::ZERO,
+        is_parent,
+        message("resp-parent-other", "noted"),
+    );
+    responses.agent("TASK-ISOLATED", "isolated answer", (0, 0, 0));
+    let test = test_codex()
+        .with_config(|config| {
+            for feature in [
+                Feature::Collab,
+                Feature::MultiAgentV2,
+                Feature::Workflows,
+                Feature::AgentWorktreeIsolation,
+            ] {
+                config.features.enable(feature).expect("feature");
+            }
+            config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+            config.workspace_roots = vec![config.cwd.clone()];
+            config.workflows.require_approval = codex_core::config::WorkflowApproval::Never;
+        })
+        .with_workspace_setup(|cwd, _fs| async move {
+            let cwd = cwd.as_path();
+            git(cwd, &["init", "--quiet", "-b", "main"]);
+            git(cwd, &["config", "user.name", "Codex Test"]);
+            git(cwd, &["config", "user.email", "codex@example.invalid"]);
+            std::fs::write(cwd.join("a.txt"), "base\n")?;
+            git(cwd, &["add", "."]);
+            git(
+                cwd,
+                &["commit", "--quiet", "--no-gpg-sign", "-m", "initial"],
+            );
+            Ok(())
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("run it").await?;
+    let first = finished_run(&test.codex).await;
+    assert_eq!(first.status, RunStatus::Completed, "{first:?}");
+    let report = first
+        .logs_tail
+        .iter()
+        .find_map(|line| line.strip_prefix("agent 1 worktree:\n"))
+        .expect("worktree report")
+        .to_string();
+    let journaled = journal_records(&test, &first.run_id)
+        .into_iter()
+        .find(|record| record["kind"] == "agent_finished")
+        .expect("agent_finished");
+    assert_eq!(journaled["worktree"], json!(report), "{journaled}");
+
+    test.codex
+        .start_or_steer_turn(user_turn("resume it"))
+        .await?;
+    let second_id = new_run_id(&test.codex, &[first.run_id.as_str()]).await;
+    let second = finished_run_with_id(&test.codex, &second_id).await;
+    assert_eq!(second.status, RunStatus::Completed, "{second:?}");
+    assert_eq!(
+        run_result(&test.codex, &second_id),
+        json!("isolated answer")
+    );
+    let expected = format!(
+        "agent 1 answered from the journal of {}; its worktree:\n{report}",
+        first.run_id
+    );
+    assert!(
+        second.logs_tail.contains(&expected),
+        "{:?}",
+        second.logs_tail
+    );
+    // The cached record keeps the report, so a resume of this run finds it too.
+    let cached = journal_records(&test, &second_id)
+        .into_iter()
+        .find(|record| record["kind"] == "agent_finished")
+        .expect("agent_finished");
+    assert_eq!(cached["cached"], true);
+    assert_eq!(cached["worktree"], json!(report), "{cached}");
+
+    write_old_isolated_run(&test)?;
+    test.codex
+        .start_or_steer_turn(user_turn("resume the old one"))
+        .await?;
+    let third_id = new_run_id(
+        &test.codex,
+        &[first.run_id.as_str(), second_id.as_str(), OLD_RUN_ID],
+    )
+    .await;
+    let third = finished_run_with_id(&test.codex, &third_id).await;
+    assert_eq!(run_result(&test.codex, &third_id), json!("old answer"));
+    let marker = format!(
+        "agent 1 answered from the journal of {OLD_RUN_ID}, which does not record that isolated agent's worktree; look for its branch in the log of {OLD_RUN_ID}"
+    );
+    assert!(third.logs_tail.contains(&marker), "{:?}", third.logs_tail);
+    assert_eq!(responses.served("TASK-ISOLATED").len(), 1);
+    assert!(responses.served("unmatched").is_empty());
+    Ok(())
+}
+
+/// R1.8, R6.4 (review finding 7): a bad combination of `workflow` arguments or an unknown
+/// saved script is reported before `resume_from` is looked up, so a stopped run named there
+/// is neither marked interrupted nor registered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn argument_errors_come_before_the_resume_lookup() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    parent_chain(
+        &responses,
+        "both",
+        None,
+        "call-1",
+        json!({ "script": ONE_SLOW_AGENT, "name": "verify", "resume_from": OLD_RUN_ID }),
+    );
+    parent_chain(
+        &responses,
+        "absent",
+        Some("call-1"),
+        "call-2",
+        json!({ "name": "absent", "resume_from": OLD_RUN_ID }),
+    );
+    responses.rule(
+        "parent_done",
+        1,
+        Duration::ZERO,
+        |body| is_parent(body) && has_call_output(body, "call-2"),
+        message("resp-parent-done", "Done."),
+    );
+    let test = build(&server, |_| {}).await?;
+    // A run of a stopped process: its journal has no `run_finished`.
+    let dir = run_dir(&test, OLD_RUN_ID);
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("script.js"), ONE_SLOW_AGENT)?;
+    std::fs::write(dir.join("args.json"), "null")?;
+    let journal = format!(
+        "{}\n",
+        json!({"seq": 1, "kind": "run_started", "run_id": OLD_RUN_ID, "name": "one", "script_sha256": "s", "args_sha256": "a", "parent_turn_id": "t", "resume_from": null})
+    );
+    std::fs::write(dir.join("journal.jsonl"), &journal)?;
+
+    test.submit_turn("start them").await?;
+    let done = &responses.served("parent_done")[0];
+    let output = |call_id: &str| call_output(done, call_id).expect("output");
+    assert!(
+        output("call-1").contains("either `script` or `name`, not both"),
+        "{}",
+        output("call-1")
+    );
+    assert!(
+        output("call-2").contains("no saved workflow absent.js in "),
+        "{}",
+        output("call-2")
+    );
+    assert_eq!(std::fs::read_to_string(dir.join("journal.jsonl"))?, journal);
+    assert!(test.codex.workflow_runs().is_empty());
+    Ok(())
+}
+
+/// R12.1, Q32 (review finding 7): saved scripts of a project load only when the project is
+/// trusted: the layer of an untrusted project is disabled, so its `.codex/workflows` is not
+/// searched; the same folder of a trusted project is.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn project_workflows_load_only_from_trusted_projects() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    for trust in ["untrusted", "trusted"] {
+        let server = start_mock_server().await;
+        let responses = ScriptedResponses::mount(&server).await;
+        parent_chain(
+            &responses,
+            "by_name",
+            None,
+            "call-1",
+            json!({ "name": "evil" }),
+        );
+        responses.rule(
+            "parent_done",
+            1,
+            Duration::ZERO,
+            |body| {
+                is_parent(body)
+                    && has_call_output(body, "call-1")
+                    && !body.contains(NOTIFICATION_MARKER)
+            },
+            message("resp-parent-done", "Done."),
+        );
+        responses.rule(
+            "parent_notified",
+            usize::MAX,
+            Duration::ZERO,
+            |body| is_parent(body) && body.contains(NOTIFICATION_MARKER),
+            message("resp-parent-notified", "noted"),
+        );
+        responses.agent("TASK-EVIL", "evil answer", (0, 0, 0));
+        let home = Arc::new(tempfile::TempDir::new()?);
+        let project = tempfile::TempDir::new()?;
+        std::fs::create_dir_all(project.path().join(".git"))?;
+        std::fs::create_dir_all(project.path().join(".codex/workflows"))?;
+        std::fs::write(
+            project.path().join(".codex/workflows/evil.js"),
+            "export const meta = { name: 'evil', description: 'Project script' };\nreturn await agent('TASK-EVIL');\n",
+        )?;
+        std::fs::write(
+            home.path().join("config.toml"),
+            toml::to_string(&json!({
+                "projects": { project.path().to_string_lossy().as_ref(): { "trust_level": trust } }
+            }))?,
+        )?;
+        let loaded = codex_core::config::ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .loader_overrides(codex_config::LoaderOverrides::without_managed_config_for_tests())
+            .harness_overrides(codex_core::config::ConfigOverrides {
+                cwd: Some(project.path().to_path_buf()),
+                ..Default::default()
+            })
+            .build()
+            .await?;
+        let project_layers: Vec<bool> = loaded
+            .config_layer_stack
+            .all_layers_high_to_low()
+            .filter(|layer| matches!(layer.name, codex_config::ConfigLayerSource::Project { .. }))
+            .map(codex_config::ConfigLayerEntry::is_disabled)
+            .collect();
+        assert_eq!(project_layers, vec![trust == "untrusted"], "{trust}");
+        let test = workflow_builder(move |config| {
+            config.config_layer_stack = loaded.config_layer_stack;
+        })
+        .with_home(Arc::clone(&home))
+        .build(&server)
+        .await?;
+
+        test.submit_turn("run the project script").await?;
+        let done = &responses.served("parent_done")[0];
+        let output = call_output(done, "call-1").expect("output");
+        if trust == "untrusted" {
+            let searched = home.path().join("workflows");
+            assert!(
+                output.contains(&format!(
+                    "no saved workflow evil.js in {}",
+                    searched.display()
+                )),
+                "{output}"
+            );
+            assert!(
+                !output.contains(&project.path().display().to_string()),
+                "{output}"
+            );
+            assert!(test.codex.workflow_runs().is_empty());
+            assert!(responses.served("TASK-EVIL").is_empty());
+        } else {
+            let run = finished_run(&test.codex).await;
+            assert_eq!(run.name, "evil");
+            assert_eq!(run_result(&test.codex, &run.run_id), json!("evil answer"));
+        }
+    }
+    Ok(())
+}
+
+/// R6.4, Q5 (review finding 7): marking stopped runs `interrupted` relies on the thread's
+/// cross-process writer lock: while one session owns the thread and its run works, a second
+/// load of the thread fails before the marking hook, and the live journal stays as it was.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_second_load_of_a_live_thread_leaves_its_runs_alone() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    let arguments = json!({ "script": STOPPED_SCRIPT, "args": { "topic": "t1" } }).to_string();
+    responses.parent_calls("parent_start", "workflow", &arguments, WORKFLOW_CALL_ID);
+    responses.parent_after_tool(WORKFLOW_CALL_ID);
+    responses.rule(
+        "parent_notified",
+        usize::MAX,
+        Duration::ZERO,
+        |body| is_parent(body) && body.contains(NOTIFICATION_MARKER),
+        message("resp-parent-notified", "noted"),
+    );
+    responses.agent("TASK-SA t1", "answer A", (100, 0, 10));
+    responses.agent_with_delay("TASK-SB", "answer B", (0, 0, 0), Duration::from_secs(60));
+    let test = build(&server, |_| {}).await?;
+
+    test.submit_turn("run it").await?;
+    let run_id = test.codex.workflow_runs()[0].run_id.clone();
+    // The slow agent works while the second load happens.
+    wait_for_served(&responses, "TASK-SB", 1).await;
+    let journal_path = run_dir(&test, &run_id).join("journal.jsonl");
+    let before = std::fs::read(&journal_path)?;
+    let rollout_path = test
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    let error = match workflow_builder(|_| {})
+        .resume(&server, Arc::clone(&test.home), rollout_path)
+        .await
+    {
+        Ok(_) => panic!("a second load of a live thread must fail"),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(error.contains("already has an active writer"), "{error}");
+    assert_eq!(std::fs::read(&journal_path)?, before);
+    let run = test.codex.workflow_runs()[0].clone();
+    assert_eq!(run.status, RunStatus::Running, "{run:?}");
+    assert_eq!(run.agents.running, 1, "{run:?}");
+    test.codex.shutdown_and_wait().await?;
     Ok(())
 }
