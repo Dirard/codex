@@ -113,7 +113,7 @@ pub(crate) struct InputQueue {
 pub(crate) struct PendingMailboxCommunication {
     pub(crate) communication: crate::PendingAgentMessage,
     start_options: TurnStartOptions,
-    turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>, // Fork: spawn budget
+    turn_spawn_budget: Option<TurnSpawnBudget>, // Fork: spawn budget
     _diagnostics_guard: GaugeGuard,
 }
 
@@ -223,7 +223,7 @@ impl InputQueue {
         &self,
         communication: crate::PendingAgentMessage,
         start_options: TurnStartOptions,
-        turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
     ) {
         let mut pending = self.mailbox_pending_mails.lock().await;
         // Mail retained while unloaded precedes new submissions to the loaded session.
@@ -263,11 +263,7 @@ impl InputQueue {
     pub(crate) async fn drain_mailbox_input_items_for_task(
         &self,
         take_background_notifications: bool,
-    ) -> (
-        Vec<TurnInput>,
-        TurnStartOptions,
-        Option<crate::agent::types::TurnSpawnBudget>,
-    ) {
+    ) -> (Vec<TurnInput>, TurnStartOptions, Option<TurnSpawnBudget>) {
         let pending_mails = self.drain_mailbox().await;
         // A later follow-up supersedes the earlier choice, including an omitted choice.
         let turn_spawn_budget = pending_mails
@@ -444,11 +440,7 @@ impl InputQueue {
     pub(crate) async fn get_pending_input(
         &self,
         active_turn: &Mutex<Option<ActiveTurn>>,
-    ) -> (
-        Vec<TurnInput>,
-        TurnStartOptions,
-        Option<crate::agent::types::TurnSpawnBudget>,
-    ) {
+    ) -> (Vec<TurnInput>, TurnStartOptions, Option<TurnSpawnBudget>) {
         let (pending_input, accepts_mailbox_delivery) = {
             let mut active = active_turn.lock().await;
             match active.as_mut() {

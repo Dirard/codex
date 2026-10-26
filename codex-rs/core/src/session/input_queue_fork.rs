@@ -13,7 +13,8 @@ use super::InputQueue;
 use super::InputQueueActivity;
 use super::TurnInput;
 use super::TurnInputQueue;
-use crate::agent::types::TurnSpawnBudget;
+/// The parent names the spawn budget of queued mail through `fork::*`, without a `use`.
+pub(super) use crate::agent::types::TurnSpawnBudget;
 use crate::context::BackgroundTerminalNotification;
 use crate::context::ContextualUserFragment;
 use crate::context::WorkflowNotification;
