@@ -22,19 +22,10 @@ use tracing::warn;
 
 const INITIAL_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(5);
 const MAX_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(60);
-/// Fork capacity floor for `ServerOverloaded` unless an explicit stream budget is smaller.
-const SERVER_OVERLOADED_RETRY_FLOOR: u64 = 3;
 
-/// Retries allowed for `ServerOverloaded` on its independent counter, raised after per-request
-/// caps to the fork floor. An explicit `stream_max_retries` below the floor is honored exactly,
-/// so an explicit zero fails fast; an explicit value at or above it, such as the default five,
-/// gets the floor like the unset default, so asking for more never yields fewer retries.
-fn server_overloaded_max_retries(max_retries: u64, configured_stream_retries: Option<u64>) -> u64 {
-    let floor = configured_stream_retries.map_or(SERVER_OVERLOADED_RETRY_FLOOR, |configured| {
-        configured.min(SERVER_OVERLOADED_RETRY_FLOOR)
-    });
-    max_retries.max(floor)
-}
+// Fork: retry floor for `ServerOverloaded` (docs/fork/02-compaction-context.md F6).
+#[path = "responses_retry_fork.rs"]
+mod fork;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ResponsesStreamRequest {
@@ -101,17 +92,14 @@ pub(crate) async fn handle_response_stream_error(
         ResponsesStreamRequest::LocalCompaction => RetryOperation::LocalCompaction,
         ResponsesStreamRequest::RemoteCompactionV2 => RetryOperation::RemoteCompactionV2,
     };
-    let (retries, max_retries) = if matches!(err.details(), CodexErrorDetails::ServerOverloaded) {
-        (
-            &mut retry_state.server_overloaded_retries,
-            server_overloaded_max_retries(
-                max_retries,
-                turn_context.provider.info().stream_max_retries,
-            ),
-        )
-    } else {
-        (&mut retry_state.retries, max_retries)
-    };
+    // Fork: `ServerOverloaded` retries on its own counter with a floor.
+    let (retries, max_retries) = fork::retry_budget(
+        &err,
+        &mut retry_state.retries,
+        &mut retry_state.server_overloaded_retries,
+        max_retries,
+        turn_context,
+    );
     let retry_count = retries.saturating_add(1);
     let Some(delay) = err.retry_delay(retry_count) else {
         return Err(err);
