@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use crate::agent::control::TurnSpawnBudget;
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::TokenBudgetConfig;
 use crate::environment_selection::TurnEnvironmentSnapshot;
@@ -33,7 +32,7 @@ pub(crate) struct StepContext {
     pub(crate) token_budget: Option<TokenBudgetConfig>,
     /// Telemetry context tagged with this sampling request's model.
     pub(crate) session_telemetry: SessionTelemetry,
-    pub(crate) turn_spawn_budget: TurnSpawnBudget,
+    pub(crate) turn_spawn_budget: crate::agent::control::TurnSpawnBudget, // Fork
     pub(crate) environments: TurnEnvironmentSnapshot,
     /// Child bindings captured with this step; configured-only when opted in.
     pub(crate) inherited_environments: TurnEnvironmentSnapshot,

@@ -5,8 +5,6 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::W3cTraceContext;
 use tokio::sync::OwnedRwLockReadGuard;
 
-use crate::agent::types::TurnSpawnBudget;
-
 #[derive(Debug)]
 pub(crate) struct Submission {
     pub id: String,
@@ -17,8 +15,8 @@ pub(crate) struct Submission {
     pub trace: Option<W3cTraceContext>,
     pub parent_turn_id: Option<String>,
     pub root_turn_id: Option<String>,
-    /// Runtime-only delegation epoch; never crosses the protocol boundary.
-    pub turn_spawn_budget: Option<TurnSpawnBudget>,
+    /// Fork: runtime-only delegation epoch; never crosses the protocol boundary.
+    pub turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
     /// Keeps a V2 recipient resident until this submission is handled or dropped.
     pub residency_guard: Option<OwnedRwLockReadGuard<()>>,
     /// Owns delivery until dispatch; failed or abandoned submissions discard it.

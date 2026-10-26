@@ -427,13 +427,9 @@ async fn start_or_steer(
             else {
                 unreachable!("explicit user input can enter Plan mode");
             };
-            if !matches!(&turn_context.session_source, SessionSource::SubAgent(_)) {
-                session
-                    .start_turn_spawn_budget(turn_context.config.max_spawned_threads_per_turn)
-                    .await;
-            } else if let Some(turn_spawn_budget) = turn_spawn_budget {
-                session.set_turn_spawn_budget(turn_spawn_budget).await;
-            }
+            session
+                .fork_begin_turn_spawn_budget(&turn_context, turn_spawn_budget)
+                .await;
             turn_context
                 .turn_metadata_state
                 .update_responsesapi_client_metadata(responsesapi_client_metadata);
@@ -583,13 +579,9 @@ async fn start_if_idle(
             return Err(error);
         }
     };
-    if kind == TurnStartKind::User
-        && !matches!(&turn_context.session_source, SessionSource::SubAgent(_))
-    {
-        session
-            .start_turn_spawn_budget(turn_context.config.max_spawned_threads_per_turn)
-            .await;
-    }
+    session
+        .fork_begin_user_turn_spawn_budget(&turn_context, kind == TurnStartKind::User)
+        .await;
     turn_context
         .turn_metadata_state
         .update_responsesapi_client_metadata(responsesapi_client_metadata);

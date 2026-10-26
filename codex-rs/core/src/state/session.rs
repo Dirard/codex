@@ -11,9 +11,7 @@ use super::AdditionalContextStore;
 use super::auto_compact_window::AutoCompactWindow;
 use super::auto_compact_window::AutoCompactWindowIds;
 use super::auto_compact_window::AutoCompactWindowSnapshot;
-use super::auto_compact_window::PreparedAutoCompactWindow;
 use crate::TurnStartOptions;
-use crate::agent::control::TurnSpawnBudget;
 use crate::context_manager::ContextManager;
 use crate::context_manager::HistoryReplacement;
 use crate::session::PreviousTurnSettings;
@@ -107,7 +105,7 @@ pub(crate) struct SessionState {
     pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
     next_turn_is_first: bool,
     initial_settings_pending: bool,
-    turn_spawn_budget: Option<TurnSpawnBudget>,
+    turn_spawn_budget: Option<crate::agent::control::TurnSpawnBudget>, // Fork: session_fork.rs
 }
 
 impl SessionState {
@@ -155,19 +153,6 @@ impl SessionState {
         }
     }
 
-    pub(crate) fn start_turn_spawn_budget(&mut self, limit: usize) {
-        self.turn_spawn_budget = Some(TurnSpawnBudget::new(limit));
-    }
-
-    pub(crate) fn set_turn_spawn_budget(&mut self, budget: TurnSpawnBudget) {
-        self.turn_spawn_budget = Some(budget);
-    }
-
-    pub(crate) fn current_turn_spawn_budget(&mut self, limit: usize) -> TurnSpawnBudget {
-        self.turn_spawn_budget
-            .get_or_insert_with(|| TurnSpawnBudget::new(limit))
-            .clone()
-    }
     pub(crate) fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
         self.previous_turn_settings.clone()
     }
@@ -356,17 +341,6 @@ impl SessionState {
         self.auto_compact_window.advance()
     }
 
-    pub(crate) fn prepare_auto_compact_window(&self) -> PreparedAutoCompactWindow {
-        self.auto_compact_window.prepare_advance()
-    }
-
-    pub(crate) fn commit_prepared_auto_compact_window(
-        &mut self,
-        prepared: PreparedAutoCompactWindow,
-    ) -> bool {
-        self.auto_compact_window.commit_prepared(prepared)
-    }
-
     pub(crate) fn request_new_context_window(&mut self) {
         self.auto_compact_window.request_new_context_window();
     }
@@ -496,3 +470,7 @@ fn merge_rate_limit_fields(
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod tests;
+
+// Fork: spawn budget and prepared compaction windows.
+#[path = "session_fork.rs"]
+mod fork;

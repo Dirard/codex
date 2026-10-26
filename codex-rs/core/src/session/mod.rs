@@ -17,7 +17,6 @@ use crate::agent::agent_status_from_event;
 use crate::agent::api::AgentConfigUpdate;
 use crate::agent::api::AgentTurnOutcome;
 use crate::agent::control::AgentControlInit;
-use crate::agent::control::TurnSpawnBudget;
 use crate::agent::status::is_final;
 use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
@@ -314,6 +313,11 @@ use self::turn_context::TurnContext;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
+// Fork: session modules of the fork; the hot files keep thin hooks into them
+// (specs/fork-rebase-sustainability-2026-10-26.md, UC2).
+mod fork_spawn_budget;
+// Fork end
+
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
 use crate::mcp::McpEnvironmentScope;
@@ -523,7 +527,7 @@ pub(crate) struct SessionSpawnArgs {
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
     pub(crate) inherited_environments: Option<TurnEnvironmentSnapshot>,
-    pub(crate) turn_spawn_budget: Option<TurnSpawnBudget>,
+    pub(crate) turn_spawn_budget: Option<crate::agent::control::TurnSpawnBudget>, // Fork
     /// Parent rollout trace used only to derive fresh spawned child traces.
     ///
     /// Root sessions and non-thread-spawn subagents pass a disabled context;
@@ -1121,37 +1125,6 @@ impl SessionIo {
         Ok(id)
     }
 
-    /// Fork: submits `op` like `submit_with_trace`, and the turn it starts inherits the
-    /// caller's cumulative spawn budget.
-    pub(crate) async fn submit_with_spawn_budget(
-        &self,
-        op: impl Into<WithTurnExtensionData<Op>>,
-        parent_turn_id: Option<String>,
-        root_turn_id: Option<String>,
-        residency_guard: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
-        turn_spawn_budget: Option<TurnSpawnBudget>,
-        message_delivery: Option<crate::agent_communication::MessageDelivery>,
-    ) -> CodexResult<String> {
-        let id = new_submission_id();
-        let WithTurnExtensionData {
-            request: op,
-            turn_extension_init,
-        } = op.into();
-        self.submit_with_id(Submission {
-            id: id.clone(),
-            op,
-            turn_extension_init,
-            trace: None,
-            parent_turn_id,
-            root_turn_id,
-            turn_spawn_budget,
-            residency_guard,
-            message_delivery,
-        })
-        .await?;
-        Ok(id)
-    }
-
     /// Use sparingly: prefer `submit()` so submission IDs are generated consistently.
     pub(crate) async fn submit_with_id(&self, mut sub: Submission) -> CodexResult<()> {
         if sub.trace.is_none() {
@@ -1172,7 +1145,7 @@ impl SessionIo {
         &self,
         request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
         mode: TurnInputMode,
-        turn_spawn_budget: Option<TurnSpawnBudget>,
+        turn_spawn_budget: Option<crate::agent::control::TurnSpawnBudget>,
     ) -> CodexResult<TurnInputSubmission> {
         let id = new_submission_id();
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -2049,18 +2022,6 @@ impl Session {
     async fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
         let state = self.state.lock().await;
         state.previous_turn_settings()
-    }
-
-    pub(crate) async fn start_turn_spawn_budget(&self, limit: usize) {
-        self.state.lock().await.start_turn_spawn_budget(limit);
-    }
-
-    pub(crate) async fn set_turn_spawn_budget(&self, budget: TurnSpawnBudget) {
-        self.state.lock().await.set_turn_spawn_budget(budget);
-    }
-
-    pub(crate) async fn current_turn_spawn_budget(&self, limit: usize) -> TurnSpawnBudget {
-        self.state.lock().await.current_turn_spawn_budget(limit)
     }
 
     #[tracing::instrument(level = "trace", skip_all)]

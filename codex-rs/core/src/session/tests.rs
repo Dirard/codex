@@ -271,13 +271,14 @@ pub(crate) fn update_turn_settings_for_test(
 
 impl StepContext {
     pub(crate) fn for_test(turn: Arc<TurnContext>) -> Arc<Self> {
-        let turn_spawn_budget = TurnSpawnBudget::new(turn.config.max_spawned_threads_per_turn);
+        let turn_spawn_budget =
+            crate::agent::control::TurnSpawnBudget::new(turn.config.max_spawned_threads_per_turn);
         Self::for_test_with_turn_spawn_budget(turn, turn_spawn_budget)
     }
 
     pub(crate) fn for_test_with_turn_spawn_budget(
         turn: Arc<TurnContext>,
-        turn_spawn_budget: TurnSpawnBudget,
+        turn_spawn_budget: crate::agent::control::TurnSpawnBudget,
     ) -> Arc<Self> {
         let environments = turn.initial_environments.clone();
         // Unit fixtures still customize the legacy Config directly.
