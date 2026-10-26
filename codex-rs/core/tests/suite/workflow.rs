@@ -50,6 +50,8 @@ struct Rule {
     body: Body,
     remaining: usize,
     delay: Duration,
+    /// HTTP status; 200 serves the body as SSE, anything else as a JSON error body.
+    status: u16,
 }
 
 /// Serves each request with the first matching rule that has uses left.
@@ -66,7 +68,14 @@ impl Respond for ScriptedResponses {
         for rule in rules.iter_mut() {
             if rule.remaining > 0 && (rule.matches)(&body) {
                 rule.remaining -= 1;
-                let response = sse_response((rule.body)(&body)).set_delay(rule.delay);
+                let response = if rule.status == 200 {
+                    sse_response((rule.body)(&body))
+                } else {
+                    ResponseTemplate::new(rule.status)
+                        .insert_header("content-type", "application/json")
+                        .set_body_string((rule.body)(&body))
+                }
+                .set_delay(rule.delay);
                 self.log
                     .lock()
                     .expect("log")
@@ -119,6 +128,26 @@ impl ScriptedResponses {
             body: Arc::new(body),
             remaining: times,
             delay,
+            status: 200,
+        });
+    }
+
+    /// A rule that fails requests with HTTP `status` and a JSON `body`.
+    fn rule_status(
+        &self,
+        name: &str,
+        times: usize,
+        status: u16,
+        matches: impl Fn(&str) -> bool + Send + Sync + 'static,
+        body: String,
+    ) {
+        self.rules.lock().expect("rules").push(Rule {
+            name: name.to_string(),
+            matches: Arc::new(matches),
+            body: Arc::new(move |_| body.clone()),
+            remaining: times,
+            delay: Duration::ZERO,
+            status,
         });
     }
 
@@ -1968,5 +1997,1038 @@ async fn compaction_leaves_a_queued_workflow_notification_to_wake_a_turn() -> Re
         !responses.served("compact")[0].contains(NOTIFICATION_MARKER),
         "the compaction must not carry the notification"
     );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------
+// Stage 2 (2026-10-26): live and hard budgets, resume, runs of earlier processes, nested and
+// saved workflows, structured-output fallback, gRPC Code Mode host.
+// ---------------------------------------------------------------------------------------
+
+/// The configuration `build` uses, as a builder that can also resume a thread.
+fn workflow_builder(
+    configure: impl FnOnce(&mut codex_core::config::Config) + Send + 'static,
+) -> core_test_support::test_codex::TestCodexBuilder {
+    test_codex().with_config(move |config| {
+        for feature in [Feature::Collab, Feature::MultiAgentV2, Feature::Workflows] {
+            config
+                .features
+                .enable(feature)
+                .expect("test config should allow feature update");
+        }
+        config.workflows.require_approval = codex_core::config::WorkflowApproval::Never;
+        configure(config);
+    })
+}
+
+/// The run with `run_id`, once it is terminal.
+async fn finished_run_with_id(codex: &CodexThread, run_id: &str) -> RunSnapshot {
+    let deadline = tokio::time::Instant::now() + RUN_TIMEOUT;
+    loop {
+        if let Some(run) = codex
+            .workflow_runs()
+            .into_iter()
+            .find(|run| run.run_id == run_id)
+            && run.status.is_terminal()
+        {
+            return run;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "workflow run {run_id} did not finish: {:?}",
+            codex.workflow_runs()
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+/// The id of the run started by the `workflow` call `call_id` in a request body.
+fn run_id_of_call(body: &str, call_id: &str) -> String {
+    let output = call_output(body, call_id).expect("workflow output");
+    serde_json::from_str::<Value>(&output).expect("start result")["run_id"]
+        .as_str()
+        .expect("run_id")
+        .to_string()
+}
+
+fn journal_records(test: &TestCodex, run_id: &str) -> Vec<Value> {
+    std::fs::read_to_string(
+        test.codex_home_path()
+            .join("workflows")
+            .join(test.session_configured.thread_id.to_string())
+            .join(run_id)
+            .join("journal.jsonl"),
+    )
+    .expect("journal")
+    .lines()
+    .map(|line| serde_json::from_str(line).expect("record"))
+    .collect()
+}
+
+/// An agent turn that calls a tool nobody has, so the agent samples again.
+fn agent_tool_turn(id: &str, call_id: &str, tokens: (i64, i64, i64)) -> String {
+    let (input, cached, output) = tokens;
+    sse(vec![
+        ev_response_created(id),
+        ev_function_call(call_id, "no_such_tool", "{}"),
+        completed(id, input, cached, output),
+    ])
+}
+
+/// A final agent answer with usage.
+fn agent_answer(id: &str, text: &str, tokens: (i64, i64, i64)) -> String {
+    let (input, cached, output) = tokens;
+    sse(vec![
+        ev_response_created(id),
+        final_answer(&format!("msg-{id}"), text),
+        completed(id, input, cached, output),
+    ])
+}
+
+const LIVE_BUDGET_SCRIPT: &str = r#"export const meta = { name: 'live', description: 'Live budget' };
+const first = agent('TASK-LONG', { label: 'long' });
+while (((await budget.used()) ?? 0) === 0) { await budget.remaining(); }
+const late = await agent('TASK-LATE', { label: 'late' });
+log('late settled');
+return { first: await first, late };
+"#;
+
+/// R5.1, R5.2 (stage 2): every model response of an agent is charged when it is recorded,
+/// so a call made while another agent still works sees the spent budget and resolves to
+/// null, the running agent finishes (soft mode), and its total is not counted twice.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_budget_stops_new_agents_while_others_run() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    let arguments = json!({ "script": LIVE_BUDGET_SCRIPT, "budget_tokens": 500 }).to_string();
+    responses.parent_calls("parent_start", "workflow", &arguments, WORKFLOW_CALL_ID);
+    responses.parent_after_tool(WORKFLOW_CALL_ID);
+    responses.rule(
+        "parent_notified",
+        usize::MAX,
+        Duration::ZERO,
+        |body| is_parent(body) && body.contains(NOTIFICATION_MARKER),
+        message("resp-parent-notified", "done"),
+    );
+    responses.rule(
+        "long_tool",
+        1,
+        Duration::ZERO,
+        |body| {
+            body.contains(AGENT_MARKER)
+                && body.contains("TASK-LONG")
+                && !has_call_output(body, "long-call")
+        },
+        agent_tool_turn("resp-long-1", "long-call", (900, 100, 200)),
+    );
+    responses.rule(
+        "long_answer",
+        1,
+        Duration::from_millis(1500),
+        |body| body.contains(AGENT_MARKER) && has_call_output(body, "long-call"),
+        agent_answer("resp-long-2", "long done", (100, 0, 10)),
+    );
+    let test = build(&server, |_| {}).await?;
+
+    test.submit_turn("run it").await?;
+    let run = finished_run(&test.codex).await;
+    assert_eq!(run.status, RunStatus::Completed, "{run:?}");
+    assert_eq!(
+        run_result(&test.codex, &run.run_id),
+        json!({ "first": "long done", "late": null })
+    );
+    assert_eq!(run.null_reasons.get("budget_exhausted"), Some(&1));
+    // 800 + 200 for the first response, 100 + 10 for the answer, each counted once.
+    assert_eq!((run.charged_tokens, run.cached_tokens), (1110, 100));
+    // The late call settled while the first agent was still working.
+    let settled: Vec<u64> = journal_records(&test, &run.run_id)
+        .iter()
+        .filter(|record| record["kind"] == "agent_finished")
+        .map(|record| record["call"].as_u64().expect("call"))
+        .collect();
+    assert_eq!(settled, vec![2, 1]);
+    assert!(responses.served("unmatched").is_empty());
+    Ok(())
+}
+
+/// R5.4 (stage 2): in hard mode an agent whose response took the run above its budget is
+/// interrupted, its call resolves to null `budget_exhausted` and the run still completes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hard_budget_interrupts_running_agents() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    let script = "export const meta = { name: 'hard', description: 'Hard budget' };\nreturn await agent('TASK-LONG', { label: 'long' });\n";
+    let arguments = json!({ "script": script, "budget_tokens": 500 }).to_string();
+    responses.parent_calls("parent_start", "workflow", &arguments, WORKFLOW_CALL_ID);
+    responses.parent_after_tool(WORKFLOW_CALL_ID);
+    responses.rule(
+        "parent_notified",
+        usize::MAX,
+        Duration::ZERO,
+        |body| is_parent(body) && body.contains(NOTIFICATION_MARKER),
+        message("resp-parent-notified", "done"),
+    );
+    responses.rule(
+        "long_tool",
+        1,
+        Duration::ZERO,
+        |body| {
+            body.contains(AGENT_MARKER)
+                && body.contains("TASK-LONG")
+                && !has_call_output(body, "long-call")
+        },
+        agent_tool_turn("resp-long-1", "long-call", (900, 100, 200)),
+    );
+    responses.rule(
+        "long_answer",
+        1,
+        Duration::from_secs(20),
+        |body| body.contains(AGENT_MARKER) && has_call_output(body, "long-call"),
+        agent_answer("resp-long-2", "too late", (100, 0, 10)),
+    );
+    let test = build(&server, |config| {
+        config.workflows.budget_mode = codex_core::config::WorkflowBudgetMode::Hard;
+        config.workflows.budget_hard_overshoot = 1.0;
+    })
+    .await?;
+
+    let started = std::time::Instant::now();
+    test.submit_turn("run it").await?;
+    let run = finished_run(&test.codex).await;
+    assert!(
+        started.elapsed() < Duration::from_secs(15),
+        "the hard budget must not wait for the delayed answer"
+    );
+    assert_eq!(run.status, RunStatus::Completed, "{run:?}");
+    assert_eq!(run_result(&test.codex, &run.run_id), Value::Null);
+    assert_eq!(run.null_reasons.get("budget_exhausted"), Some(&1));
+    assert!(
+        run.logs_tail
+            .iter()
+            .any(|line| line.contains("above its hard budget of 500")),
+        "{:?}",
+        run.logs_tail
+    );
+    let (snapshot, _) = test.codex.workflow_run(&run.run_id, false).expect("run");
+    let thread_id = snapshot.agent_list[0].thread_id.clone().expect("thread");
+    let thread = test
+        .thread_manager
+        .get_thread(codex_protocol::ThreadId::from_string(&thread_id)?)
+        .await?;
+    assert!(matches!(
+        thread.agent_status().await,
+        codex_protocol::protocol::AgentStatus::Interrupted
+    ));
+    Ok(())
+}
+
+const RESUMABLE_SCRIPT: &str = r#"export const meta = { name: 'resumable', description: 'Three agents' };
+const a = await agent('TASK-RA');
+const b = await agent('TASK-RB', { timeout_ms: 300 });
+const c = await agent('TASK-RC');
+return { a, b, c };
+"#;
+
+const RESUMED_SCRIPT: &str = r#"export const meta = { name: 'resumable', description: 'Three agents, the last one replaced' };
+const a = await agent('TASK-RA');
+const b = await agent('TASK-RB', { timeout_ms: 300 });
+const d = await agent('TASK-RD');
+return { a, b, d };
+"#;
+
+const RESUME_CALL_ID: &str = "wf-call-2";
+
+/// R6.3, R6.5 (stage 2): a run resumed with a changed script answers its unchanged
+/// successful calls from the source journal without agents, runs the null and the changed
+/// calls live, and reports the reuse in its snapshot and notification.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_reuses_journaled_answers() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    responses.rule(
+        "parent_start",
+        1,
+        Duration::ZERO,
+        |body| {
+            is_parent(body)
+                && !body.contains("function_call_output")
+                && !body.contains(NOTIFICATION_MARKER)
+        },
+        sse(vec![
+            ev_response_created("resp-parent-start"),
+            ev_function_call(
+                WORKFLOW_CALL_ID,
+                "workflow",
+                &workflow_arguments(RESUMABLE_SCRIPT),
+            ),
+            completed("resp-parent-start", 0, 0, 0),
+        ]),
+    );
+    responses.parent_after_tool(WORKFLOW_CALL_ID);
+    responses.rule_with(
+        "parent_resume",
+        1,
+        Duration::ZERO,
+        |body| {
+            is_parent(body) && body.contains("resume it") && !has_call_output(body, RESUME_CALL_ID)
+        },
+        |body| {
+            let arguments = json!({
+                "script": RESUMED_SCRIPT,
+                "resume_from": run_id_of_call(body, WORKFLOW_CALL_ID),
+            });
+            sse(vec![
+                ev_response_created("resp-resume"),
+                ev_function_call(RESUME_CALL_ID, "workflow", &arguments.to_string()),
+                completed("resp-resume", 0, 0, 0),
+            ])
+        },
+    );
+    responses.rule(
+        "parent_after_resume",
+        1,
+        Duration::ZERO,
+        |body| {
+            is_parent(body)
+                && has_call_output(body, RESUME_CALL_ID)
+                && body.matches(NOTIFICATION_MARKER).count() < 2
+        },
+        message("resp-after-resume", "Resumed."),
+    );
+    responses.rule(
+        "parent_notified",
+        usize::MAX,
+        Duration::ZERO,
+        |body| is_parent(body) && body.contains(NOTIFICATION_MARKER),
+        message("resp-parent-notified", "noted"),
+    );
+    responses.agent("TASK-RA", "answer A", (100, 0, 10));
+    responses.agent_with_delay("TASK-RB", "late B", (0, 0, 0), Duration::from_secs(30));
+    responses.agent("TASK-RB", "answer B", (100, 0, 10));
+    responses.agent("TASK-RC", "answer C", (100, 0, 10));
+    responses.agent("TASK-RD", "answer D", (100, 0, 10));
+    let test = build(&server, |_| {}).await?;
+
+    test.submit_turn("run it").await?;
+    let first = finished_run(&test.codex).await;
+    assert_eq!(
+        run_result(&test.codex, &first.run_id),
+        json!({ "a": "answer A", "b": null, "c": "answer C" })
+    );
+    wait_for_turns(&test, 1).await;
+
+    test.submit_turn("resume it").await?;
+    let second_id = test
+        .codex
+        .workflow_runs()
+        .into_iter()
+        .map(|run| run.run_id)
+        .find(|run_id| *run_id != first.run_id)
+        .expect("resumed run");
+    let second = finished_run_with_id(&test.codex, &second_id).await;
+    assert_eq!(second.status, RunStatus::Completed, "{second:?}");
+    assert_eq!(
+        run_result(&test.codex, &second_id),
+        json!({ "a": "answer A", "b": "answer B", "d": "answer D" })
+    );
+    assert_eq!(
+        second.resume,
+        Some(codex_workflow::ResumeStats {
+            from: first.run_id.clone(),
+            source_results: 2,
+            served: 1,
+            unused: 1,
+        })
+    );
+    let (snapshot, _) = test.codex.workflow_run(&second_id, false).expect("run");
+    assert!(snapshot.agent_list[0].cached, "{snapshot:?}");
+    assert_eq!(snapshot.agent_list[0].thread_id, None);
+    // TASK-RA ran once, in the first run only; the null call and the new one ran live.
+    assert_eq!(responses.served("TASK-RA").len(), 1);
+    assert_eq!(responses.served("TASK-RB").len(), 2);
+    assert_eq!(responses.served("TASK-RD").len(), 1);
+    assert!(responses.served("unmatched").is_empty());
+    let records = journal_records(&test, &second_id);
+    assert_eq!(records[0]["resume_from"], json!(first.run_id));
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "agent_finished" && record["cached"] == true)
+    );
+
+    wait_for_turns(&test, 1).await;
+    let notified = responses.served("parent_notified");
+    let last = notified.last().expect("second notification");
+    assert!(
+        last.contains(&format!(
+            "Resumed from {}: 1 of 2 journaled results reused, 1 unused.",
+            first.run_id
+        )),
+        "{last}"
+    );
+    Ok(())
+}
+
+const STOPPED_SCRIPT: &str = r#"export const meta = { name: 'stopped', description: 'Stopped by a restart' };
+const a = await agent(`TASK-SA ${args.topic}`);
+const b = await agent('TASK-SB');
+return { a, b };
+"#;
+
+/// R6.4, R6.3, R6.7 (stage 2): a run whose process stopped is marked interrupted when the
+/// thread loads, without a turn, is listed by status, and `resume_from` without a script
+/// reruns its script and args, reusing the answer it already had.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn interrupted_runs_are_marked_on_load_and_resumable() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    let arguments = json!({ "script": STOPPED_SCRIPT, "args": { "topic": "t1" } }).to_string();
+    responses.parent_calls("parent_start", "workflow", &arguments, WORKFLOW_CALL_ID);
+    responses.rule(
+        "parent_after_tool",
+        1,
+        Duration::ZERO,
+        |body| {
+            is_parent(body)
+                && has_call_output(body, WORKFLOW_CALL_ID)
+                && !body.contains("resume it")
+        },
+        message("resp-parent-after-tool", "Started the workflow."),
+    );
+    responses.rule_with(
+        "parent_resume",
+        1,
+        Duration::ZERO,
+        |body| {
+            is_parent(body) && body.contains("resume it") && !has_call_output(body, RESUME_CALL_ID)
+        },
+        |body| {
+            let arguments = json!({ "resume_from": run_id_of_call(body, WORKFLOW_CALL_ID) });
+            sse(vec![
+                ev_response_created("resp-resume"),
+                ev_function_call(RESUME_CALL_ID, "workflow", &arguments.to_string()),
+                completed("resp-resume", 0, 0, 0),
+            ])
+        },
+    );
+    responses.rule(
+        "parent_after_resume",
+        1,
+        Duration::ZERO,
+        |body| {
+            is_parent(body)
+                && has_call_output(body, RESUME_CALL_ID)
+                && !body.contains(NOTIFICATION_MARKER)
+        },
+        message("resp-after-resume", "Resumed."),
+    );
+    responses.rule(
+        "parent_notified",
+        usize::MAX,
+        Duration::ZERO,
+        |body| is_parent(body) && body.contains(NOTIFICATION_MARKER),
+        message("resp-parent-notified", "noted"),
+    );
+    responses.agent("TASK-SA t1", "answer A", (100, 0, 10));
+    responses.agent_with_delay("TASK-SB", "never", (0, 0, 0), Duration::from_secs(60));
+    responses.agent("TASK-SB", "answer B", (100, 0, 10));
+    let test = build(&server, |_| {}).await?;
+
+    test.submit_turn("run it").await?;
+    let run_id = test.codex.workflow_runs()[0].run_id.clone();
+    let deadline = tokio::time::Instant::now() + RUN_TIMEOUT;
+    loop {
+        let run = test.codex.workflow_runs()[0].clone();
+        if run.agents.completed == 1 && run.agents.running == 1 {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "{run:?}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // The slow agent's request is in flight when the process stops.
+    wait_for_served(&responses, "TASK-SB", 1).await;
+    let rollout_path = test
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+    test.codex.shutdown_and_wait().await?;
+    // A process that stops without shutting down leaves the journal without its end.
+    let journal_path = test
+        .codex_home_path()
+        .join("workflows")
+        .join(test.session_configured.thread_id.to_string())
+        .join(&run_id)
+        .join("journal.jsonl");
+    let text = std::fs::read_to_string(&journal_path)?;
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.contains("\"kind\":\"run_finished\""))
+        .collect();
+    std::fs::write(&journal_path, format!("{}\n", kept.join("\n")))?;
+    let served_before_load = responses.rule_order().len();
+
+    let resumed = workflow_builder(|_| {})
+        .resume(&server, Arc::clone(&test.home), rollout_path)
+        .await?;
+    let records = journal_records(&resumed, &run_id);
+    let last = records.last().expect("record");
+    assert_eq!(last["kind"], "run_finished");
+    assert_eq!(last["status"], "interrupted");
+    assert_eq!(
+        last["error"],
+        "the Codex process stopped while the run was active"
+    );
+    let listed = resumed.codex.workflow_runs();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0].status, RunStatus::Interrupted);
+    assert_eq!(listed[0].agents.completed, 1);
+    assert_eq!(listed[0].null_reasons.get("interrupted"), Some(&1));
+    // Loading neither restarted the run nor started a turn.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(responses.rule_order().len(), served_before_load);
+
+    resumed.submit_turn("resume it").await?;
+    let second_id = resumed
+        .codex
+        .workflow_runs()
+        .into_iter()
+        .map(|run| run.run_id)
+        .find(|id| *id != run_id)
+        .expect("resumed run");
+    let second = finished_run_with_id(&resumed.codex, &second_id).await;
+    assert_eq!(second.status, RunStatus::Completed, "{second:?}");
+    assert_eq!(
+        run_result(&resumed.codex, &second_id),
+        json!({ "a": "answer A", "b": "answer B" })
+    );
+    assert_eq!(responses.served("TASK-SA t1").len(), 1);
+    assert_eq!(second.resume.as_ref().map(|resume| resume.served), Some(1));
+    let second_dir = resumed
+        .codex_home_path()
+        .join("workflows")
+        .join(resumed.session_configured.thread_id.to_string())
+        .join(&second_id);
+    assert_eq!(
+        std::fs::read_to_string(second_dir.join("args.json"))?,
+        "{\"topic\":\"t1\"}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(second_dir.join("script.js"))?,
+        STOPPED_SCRIPT
+    );
+    Ok(())
+}
+
+/// R6.7, R6.1 (stage 2): after a restart, `workflow_status` finds a finished run of the
+/// thread by id through its journal and returns its persisted result.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn finished_runs_are_restored_by_id_after_restart() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    responses.parent_calls(
+        "parent_start",
+        "workflow",
+        &workflow_arguments(ONE_SLOW_AGENT),
+        WORKFLOW_CALL_ID,
+    );
+    responses.rule(
+        "parent_after_tool",
+        1,
+        Duration::ZERO,
+        |body| {
+            is_parent(body)
+                && has_call_output(body, WORKFLOW_CALL_ID)
+                && !body.contains(NOTIFICATION_MARKER)
+        },
+        message("resp-parent-after-tool", "Started the workflow."),
+    );
+    responses.rule_with(
+        "parent_status",
+        1,
+        Duration::ZERO,
+        |body| {
+            is_parent(body)
+                && body.contains("status please")
+                && !has_call_output(body, "status-call")
+        },
+        |body| {
+            let arguments = json!({
+                "run_id": run_id_of_call(body, WORKFLOW_CALL_ID),
+                "include_result": true,
+            });
+            sse(vec![
+                ev_response_created("resp-status"),
+                ev_function_call("status-call", "workflow_status", &arguments.to_string()),
+                completed("resp-status", 0, 0, 0),
+            ])
+        },
+    );
+    responses.rule(
+        "parent_after_status",
+        1,
+        Duration::ZERO,
+        |body| is_parent(body) && has_call_output(body, "status-call"),
+        message("resp-after-status", "Seen."),
+    );
+    responses.rule(
+        "parent_notified",
+        usize::MAX,
+        Duration::ZERO,
+        |body| is_parent(body) && body.contains(NOTIFICATION_MARKER),
+        message("resp-parent-notified", "noted"),
+    );
+    responses.agent("TASK-ONE", "the answer", (0, 0, 0));
+    let mut builder = workflow_builder(|_| {});
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run it").await?;
+    let run = finished_run(&test.codex).await;
+    wait_for_turns(&test, 1).await;
+    let resumed = workflow_builder(|_| {}).restart(&server, &test).await?;
+    assert!(resumed.codex.workflow_runs().is_empty());
+
+    resumed.submit_turn("status please").await?;
+    let after_status = responses.served("parent_after_status");
+    let status = call_output(&after_status[0], "status-call").expect("status output");
+    let status: Value = serde_json::from_str(&status)?;
+    assert_eq!(status["run"]["status"], "completed", "{status}");
+    assert_eq!(status["run"]["run_id"], json!(run.run_id), "{status}");
+    assert_eq!(status["result"], "\"the answer\"", "{status}");
+    assert_eq!(resumed.codex.workflow_runs().len(), 1);
+    Ok(())
+}
+
+const VERIFY_SCRIPT: &str = r#"export const meta = { name: 'verify', description: 'Two checks' };
+phase('Check');
+const one = await agent(`TASK-V1 ${args.item}`);
+const two = await agent(`TASK-V2 ${args.item}`);
+log('checked');
+return { one, two, frozen: Object.isFrozen(args) };
+"#;
+
+const FAILING_SCRIPT: &str = "export const meta = { name: 'fails', description: 'Throws' };\nthrow new Error('nested failure');\n";
+
+const DEEPER_SCRIPT: &str = r#"export const meta = { name: 'deeper', description: 'Tries a second level' };
+try { await workflow('verify', { item: 'z' }); return 'no error'; } catch (error) { return error.name; }
+"#;
+
+const OUTER_SCRIPT: &str = r#"export const meta = { name: 'outer', description: 'Calls saved workflows' };
+phase('Outer');
+const [own, nested] = await parallel([() => agent('TASK-OWN'), () => workflow('verify', { item: 'x' })]);
+const failed = await workflow('fails');
+const deeper = await workflow('deeper');
+let missing = null;
+try { await workflow('absent'); } catch (error) { missing = error.message; }
+const extra = await agent('TASK-EXTRA');
+return { own, nested, failed, deeper, missing, extra };
+"#;
+
+fn save_workflows(codex_home: &std::path::Path) -> Result<()> {
+    let dir = codex_home.join("workflows");
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("verify.js"), VERIFY_SCRIPT)?;
+    std::fs::write(dir.join("fails.js"), FAILING_SCRIPT)?;
+    std::fs::write(dir.join("deeper.js"), DEEPER_SCRIPT)?;
+    Ok(())
+}
+
+/// R12.1, R12.2, R12.4, R4.5 (stage 2): saved scripts run inside the calling run with their
+/// own args and phases, share its gate, agent limit and budget, cannot nest further, and
+/// resolve to null when they throw; an unknown name throws.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn nested_workflows_share_the_run_limits() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    responses.parent_runs_workflow(OUTER_SCRIPT, Value::Null);
+    responses.agent_with_delay(
+        "TASK-OWN",
+        "own answer",
+        (100, 0, 10),
+        Duration::from_millis(300),
+    );
+    responses.agent("TASK-V1 x", "v1 x", (200, 0, 20));
+    responses.agent("TASK-V2 x", "v2 x", (300, 0, 30));
+    let test = build(&server, |config| {
+        config.workflows.max_concurrent_agents = 1;
+        config.workflows.max_agents_per_run = 3;
+    })
+    .await?;
+    save_workflows(test.codex_home_path())?;
+
+    test.submit_turn("run it").await?;
+    let run = finished_run(&test.codex).await;
+    assert_eq!(run.status, RunStatus::Completed, "{run:?}");
+    let result = run_result(&test.codex, &run.run_id);
+    assert_eq!(result["own"], "own answer");
+    assert_eq!(
+        result["nested"],
+        json!({ "one": "v1 x", "two": "v2 x", "frozen": true })
+    );
+    assert_eq!(result["failed"], Value::Null);
+    assert_eq!(result["deeper"], "WorkflowNestingError");
+    assert!(
+        result["missing"]
+            .as_str()
+            .is_some_and(|message| message.contains("no saved workflow absent.js in ")),
+        "{result}"
+    );
+    // Three agents started; the fourth call met the shared agent limit.
+    assert_eq!(result["extra"], Value::Null);
+    assert_eq!(run.null_reasons.get("agent_limit"), Some(&1));
+    // One gate: agents ran one at a time in call order.
+    let agents: Vec<String> = responses
+        .rule_order()
+        .into_iter()
+        .filter(|rule| rule.starts_with("TASK-"))
+        .collect();
+    assert_eq!(agents, vec!["TASK-OWN", "TASK-V1 x", "TASK-V2 x"]);
+    // One budget: the nested agents are charged to the run.
+    assert_eq!(run.charged_tokens, 110 + 220 + 330);
+    let (snapshot, _) = test.codex.workflow_run(&run.run_id, false).expect("run");
+    assert_eq!(
+        snapshot.agent_list[1].phase.as_deref(),
+        Some("verify/Check")
+    );
+    let logs = snapshot.logs_tail.join("\n");
+    assert!(logs.contains("[verify] checked"), "{logs}");
+    assert!(logs.contains("workflow verify started"), "{logs}");
+    assert!(
+        logs.contains("workflow fails failed: Error: nested failure"),
+        "{logs}"
+    );
+    assert!(logs.contains("fails.js:2"), "{logs}");
+    let kinds: Vec<String> = journal_records(&test, &run.run_id)
+        .iter()
+        .map(|record| record["kind"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| *kind == "workflow_started")
+            .count(),
+        3
+    );
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| *kind == "workflow_finished")
+            .count(),
+        3
+    );
+    Ok(())
+}
+
+/// The arguments of the `workflow` call `call_id` the parent makes after `after_call_id`.
+fn parent_chain(
+    responses: &ScriptedResponses,
+    name: &str,
+    after_call_id: Option<&'static str>,
+    call_id: &'static str,
+    arguments: Value,
+) {
+    let body = sse(vec![
+        ev_response_created(&format!("resp-{name}")),
+        ev_function_call(call_id, "workflow", &arguments.to_string()),
+        completed(&format!("resp-{name}"), 0, 0, 0),
+    ]);
+    responses.rule(
+        name,
+        1,
+        Duration::ZERO,
+        move |body| {
+            is_parent(body)
+                && !body.contains(NOTIFICATION_MARKER)
+                && !has_call_output(body, call_id)
+                && after_call_id.is_none_or(|after| has_call_output(body, after))
+                && (after_call_id.is_some() || !body.contains("function_call_output"))
+        },
+        body,
+    );
+}
+
+/// R12.3, R12.4, R1.8, R6.3 (stage 2): the tool runs a saved script by `name`; bad argument
+/// combinations, an unknown saved script and an unusable `resume_from` create no run.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn workflow_tool_runs_a_saved_script_by_name() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    parent_chain(
+        &responses,
+        "by_name",
+        None,
+        "call-1",
+        json!({ "name": "verify", "args": { "item": "y" } }),
+    );
+    responses.rule_with(
+        "running_source",
+        1,
+        Duration::ZERO,
+        |body| {
+            is_parent(body) && has_call_output(body, "call-1") && !has_call_output(body, "call-2")
+        },
+        |body| {
+            let arguments = json!({ "resume_from": run_id_of_call(body, "call-1") });
+            sse(vec![
+                ev_response_created("resp-running-source"),
+                ev_function_call("call-2", "workflow", &arguments.to_string()),
+                completed("resp-running-source", 0, 0, 0),
+            ])
+        },
+    );
+    parent_chain(
+        &responses,
+        "unknown_source",
+        Some("call-2"),
+        "call-3",
+        json!({ "resume_from": "wf-00000000" }),
+    );
+    parent_chain(
+        &responses,
+        "both",
+        Some("call-3"),
+        "call-4",
+        json!({ "name": "verify", "script": ONE_SLOW_AGENT }),
+    );
+    parent_chain(&responses, "neither", Some("call-4"), "call-5", json!({}));
+    parent_chain(
+        &responses,
+        "absent",
+        Some("call-5"),
+        "call-6",
+        json!({ "name": "absent" }),
+    );
+    responses.rule(
+        "parent_done",
+        1,
+        Duration::ZERO,
+        |body| {
+            is_parent(body)
+                && has_call_output(body, "call-6")
+                && !body.contains(NOTIFICATION_MARKER)
+        },
+        message("resp-parent-done", "Done."),
+    );
+    responses.rule(
+        "parent_notified",
+        usize::MAX,
+        Duration::ZERO,
+        |body| is_parent(body) && body.contains(NOTIFICATION_MARKER),
+        message("resp-parent-notified", "noted"),
+    );
+    responses.agent_with_delay("TASK-V1 y", "v1 y", (0, 0, 0), Duration::from_secs(2));
+    responses.agent("TASK-V2 y", "v2 y", (0, 0, 0));
+    let test = build(&server, |_| {}).await?;
+    save_workflows(test.codex_home_path())?;
+
+    test.submit_turn("run the saved one").await?;
+    let done = &responses.served("parent_done")[0];
+    let output = |call_id: &str| call_output(done, call_id).expect("output");
+    assert!(
+        output("call-2").contains("is still running"),
+        "{}",
+        output("call-2")
+    );
+    assert!(
+        output("call-3").contains("unknown workflow run `wf-00000000`"),
+        "{}",
+        output("call-3")
+    );
+    assert!(
+        output("call-4").contains("either `script` or `name`, not both"),
+        "{}",
+        output("call-4")
+    );
+    assert!(
+        output("call-5").contains("pass `script`, the `name` of a saved script, or `resume_from`"),
+        "{}",
+        output("call-5")
+    );
+    assert!(
+        output("call-6").contains("no saved workflow absent.js in "),
+        "{}",
+        output("call-6")
+    );
+    let runs = test.codex.workflow_runs();
+    assert_eq!(
+        runs.len(),
+        1,
+        "only the saved script started a run: {runs:?}"
+    );
+    let run = finished_run(&test.codex).await;
+    assert_eq!(run.name, "verify");
+    assert_eq!(
+        run_result(&test.codex, &run.run_id),
+        json!({ "one": "v1 y", "two": "v2 y", "frozen": true })
+    );
+    Ok(())
+}
+
+const FALLBACK_SCRIPT: &str = r#"export const meta = { name: 'fallback', description: 'Schema fallback' };
+const verdict = { type: 'object', additionalProperties: false, required: ['ok'], properties: { ok: { type: 'boolean' } } };
+const s1 = await agent('TASK-S1', { schema: verdict });
+const s2 = await agent('TASK-S2', { schema: verdict });
+return { s1, s2 };
+"#;
+
+/// R3.12, R3.5 (stage 2): when the provider rejects the native JSON schema format, the same
+/// agent is asked again with the schema in its task, without the corrective turn, and the
+/// run's later schema calls put the schema in the task at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn schema_calls_fall_back_to_the_prompt_when_the_provider_rejects_json_schema() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    responses.parent_runs_workflow(FALLBACK_SCRIPT, Value::Null);
+    responses.rule_status(
+        "reject",
+        usize::MAX,
+        400,
+        |body| body.contains(AGENT_MARKER) && body.contains("\"json_schema\""),
+        json!({
+            "error": {
+                "message": "Invalid schema for response_format 'codex_output_schema': json_schema is not supported by this provider",
+                "type": "invalid_request_error",
+                "param": "text.format",
+                "code": "invalid_json_schema"
+            }
+        })
+        .to_string(),
+    );
+    responses.rule(
+        "s1_fallback",
+        1,
+        Duration::ZERO,
+        |body| {
+            body.contains(AGENT_MARKER)
+                && body.contains("TASK-S1")
+                && body.contains("rejected the structured-output format")
+        },
+        agent_answer("resp-s1", "{\"ok\": true}", (0, 0, 0)),
+    );
+    responses.rule(
+        "s2_prompt",
+        1,
+        Duration::ZERO,
+        |body| {
+            body.contains(AGENT_MARKER) && body.contains("TASK-S2") && body.contains("JSON schema:")
+        },
+        agent_answer("resp-s2", "```json\n{\"ok\": false}\n```", (0, 0, 0)),
+    );
+    let test = build(&server, |_| {}).await?;
+
+    test.submit_turn("run it").await?;
+    let run = finished_run(&test.codex).await;
+    assert_eq!(run.status, RunStatus::Completed, "{run:?}");
+    assert_eq!(
+        run_result(&test.codex, &run.run_id),
+        json!({ "s1": { "ok": true }, "s2": { "ok": false } }),
+        "{run:?} {:?}",
+        responses.rule_order()
+    );
+    assert!(run.null_reasons.is_empty(), "{run:?}");
+    // Only the first schema call met the refusal; the second went straight to the prompt.
+    assert_eq!(responses.served("reject").len(), 1);
+    assert!(responses.served("reject")[0].contains("TASK-S1"));
+    assert!(!responses.served("s2_prompt")[0].contains("\"json_schema\""));
+    assert!(
+        run.logs_tail
+            .iter()
+            .any(|line| line.contains("rejected native structured output")),
+        "{:?}",
+        run.logs_tail
+    );
+    assert!(responses.served("unmatched").is_empty());
+    Ok(())
+}
+
+/// R3.12, R3.6 (stage 2): with `structured_output = "prompt"` the schema goes in the task
+/// and the corrective turn, no request asks for native structured output, a fenced answer
+/// is accepted and a second invalid answer resolves to null.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn prompt_mode_puts_the_schema_in_the_task() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    let script = r#"export const meta = { name: 'prompted', description: 'Schema in the prompt' };
+const verdict = { type: 'object', additionalProperties: false, required: ['ok'], properties: { ok: { type: 'boolean' } } };
+const good = await agent('TASK-P1', { schema: verdict });
+const bad = await agent('TASK-P2', { schema: verdict });
+return { good, bad };
+"#;
+    responses.parent_runs_workflow(script, Value::Null);
+    responses.agent("TASK-P1", "```json\n{\"ok\": true}\n```", (0, 0, 0));
+    responses.agent("TASK-P2", "not json", (0, 0, 0));
+    responses.correction("TASK-P2", "{\"ok\": \"no\"}");
+    let test = build(&server, |config| {
+        config.workflows.structured_output = codex_core::config::WorkflowStructuredOutput::Prompt;
+    })
+    .await?;
+
+    test.submit_turn("run it").await?;
+    let run = finished_run(&test.codex).await;
+    assert_eq!(run.status, RunStatus::Completed, "{run:?}");
+    assert_eq!(
+        run_result(&test.codex, &run.run_id),
+        json!({ "good": { "ok": true }, "bad": null })
+    );
+    assert_eq!(run.null_reasons.get("schema_invalid"), Some(&1));
+    for rule in ["TASK-P1", "TASK-P2", "TASK-P2-correction"] {
+        let served = responses.served(rule);
+        assert_eq!(served.len(), 1, "{rule}");
+        assert!(
+            !served[0].contains("\"json_schema\""),
+            "{rule}: {}",
+            served[0]
+        );
+        assert!(served[0].contains("\\\"additionalProperties\\\""), "{rule}");
+    }
+    assert!(responses.served("TASK-P1")[0].contains("JSON schema:"));
+    Ok(())
+}
+
+/// R2.1, R2.2, R9.1 (stage 2): runs work the same on the gRPC Code Mode host: a fan-out
+/// completes and cancelling a run interrupts its agent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn workflow_runs_on_the_grpc_code_mode_host() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    responses.parent_runs_workflow(FAN_OUT_SCRIPT, json!({ "topic": "grpc" }));
+    responses.agent_with_delay(
+        "TASK-FIRST",
+        "first answer",
+        (100, 0, 10),
+        Duration::from_millis(300),
+    );
+    responses.agent("TASK-B", "answer B", (100, 0, 10));
+    responses.agent("TASK-C", "answer C", (100, 0, 10));
+    let test = build(&server, |config| {
+        config
+            .features
+            .enable(Feature::CodeModeHostGrpc)
+            .expect("grpc host feature");
+    })
+    .await?;
+    assert!(test.config.features.enabled(Feature::CodeModeHostGrpc));
+
+    test.submit_turn("run it").await?;
+    let run = finished_run(&test.codex).await;
+    assert_eq!(run.status, RunStatus::Completed, "{run:?}");
+    assert_eq!(
+        run_result(&test.codex, &run.run_id),
+        json!({ "first": "first answer", "rest": ["answer B", "answer C"] })
+    );
+    assert_eq!(run.agents.completed, 3);
+    wait_for_turns(&test, 1).await;
+    assert_eq!(responses.served("parent_notified").len(), 1);
     Ok(())
 }
