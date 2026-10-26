@@ -37,6 +37,19 @@ pub(crate) fn enabled(config: &Config) -> bool {
     config.features.enabled(Feature::ExplorerProfile)
 }
 
+/// The `agent_type` description of `spawn_agent`; the profile adds the `explorer` type.
+pub(crate) fn agent_type_description(config: &Config) -> String {
+    if enabled(config) {
+        crate::agent::role::spawn_tool_spec::build_with_explorer_profile(
+            &config.agent_roles,
+            &config.explorer_profile,
+            config.agent_default_subagent_model.as_deref(),
+        )
+    } else {
+        crate::agent::role::spawn_tool_spec::build(&config.agent_roles)
+    }
+}
+
 /// Whether a spawn that requested `role_name` creates a profiled explorer.
 pub(crate) fn applies_to_role(config: &Config, role_name: Option<&str>) -> bool {
     enabled(config) && role_name.map(str::trim) == Some(EXPLORER_ROLE_NAME)

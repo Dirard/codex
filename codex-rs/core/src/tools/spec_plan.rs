@@ -42,7 +42,6 @@ use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
-use crate::tools::handlers::multi_agents_spec::WAIT_AGENT_EXIT_NOTIFICATION_GUIDANCE;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::InterruptAgentHandler;
@@ -93,6 +92,7 @@ use codex_tools::can_request_original_image_detail;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::default_namespace_description;
+use codex_tools::request_user_input_available_modes;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -118,7 +118,6 @@ struct CoreToolPlanContext<'a> {
     workflows_available: bool,
 }
 
-/// Builds the allowed tool surface, retaining explicit extensions for isolated reviewers.
 #[instrument(level = "trace", skip_all)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_tool_router(
@@ -151,43 +150,40 @@ pub(crate) fn build_tool_router(
     };
     let mut registry = ToolRegistry::with_tool_policy(Arc::clone(&session.tool_policy));
     add_core_tool_sources(&context, &mut registry);
-
-    let mut mcp_omitted_exposures = HashMap::new();
-    let is_basic_session = crate::guardian::is_basic_session_source(&turn_context.session_source);
-    if !is_basic_session {
-        let registered_mcp_tools = session.services.mcp_handler_cache.append_mcp_tools(
-            mcp,
-            &turn_context.config,
-            apps_enabled,
-            &mcp.config().mcp_server_catalog,
-            model_info.supports_search_tool,
-            session.services.mcp_manager.shared_definitions(),
-            &mut registry,
-        );
-        mcp_omitted_exposures = apply_mcp_tool_exposure_policy(
-            turn_context,
-            model_info,
-            mcp,
-            &registered_mcp_tools,
-            &mut registry,
-        );
+    // Fork: an isolated reviewer (Guardian) gets no MCP, dynamic or hosted tools.
+    if crate::guardian::is_basic_session_source(&turn_context.session_source) {
+        return fork::basic_tool_router(session, turn_context, model_info, step_store, registry);
     }
+
+    let registered_mcp_tools = session.services.mcp_handler_cache.append_mcp_tools(
+        mcp,
+        &turn_context.config,
+        apps_enabled,
+        &mcp.config().mcp_server_catalog,
+        model_info.supports_search_tool,
+        session.services.mcp_manager.shared_definitions(),
+        &mut registry,
+    );
+    let mcp_omitted_exposures = apply_mcp_tool_exposure_policy(
+        turn_context,
+        model_info,
+        mcp,
+        &registered_mcp_tools,
+        &mut registry,
+    );
     let standalone_web_search_tool = append_extension_tool_executors(
         turn_context,
         model_info,
         extension_tool_executors(session, step_store),
         &mut registry,
     );
-    let hosted_specs = if is_basic_session {
-        Vec::new()
-    } else {
-        append_dynamic_tool_runtimes(&turn_context.dynamic_tools, &mut registry);
-        hosted_model_tool_specs(
-            turn_context,
-            model_info,
-            standalone_web_search_tool.as_slice(),
-        )
-    };
+    append_dynamic_tool_runtimes(&turn_context.dynamic_tools, &mut registry);
+    let hosted_specs = hosted_model_tool_specs(
+        turn_context,
+        model_info,
+        standalone_web_search_tool.as_slice(),
+    );
+
     finalize_tool_router(
         turn_context,
         model_info,
@@ -841,12 +837,6 @@ fn image_generation_available(turn_context: &TurnContext, model_info: &ModelInfo
                 .is_some_and(AuthManager::current_auth_uses_codex_backend))
 }
 
-/// Fork: whether background `exec_command` processes can notify this thread on exit.
-fn exec_exit_notifications_enabled(turn_context: &TurnContext) -> bool {
-    let features = turn_context.config.features.get();
-    features.enabled(Feature::UnifiedExec) && features.enabled(Feature::ExecExitNotifications)
-}
-
 fn wait_agent_timeout_options(turn_context: &TurnContext) -> WaitAgentTimeoutOptions {
     if multi_agent_v2_enabled(turn_context) {
         return WaitAgentTimeoutOptions {
@@ -867,15 +857,9 @@ fn agent_type_description(
     turn_context: &TurnContext,
     default_agent_type_description: &str,
 ) -> String {
-    let agent_type_description = if crate::agent::explorer_profile::enabled(&turn_context.config) {
-        crate::agent::role::spawn_tool_spec::build_with_explorer_profile(
-            &turn_context.config.agent_roles,
-            &turn_context.config.explorer_profile,
-            turn_context.config.agent_default_subagent_model.as_deref(),
-        )
-    } else {
-        crate::agent::role::spawn_tool_spec::build(&turn_context.config.agent_roles)
-    };
+    // Fork: the explorer profile describes the `explorer` agent type.
+    let agent_type_description =
+        crate::agent::explorer_profile::agent_type_description(&turn_context.config);
     if agent_type_description.is_empty() {
         default_agent_type_description.to_string()
     } else {
@@ -997,10 +981,8 @@ fn code_mode_tools<'a>(
             .allows(&ToolName::plain(codex_code_mode::PUBLIC_TOOL_NAME));
     let mut seen = HashSet::new();
     registry.entries().filter_map(move |tool| {
-        if !enabled
-            || !(tool.exposure.is_available_in_code_mode()
-                || tool.exposure == ToolExposure::DirectModelOnly)
-        {
+        // Fork: direct-only tools get a Code Mode stub.
+        if !enabled || !fork::available_in_code_mode(tool.exposure) {
             return None;
         }
 
@@ -1064,45 +1046,18 @@ fn register_code_mode_executors(
 
     let mut code_mode_tool_names = BTreeMap::new();
     let mut code_mode_nested_tool_specs = Vec::new();
-    let mut direct_tool_stubs = Vec::new();
     let mut exec_prompt_tool_specs = Vec::new();
     let mut deferred_exec_prompt_tool_specs = Vec::new();
     let mut included_deferred_mcp_output_schema = false;
     let deferred_tools_guidance_enabled = model_info.supports_search_tool;
-    let code_mode_input_schema_max_bytes =
-        turn_context.config.code_mode.tool_input_schema_max_bytes;
+    // Fork: omitted MCP tools and direct-only tools stay out of the nested tools.
+    let mut fork_tools = fork::CodeModeTools::new(turn_context, model_info, mcp_omitted_exposures);
     for (name, spec, tool) in code_mode_tools(turn_context, model_info, registry) {
-        let tool_name = tool.runtime.tool_name();
-        if !code_mode_only_strict_3p_tools(turn_context, model_info)
-            && mcp_omitted_exposures
-                .get(&tool_name)
-                .is_some_and(|exposures| exposures.contains(ToolExposures::CODE_MODE))
-        {
+        if fork_tools.skips(&spec, tool) {
             continue;
         }
+        code_mode_tool_names.insert(name, tool.runtime.tool_name());
         let exposure = tool.exposure;
-        if exposure == ToolExposure::DirectModelOnly {
-            direct_tool_stubs.extend(
-                collect_code_mode_exec_prompt_tool_definitions(
-                    std::iter::once(spec.as_ref()),
-                    code_mode_input_schema_max_bytes,
-                )
-                .into_iter()
-                .map(|mut definition| {
-                    let name = definition.name.clone();
-                    definition.description = format!(
-                        "Direct model tool only. Call the matching tool directly; do not invoke `{name}` through `exec` or `tools.*`.\n\n{}",
-                        definition.description
-                    );
-                    definition.input_schema = None;
-                    definition.output_schema = None;
-                    definition
-                }),
-            );
-            continue;
-        }
-        // Direct-only stubs are not nested tools; keep them out of code-mode routing metadata.
-        code_mode_tool_names.insert(name, tool_name);
         let cached_runtime = tool.cached_runtime().cloned();
 
         if exposure == ToolExposure::Deferred {
@@ -1129,6 +1084,8 @@ fn register_code_mode_executors(
         codex_code_mode::DeferredToolDiscovery::Catalog
     };
     let mut namespace_descriptions = code_mode_namespace_descriptions(&exec_prompt_tool_specs);
+    let code_mode_input_schema_max_bytes =
+        turn_context.config.code_mode.tool_input_schema_max_bytes;
     let mut enabled_tools = collect_code_mode_exec_prompt_tool_definitions(
         exec_prompt_tool_specs.iter(),
         code_mode_input_schema_max_bytes,
@@ -1160,7 +1117,7 @@ fn register_code_mode_executors(
     let execute_handler = CodeModeExecuteHandler::new(
         create_code_mode_tool(exec_description),
         code_mode_nested_tool_specs,
-        direct_tool_stubs,
+        fork_tools.direct_tool_stubs,
     );
 
     registry.prepend_trusted(Arc::new(CodeModeWaitHandler::new(
@@ -1271,11 +1228,7 @@ fn add_core_tool_sources(context: &CoreToolPlanContext<'_>, registry: &mut ToolR
     add_core_utility_tools(context, registry);
     add_collaboration_tools(context, registry);
     // Fork: background workflow runs (dynamic workflow, UC1).
-    crate::workflow::add_workflow_tools(
-        context.turn_context,
-        context.workflows_available,
-        registry,
-    );
+    fork::add_workflow_tools(context, registry);
 }
 
 fn standalone_web_search_enabled(turn_context: &TurnContext, model_info: &ModelInfo) -> bool {
@@ -1329,7 +1282,7 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
     let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals)
         && context.tool_policy.expose_additional_permissions;
     let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
-    let exit_notifications = exec_exit_notifications_enabled(turn_context);
+    let exit_notifications = fork::exec_exit_notifications_enabled(turn_context);
     let options = ExecCommandHandlerOptions {
         allow_tty: features.enabled(Feature::UnifiedExecTty),
         exec_permission_approvals_enabled,
@@ -1392,11 +1345,10 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         registry.add_with_exposure(
             RequestUserInputHandler {
                 // Fork: Default mode only for interactive root threads.
-                available_modes:
-                    crate::tools::handlers::request_user_input_spec::request_user_input_modes_for_session(
-                        features,
-                        &turn_context.session_source,
-                    ),
+                available_modes: fork::request_user_input_modes(
+                    request_user_input_available_modes(features),
+                    turn_context,
+                ),
             },
             ToolExposure::DirectModelOnly,
         );
@@ -1562,10 +1514,8 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                                 .features
                                 .enabled(Feature::ModelCatalogInContext),
                             agent_type_description,
-                            // Fork: the explorer profile needs `agent_type` even without
-                            // user-defined roles.
-                            expose_agent_type: !turn_context.config.agent_roles.is_empty()
-                                || crate::agent::explorer_profile::enabled(&turn_context.config),
+                            // Fork: also for the explorer profile.
+                            expose_agent_type: fork::expose_agent_type(&turn_context.config),
                             hide_agent_type_model_reasoning: hide_spawn_agent_metadata,
                             expose_spawn_agent_model_overrides: turn_context
                                 .config
@@ -1576,13 +1526,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                                 .multi_agent_v2
                                 .usage_hint_text
                                 .clone(),
-                            explorer_profile: crate::agent::explorer_profile::enabled(
-                                &turn_context.config,
-                            ),
-                            worktree_isolation: turn_context
-                                .config
-                                .features
-                                .enabled(Feature::AgentWorktreeIsolation),
+                            fork: fork::spawn_agent_options(&turn_context.config),
                         },
                         spawn_agent_description.map(str::to_owned),
                     ),
@@ -1618,23 +1562,14 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 );
             }
             if turn_context.config.multi_agent_v2.wait_agent_enabled {
-                let exit_notifications = exec_exit_notifications_enabled(turn_context);
-                // Fork: a catalog description replaces the bundled one, so it gets the
-                // exit-notification sentence too (background-exec-notifications R4.6).
-                let wait_agent_description = model_messages
-                    .multi_agent_tool_description_override("wait_agent")
-                    .map(|description| {
-                        if exit_notifications {
-                            format!("{description}{WAIT_AGENT_EXIT_NOTIFICATION_GUIDANCE}")
-                        } else {
-                            description.to_string()
-                        }
-                    });
+                // Fork: background terminals with exit notifications (R4.6).
+                let exit_notifications = fork::exec_exit_notifications_enabled(turn_context);
                 registry.register_trusted_with_exposure(
                     multi_agent_v2_handler(
                         WaitAgentHandlerV2::new(context.wait_agent_timeouts, exit_notifications),
                         tool_namespace,
-                        wait_agent_description.as_deref(),
+                        fork::wait_agent_description(&model_messages, exit_notifications)
+                            .as_deref(),
                         model_messages.multi_agent_tool_parameters_override("wait_agent"),
                         message_delivery,
                     ),
@@ -1678,14 +1613,12 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                         .features
                         .enabled(Feature::ModelCatalogInContext),
                     agent_type_description,
-                    // Fork: the explorer profile needs `agent_type` even without user roles.
-                    expose_agent_type: !turn_context.config.agent_roles.is_empty()
-                        || crate::agent::explorer_profile::enabled(&turn_context.config),
+                    // Fork: also for the explorer profile.
+                    expose_agent_type: fork::expose_agent_type(&turn_context.config),
                     hide_agent_type_model_reasoning: false,
                     expose_spawn_agent_model_overrides: true,
                     usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
-                    explorer_profile: false,
-                    worktree_isolation: false,
+                    fork: Default::default(),
                 }),
                 exposure,
             );
@@ -1805,6 +1738,10 @@ fn code_mode_namespace_name<'a>(
         .and_then(|namespace| namespace_descriptions.get(namespace))
         .map(|namespace_description| namespace_description.name.as_str())
 }
+
+// Fork: tool plan hooks (spec_plan_fork.rs).
+#[path = "spec_plan_fork.rs"]
+mod fork;
 
 #[cfg(test)]
 #[path = "spec_plan_tests.rs"]

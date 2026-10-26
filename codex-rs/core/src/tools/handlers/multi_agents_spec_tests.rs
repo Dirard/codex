@@ -123,8 +123,7 @@ fn spawn_agent_tool_v2_fork_turns_lists_supported_values() {
             multi_agent_version: MultiAgentVersion::V2,
             model_catalog_in_context: false,
             usage_hint_text: None,
-            explorer_profile: false,
-            worktree_isolation: false,
+            fork: Default::default(),
         },
         /*description_override*/ None,
     ) else {
@@ -475,7 +474,10 @@ fn spawn_agent_tool_v2_exposes_isolation_only_when_enabled() {
             SpawnAgentToolOptions {
                 multi_agent_version: MultiAgentVersion::V2,
                 hide_agent_type_model_reasoning,
-                worktree_isolation,
+                fork: SpawnAgentForkOptions {
+                    worktree_isolation,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             /*description_override*/ None,

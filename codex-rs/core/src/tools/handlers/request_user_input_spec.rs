@@ -1,6 +1,4 @@
-use codex_features::Features;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::protocol::SessionSource;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
@@ -9,29 +7,6 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 pub const REQUEST_USER_INPUT_TOOL_NAME: &str = "request_user_input";
-
-/// Fork: when to ask, added to the description whenever Default mode allows the tool.
-///
-/// The description is shared by every mode, so the text names Default mode and leaves Plan
-/// mode's rules alone. It follows the upstream Default-mode template: the tool is for optional
-/// questions, and input that progress must wait for is asked in plain text.
-pub(crate) const DEFAULT_MODE_GUIDANCE: &str = "In Default mode, prefer reasonable assumptions and keep working: ask only optional questions whose answer would materially improve the work and that you cannot settle from the codebase, the conversation or your tools, such as a real choice between materially different approaches. Do not ask for permission, to confirm a plan you can carry out, or for facts you can discover. Ask at most once per decision. The user may not answer; if no answer arrives, continue with your recommended option and state that assumption. Do not use this tool for irreversible or destructive actions (deleting or overwriting data or work, migrations, publishing, pushing, spending money): ask the user in plain text and do not take such an action until the user answers. Plan mode keeps its own rules for this tool.";
-
-/// Fork: returned in Default mode when the request resolves without any answer.
-pub(crate) const DEFAULT_MODE_NO_ANSWER_MESSAGE: &str = "No answer was received: the user did not answer, or this client cannot show questions. If your recommended option is reversible, continue with it and state that assumption in your reply. If it, or the step it leads to, is irreversible or destructive (deleting or overwriting data or work, migrations, publishing, pushing, spending money), do not take it without the user: finish your turn and ask in plain text instead. Do not ask again with request_user_input for this decision.";
-
-/// Fork: modes in which this session may ask. Default mode (behind
-/// `default_mode_request_user_input`) is for root threads; sub-agents keep the Plan-only set
-/// and its description because only the root thread may ask the user.
-pub(crate) fn request_user_input_modes_for_session(
-    features: &Features,
-    session_source: &SessionSource,
-) -> Vec<ModeKind> {
-    codex_tools::request_user_input_available_modes(features)
-        .into_iter()
-        .filter(|mode| mode.allows_request_user_input() || !session_source.is_non_root_agent())
-        .collect()
-}
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub(crate) struct RequestUserInputToolArgs {
@@ -150,11 +125,8 @@ pub fn request_user_input_tool_description(available_modes: &[ModeKind]) -> Stri
     let description = format!(
         "Request user input for one to three short questions and wait for the response. This tool is only available in {allowed_modes}."
     );
-    if available_modes.contains(&ModeKind::Default) {
-        format!("{description}\n{DEFAULT_MODE_GUIDANCE}")
-    } else {
-        description
-    }
+    // Fork: Default mode adds when to ask (default_mode_request_user_input).
+    fork::with_default_mode_guidance(description, available_modes)
 }
 
 fn format_allowed_modes(available_modes: &[ModeKind]) -> String {
@@ -170,6 +142,11 @@ fn format_allowed_modes(available_modes: &[ModeKind]) -> String {
         [..] => format!("modes: {}", mode_names.join(",")),
     }
 }
+
+// Fork: request_user_input in Default mode (explorer-and-questions spec).
+#[path = "request_user_input_spec_fork.rs"]
+mod fork;
+pub(crate) use fork::*;
 
 #[cfg(test)]
 #[path = "request_user_input_spec_tests.rs"]

@@ -33,11 +33,8 @@ pub struct SpawnAgentToolOptions {
     pub multi_agent_version: MultiAgentVersion,
     pub model_catalog_in_context: bool,
     pub usage_hint_text: Option<String>,
-    /// Fork: `explorer_profile` is enabled, so explorers default to `fork_turns = "none"`.
-    pub explorer_profile: bool,
-    /// Fork: expose `isolation` and the `worktree` result field (feature
-    /// `agent_worktree_isolation`).
-    pub worktree_isolation: bool,
+    /// Fork: explorer profile and worktree isolation options (multi_agents_spec_fork.rs).
+    pub fork: SpawnAgentForkOptions,
 }
 
 impl Default for SpawnAgentToolOptions {
@@ -51,16 +48,10 @@ impl Default for SpawnAgentToolOptions {
             multi_agent_version: MultiAgentVersion::Disabled,
             model_catalog_in_context: false,
             usage_hint_text: None,
-            explorer_profile: false,
-            worktree_isolation: false,
+            fork: SpawnAgentForkOptions::default(),
         }
     }
 }
-
-/// Fork: `wait_agent` description addition when exit notifications are enabled.
-pub(crate) const WAIT_AGENT_EXIT_NOTIFICATION_GUIDANCE: &str = " It also returns when a background terminal started with exec_command notify_on_exit exits, and it keeps waiting while such a terminal is still running (for at most 5 minutes when timeout_ms is omitted).";
-
-const SPAWN_AGENT_ISOLATION_DESCRIPTION: &str = "Where the new agent works. `none` shares your checkout. `worktree` gives the agent its own git worktree created from a snapshot of your working tree, so parallel agents can edit the same files without conflicts; your checkout stays read-only for it. Omit to use the default for the agent type (normally `none`). When a worktree agent finishes, Codex appends an `<agent_worktree>` block at the end of its result with a branch and a `git diff-tree -p --binary <base> <branch> | git -C \"$(git rev-parse --show-toplevel)\" apply --whitespace=nowarn` command that applies its changes to your checkout without committing; do not ask the agent to write that block.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WaitAgentTimeoutOptions {
@@ -142,14 +133,6 @@ pub fn create_spawn_agent_tool_v2(
         properties.remove("model");
         properties.remove("reasoning_effort");
     }
-    if options.explorer_profile {
-        properties.insert(
-            "fork_turns".to_string(),
-            JsonSchema::string(Some(
-                "Parent history to inherit. Defaults to `all` (`none` for `explorer` agents); use `none` to start without parent history. Only `all` and `none` are supported.".to_string(),
-            )),
-        );
-    }
     properties.insert(
         "task_name".to_string(),
         JsonSchema::string(Some(
@@ -157,15 +140,8 @@ pub fn create_spawn_agent_tool_v2(
                 .to_string(),
         )),
     );
-    if options.worktree_isolation {
-        properties.insert(
-            "isolation".to_string(),
-            JsonSchema::string_enum(
-                vec![json!("none"), json!("worktree")],
-                Some(SPAWN_AGENT_ISOLATION_DESCRIPTION.to_string()),
-            ),
-        );
-    }
+    // Fork: `fork_turns` for explorers and `isolation` (multi_agents_spec_fork.rs).
+    fork::extend_spawn_agent_properties(&mut properties, &options.fork);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
@@ -187,11 +163,7 @@ pub fn create_spawn_agent_tool_v2(
             Some(false.into()),
         ),
         output_schema: Some(
-            spawn_agent_output_schema_v2(
-                options.hide_agent_type_model_reasoning,
-                options.worktree_isolation,
-            )
-            .into(),
+            fork::output_schema_v2(options.hide_agent_type_model_reasoning, &options.fork).into(),
         ),
     })
 }
@@ -470,30 +442,7 @@ fn spawn_agent_output_schema_v1() -> Value {
     })
 }
 
-fn spawn_agent_output_schema_v2(hide_agent_metadata: bool, worktree_isolation: bool) -> Value {
-    let mut schema = spawn_agent_output_schema_v2_base(hide_agent_metadata);
-    if worktree_isolation && let Some(properties) = schema["properties"].as_object_mut() {
-        properties.insert(
-            "worktree".to_string(),
-            json!({
-                "type": "object",
-                "description": "Present when the agent works in its own git worktree.",
-                "properties": {
-                    "path": { "type": "string", "description": "Root of the agent's worktree." },
-                    "branch": { "type": "string", "description": "Branch that receives the agent's changes when it finishes a turn." },
-                    "base": { "type": "string", "description": "Commit the worktree started from." },
-                    "base_kind": { "type": "string", "enum": ["working_tree", "head"] },
-                    "parent_checkout_protected": { "type": "boolean", "description": "Whether the sandbox keeps your checkout read-only for the agent." }
-                },
-                "required": ["path", "branch", "base", "base_kind", "parent_checkout_protected"],
-                "additionalProperties": false
-            }),
-        );
-    }
-    schema
-}
-
-fn spawn_agent_output_schema_v2_base(hide_agent_metadata: bool) -> Value {
+fn spawn_agent_output_schema_v2(hide_agent_metadata: bool) -> Value {
     if hide_agent_metadata {
         return json!({
             "type": "object",
@@ -988,6 +937,12 @@ fn wait_agent_tool_parameters_v2(options: WaitAgentTimeoutOptions) -> JsonSchema
 
     JsonSchema::object(properties, /*required*/ None, Some(false.into()))
 }
+
+// Fork: spawn options of the explorer profile and worktree isolation, wait guidance.
+#[path = "multi_agents_spec_fork.rs"]
+mod fork;
+pub use fork::SpawnAgentForkOptions;
+pub(crate) use fork::WAIT_AGENT_EXIT_NOTIFICATION_GUIDANCE;
 
 #[cfg(test)]
 #[path = "multi_agents_spec_tests.rs"]
