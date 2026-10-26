@@ -67,6 +67,31 @@ fn optional_compaction_neither_fails_nor_counts() {
     );
 }
 
+/// Review R9-1 (docs/fork/reviews/2026-10-26-sandbox-compaction-review.md): optional
+/// compactions in a row without progress stop starting until progress, and forced ones go on.
+#[test]
+fn optional_compactions_without_progress_stop_until_progress() {
+    let mut turn_loop = TurnLoop::default();
+    assert!(turn_loop.allows_optional_compaction());
+    assert!(compact_without_progress(&mut turn_loop, OPTIONAL));
+    assert!(turn_loop.allows_optional_compaction());
+    assert!(compact_without_progress(&mut turn_loop, OPTIONAL));
+    assert!(!turn_loop.allows_optional_compaction());
+
+    // The token limit still forces its compactions, and they do not lift the stop.
+    assert!(compact_without_progress(&mut turn_loop, FORCED));
+    assert!(!turn_loop.allows_optional_compaction());
+
+    turn_loop.on_sampled(
+        /*model_needs_follow_up*/ true,
+        SamplingOutcome {
+            made_progress: true,
+            answered: false,
+        },
+    );
+    assert!(turn_loop.allows_optional_compaction());
+}
+
 #[test]
 fn progress_resets_the_guard() {
     let mut turn_loop = TurnLoop::default();

@@ -4,14 +4,23 @@
 
 use std::sync::Arc;
 
+use codex_analytics::CompactionPhase;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_thread_store::PersistContext;
+use tokio_util::sync::CancellationToken;
 
 use super::TurnInput;
+use super::context_window::ContextWindowTokenStatus;
 use super::session::Session;
+use super::step_context::StepContext;
 use super::turn::run_hooks_and_record_inputs;
 use super::turn_context::TurnContext;
+use crate::context::world_state::WorldState;
+
+/// Optional compactions in a row without progress after which no new background compaction
+/// starts until the model makes progress (review R9-1).
+const OPTIONAL_COMPACTIONS_WITHOUT_PROGRESS: usize = 2;
 
 /// Fork: what one sampled response did for the turn loop.
 #[derive(Clone, Copy, Debug, Default)]
@@ -59,6 +68,7 @@ pub(super) struct TurnLoop {
     answered: bool,
     made_progress: bool,
     consecutive_compactions_without_progress: usize,
+    consecutive_optional_compactions_without_progress: usize,
 }
 
 impl TurnLoop {
@@ -76,6 +86,7 @@ impl TurnLoop {
         self.made_progress = outcome.made_progress;
         if outcome.made_progress {
             self.consecutive_compactions_without_progress = 0;
+            self.consecutive_optional_compactions_without_progress = 0;
         }
         model_needs_follow_up
     }
@@ -96,9 +107,24 @@ impl TurnLoop {
     }
 
     pub(super) fn on_compacted(&mut self, token_limit_reached: bool) {
-        if token_limit_reached && !self.made_progress {
-            self.consecutive_compactions_without_progress += 1;
+        if self.made_progress {
+            return;
         }
+        if token_limit_reached {
+            self.consecutive_compactions_without_progress += 1;
+        } else {
+            self.consecutive_optional_compactions_without_progress += 1;
+        }
+    }
+
+    /// Whether an optional compaction may still start: a step without progress after an
+    /// installed background candidate starts the next one while the context stays above the
+    /// async threshold, so without progress they would repeat for the rest of the turn, one
+    /// compaction request every few samples (review R9-1). They stop after two in a row until
+    /// the model makes progress. Forced compactions do not go through this.
+    pub(super) fn allows_optional_compaction(&self) -> bool {
+        self.consecutive_optional_compactions_without_progress
+            < OPTIONAL_COMPACTIONS_WITHOUT_PROGRESS
     }
 
     /// Only the hooks can tell whether input queued behind a finished answer continues the
@@ -141,6 +167,36 @@ impl TurnLoop {
         }
         !blocked
     }
+}
+
+/// Fork: the mid-turn start of a background compaction (`async_compaction::maybe_start`, same
+/// arguments after the turn loop), unless optional compactions ran out of progress
+/// (`TurnLoop::allows_optional_compaction`). A candidate that is already running may still
+/// install: it is paid for.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn maybe_start_async_compaction(
+    turn_loop: &TurnLoop,
+    sess: &Arc<Session>,
+    step_context: &Arc<StepContext>,
+    world_state: &Arc<WorldState>,
+    phase: CompactionPhase,
+    turn_cancellation: &CancellationToken,
+    token_status: &ContextWindowTokenStatus,
+    turn_state: (Option<String>, Option<u64>),
+) {
+    if !turn_loop.allows_optional_compaction() {
+        return;
+    }
+    super::async_compaction::maybe_start(
+        sess,
+        step_context,
+        world_state,
+        phase,
+        turn_cancellation,
+        token_status,
+        turn_state,
+    )
+    .await;
 }
 
 #[cfg(test)]

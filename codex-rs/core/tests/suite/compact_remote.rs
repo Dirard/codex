@@ -2177,6 +2177,145 @@ async fn remote_compact_loop_guard_lets_optional_candidate_install() -> Result<(
     Ok(())
 }
 
+/// Serves the optional-compaction budget scenario: foreground samples without progress below
+/// the auto-compact limit, one at the limit, then the answer. Background compactions and
+/// foreground samples race for arrival order, so responses go by request content and count.
+#[derive(Default)]
+struct OptionalCompactionBudgetResponses {
+    samples: std::sync::atomic::AtomicUsize,
+    compactions: std::sync::atomic::AtomicUsize,
+}
+
+impl OptionalCompactionBudgetResponses {
+    const AT_LIMIT_SAMPLE: usize = 9;
+    const FINAL_SAMPLE: usize = 12;
+}
+
+impl wiremock::Respond for OptionalCompactionBudgetResponses {
+    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+        let body: Value =
+            serde_json::from_slice(&request.body).expect("uncompressed JSON request body");
+        let is_compaction = body["input"].as_array().is_some_and(|input| {
+            input
+                .iter()
+                .any(|item| item["type"] == "compaction_trigger")
+        });
+        if is_compaction {
+            let number = self
+                .compactions
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            return responses::sse_response(remote_compaction_sse(
+                &format!("compact-{number}"),
+                &format!("SUMMARY_{number}"),
+            ));
+        }
+        let sample = self
+            .samples
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        let id = format!("sample-{sample}");
+        let events = match sample {
+            Self::FINAL_SAMPLE => vec![
+                responses::ev_response_created(&id),
+                responses::ev_assistant_message("final-message", "done"),
+                responses::ev_completed(&id),
+            ],
+            Self::AT_LIMIT_SAMPLE => vec![
+                responses::ev_response_created(&id),
+                ev_follow_up_at_limit(&id),
+            ],
+            // Below the auto-compact limit but above the async threshold, without progress.
+            _ => {
+                let mut completed =
+                    responses::ev_completed_with_tokens(&id, /*total_tokens*/ 50_000);
+                completed["response"]["end_turn"] = json!(false);
+                vec![responses::ev_response_created(&id), completed]
+            }
+        };
+        responses::sse_response(responses::sse(events))
+    }
+}
+
+/// Fork R9-1 (docs/fork/reviews/2026-10-26-sandbox-compaction-review.md): optional background
+/// compactions need no guard against failing the turn, but without progress each installed
+/// candidate used to start the next one. After two of them in a row without progress no new
+/// background compaction starts until the model makes progress; a forced one still runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn optional_compactions_without_progress_are_limited() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.turn_lifecycle_contributor(Arc::new(TurnErrorRecorder {
+        errors: Arc::clone(&errors),
+    }));
+    let harness = TestCodexHarness::with_builder(
+        loop_guard_test_codex()
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::AsyncCompaction);
+                // The responder reads raw request bodies.
+                let _ = config.features.disable(Feature::EnableRequestCompression);
+                config.async_compaction_threshold_percent = 1;
+            })
+            .with_extensions(Arc::new(extensions.build())),
+    )
+    .await?;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path_regex(".*/responses$"))
+        .respond_with(OptionalCompactionBudgetResponses::default())
+        .mount(harness.server())
+        .await;
+
+    tokio::time::timeout(
+        Duration::from_secs(60),
+        harness
+            .test()
+            .submit_turn("optional compactions without progress"),
+    )
+    .await??;
+
+    assert_eq!(
+        errors.lock().expect("turn error records lock").as_slice(),
+        &[] as &[CodexErrorInfo]
+    );
+    let requests = responses::received_responses_requests(harness.server()).await;
+    let samples = requests
+        .iter()
+        .filter(|request| !is_compact_request(request))
+        .count();
+    assert_eq!(samples, OptionalCompactionBudgetResponses::FINAL_SAMPLE);
+    let at_limit = requests
+        .iter()
+        .filter(|request| !is_compact_request(request))
+        .nth(OptionalCompactionBudgetResponses::AT_LIMIT_SAMPLE - 1)
+        .map(|at_limit| {
+            requests
+                .iter()
+                .position(|request| std::ptr::eq(request, at_limit))
+                .expect("at-limit sample position")
+        })
+        .expect("at-limit sample");
+    let optional_before_limit = requests[..at_limit]
+        .iter()
+        .filter(|request| is_compact_request(request))
+        .count();
+    assert!(
+        optional_before_limit <= 2,
+        "{optional_before_limit} optional compactions without progress"
+    );
+    // The limit still forces a compaction right after the sample that reached it.
+    assert!(is_compact_request(&requests[at_limit + 1]));
+    assert_eq!(
+        requests[at_limit + 1..]
+            .iter()
+            .filter(|request| is_compact_request(request))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result<()> {
     skip_if_no_network!(Ok(()));

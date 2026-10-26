@@ -636,7 +636,8 @@ pub(crate) async fn run_turn(
                 let needs_follow_up = model_needs_follow_up || has_pending_input;
                 let token_limit_reached = token_status.token_limit_reached;
 
-                super::async_compaction::maybe_start(
+                super::fork_turn::maybe_start_async_compaction(
+                    &fork_loop,
                     &sess,
                     &step_context,
                     &world_state,
