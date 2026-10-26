@@ -77,6 +77,8 @@ pub fn is_structured_feature_path<S: AsRef<str>>(path: &[S]) -> bool {
                 | "runtime_agent_instances"
                 // Fork: explorer profile settings (specs/explorer-and-questions-2026-10-25.md).
                 | "explorer_profile"
+                // Fork: agent worktree settings (specs/agent-worktree-isolation-2026-10-25.md).
+                | "agent_worktree_isolation"
         )
 }
 

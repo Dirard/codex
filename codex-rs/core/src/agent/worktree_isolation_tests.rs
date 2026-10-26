@@ -362,3 +362,39 @@ fn explorer_isolation_note_has_no_edit_instructions() {
         }
     }
 }
+
+/// R1.6: a boolean toggle (`--enable`, `-c`, `/experimental`) sets only `enabled` of the
+/// `[features.agent_worktree_isolation]` table and keeps its settings.
+#[tokio::test]
+async fn isolation_table_survives_boolean_toggles() {
+    use crate::config::ConfigBuilder;
+    use toml::Value as TomlValue;
+
+    assert!(codex_config::is_structured_feature_path(&[
+        "features",
+        "agent_worktree_isolation"
+    ]));
+
+    let home = tempfile::TempDir::new().expect("create temp dir");
+    std::fs::write(
+        home.path().join("config.toml"),
+        "[features.agent_worktree_isolation]\nenabled = false\ndefault_isolation = \"worktree\"\nbase = \"head\"\n",
+    )
+    .expect("write config.toml");
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .cli_overrides(vec![(
+            "features.agent_worktree_isolation".to_string(),
+            TomlValue::Boolean(true),
+        )])
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("load test config");
+    assert!(config.features.enabled(Feature::AgentWorktreeIsolation));
+    assert_eq!(
+        config.agent_worktree_isolation.default_isolation,
+        AgentIsolation::Worktree
+    );
+    assert_eq!(config.agent_worktree_isolation.base, AgentWorktreeBase::Head);
+}
