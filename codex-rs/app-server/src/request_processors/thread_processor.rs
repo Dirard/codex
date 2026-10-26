@@ -119,31 +119,10 @@ struct ThreadRevertRuntimeSnapshot {
     client_mcp_extensions: ClientMcpExtensions,
 }
 
-/// Fork: a non-empty `thread/resume.dynamicTools` list that differs from the loaded
-/// thread's tools is a resume override; omitted or empty keeps the active tools.
-fn dynamic_tools_override_mismatch(
-    requested: Option<&[DynamicToolSpec]>,
-    active: &[DynamicToolSpec],
-) -> Option<String> {
-    let requested = requested.filter(|tools| !tools.is_empty())?;
-    let names = |tools: &[DynamicToolSpec]| {
-        tools
-            .iter()
-            .map(|tool| match tool {
-                DynamicToolSpec::Function(function) => function.name.as_str(),
-                DynamicToolSpec::Namespace(namespace) => namespace.name.as_str(),
-            })
-            .collect::<Vec<_>>()
-            .join(",")
-    };
-    (requested != active).then(|| {
-        format!(
-            "dynamic_tools requested=[{}] active=[{}]",
-            names(requested),
-            names(active)
-        )
-    })
-}
+// Fork: `thread/resume.dynamicTools` (docs/fork/04-app-server-protocol.md, section 6).
+#[path = "thread_resume_dynamic_tools.rs"]
+mod thread_resume_dynamic_tools;
+use thread_resume_dynamic_tools::*;
 
 fn collect_resume_override_mismatches(
     request: &ThreadResumeParams,
@@ -3978,12 +3957,7 @@ impl ThreadRequestProcessor {
                 "`permissions` cannot be combined with `sandbox`",
             ));
         }
-        // Fork: validate replacement tools before a loaded thread can be rebuilt for them.
-        if let Some(dynamic_tools) = params.dynamic_tools.as_deref()
-            && !dynamic_tools.is_empty()
-        {
-            validate_dynamic_tools(dynamic_tools).map_err(invalid_request)?;
-        }
+        fork_validate_resume_dynamic_tools(params)?;
         let redact_resume_payloads =
             should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
@@ -4730,18 +4704,7 @@ impl ThreadRequestProcessor {
                 &config_snapshot,
                 selected_service_tier.as_deref(),
             );
-            // Fork: replacement dynamic tools follow the same rebuild-or-ignore policy.
-            if params
-                .dynamic_tools
-                .as_ref()
-                .is_some_and(|tools| !tools.is_empty())
-                && let Some(mismatch) = dynamic_tools_override_mismatch(
-                    params.dynamic_tools.as_deref(),
-                    &existing_thread.dynamic_tools().await,
-                )
-            {
-                mismatch_details.push(mismatch);
-            }
+            mismatch_details.extend(fork_dynamic_tools_mismatch(params, &existing_thread).await);
             if !mismatch_details.is_empty() {
                 let has_subscribers = !self
                     .thread_state_manager

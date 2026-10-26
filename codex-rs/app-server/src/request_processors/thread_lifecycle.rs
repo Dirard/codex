@@ -1,7 +1,6 @@
 use super::*;
 use crate::extensions::send_thread_warning;
 use codex_app_server_protocol::ThreadQueueChangedNotification;
-use codex_app_server_protocol::ThreadWorkflowUpdatedNotification;
 use codex_core::ThreadEvictionOutcome;
 use codex_extension_api::ThreadIdleCause;
 use codex_protocol::config_types::MultiAgentMode;
@@ -262,6 +261,7 @@ pub(super) async fn ensure_listener_task_running(
     let is_v2_child = conversation.multi_agent_version() == Some(MultiAgentVersion::V2)
         && matches!(config_snapshot.session_source, SessionSource::SubAgent(_));
     let thread_settings_baseline = thread_settings_from_config_snapshot(&config_snapshot);
+    // Fork: the listener also owns the workflow update forwarder.
     let (mut listener_command_rx, listener_generation, workflow_updates) = {
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_matches(&conversation) {
@@ -301,7 +301,7 @@ pub(super) async fn ensure_listener_task_running(
     } = listener_task_context;
     let outgoing_for_task = Arc::clone(&outgoing);
     tokio::spawn(async move {
-        // Dropped, and so stopped, on every exit of this task.
+        // Fork: dropped, and so stopped, on every exit of this task.
         let _workflow_updates = workflow_updates;
         loop {
             tokio::select! {
@@ -695,22 +695,13 @@ pub(super) async fn handle_thread_listener_command(
                 .await;
         }
         ThreadListenerCommand::EmitThreadWorkflowUpdated { run } => {
-            let subscribed_connection_ids = thread_state_manager
-                .subscribed_connection_ids(conversation_id)
-                .await;
-            let outgoing = ThreadScopedOutgoingMessageSender::new(
-                Arc::clone(outgoing),
-                subscribed_connection_ids,
+            crate::workflow_updates::fork_emit_thread_workflow_updated(
+                outgoing,
+                thread_state_manager,
                 conversation_id,
-            );
-            outgoing
-                .send_server_notification(ServerNotification::ThreadWorkflowUpdated(
-                    ThreadWorkflowUpdatedNotification {
-                        thread_id: conversation_id.to_string(),
-                        run: *run,
-                    },
-                ))
-                .await;
+                *run,
+            )
+            .await;
         }
         ThreadListenerCommand::EmitWarning { message } => {
             send_thread_warning(outgoing, thread_state_manager, conversation_id, message).await;

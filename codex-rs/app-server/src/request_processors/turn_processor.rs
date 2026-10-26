@@ -22,8 +22,6 @@ use codex_skills::system_cache_root_dir;
 use crate::image_url::REMOTE_IMAGE_URL_ERROR;
 use crate::image_url::is_remote_image_url;
 
-const ADDITIONAL_CONTEXT_TOO_LARGE_ERROR_CODE: &str = "additional_context_too_large";
-
 pub(super) fn validate_user_input_image_urls(
     input: &[V2UserInput],
 ) -> Result<(), JSONRPCErrorError> {
@@ -126,70 +124,6 @@ struct ThreadEnvironmentOverride {
     environment_requests: Option<TurnEnvironmentRequests>,
     // Only default-environment updates replace the task's separately persisted root selection.
     runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
-}
-
-fn validate_additional_context_limits(
-    additional_context: &Option<HashMap<String, AdditionalContextEntry>>,
-) -> Result<(), JSONRPCErrorError> {
-    let Some(additional_context) = additional_context else {
-        return Ok(());
-    };
-    if additional_context.len() > MAX_ADDITIONAL_CONTEXT_ENTRIES {
-        return Err(additional_context_too_large_error(
-            "additionalContext entries",
-            MAX_ADDITIONAL_CONTEXT_ENTRIES,
-            additional_context.len(),
-        ));
-    }
-
-    let mut total_bytes = 0usize;
-    for (key, entry) in additional_context {
-        let key_bytes = key.len();
-        if key_bytes > MAX_ADDITIONAL_CONTEXT_KEY_BYTES {
-            return Err(additional_context_too_large_error(
-                "additionalContext key bytes",
-                MAX_ADDITIONAL_CONTEXT_KEY_BYTES,
-                key_bytes,
-            ));
-        }
-
-        let value_bytes = entry.value.len();
-        if value_bytes > MAX_ADDITIONAL_CONTEXT_VALUE_BYTES {
-            return Err(additional_context_too_large_error(
-                "additionalContext value bytes",
-                MAX_ADDITIONAL_CONTEXT_VALUE_BYTES,
-                value_bytes,
-            ));
-        }
-
-        total_bytes = total_bytes
-            .saturating_add(key_bytes)
-            .saturating_add(value_bytes);
-        if total_bytes > MAX_ADDITIONAL_CONTEXT_TOTAL_BYTES {
-            return Err(additional_context_too_large_error(
-                "additionalContext total bytes",
-                MAX_ADDITIONAL_CONTEXT_TOTAL_BYTES,
-                total_bytes,
-            ));
-        }
-    }
-
-    Ok(())
-}
-
-fn additional_context_too_large_error(
-    field: &'static str,
-    limit: usize,
-    actual: usize,
-) -> JSONRPCErrorError {
-    let mut error = invalid_params(format!("{field} exceeds the maximum of {limit}."));
-    error.data = Some(serde_json::json!({
-        "input_error_code": ADDITIONAL_CONTEXT_TOO_LARGE_ERROR_CODE,
-        "field": field,
-        "limit": limit,
-        "actual": actual,
-    }));
-    error
 }
 
 struct ThreadSettingsBuildParams {
@@ -646,14 +580,7 @@ impl TurnRequestProcessor {
             );
             return Err(error);
         }
-        if let Err(error) = validate_additional_context_limits(&params.additional_context) {
-            self.track_error_response(
-                &request_id,
-                &error,
-                Some(AnalyticsJsonRpcError::Input(InputError::TooLarge)),
-            );
-            return Err(error);
-        }
+        self.fork_reject_oversized_additional_context(&request_id, &params.additional_context)?;
         Self::set_app_server_client_info(
             thread.as_ref(),
             app_server_client_name,
@@ -1148,14 +1075,7 @@ impl TurnRequestProcessor {
             );
             return Err(error);
         }
-        if let Err(error) = validate_additional_context_limits(&params.additional_context) {
-            self.track_error_response(
-                request_id,
-                &error,
-                Some(AnalyticsJsonRpcError::Input(InputError::TooLarge)),
-            );
-            return Err(error);
-        }
+        self.fork_reject_oversized_additional_context(request_id, &params.additional_context)?;
 
         let mapped_items: Vec<CoreInputItem> = params
             .input
@@ -1794,9 +1714,9 @@ impl TurnRequestProcessor {
     }
 }
 
-#[cfg(test)]
-#[path = "turn_processor_additional_context_tests.rs"]
-mod additional_context_tests;
+// Fork: limits of turn `additionalContext` (docs/fork/04-app-server-protocol.md).
+#[path = "additional_context_limits.rs"]
+mod additional_context_limits;
 
 fn xcode_26_4_mcp_elicitations_auto_deny(
     client_name: Option<&str>,

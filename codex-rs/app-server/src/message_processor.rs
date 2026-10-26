@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
@@ -49,7 +48,6 @@ use crate::request_processors::ThreadGoalRequestProcessor;
 use crate::request_processors::ThreadQueueRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
 use crate::request_processors::ThreadResumeTarget;
-use crate::request_processors::ThreadWorkflowRequestProcessor;
 use crate::request_processors::TurnRequestProcessor;
 use crate::request_processors::WindowsSandboxRequestProcessor;
 use crate::request_processors::read_server_diagnostics;
@@ -69,7 +67,6 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::ExperimentalApi;
-use codex_app_server_protocol::GatewayOAuthLoginResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -113,9 +110,9 @@ use crate::turn_admission::TurnAdmission;
 
 const CONNECTION_RPC_DRAIN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);
 
-type GatewayOAuthLoginFuture = Pin<
-    Box<dyn Future<Output = Result<GatewayOAuthLoginResponse, JSONRPCErrorError>> + Send + 'static>,
->;
+// Fork: a gateway OAuth login admitted before its request was queued.
+type GatewayOAuthLoginFuture =
+    futures::future::BoxFuture<'static, Result<Option<ClientResponsePayload>, JSONRPCErrorError>>;
 
 fn deserialize_client_request(request: JSONRPCRequest) -> Result<ClientRequest, JSONRPCErrorError> {
     reject_obsolete_request_fields(&request)?;
@@ -175,7 +172,7 @@ pub(crate) struct MessageProcessor {
     search_processor: SearchRequestProcessor,
     thread_goal_processor: ThreadGoalRequestProcessor,
     thread_queue_processor: ThreadQueueRequestProcessor,
-    thread_workflow_processor: ThreadWorkflowRequestProcessor,
+    thread_workflow_processor: crate::request_processors::ThreadWorkflowRequestProcessor, // Fork
     thread_processor: ThreadRequestProcessor,
     turn_processor: TurnRequestProcessor,
     windows_sandbox_processor: WindowsSandboxRequestProcessor,
@@ -349,6 +346,8 @@ impl MessageProcessor {
                     Arc::clone(&extension_event_sink),
                 ))
             });
+            // Fork: fork CI runs clippy with `-D warnings` on this crate.
+            #[allow(clippy::let_and_return)]
             let manager = ThreadManager::new(
                 config.as_ref(),
                 auth_manager.clone(),
@@ -388,7 +387,9 @@ impl MessageProcessor {
                     thread_state_manager.clone(),
                 )),
                 Some({
-                    (app_server_time_provider(outgoing.clone(), thread_state_manager.clone())) as _
+                    let time_provider =
+                        app_server_time_provider(outgoing.clone(), thread_state_manager.clone());
+                    time_provider
                 }),
             );
             match code_mode_session_provider {
@@ -524,8 +525,6 @@ impl MessageProcessor {
             config_manager.clone(),
             queue_service,
         );
-        let thread_workflow_processor =
-            ThreadWorkflowRequestProcessor::new(Arc::clone(&thread_manager));
         let project_processor = ProjectRequestProcessor::new(
             Arc::clone(&thread_store),
             outgoing.clone(),
@@ -635,7 +634,11 @@ impl MessageProcessor {
             search_processor,
             thread_goal_processor,
             thread_queue_processor,
-            thread_workflow_processor,
+            // Fork: thread/workflow/* requests.
+            thread_workflow_processor:
+                crate::request_processors::ThreadWorkflowRequestProcessor::new(Arc::clone(
+                    &thread_manager,
+                )),
             thread_processor,
             turn_processor,
             windows_sandbox_processor,
@@ -1034,29 +1037,12 @@ impl MessageProcessor {
             _ => (None, false),
         };
 
-        let gateway_oauth_login = match &codex_request {
-            ClientRequest::GatewayOAuthLogin { .. } => {
-                if session
-                    .opted_out_notification_methods()
-                    .contains("account/gatewayOAuth/changed")
-                {
-                    return Err(invalid_request(
-                        "Gateway login requires account/gatewayOAuth/changed notifications",
-                    ));
-                }
-                let admission = self
-                    .account_processor
-                    .admit_gateway_oauth_login(connection_id, &session.rpc_gate)?;
-                let account_processor = Arc::clone(&self.account_processor);
-                Some(Box::pin(async move {
-                    account_processor
-                        .gateway_oauth_login(connection_id, admission)
-                        .await
-                }) as GatewayOAuthLoginFuture)
-            }
-            _ => None,
-        };
-
+        // Fork: admit a gateway OAuth login before the request waits in a queue.
+        let gateway_oauth_login = self.account_processor.fork_admit_gateway_oauth_login(
+            &codex_request,
+            connection_id,
+            &session,
+        )?;
         let event_stream_ready = match &codex_request {
             ClientRequest::McpServerEventStreamStart { params, .. } => Some(
                 session
@@ -1459,21 +1445,12 @@ impl MessageProcessor {
                 .start(&request_id, params)
                 .await
                 .map(|response| Some(response.into())),
-            ClientRequest::ThreadWorkflowList { params, .. } => self
-                .thread_workflow_processor
-                .list(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::ThreadWorkflowRead { params, .. } => self
-                .thread_workflow_processor
-                .read(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::ThreadWorkflowCancel { params, .. } => self
-                .thread_workflow_processor
-                .cancel(params)
-                .await
-                .map(|response| Some(response.into())),
+            // Fork: dynamic workflow runs of a loaded thread.
+            request @ (ClientRequest::ThreadWorkflowList { .. }
+            | ClientRequest::ThreadWorkflowRead { .. }
+            | ClientRequest::ThreadWorkflowCancel { .. }) => {
+                self.thread_workflow_processor.handle(request).await
+            }
             ClientRequest::ThreadMetadataUpdate { params, .. } => {
                 self.thread_processor.thread_metadata_update(params).await
             }
@@ -1855,10 +1832,12 @@ impl MessageProcessor {
                     .await
                     .map(|response| Some(response.into()))
             }
-            ClientRequest::GatewayOAuthLogin { .. } => gateway_oauth_login
-                .ok_or_else(|| internal_error("gateway OAuth login was not admitted"))?
-                .await
-                .map(|response| Some(response.into())),
+            // Fork: the login was admitted before the request was queued.
+            ClientRequest::GatewayOAuthLogin { .. } => {
+                gateway_oauth_login
+                    .ok_or_else(|| internal_error("gateway OAuth login was not admitted"))?
+                    .await
+            }
             ClientRequest::GatewayOAuthCancel { .. } => {
                 Box::pin(self.account_processor.gateway_oauth_cancel(connection_id))
                     .await

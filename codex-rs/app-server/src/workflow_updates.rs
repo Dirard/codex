@@ -70,6 +70,35 @@ pub(crate) fn spawn_workflow_update_forwarder(
     }))
 }
 
+/// Sends `thread/workflow/updated` for `run` to the connections subscribed to the thread.
+/// The thread listener calls it for `EmitThreadWorkflowUpdated`, which orders the update
+/// with the thread's other notifications.
+pub(crate) async fn fork_emit_thread_workflow_updated(
+    outgoing: &Arc<crate::outgoing_message::OutgoingMessageSender>,
+    thread_state_manager: &crate::thread_state::ThreadStateManager,
+    conversation_id: codex_protocol::ThreadId,
+    run: WorkflowRun,
+) {
+    let subscribed_connection_ids = thread_state_manager
+        .subscribed_connection_ids(conversation_id)
+        .await;
+    let outgoing = crate::outgoing_message::ThreadScopedOutgoingMessageSender::new(
+        Arc::clone(outgoing),
+        subscribed_connection_ids,
+        conversation_id,
+    );
+    outgoing
+        .send_server_notification(
+            codex_app_server_protocol::ServerNotification::ThreadWorkflowUpdated(
+                codex_app_server_protocol::ThreadWorkflowUpdatedNotification {
+                    thread_id: conversation_id.to_string(),
+                    run,
+                },
+            ),
+        )
+        .await;
+}
+
 /// Runs whose snapshots may have changed.
 enum Changed {
     Run(String),

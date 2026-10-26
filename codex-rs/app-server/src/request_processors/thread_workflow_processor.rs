@@ -3,6 +3,8 @@
 
 use std::sync::Arc;
 
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ThreadWorkflowCancelParams;
 use codex_app_server_protocol::ThreadWorkflowCancelResponse;
@@ -15,6 +17,7 @@ use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_protocol::ThreadId;
 
+use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 
 pub(crate) struct ThreadWorkflowRequestProcessor {
@@ -24,6 +27,31 @@ pub(crate) struct ThreadWorkflowRequestProcessor {
 impl ThreadWorkflowRequestProcessor {
     pub(crate) fn new(thread_manager: Arc<ThreadManager>) -> Self {
         Self { thread_manager }
+    }
+
+    /// Handles a `thread/workflow/*` request routed here by `MessageProcessor`.
+    pub(crate) async fn handle(
+        &self,
+        request: ClientRequest,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        match request {
+            ClientRequest::ThreadWorkflowList { params, .. } => self
+                .list(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadWorkflowRead { params, .. } => self
+                .read(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadWorkflowCancel { params, .. } => self
+                .cancel(params)
+                .await
+                .map(|response| Some(response.into())),
+            other => Err(internal_error(format!(
+                "{} is not a thread/workflow request",
+                other.method_name()
+            ))),
+        }
     }
 
     pub(crate) async fn list(
