@@ -2329,6 +2329,84 @@ async fn auto_compact_runs_after_token_limit_hit() {
     );
 }
 
+/// Fork R7 (docs/fork/02-compaction-context.md): a provider that reports partial usage, or no
+/// usage at all, must not leave mid-turn auto-compaction blind to a context over the limit.
+#[test_case::test_case(Some(json!({"input_tokens": 60_000})); "partial usage")]
+#[test_case::test_case(None; "no usage")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_runs_without_complete_usage(usage: Option<Value>) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut completed = json!({
+        "type": "response.completed",
+        "response": { "id": "r1", "end_turn": false }
+    });
+    if let Some(usage) = usage {
+        completed["response"]["usage"] = usage;
+    }
+    // The assistant message ends the sampled items, so before the fix only the stale usage
+    // (none) counted and the large user message was invisible to the token check.
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_assistant_message("m1", FIRST_REPLY), completed]),
+            sse(vec![
+                ev_assistant_message("m2", AUTO_SUMMARY_TEXT),
+                ev_completed_with_tokens("r2", /*total_tokens*/ 200),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", FINAL_REPLY),
+                ev_completed_with_tokens("r3", /*total_tokens*/ 120),
+            ]),
+        ],
+    )
+    .await;
+    let model_provider = non_openai_model_provider(&server);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(50_000);
+        })
+        .build(&server)
+        .await?
+        .codex;
+
+    // About 60k tokens by the byte estimate, over the 50k limit.
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "large ".repeat(40_000),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let mut errors = Vec::new();
+    wait_for_event(&codex, |event| match event {
+        EventMsg::Error(error) => {
+            errors.push(error.message.clone());
+            false
+        }
+        EventMsg::TurnComplete(_) => true,
+        _ => false,
+    })
+    .await;
+
+    assert_eq!(errors, Vec::<String>::new());
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(body_contains_text(
+        &requests[1].body_json().to_string(),
+        SUMMARIZATION_PROMPT
+    ));
+    assert!(
+        requests[2]
+            .body_json()
+            .to_string()
+            .contains(AUTO_SUMMARY_TEXT)
+    );
+    Ok(())
+}
+
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]

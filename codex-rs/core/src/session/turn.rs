@@ -3285,6 +3285,7 @@ async fn try_run_sampling_request(
                         super::TokenUsageContext::Sampling,
                     )
                     .await;
+                sess.fork_estimate_usage(&step_context, &token_usage).await;
                 should_emit_token_count = true;
                 should_emit_turn_diff = true;
                 if let Err(err) = budget_result {
