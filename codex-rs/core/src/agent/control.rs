@@ -648,13 +648,13 @@ impl LocalAgentControl {
                 )
                 .await;
         };
-        // Fork: a follow-up watcher of the same child replaces this one.
+        // Fork: a follow-up watcher of the same child replaces this one; a watcher's record
+        // goes away when it ends (B9).
         let (abort, watcher) = fork_completion::abortable(watcher);
-        let completion = tokio::spawn(async move {
+        self.spawn_completion_watcher(child_thread_id, abort, async move {
             watcher.await;
             teardown.complete();
         });
-        self.register_completion_watcher(child_thread_id, abort, completion);
     }
 
     fn prepare_agent_metadata(

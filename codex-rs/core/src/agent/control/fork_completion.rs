@@ -1,15 +1,22 @@
 //! Fork: completion watchers of legacy (non-V2) children.
 //!
 //! A follow-up turn of a finished child gets its own watcher, which replaces the watcher of
-//! the previous turn (`tasks/mod.rs` starts it). Explorer results are capped like the
+//! the previous turn (`tasks/mod.rs` starts it). A watcher drops its record when it ends
+//! (B9 in `docs/fork/01-multi-agent-runtime.md`). Explorer results are capped like the
 //! completion mail of V2 children (`specs/explorer-and-questions-2026-10-25.md`).
 
 use super::*;
 use crate::codex_thread::CodexThread;
 use futures::future::AbortHandle;
 use futures::future::Abortable;
+use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Mutex;
+use std::sync::PoisonError;
 use tokio::task::JoinHandle;
+
+/// The newest completion watcher of each child, as `LocalAgentRuntime` records them.
+type CompletionWatchers = Arc<Mutex<HashMap<ThreadId, (AbortHandle, JoinHandle<()>)>>>;
 
 /// Where a completion watcher reads the child's status from.
 pub(crate) enum CompletionWatcherStart {
@@ -90,21 +97,32 @@ impl LocalAgentControl {
         );
     }
 
-    /// Records the newest watcher of `child_thread_id`; a watcher it replaces is aborted.
-    pub(super) fn register_completion_watcher(
+    /// Spawns `watcher` as the newest watcher of `child_thread_id`; a watcher it replaces is
+    /// aborted. The record goes away when the watcher ends, unless a newer watcher of the same
+    /// child replaced it.
+    pub(super) fn spawn_completion_watcher(
         &self,
         child_thread_id: ThreadId,
         abort: AbortHandle,
-        completion: JoinHandle<()>,
+        watcher: impl Future<Output = ()> + Send + 'static,
     ) {
-        if let Some(previous_watcher) = self
+        let completion_watchers = Arc::clone(&self.runtime.completion_watchers);
+        // The task drops its record under this lock, so it cannot do so before the insert.
+        let mut watchers = self
             .runtime
             .completion_watchers
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(child_thread_id, (abort, completion))
-        {
-            previous_watcher.0.abort();
+            .unwrap_or_else(PoisonError::into_inner);
+        let completion = tokio::spawn(async move {
+            let _record = WatcherRecord {
+                completion_watchers,
+                child_thread_id,
+                task_id: tokio::task::id(),
+            };
+            watcher.await;
+        });
+        if let Some((previous_abort, _)) = watchers.insert(child_thread_id, (abort, completion)) {
+            previous_abort.abort();
         }
     }
 
@@ -135,7 +153,7 @@ impl LocalAgentControl {
             .runtime
             .completion_watchers
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .remove(&child_thread_id);
         if let Some((abort, completion)) = previous_watcher {
             match previous_watcher_action {
@@ -151,5 +169,28 @@ impl LocalAgentControl {
             child_agent_path,
             CompletionWatcherStart::AfterCurrentTurn(status_updates),
         );
+    }
+}
+
+/// Drops a watcher's record when the watcher ends, unless a newer watcher of the same child
+/// replaced the record (B9).
+struct WatcherRecord {
+    completion_watchers: CompletionWatchers,
+    child_thread_id: ThreadId,
+    task_id: tokio::task::Id,
+}
+
+impl Drop for WatcherRecord {
+    fn drop(&mut self) {
+        let mut watchers = self
+            .completion_watchers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if watchers
+            .get(&self.child_thread_id)
+            .is_some_and(|(_, completion)| completion.id() == self.task_id)
+        {
+            watchers.remove(&self.child_thread_id);
+        }
     }
 }

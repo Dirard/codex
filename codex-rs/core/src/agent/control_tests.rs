@@ -167,6 +167,9 @@ impl LocalAgentControl {
 #[path = "control/turn_spawn_budget_tests.rs"]
 mod turn_spawn_budget_tests;
 
+#[path = "control/fork_completion_tests.rs"]
+mod fork_completion_tests;
+
 async fn test_config_with_cli_overrides(
     mut cli_overrides: Vec<(String, TomlValue)>,
 ) -> (TempDir, Config) {
