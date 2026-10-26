@@ -669,10 +669,34 @@ impl ContextManager {
         &self,
         base_instructions: &BaseInstructions,
     ) -> Option<i64> {
-        Some(estimate_history_token_count(
-            self.items.as_slice(),
+        // Fork: compaction candidates share this estimate before they are installed.
+        Some(Self::estimate_history_token_count(
+            &self.items,
             base_instructions,
         ))
+    }
+
+    pub(crate) fn estimate_history_token_count(
+        items: &[ResponseItemEnvelope],
+        base_instructions: &BaseInstructions,
+    ) -> i64 {
+        // Incremental windows supply instructions through history, including an empty base.
+        let has_recorded_instructions = items.iter().any(|envelope| {
+            matches!(envelope.item, ResponseItem::AdditionalTools { .. })
+                || BaseInstructionsFragment::text_from_item(&envelope.item).is_some()
+        });
+        let base_tokens = if has_recorded_instructions {
+            0
+        } else {
+            i64::try_from(approx_token_count(&base_instructions.text)).unwrap_or(i64::MAX)
+        };
+
+        let items_tokens = items
+            .iter()
+            .map(|envelope| estimate_item_token_count(&envelope.item))
+            .fold(0i64, i64::saturating_add);
+
+        base_tokens.saturating_add(items_tokens)
     }
 
     pub(crate) fn remove_first_item(&mut self) {
@@ -1020,26 +1044,6 @@ impl ContextManager {
         }
         cut_idx
     }
-}
-
-pub(crate) fn estimate_history_token_count(
-    items: &[ResponseItemEnvelope],
-    base_instructions: &BaseInstructions,
-) -> i64 {
-    // Incremental windows supply instructions through history, including an empty base.
-    let has_recorded_instructions = items.iter().any(|envelope| {
-        matches!(&envelope.item, ResponseItem::AdditionalTools { .. })
-            || BaseInstructionsFragment::text_from_item(&envelope.item).is_some()
-    });
-    let base_tokens = if has_recorded_instructions {
-        0
-    } else {
-        i64::try_from(approx_token_count(&base_instructions.text)).unwrap_or(i64::MAX)
-    };
-    items
-        .iter()
-        .map(|envelope| estimate_item_token_count(&envelope.item))
-        .fold(base_tokens, i64::saturating_add)
 }
 
 /// Configuration updates require harness provenance; raw system messages are never retained.

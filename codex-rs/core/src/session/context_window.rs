@@ -56,6 +56,8 @@ async fn context_window_token_status_with_config(
     model_info: &ModelInfo,
 ) -> ContextWindowTokenStatus {
     let active_context_tokens = sess.get_total_token_usage().await;
+    // Fork: compaction candidates get the same status before they are installed
+    // (docs/fork/02-compaction-context.md F1).
     let auto_compact_window_prefill_tokens = match config.model_auto_compact_token_limit_scope {
         AutoCompactTokenLimitScope::Total => None,
         AutoCompactTokenLimitScope::BodyAfterPrefix => {
@@ -79,17 +81,24 @@ pub(crate) fn context_window_token_status_for_usage(
     auto_compact_window_prefill_tokens: Option<i64>,
 ) -> ContextWindowTokenStatus {
     // Count either the full active context or only the tokens added after the initial prefix.
-    let (auto_compact_scope_tokens, auto_compact_scope_limit) =
+    let (auto_compact_scope_tokens, auto_compact_scope_limit, auto_compact_window_prefill_tokens) =
         match config.model_auto_compact_token_limit_scope {
-            AutoCompactTokenLimitScope::Total => {
-                (active_context_tokens, model_info.auto_compact_token_limit())
-            }
+            AutoCompactTokenLimitScope::Total => (
+                active_context_tokens,
+                model_info.auto_compact_token_limit(),
+                auto_compact_window_prefill_tokens,
+            ),
             AutoCompactTokenLimitScope::BodyAfterPrefix => {
                 let baseline = auto_compact_window_prefill_tokens.unwrap_or(active_context_tokens);
+
                 let scope_limit = config
                     .model_auto_compact_token_limit
                     .or_else(|| model_info.auto_compact_token_limit());
-                (active_context_tokens.saturating_sub(baseline), scope_limit)
+                (
+                    active_context_tokens.saturating_sub(baseline),
+                    scope_limit,
+                    auto_compact_window_prefill_tokens,
+                )
             }
         };
 
