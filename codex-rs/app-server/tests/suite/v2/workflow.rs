@@ -200,6 +200,14 @@ fn message(response_id: &str, text: &str) -> String {
 }
 
 async fn start_app_server(server: &MockServer, codex_home: &TempDir) -> Result<TestAppServer> {
+    start_app_server_with_args(server, codex_home, &[]).await
+}
+
+async fn start_app_server_with_args(
+    server: &MockServer,
+    codex_home: &TempDir,
+    args: &[&str],
+) -> Result<TestAppServer> {
     MockResponsesConfig::new(&server.uri())
         .enable_feature(Feature::MultiAgentV2)
         .enable_feature(Feature::Workflows)
@@ -208,8 +216,29 @@ async fn start_app_server(server: &MockServer, codex_home: &TempDir) -> Result<T
         .write(codex_home.path())?;
     TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        .with_args(args)
         .build_initialized()
         .await
+}
+
+/// A Code Mode host listening for gRPC on a local TCP port, and its URL.
+async fn start_remote_code_mode_host() -> Result<(tokio::process::Child, String)> {
+    let mut host =
+        tokio::process::Command::new(codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?)
+            .args(["--listen", "grpc://127.0.0.1:0"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .kill_on_drop(/*kill_on_drop*/ true)
+            .spawn()?;
+    let stdout = host.stdout.take().expect("host stdout");
+    let url = timeout(
+        READ_TIMEOUT,
+        tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(stdout)).next_line(),
+    )
+    .await??
+    .expect("the host publishes its URL");
+    Ok((host, url))
 }
 
 /// Starts a turn that launches the scripted workflow and returns the thread id, the turn
@@ -545,5 +574,90 @@ async fn workflow_cancel_settles_a_running_run() -> Result<()> {
     assert_eq!(agents[0].state, WorkflowAgentState::Null);
     assert_eq!(agents[0].reason.as_deref(), Some("cancelled"));
     assert_eq!(scripted.served("TASK-SLOW"), 1);
+    Ok(())
+}
+
+/// R2.1, R2.2 (stage 2): with `--code-mode-host`, runs execute on a remote gRPC Code Mode
+/// host: the script's host calls arrive as gRPC tool calls, agents answer and the run
+/// completes with its snapshots streamed to the client.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn workflow_runs_on_a_remote_code_mode_host() -> Result<()> {
+    let (_host, host_url) = start_remote_code_mode_host().await?;
+    let server = responses::start_mock_server().await;
+    let scripted = ScriptedResponses::mount(&server).await;
+    scripted.parent_runs_workflow(TWO_AGENT_SCRIPT);
+    scripted.agent("TASK-FIRST", "first answer", Duration::from_millis(300));
+    scripted.agent("TASK-SECOND", "second answer", Duration::ZERO);
+    let codex_home = TempDir::new()?;
+    let mut app =
+        start_app_server_with_args(&server, &codex_home, &["--code-mode-host", &host_url]).await?;
+
+    let (thread_id, _, started) = launch_workflow(&mut app).await?;
+    let updates = updates_until_terminal(&mut app, &started.run_id).await?;
+    let terminal = updates.last().expect("terminal update");
+    assert_eq!(
+        terminal.status,
+        WorkflowRunStatus::Completed,
+        "{terminal:#?}"
+    );
+    assert_eq!(terminal.agent_counts.completed, 2);
+    assert_eq!(terminal.logs_tail, vec!["first done".to_string()]);
+    let ThreadWorkflowReadResponse { result, .. } = app
+        .request(|request_id| ClientRequest::ThreadWorkflowRead {
+            request_id,
+            params: ThreadWorkflowReadParams {
+                thread_id: thread_id.clone(),
+                run_id: started.run_id.clone(),
+                include_result: true,
+            },
+        })
+        .await?;
+    assert_eq!(
+        serde_json::from_str::<Value>(&result.expect("result"))?,
+        json!({ "first": "first answer", "second": "second answer" })
+    );
+    wait_for_turns(&mut app, &thread_id, 2).await?;
+    assert_eq!(scripted.served("parent_notified"), 1);
+    Ok(())
+}
+
+/// R2.9 (stage 2): when the remote Code Mode host goes away during a run, the run fails
+/// with the session error and its running agent is stopped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn workflow_fails_when_the_remote_host_goes_away() -> Result<()> {
+    let (mut host, host_url) = start_remote_code_mode_host().await?;
+    let server = responses::start_mock_server().await;
+    let scripted = ScriptedResponses::mount(&server).await;
+    scripted.parent_runs_workflow(SLOW_AGENT_SCRIPT);
+    scripted.agent("TASK-SLOW", "too late", Duration::from_secs(120));
+    let codex_home = TempDir::new()?;
+    let mut app =
+        start_app_server_with_args(&server, &codex_home, &["--code-mode-host", &host_url]).await?;
+
+    let (_, _, started) = launch_workflow(&mut app).await?;
+    loop {
+        let update: ThreadWorkflowUpdatedNotification = timeout(
+            READ_TIMEOUT,
+            app.read_notification("thread/workflow/updated"),
+        )
+        .await??;
+        if update.run.run_id == started.run_id && update.run.agent_counts.running == 1 {
+            break;
+        }
+    }
+    host.kill().await?;
+
+    let updates = updates_until_terminal(&mut app, &started.run_id).await?;
+    let terminal = updates.last().expect("terminal update");
+    assert_eq!(terminal.status, WorkflowRunStatus::Failed, "{terminal:#?}");
+    assert!(
+        terminal
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("code-mode")),
+        "{terminal:#?}"
+    );
+    assert_eq!(terminal.agent_counts.running, 0, "{terminal:#?}");
+    assert_eq!(terminal.agent_counts.null_results, 1, "{terminal:#?}");
     Ok(())
 }
