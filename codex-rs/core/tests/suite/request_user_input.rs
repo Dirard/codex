@@ -545,6 +545,12 @@ async fn request_user_input_default_mode_without_answer_tells_model_to_continue(
     );
     assert!(output.contains("recommended option"), "{output}");
     assert!(output.contains("Do not ask again"), "{output}");
+    // Review P5: no answer never authorizes an irreversible action.
+    assert!(
+        output.contains("irreversible or destructive")
+            && output.contains("do not take it without the user"),
+        "{output}"
+    );
     Ok(())
 }
 

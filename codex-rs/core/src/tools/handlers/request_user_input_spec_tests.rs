@@ -195,14 +195,50 @@ fn request_user_input_tool_description_mentions_available_modes() {
 }
 
 #[test]
-fn default_mode_guidance_limits_questions_to_real_forks() {
-    assert!(DEFAULT_MODE_GUIDANCE.contains("Ask only when the answer changes what you do next"));
-    assert!(DEFAULT_MODE_GUIDANCE.contains("Do not ask for permission to continue"));
-    assert!(DEFAULT_MODE_GUIDANCE.contains("If no answer arrives"));
+fn default_mode_guidance_limits_questions_to_optional_forks() {
+    // Mirrors the upstream Default-mode template: the tool is for optional questions only.
+    assert!(DEFAULT_MODE_GUIDANCE.contains("ask only optional questions"));
+    assert!(DEFAULT_MODE_GUIDANCE.contains("Do not ask for permission"));
+    assert!(DEFAULT_MODE_GUIDANCE.contains("if no answer arrives"));
+}
+
+// Review P5: an irreversible decision is not an optional question. Neither text may let the
+// model take such an action on its recommended option when nobody answered.
+#[test]
+fn default_mode_texts_keep_irreversible_actions_with_the_user() {
+    for text in [DEFAULT_MODE_GUIDANCE, DEFAULT_MODE_NO_ANSWER_MESSAGE] {
+        assert!(text.contains("irreversible or destructive"), "{text}");
+        assert!(text.contains("in plain text"), "{text}");
+    }
+    assert!(
+        DEFAULT_MODE_GUIDANCE.contains("do not take such an action until the user answers"),
+        "{DEFAULT_MODE_GUIDANCE}"
+    );
+    assert!(
+        DEFAULT_MODE_NO_ANSWER_MESSAGE.contains("do not take it without the user"),
+        "{DEFAULT_MODE_NO_ANSWER_MESSAGE}"
+    );
+    assert!(
+        !DEFAULT_MODE_GUIDANCE.contains("irreversible or costly decision the user should own"),
+        "irreversible decisions are no longer a reason to ask with this tool"
+    );
+}
+
+// Review P6: the description is shared by every mode, so the guidance names Default mode and
+// leaves Plan mode's own question rules untouched.
+#[test]
+fn default_mode_guidance_does_not_change_plan_mode() {
+    assert!(DEFAULT_MODE_GUIDANCE.starts_with("In Default mode"));
+    assert!(DEFAULT_MODE_GUIDANCE.ends_with("Plan mode keeps its own rules for this tool."));
+    assert_eq!(
+        DEFAULT_MODE_GUIDANCE.matches("Plan mode").count(),
+        1,
+        "the only mention of Plan mode leaves it unchanged"
+    );
 }
 
 #[test]
-fn request_user_input_modes_for_session_require_interactive_root() {
+fn request_user_input_modes_for_session_exclude_sub_agents() {
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
