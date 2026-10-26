@@ -686,6 +686,11 @@ async fn process_sse_with_treatment(
 #[path = "responses_error_tests.rs"]
 mod error_tests;
 
+// Fork: tolerant `response.completed.usage` (docs/fork/02-compaction-context.md F8).
+#[cfg(test)]
+#[path = "responses_fork_tests.rs"]
+mod fork_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -875,30 +880,6 @@ mod tests {
             }
             other => panic!("unexpected third event: {other:?}"),
         }
-    }
-
-    #[tokio::test]
-    async fn parses_completed_with_partial_usage() {
-        let events = run_sse(vec![json!({
-            "type": "response.completed",
-            "response": {
-                "id": "resp1",
-                "usage": { "input_tokens": 3 },
-                "end_turn": true,
-            },
-        })])
-        .await;
-
-        assert_eq!(events.len(), 1);
-        assert_matches!(
-            &events[0],
-            ResponseEvent::Completed {
-                response_id,
-                token_usage: None,
-                end_turn: Some(true),
-                ..
-            } if response_id == "resp1"
-        );
     }
 
     #[test]
