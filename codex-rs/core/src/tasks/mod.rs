@@ -325,26 +325,7 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
-        // Fork: background notifications (terminal exits, finished workflow runs) describe
-        // events that happened before this turn, so a regular turn samples them with its own
-        // input instead of one step later. Other tasks leave them in the thread queue, with
-        // their wake: they would record a waking notification without a model step, and an
-        // abort would drop it (background-exec R3.8, dynamic workflow R7.7).
-        let take_background_notifications = task_kind == TaskKind::Regular;
-        let (mut pending_items, _, _) = self
-            .input_queue
-            .drain_mailbox_input_items_for_task(take_background_notifications)
-            .await;
-        let mut input = input;
-        if take_background_notifications && !input.is_empty() {
-            let (notifications, rest): (Vec<_>, Vec<_>) =
-                pending_items.into_iter().partition(|item| {
-                    matches!(item, TurnInput::ResponseItem(envelope)
-                    if crate::context::is_background_notification_item(&envelope.item))
-                });
-            pending_items = rest;
-            input.splice(0..0, notifications);
-        }
+        let (pending_items, input) = self.fork_drain_task_input(task_kind, input).await;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             let turn = active.get_or_insert_with(ActiveTurn::default);
@@ -530,27 +511,13 @@ impl Session {
             self.set_turn_spawn_budget(turn_spawn_budget).await;
         }
         if !has_trigger_turn {
-            // Queue-only mail wakes durable sleep without selecting a new task's settings.
+            // Queue-only wakes retain the previous turn context without selecting a new task.
             start_options = previous_options;
             start_options.cyber_access_program = self
                 .reference_context_item()
                 .await
                 .and_then(|context| context.cyber_access_program);
-            // Fork: name a wake by a background terminal exit (UC3, R3.1) or by a finished
-            // workflow run (dynamic workflow, UC7).
-            let notified = |matches: fn(&codex_protocol::models::ResponseItem) -> bool| {
-                input.iter().any(|item| {
-                    matches!(item, TurnInput::ResponseItem(envelope) if matches(&envelope.item))
-                })
-            };
-            if notified(crate::context::WorkflowNotification::is_notification_item) {
-                start_options.turn_trigger =
-                    Some(crate::workflow::WORKFLOW_TURN_TRIGGER.to_string());
-            } else if notified(crate::context::BackgroundTerminalNotification::is_notification_item)
-            {
-                start_options.turn_trigger =
-                    Some(crate::session::BACKGROUND_TERMINAL_TURN_TRIGGER.to_string());
-            }
+            crate::session::fork_background::name_wake_trigger(&input, &mut start_options);
         }
         let options = NewTurnContextOptions {
             final_output_json_schema: start_options.final_output_json_schema,
@@ -615,6 +582,7 @@ impl Session {
         let mut active_turn_to_clear = None;
         if let Some(mut active_turn) = self.take_active_turn(&reason).await {
             let task = active_turn.task.take();
+            let aborted_turn = task.is_some(); // Fork: read only here, see the end
             if let Some(task) = task {
                 self.handle_task_abort(
                     task,
@@ -623,6 +591,8 @@ impl Session {
                     /*error*/ None,
                 )
                 .await;
+            }
+            if aborted_turn {
                 active_turn_to_clear = Some(active_turn);
             }
         }
@@ -632,6 +602,7 @@ impl Session {
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             self.input_queue.clear_pending(&active_turn).await;
         }
+        // Fork: an abort does not restart pending work (see `was_aborted` in on_task_finished).
     }
 
     pub(crate) async fn abort_turn_if_active(
@@ -680,6 +651,7 @@ impl Session {
         // Let interrupted tasks observe cancellation before dropping pending approvals, or an
         // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
         self.input_queue.clear_pending(&active_turn).await;
+        // Fork: an abort does not restart pending work (see `was_aborted` in on_task_finished).
     }
 
     pub async fn on_task_finished(
@@ -884,7 +856,7 @@ impl Session {
         } else {
             ThreadIdleCause::Completed
         };
-        let was_aborted = abort_reason.is_some();
+        let was_aborted = abort_reason.is_some(); // Fork: no pending-work restart after an abort
         let event = if let Some(reason) = abort_reason {
             if reason == TurnAbortReason::Interrupted {
                 run_turn_interrupt_hooks(self, &turn_context, &turn_state).await;

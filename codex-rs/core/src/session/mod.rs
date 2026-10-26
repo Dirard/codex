@@ -245,8 +245,6 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::exec_output::StreamOutput;
 
 pub(crate) mod async_compaction;
-mod background_terminal;
-pub(crate) use background_terminal::BACKGROUND_TERMINAL_TURN_TRIGGER;
 mod code_mode_warning;
 mod config_refresh;
 pub(crate) mod context_window;
@@ -315,10 +313,16 @@ mod rollout_reconstruction_tests;
 
 // Fork: session modules of the fork; the hot files keep thin hooks into them
 // (specs/fork-rebase-sustainability-2026-10-26.md, UC2).
+mod background_terminal;
+pub(crate) use background_terminal::BACKGROUND_TERMINAL_TURN_TRIGGER;
 mod fork_agent_delivery;
+pub(crate) mod fork_background;
 mod fork_compaction;
+mod fork_explorer;
 mod fork_output_truncation;
 mod fork_spawn_budget;
+#[cfg(test)]
+mod fork_test_support;
 mod fork_turn;
 // Fork end
 
@@ -702,15 +706,8 @@ impl Session {
             .into_iter()
             .map(|request| TurnEnvironmentSelection::new(request, &selected_capability_roots))
             .collect::<Vec<_>>();
-        // Fork: explorer sessions run read-only without escalation on every start path
-        // (spawn, reload, cold resume); see specs/explorer-and-questions-2026-10-25.md.
-        let mut config = config;
-        if crate::agent::explorer_profile::applies_to_source(&config, &session_source) {
-            crate::agent::explorer_profile::enforce_read_only_session_config(&mut config)?;
-            environment_selections
-                .iter_mut()
-                .for_each(crate::agent::explorer_profile::clamp_environment_selection);
-        }
+        let config =
+            fork_explorer::on_session_start(config, &session_source, &mut environment_selections)?;
         // Enforce snapshot-only instructions for both managed and inline isolated sessions.
         let instructions = if isolation == codex_extension_api::SessionIsolation::Isolated {
             SessionInstructions {
@@ -1665,15 +1662,6 @@ impl Session {
         }
     }
 
-    /// Fork: lets tests outside this module give a test session model-derived instructions.
-    #[cfg(test)]
-    pub(crate) async fn set_base_instructions_provenance_for_test(
-        &self,
-        provenance: Option<BaseInstructionsProvenance>,
-    ) {
-        self.state.lock().await.base_instructions_provenance = provenance;
-    }
-
     // Merges connector IDs into the session-level explicit connector selection.
     #[tracing::instrument(
         level = "trace",
@@ -1719,7 +1707,7 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             state.set_next_turn_is_first(!has_prior_user_turns);
-        };
+        }
         let turn_context = match conversation_history {
             InitialHistory::New | InitialHistory::Cleared => {
                 // Defer initial context insertion until the first real turn starts so

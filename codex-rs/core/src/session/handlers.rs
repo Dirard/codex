@@ -317,14 +317,7 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
         .unified_exec_manager
         .terminate_all_processes(crate::unified_exec::TerminationCause::Shutdown)
         .await;
-    // Fork: persistence closes later in `shutdown`, so a resumed thread learns what
-    // happened to its armed background terminals (background-exec-notifications R2.5).
-    sess.record_background_terminals_at_shutdown(terminated)
-        .await;
-    // Fork: interrupt workflow runs and their agents (dynamic workflow, R9.3).
-    if let Some(workflows) = crate::workflow::WorkflowRegistry::existing(sess) {
-        workflows.shutdown().await;
-    }
+    sess.fork_on_processes_terminated(terminated).await;
     if let Err(err) = sess.services.code_mode_service.shutdown().await {
         sess.services.local_agent_runtime.record_shutdown_failure(
             AgentTreeShutdownFailure::operation_failed(
@@ -347,18 +340,7 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
 
     crate::hook_runtime::run_session_end_hooks(sess).await;
     emit_thread_stop_lifecycle(sess).await;
-
-    // Fork: with the session's processes stopped, finalize agent worktrees once the agent
-    // tree stops; eviction alone keeps them (spec agent-worktree-isolation UC6).
-    let runtime = &sess.services.local_agent_runtime;
-    runtime
-        .worktrees
-        .session_stopped(
-            sess.thread_id,
-            runtime.is_tree_root(sess.thread_id),
-            runtime.shutdown.is_cancelled(),
-        )
-        .await;
+    sess.fork_finalize_agent_worktrees().await;
 }
 
 async fn emit_thread_stop_lifecycle(sess: &Session) {
