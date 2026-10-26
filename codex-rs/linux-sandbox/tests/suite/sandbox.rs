@@ -39,6 +39,10 @@ mod root_metadata_tests;
 #[path = "denied_files_tests.rs"]
 mod denied_files_tests;
 
+// Fork: deny-read on bubblewrap's own `/dev` symlinks (docs/fork/upstream).
+#[path = "dev_symlink_denials_tests.rs"]
+mod dev_symlink_denials_tests;
+
 // At least on GitHub CI, the arm64 tests appear to need longer timeouts.
 
 #[cfg(not(target_arch = "aarch64"))]

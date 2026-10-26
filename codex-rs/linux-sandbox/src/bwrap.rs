@@ -68,6 +68,10 @@ const MAX_UNREADABLE_GLOB_MATCHES: usize = 8192;
 pub(crate) const WSL_INTEROP_DIR: &str = "/run/WSL";
 pub(crate) const WSLG_DISTRO_ROOT: &str = "/mnt/wslg/distro";
 
+// Fork: deny-read on bubblewrap's own `/dev` symlinks, which mounts cannot cover.
+#[path = "bwrap_dev_symlinks.rs"]
+pub(crate) mod dev_symlinks;
+
 /// Options that control how bubblewrap is invoked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BwrapOptions {
@@ -128,6 +132,8 @@ pub(crate) struct BwrapArgs {
     pub args: Vec<String>,
     pub preserved_files: Vec<File>,
     pub synthetic_mount_targets: Vec<SyntheticMountTarget>,
+    /// Fork: denied `/dev` symlinks left to the inner stage, see `dev_symlinks`.
+    pub dev_symlink_denials: Vec<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -250,6 +256,7 @@ pub(crate) fn create_bwrap_command_args(
                 args: command,
                 preserved_files: Vec::new(),
                 synthetic_mount_targets: Vec::new(),
+                dev_symlink_denials: Vec::new(),
             })
         } else {
             Ok(create_bwrap_flags_full_filesystem(command, options))
@@ -302,6 +309,7 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         args,
         preserved_files: Vec::new(),
         synthetic_mount_targets: Vec::new(),
+        dev_symlink_denials: Vec::new(),
     }
 }
 
@@ -334,7 +342,10 @@ fn create_bwrap_flags(
         args: filesystem_args,
         preserved_files,
         synthetic_mount_targets,
+        dev_symlink_denials,
     } = create_filesystem_args(file_system_sandbox_policy, sandbox_policy_cwd, options)?;
+    // Fork: only the inner stage can remove denied bubblewrap `/dev` symlinks.
+    let command = dev_symlinks::add_inner_stage_args(command, &dev_symlink_denials)?;
     let normalized_command_cwd = normalize_command_cwd_for_bwrap(command_cwd);
     let mut args = Vec::new();
     args.push("--new-session".to_string());
@@ -386,6 +397,7 @@ fn create_bwrap_flags(
         args,
         preserved_files,
         synthetic_mount_targets,
+        dev_symlink_denials,
     })
 }
 
@@ -586,6 +598,7 @@ fn create_filesystem_args(
         args,
         preserved_files: Vec::new(),
         synthetic_mount_targets: Vec::new(),
+        dev_symlink_denials: Vec::new(),
     };
     let mut allowed_write_paths = Vec::with_capacity(writable_roots.len());
     for writable_root in &writable_roots {
@@ -1345,6 +1358,10 @@ fn append_unreadable_root_args(
             unreadable_root.display(),
             symlink.display()
         )));
+    }
+    // Fork: bwrap resolves its own `/dev` symlinks outside the new root, so mounts on them fail.
+    if dev_symlinks::defer_denial(bwrap_args, unreadable_root) {
+        return Ok(());
     }
 
     if !unreadable_root.exists() {

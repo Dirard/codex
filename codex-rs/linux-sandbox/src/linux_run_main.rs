@@ -109,6 +109,11 @@ pub struct LinuxSandboxCommand {
     #[arg(long = "verify-fd-mount", hide = true)]
     pub verify_fd_mounts: Vec<String>,
 
+    /// Fork: denied bubblewrap `/dev` symlinks that the inner stage replaces, because
+    /// bubblewrap cannot mount over them.
+    #[arg(long = "deny-dev-symlink", hide = true)]
+    pub deny_dev_symlinks: Vec<PathBuf>,
+
     /// When set, skip mounting a fresh `/proc` even though PID isolation is
     /// still enabled. This is primarily intended for restrictive container
     /// environments that deny `--proc /proc`.
@@ -142,6 +147,7 @@ pub fn run_main() -> ! {
         managed_network,
         proxy_route_spec,
         verify_fd_mounts,
+        deny_dev_symlinks,
         no_proc,
         inherit_pid_namespace,
         command,
@@ -178,6 +184,10 @@ pub fn run_main() -> ! {
         }
         if let Err(err) = crate::fd_mount::verify_fd_mounts(&verify_fd_mounts) {
             panic!("failed to verify descriptor-backed bubblewrap mount: {err}");
+        }
+        // Fork: the outer stage left denied bubblewrap `/dev` symlinks to this stage.
+        if let Err(err) = crate::bwrap::dev_symlinks::replace_denied(&deny_dev_symlinks) {
+            panic!("failed to deny bubblewrap /dev symlink: {err}");
         }
 
         let mut capability_header = [LINUX_CAPABILITY_VERSION_3, 0];
@@ -466,6 +476,7 @@ fn build_bwrap_argv(
         args: argv,
         preserved_files: bwrap_args.preserved_files,
         synthetic_mount_targets: bwrap_args.synthetic_mount_targets,
+        dev_symlink_denials: bwrap_args.dev_symlink_denials,
     })
 }
 
@@ -564,6 +575,7 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
         args,
         preserved_files,
         synthetic_mount_targets,
+        ..
     } = bwrap_args;
     let setup_signal_mask = ForwardedSignalMask::block();
     let synthetic_mount_registrations = register_synthetic_mount_targets(&synthetic_mount_targets);
@@ -1041,6 +1053,7 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
         args,
         preserved_files,
         synthetic_mount_targets,
+        ..
     } = bwrap_args;
     let setup_signal_mask = ForwardedSignalMask::block();
     let synthetic_mount_registrations = register_synthetic_mount_targets(&synthetic_mount_targets);
