@@ -117,6 +117,35 @@ pub(crate) enum InputQueueActivity {
 pub(crate) const DETAILED_PENDING_BACKGROUND_NOTIFICATIONS: usize = 8;
 /// Fork: queued notifications beyond this count collapse into one summary line.
 pub(crate) const MAX_PENDING_BACKGROUND_NOTIFICATIONS: usize = 32;
+/// Fork: the summary line names at most this many dropped session IDs.
+const MAX_LISTED_DROPPED_SESSIONS: usize = 16;
+
+/// Fork: runs once the model's input took a queued notification (R2.12).
+pub(crate) type SampledCallback = Box<dyn FnOnce() + Send>;
+
+/// Fork: a background terminal notification as the queue stores it.
+pub(crate) struct QueuedBackgroundNotification {
+    pub(crate) item: ResponseItem,
+    /// Called when a turn drains the notification; dropped when it is withdrawn.
+    pub(crate) on_sampled: Option<SampledCallback>,
+}
+
+impl From<ResponseItem> for QueuedBackgroundNotification {
+    fn from(item: ResponseItem) -> Self {
+        Self {
+            item,
+            on_sampled: None,
+        }
+    }
+}
+
+/// Fork: whether the queue kept a background terminal notification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BackgroundNotificationEnqueue {
+    Queued,
+    /// Over the cap: only the summary line names the session (R3.4).
+    Dropped,
+}
 
 /// Fork: background terminal exit notifications waiting for a model step.
 ///
@@ -126,12 +155,16 @@ pub(crate) const MAX_PENDING_BACKGROUND_NOTIFICATIONS: usize = 32;
 struct BackgroundNotificationQueue {
     items: VecDeque<BackgroundNotificationEntry>,
     dropped: usize,
+    dropped_session_ids: Vec<i32>,
     dropped_wakes: bool,
 }
 
 struct BackgroundNotificationEntry {
     item: ResponseItem,
     wakes: bool,
+    /// The `ExitNotifier` key, so a poll that shows the exit can withdraw it (R2.10).
+    key: Option<u64>,
+    on_sampled: Option<SampledCallback>,
 }
 
 impl BackgroundNotificationQueue {
@@ -143,25 +176,48 @@ impl BackgroundNotificationQueue {
         self.dropped_wakes || self.items.iter().any(|entry| entry.wakes)
     }
 
-    fn drain(&mut self) -> Vec<TurnInput> {
+    /// Takes every notification and the callbacks to run once the lock is released.
+    fn drain(&mut self) -> (Vec<TurnInput>, Vec<SampledCallback>) {
+        let mut sampled = Vec::new();
         let mut items: Vec<TurnInput> = self
             .items
             .drain(..)
-            .map(|entry| TurnInput::ResponseItem(ResponseItemEnvelope::new(entry.item)))
+            .map(|entry| {
+                sampled.extend(entry.on_sampled);
+                TurnInput::ResponseItem(ResponseItemEnvelope::new(entry.item))
+            })
             .collect();
         if self.dropped > 0 {
-            let summary = BackgroundTerminalNotification::new(format!(
-                "{} more background terminals stopped while too many notifications were pending; check their session IDs with write_stdin.",
-                self.dropped
+            let summary = BackgroundTerminalNotification::new(dropped_summary(
+                self.dropped,
+                &self.dropped_session_ids,
             ));
             items.push(TurnInput::ResponseItem(ResponseItemEnvelope::new(
                 ContextualUserFragment::into(summary),
             )));
         }
         self.dropped = 0;
+        self.dropped_session_ids.clear();
         self.dropped_wakes = false;
-        items
+        (items, sampled)
     }
+}
+
+/// Fork: the overflow summary names the dropped sessions (R3.4).
+fn dropped_summary(dropped: usize, session_ids: &[i32]) -> String {
+    let listed = session_ids
+        .iter()
+        .take(MAX_LISTED_DROPPED_SESSIONS)
+        .map(i32::to_string)
+        .collect::<Vec<_>>();
+    let sessions = match dropped.saturating_sub(listed.len()) {
+        _ if listed.is_empty() => String::new(),
+        0 => format!(" (sessions {})", listed.join(", ")),
+        unlisted => format!(" (sessions {} and {unlisted} more)", listed.join(", ")),
+    };
+    format!(
+        "{dropped} more background terminals stopped while too many notifications were pending{sessions}; call write_stdin with one of these session IDs to read the exit code and output of a terminal that exited on its own."
+    )
 }
 
 /// Turn-local pending input storage owned by the input queue flow.
@@ -317,27 +373,89 @@ impl InputQueue {
 
     /// Fork: queue a background terminal exit notification for the next model step.
     ///
-    /// `render` receives whether the notification may include its output tail.
-    pub(crate) async fn enqueue_background_notification(
+    /// `render` receives whether the notification may include its output tail. `key`
+    /// identifies the notification for `withdraw_background_notification`.
+    pub(crate) async fn enqueue_background_notification<R: Into<QueuedBackgroundNotification>>(
         &self,
+        key: Option<u64>,
+        session_id: Option<i32>,
         wakes: bool,
-        render: impl FnOnce(/*with_output*/ bool) -> ResponseItem,
-    ) {
-        {
+        render: impl FnOnce(/*with_output*/ bool) -> R,
+    ) -> BackgroundNotificationEnqueue {
+        let outcome = {
             let mut queue = self.background_notifications.lock().await;
             if queue.items.len() >= MAX_PENDING_BACKGROUND_NOTIFICATIONS {
                 queue.dropped += 1;
+                if queue.dropped_session_ids.len() < MAX_LISTED_DROPPED_SESSIONS {
+                    queue.dropped_session_ids.extend(session_id);
+                }
                 queue.dropped_wakes |= wakes;
+                BackgroundNotificationEnqueue::Dropped
             } else {
                 let with_output = queue.items.len() < DETAILED_PENDING_BACKGROUND_NOTIFICATIONS;
+                let QueuedBackgroundNotification { item, on_sampled } = render(with_output).into();
                 queue.items.push_back(BackgroundNotificationEntry {
-                    item: render(with_output),
+                    item,
                     wakes,
+                    key,
+                    on_sampled,
+                });
+                BackgroundNotificationEnqueue::Queued
+            }
+        };
+        self.activity_tx
+            .send_replace(InputQueueActivity::BackgroundTerminal);
+        outcome
+    }
+
+    /// Fork: remove a queued notification that a tool response made redundant (R2.10).
+    pub(crate) async fn withdraw_background_notification(&self, key: u64) -> bool {
+        // Dropping a withdrawn entry drops its release callback: the poll that showed the
+        // exit already removed the process entry.
+        let withdrawn: VecDeque<BackgroundNotificationEntry> = {
+            let mut queue = self.background_notifications.lock().await;
+            let (withdrawn, kept) = std::mem::take(&mut queue.items)
+                .into_iter()
+                .partition(|entry| entry.key == Some(key));
+            queue.items = kept;
+            withdrawn
+        };
+        !withdrawn.is_empty()
+    }
+
+    /// Fork: put notifications that an aborted or non-regular task took back in front of
+    /// the thread queue. They do not wake the thread (R3.7, R3.8).
+    pub(crate) async fn requeue_background_notifications(&self, items: Vec<ResponseItem>) {
+        if items.is_empty() {
+            return;
+        }
+        {
+            let mut queue = self.background_notifications.lock().await;
+            for item in items.into_iter().rev() {
+                queue.items.push_front(BackgroundNotificationEntry {
+                    item,
+                    wakes: false,
+                    key: None,
+                    on_sampled: None,
                 });
             }
         }
         self.activity_tx
             .send_replace(InputQueueActivity::BackgroundTerminal);
+    }
+
+    /// Fork: take every queued notification, with the overflow summary, for a shutdown
+    /// that records them in the thread history (R2.5).
+    pub(crate) async fn take_background_notifications(&self) -> Vec<ResponseItem> {
+        // The shutdown already stopped every process, so nothing is left to release.
+        let (items, _sampled) = self.background_notifications.lock().await.drain();
+        items
+            .into_iter()
+            .filter_map(|input| match input {
+                TurnInput::ResponseItem(envelope) => Some(envelope.item),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Fork: whether any background terminal notification is queued.
@@ -407,7 +525,11 @@ impl InputQueue {
             .into_iter()
             .map(|mail| TurnInput::InterAgentCommunication(mail.communication))
             .collect();
-        items.extend(self.background_notifications.lock().await.drain());
+        let (notifications, sampled) = self.background_notifications.lock().await.drain();
+        items.extend(notifications);
+        for callback in sampled {
+            callback();
+        }
         (items, start_options, turn_spawn_budget)
     }
 
@@ -450,13 +572,20 @@ impl InputQueue {
     }
 
     /// Clear any pending waiters and input buffered for the current turn.
+    ///
+    /// Fork: background terminal notifications in that input go back to the thread queue,
+    /// so an abort before the turn sampled them does not lose them (R3.7).
     pub(crate) async fn clear_pending(&self, active_turn: &ActiveTurn) {
-        let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.clear_pending_waiters();
+        let pending_input = {
+            let mut turn_state = active_turn.turn_state.lock().await;
+            turn_state.clear_pending_waiters();
+            std::mem::take(&mut turn_state.pending_input)
+        };
         // Pending mail can own extension attachments whose destructors need the lock released.
-        let pending_input = std::mem::take(&mut turn_state.pending_input);
-        drop(turn_state);
+        let (notifications, pending_input) =
+            take_background_notification_items(pending_input.items);
         drop(pending_input);
+        self.requeue_background_notifications(notifications).await;
     }
 
     pub(crate) async fn defer_mailbox_delivery_to_next_turn(
@@ -601,6 +730,25 @@ impl InputQueue {
         }
         self.has_pending_queued_input().await
     }
+}
+
+/// Fork: split background terminal notifications from other turn input, keeping order.
+pub(crate) fn take_background_notification_items(
+    items: Vec<TurnInput>,
+) -> (Vec<ResponseItem>, Vec<TurnInput>) {
+    let mut notifications = Vec::new();
+    let mut rest = Vec::with_capacity(items.len());
+    for item in items {
+        match item {
+            TurnInput::ResponseItem(envelope)
+                if BackgroundTerminalNotification::is_notification_item(&envelope.item) =>
+            {
+                notifications.push(envelope.item);
+            }
+            item => rest.push(item),
+        }
+    }
+    (notifications, rest)
 }
 
 impl TurnInputQueue {
@@ -1103,10 +1251,15 @@ mod tests {
             /*trigger_turn*/ false,
         );
         input_queue
-            .enqueue_background_notification(/*wakes*/ false, |with_output| {
-                assert!(with_output);
-                background_notification("passive")
-            })
+            .enqueue_background_notification(
+                /*key*/ None,
+                /*session_id*/ None,
+                /*wakes*/ false,
+                |with_output| {
+                    assert!(with_output);
+                    background_notification("passive")
+                },
+            )
             .await;
         input_queue
             .enqueue_mailbox_communication(
@@ -1126,6 +1279,8 @@ mod tests {
 
         input_queue
             .enqueue_background_notification(
+                /*key*/ None,
+                /*session_id*/ None,
                 /*wakes*/ true,
                 |_| background_notification("waking"),
             )
@@ -1155,17 +1310,31 @@ mod tests {
     async fn background_notifications_are_bounded() {
         let input_queue = InputQueue::new();
         let mut with_output_flags = Vec::new();
+        let mut outcomes = Vec::new();
         for index in 0..MAX_PENDING_BACKGROUND_NOTIFICATIONS + 2 {
-            input_queue
-                .enqueue_background_notification(
-                    /*wakes*/ index == MAX_PENDING_BACKGROUND_NOTIFICATIONS + 1,
-                    |with_output| {
-                        with_output_flags.push(with_output);
-                        background_notification(&format!("notification {index}"))
-                    },
-                )
-                .await;
+            let session_id = 1000 + i32::try_from(index).expect("small index");
+            outcomes.push(
+                input_queue
+                    .enqueue_background_notification(
+                        /*key*/ None,
+                        Some(session_id),
+                        /*wakes*/ index == MAX_PENDING_BACKGROUND_NOTIFICATIONS + 1,
+                        |with_output| {
+                            with_output_flags.push(with_output);
+                            background_notification(&format!("notification {index}"))
+                        },
+                    )
+                    .await,
+            );
         }
+        assert_eq!(
+            outcomes[MAX_PENDING_BACKGROUND_NOTIFICATIONS - 1..],
+            [
+                BackgroundNotificationEnqueue::Queued,
+                BackgroundNotificationEnqueue::Dropped,
+                BackgroundNotificationEnqueue::Dropped,
+            ]
+        );
         assert_eq!(
             with_output_flags.len(),
             MAX_PENDING_BACKGROUND_NOTIFICATIONS
@@ -1183,11 +1352,130 @@ mod tests {
             items.last(),
             Some(&TurnInput::ResponseItem(ResponseItemEnvelope::new(
                 background_notification(
-                    "2 more background terminals stopped while too many notifications were pending; check their session IDs with write_stdin."
+                    "2 more background terminals stopped while too many notifications were pending (sessions 1032, 1033); call write_stdin with one of these session IDs to read the exit code and output of a terminal that exited on its own."
                 )
             )))
         );
         assert!(!input_queue.has_pending_queued_input().await);
+    }
+
+    /// Fork (R3.4): the summary lists a bounded number of dropped sessions.
+    #[test]
+    fn dropped_summary_lists_a_bounded_number_of_sessions() {
+        let ids = (1000..1000 + MAX_LISTED_DROPPED_SESSIONS as i32).collect::<Vec<_>>();
+        let summary = dropped_summary(MAX_LISTED_DROPPED_SESSIONS + 3, &ids);
+        assert!(
+            summary.starts_with("19 more background terminals stopped while too many notifications were pending (sessions 1000, 1001,"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("1015 and 3 more); call write_stdin"),
+            "{summary}"
+        );
+        assert_eq!(
+            dropped_summary(2, &[]),
+            "2 more background terminals stopped while too many notifications were pending; call write_stdin with one of these session IDs to read the exit code and output of a terminal that exited on its own."
+        );
+    }
+
+    /// Fork (R2.10): a poll that showed the exit withdraws exactly its own notification.
+    #[tokio::test]
+    async fn withdraw_removes_only_the_keyed_notification() {
+        let input_queue = InputQueue::new();
+        for (key, body) in [(Some(7), "seven"), (Some(8), "eight"), (None, "summary")] {
+            input_queue
+                .enqueue_background_notification(
+                    key,
+                    /*session_id*/ None,
+                    /*wakes*/ true,
+                    |_| background_notification(body),
+                )
+                .await;
+        }
+        assert!(input_queue.withdraw_background_notification(7).await);
+        assert!(!input_queue.withdraw_background_notification(7).await);
+        assert_eq!(
+            input_queue.take_background_notifications().await,
+            vec![
+                background_notification("eight"),
+                background_notification("summary")
+            ]
+        );
+    }
+
+    /// Fork (R2.12): a turn that drains a notification runs its release callback; a
+    /// withdrawn notification drops it unrun.
+    #[tokio::test]
+    async fn draining_a_notification_runs_its_release_callback() {
+        let input_queue = InputQueue::new();
+        let released = Arc::new(std::sync::Mutex::new(Vec::new()));
+        for (key, body) in [(1, "sampled"), (2, "withdrawn")] {
+            let released = Arc::clone(&released);
+            input_queue
+                .enqueue_background_notification(
+                    Some(key),
+                    /*session_id*/ None,
+                    /*wakes*/ true,
+                    move |_| QueuedBackgroundNotification {
+                        item: background_notification(body),
+                        on_sampled: Some(Box::new(move || {
+                            released.lock().expect("released").push(key);
+                        })),
+                    },
+                )
+                .await;
+        }
+        assert!(input_queue.withdraw_background_notification(2).await);
+        assert!(released.lock().expect("released").is_empty());
+        let (items, _, _) = input_queue.drain_mailbox_input_items().await;
+        assert_eq!(items.len(), 1);
+        assert_eq!(*released.lock().expect("released"), vec![1]);
+    }
+
+    /// Fork (R3.7): an abort returns the turn's background terminal notifications to the
+    /// thread queue without a wake and drops the rest of its input as before.
+    #[tokio::test]
+    async fn clear_pending_returns_background_notifications_to_the_thread_queue() {
+        let input_queue = InputQueue::new();
+        input_queue
+            .enqueue_background_notification(
+                /*key*/ None,
+                /*session_id*/ None,
+                /*wakes*/ false,
+                |_| background_notification("still queued"),
+            )
+            .await;
+        let active_turn = ActiveTurn::default();
+        input_queue
+            .extend_pending_input_for_turn_state(
+                active_turn.turn_state.as_ref(),
+                vec![
+                    TurnInput::ResponseItem(ResponseItemEnvelope::new(background_notification(
+                        "taken by the aborted turn",
+                    ))),
+                    TurnInput::UserInput {
+                        content: vec![UserInput::Text {
+                            text: "dropped".to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                        client_id: None,
+                        metadata: UserInputMetadata::default(),
+                    },
+                ],
+            )
+            .await;
+
+        input_queue.clear_pending(&active_turn).await;
+
+        assert!(active_turn.turn_state.lock().await.pending_input.is_empty());
+        assert!(!input_queue.has_waking_background_notifications().await);
+        assert_eq!(
+            input_queue.take_background_notifications().await,
+            vec![
+                background_notification("taken by the aborted turn"),
+                background_notification("still queued"),
+            ]
+        );
     }
 
     #[tokio::test]

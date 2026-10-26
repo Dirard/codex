@@ -2,12 +2,17 @@
 
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::ContentItemMetadata;
+use codex_protocol::models::ContentItemNamespace;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::input_text;
 
 use super::ContextualUserFragment;
 
 /// Runtime-authored report about one background terminal; never user authorization.
+///
+/// It carries tool provenance, like `SubagentNotification`: it is tool-related context the
+/// harness writes, and the unread output inside it comes from a program (R2.8).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BackgroundTerminalNotification {
     body: String,
@@ -34,6 +39,10 @@ impl BackgroundTerminalNotification {
 }
 
 impl ContextualUserFragment for BackgroundTerminalNotification {
+    fn content_metadata(&self) -> ContentItemMetadata {
+        ContentItemMetadata::tool(Some(ContentItemNamespace::Functions))
+    }
+
     fn content_kind(&self) -> ContentItemKind {
         ContentItemKind(Self::KIND.to_string())
     }
@@ -80,6 +89,26 @@ mod tests {
         );
         assert!(BackgroundTerminalNotification::is_notification_item(&item));
         assert!(crate::context::is_contextual_user_fragment(&content[0]));
+    }
+
+    /// Fork (R2.8): the notification is tool-related context, like `SubagentNotification`,
+    /// so the model is not told that the user wrote it.
+    #[test]
+    fn carries_tool_provenance() {
+        let item = ContextualUserFragment::into(BackgroundTerminalNotification::new("exited"));
+        let ResponseItem::Message {
+            internal_chat_message_metadata_passthrough: Some(metadata),
+            ..
+        } = &item
+        else {
+            panic!("expected message metadata, got {item:?}");
+        };
+        assert_eq!(
+            metadata.content_item_metadata,
+            Some(vec![ContentItemMetadata::tool(Some(
+                ContentItemNamespace::Functions
+            ))])
+        );
     }
 
     #[test]

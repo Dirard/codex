@@ -312,9 +312,14 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     sess.hooks().shutdown().await;
     sess.async_hook_results.close();
     while sess.async_hook_results.try_recv().is_ok() {}
-    sess.services
+    let terminated = sess
+        .services
         .unified_exec_manager
         .terminate_all_processes(crate::unified_exec::TerminationCause::Shutdown)
+        .await;
+    // Fork: persistence closes later in `shutdown`, so a resumed thread learns what
+    // happened to its armed background terminals (background-exec-notifications R2.5).
+    sess.record_background_terminals_at_shutdown(terminated)
         .await;
     if let Err(err) = sess.services.code_mode_service.shutdown().await {
         sess.services.local_agent_runtime.record_shutdown_failure(

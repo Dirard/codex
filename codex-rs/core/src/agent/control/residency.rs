@@ -334,8 +334,9 @@ async fn is_unloadable(thread: &CodexThread) -> bool {
             .input_queue
             .has_trigger_turn_mailbox_items()
             .await
-        // Fork: unloading would kill the process or drop the notification it expects.
-        && !thread.session.has_pending_background_terminal_work().await
+        // Fork: unloading would kill an armed process or skip a turn a notification starts;
+        // other queued notifications are recorded by the shutdown (R3.6, R2.5).
+        && !thread.session.background_terminals_block_eviction().await
 }
 
 #[cfg(test)]

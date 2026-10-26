@@ -42,6 +42,7 @@ use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
+use crate::tools::handlers::multi_agents_spec::WAIT_AGENT_EXIT_NOTIFICATION_GUIDANCE;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::InterruptAgentHandler;
@@ -1607,14 +1608,23 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 );
             }
             if turn_context.config.multi_agent_v2.wait_agent_enabled {
+                let exit_notifications = exec_exit_notifications_enabled(turn_context);
+                // Fork: a catalog description replaces the bundled one, so it gets the
+                // exit-notification sentence too (background-exec-notifications R4.6).
+                let wait_agent_description = model_messages
+                    .multi_agent_tool_description_override("wait_agent")
+                    .map(|description| {
+                        if exit_notifications {
+                            format!("{description}{WAIT_AGENT_EXIT_NOTIFICATION_GUIDANCE}")
+                        } else {
+                            description.to_string()
+                        }
+                    });
                 registry.register_trusted_with_exposure(
                     multi_agent_v2_handler(
-                        WaitAgentHandlerV2::new(
-                            context.wait_agent_timeouts,
-                            exec_exit_notifications_enabled(turn_context),
-                        ),
+                        WaitAgentHandlerV2::new(context.wait_agent_timeouts, exit_notifications),
                         tool_namespace,
-                        model_messages.multi_agent_tool_description_override("wait_agent"),
+                        wait_agent_description.as_deref(),
                         model_messages.multi_agent_tool_parameters_override("wait_agent"),
                         message_delivery,
                     ),

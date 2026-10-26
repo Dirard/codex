@@ -778,7 +778,7 @@ impl Session {
 
     /// Fork: a waking background terminal notification starts an automatic turn unless the
     /// user interrupted the last turn or Plan mode forbids automatic work (UC3, R3.1, R3.3).
-    async fn should_wake_on_background_notifications(&self) -> bool {
+    pub(crate) async fn should_wake_on_background_notifications(&self) -> bool {
         if self.is_interrupted() || !self.input_queue.has_waking_background_notifications().await {
             return false;
         }

@@ -13,6 +13,7 @@ use super::UnifiedExecContext;
 use super::exit_notification::ExitOutcome;
 use super::exit_notification::ExitReport;
 use super::exit_notification::NOTIFICATION_TAIL_MAX_BYTES;
+use super::head_tail_buffer::LastBytes;
 use super::process::OutputBuffers;
 use super::process::OutputHandles;
 use super::process::UnifiedExecProcess;
@@ -252,15 +253,14 @@ pub(crate) fn spawn_exit_watcher(
             .await;
         }
         // Fork: still under the interaction lock, so a concurrent `write_stdin` either
-        // observed this exit already or runs after the notifier settled.
+        // observed this exit already or runs after the notification is queued and can
+        // withdraw it (R2.10). Only the wake runs as a separate task.
         if let Some((exit_notifier, session, output_buffer)) = notification_context {
             let report = exit_report(&process, &output_buffer, duration).await;
             if let Some(pending) = exit_notifier.on_exit(report) {
-                tokio::spawn(async move {
-                    session
-                        .deliver_background_terminal_notification(pending)
-                        .await;
-                });
+                session
+                    .deliver_background_terminal_notification(&exit_notifier, pending)
+                    .await;
             }
         }
     });
@@ -272,7 +272,11 @@ async fn exit_report(
     output_buffer: &Mutex<OutputBuffers>,
     duration: Duration,
 ) -> ExitReport {
-    let (unread_tail, unread_earlier_bytes) = output_buffer
+    let LastBytes {
+        bytes: unread_tail,
+        readable_earlier: unread_earlier_bytes,
+        lost: unread_lost_bytes,
+    } = output_buffer
         .lock()
         .await
         .pending
@@ -295,6 +299,7 @@ async fn exit_report(
         duration,
         unread_tail,
         unread_earlier_bytes,
+        unread_lost_bytes,
         sandbox_denied,
     }
 }

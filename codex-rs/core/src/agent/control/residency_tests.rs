@@ -322,7 +322,7 @@ async fn grandchild_result_is_retained_for_evicted_parent() {
     assert!(!mail.trigger_turn);
 }
 
-/// Fork: a V2 agent with a queued background terminal notification stays resident.
+/// Fork: a V2 agent with a queued notification that would start its turn stays resident.
 #[tokio::test]
 async fn queued_background_terminal_notification_blocks_eviction() {
     let mut config = test_config().await;
@@ -360,7 +360,7 @@ async fn queued_background_terminal_notification_blocks_eviction() {
         .thread
         .session
         .input_queue
-        .enqueue_background_notification(/*wakes*/ true, |_| {
+        .enqueue_background_notification(/*key*/ None, Some(1000), /*wakes*/ true, |_| {
             crate::context::ContextualUserFragment::into(
                 crate::context::BackgroundTerminalNotification::new("exited"),
             )
@@ -386,6 +386,71 @@ async fn queued_background_terminal_notification_blocks_eviction() {
         .await
         .expect("evict idle worker");
     assert_eq!(outcome, ThreadEvictionOutcome::Evicted);
+}
+
+/// Fork (R3.6): a notification that never starts a turn does not keep its agent resident;
+/// the shutdown records it in the agent's history (R2.5).
+#[tokio::test]
+async fn passive_background_terminal_notification_does_not_block_eviction() {
+    let mut config = test_config().await;
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    config.codex_home = temp_home.path().to_path_buf().try_into().unwrap();
+    config.cwd = temp_home.path().to_path_buf().try_into().unwrap();
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let root = manager
+        .start_thread(StartThreadOptions::new(config.clone()))
+        .await
+        .expect("start root thread");
+    let control = manager.agent_control();
+    let state = control
+        .runtime
+        .upgrade()
+        .expect("thread manager should be live");
+    let membership = control.runtime.admit_start().expect("admit residency work");
+    let worker = spawn_thread_spawn_agent(
+        &control,
+        &state,
+        config,
+        root.thread_id,
+        AgentPath::root().join("worker").expect("worker path"),
+        /*depth*/ 1,
+    )
+    .await;
+    mark_thread_completed(worker.thread.as_ref()).await;
+    worker
+        .thread
+        .session
+        .input_queue
+        .enqueue_background_notification(/*key*/ None, Some(1000), /*wakes*/ false, |_| {
+            crate::context::ContextualUserFragment::into(
+                crate::context::BackgroundTerminalNotification::new(
+                    "terminated at the user's request",
+                ),
+            )
+        })
+        .await;
+
+    let outcome = state
+        .try_evict_v2_thread(Arc::clone(&worker.thread), &membership)
+        .await
+        .expect("evict worker");
+    assert_eq!(outcome, ThreadEvictionOutcome::Evicted);
+    let history = worker.thread.session.clone_history().await;
+    assert_eq!(
+        history
+            .raw_items()
+            .filter(
+                |item| crate::context::BackgroundTerminalNotification::is_notification_item(item)
+            )
+            .count(),
+        1
+    );
 }
 
 async fn spawn_v2_subagent(

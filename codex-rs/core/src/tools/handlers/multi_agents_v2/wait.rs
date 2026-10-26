@@ -105,15 +105,27 @@ impl Handler {
             outcome
         } else {
             let snapshot = active_descendant_snapshot(session.as_ref(), turn.as_ref()).await?;
-            if snapshot == ActiveAgentSnapshot::default()
-                && !board_posts_may_arrive(session.as_ref(), turn.as_ref()).await?
-                // Fork: an expected background terminal notification is worth waiting for.
-                && !session.has_pending_background_terminal_work().await
-            {
+            let no_agents = snapshot == ActiveAgentSnapshot::default()
+                && !board_posts_may_arrive(session.as_ref(), turn.as_ref()).await?;
+            // Fork: an expected background terminal notification is worth waiting for.
+            let terminals_only = no_agents && session.has_pending_background_terminal_work().await;
+            if no_agents && !terminals_only {
                 recheck_activity(session.as_ref(), turn_state.as_deref())
                     .await
                     .unwrap_or(WaitOutcome::NoActiveAgents)
             } else {
+                // Fork: a hung terminal must not hold a wait without `timeout_ms` for the
+                // full default (R4.5).
+                let deadline = if terminals_only {
+                    wait_started
+                        + Duration::from_millis(effective_timeout_ms(
+                            requested_timeout_ms,
+                            timeout_ms,
+                            /*terminals_only*/ true,
+                        ) as u64)
+                } else {
+                    deadline
+                };
                 wait_for_activity(
                     session.as_ref(),
                     turn.as_ref(),
@@ -200,11 +212,10 @@ impl WaitAgentResult {
                     "Wait timed out. Active agents: pending_init={}, running={}, interrupted={}.",
                     snapshot.pending_init, snapshot.running, snapshot.interrupted
                 );
-                // Fork: say what the wait is still for when only terminals are pending.
-                if background_terminals > 0 {
-                    message.push_str(&format!(
-                        " Background terminals that will report their exit: {background_terminals}."
-                    ));
+                // Fork: say what the wait is still for when terminals are pending (R4.5).
+                if !background_terminals.is_empty() {
+                    message.push(' ');
+                    message.push_str(&describe_background_terminals(&background_terminals));
                 }
                 (message, true)
             }
@@ -244,15 +255,62 @@ struct ActiveAgentSnapshot {
     interrupted: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum WaitOutcome {
     MailboxActivity,
     /// Fork: a background terminal exit notification is waiting for the model.
     BackgroundTerminal,
     Steered,
     NoActiveAgents,
-    /// Agent snapshot and the number of terminals whose exit will still be reported.
-    TimedOut(ActiveAgentSnapshot, usize),
+    /// Agent snapshot and the terminals whose exit will still be reported.
+    TimedOut(ActiveAgentSnapshot, Vec<WaitingTerminal>),
+}
+
+/// Fork: the longest wait without `timeout_ms` that only background terminals hold (R4.5).
+pub(crate) const BACKGROUND_TERMINAL_WAIT_CAP_MS: i64 = 300_000;
+
+/// Fork: a wait that the model did not bound and that only terminals hold ends early.
+fn effective_timeout_ms(
+    requested_timeout_ms: Option<i64>,
+    timeout_ms: i64,
+    terminals_only: bool,
+) -> i64 {
+    if requested_timeout_ms.is_none() && terminals_only {
+        timeout_ms.min(BACKGROUND_TERMINAL_WAIT_CAP_MS)
+    } else {
+        timeout_ms
+    }
+}
+
+/// Fork: one terminal that will still report its exit, as a timeout snapshot shows it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WaitingTerminal {
+    session_id: i32,
+    running_for: Duration,
+    /// `None` while the process printed nothing.
+    quiet_for: Option<Duration>,
+}
+
+fn describe_background_terminals(terminals: &[WaitingTerminal]) -> String {
+    let details = terminals
+        .iter()
+        .map(|terminal| {
+            let output = match terminal.quiet_for {
+                Some(quiet_for) => format!("last output {:.1}s ago", quiet_for.as_secs_f64()),
+                None => "no output yet".to_string(),
+            };
+            format!(
+                "session {}: running for {:.1}s, {output}",
+                terminal.session_id,
+                terminal.running_for.as_secs_f64()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(
+        "Background terminals that will report their exit: {} ({details}). Their exits are reported even after this turn ends, so you can end the turn instead of waiting again.",
+        terminals.len()
+    )
 }
 
 /// A bound board delivers posts from agents outside the caller's subtree. Remote and
@@ -371,11 +429,21 @@ async fn wait_for_activity(
             if let Some(outcome) = recheck_activity(session, turn_state).await {
                 return Ok(outcome);
             }
+            let now = Instant::now();
             let background_terminals = session
                 .services
                 .unified_exec_manager
-                .pending_exit_notification_count()
-                .await;
+                .pending_exit_notifications()
+                .await
+                .into_iter()
+                .map(|terminal| WaitingTerminal {
+                    session_id: terminal.process_id,
+                    running_for: now.saturating_duration_since(terminal.started_at),
+                    quiet_for: terminal
+                        .last_output_at
+                        .map(|last_output_at| now.saturating_duration_since(last_output_at)),
+                })
+                .collect();
             Ok(WaitOutcome::TimedOut(snapshot, background_terminals))
         }
     }
@@ -386,5 +454,73 @@ fn wait_outcome_for_activity(activity: InputQueueActivity) -> WaitOutcome {
         InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
         InputQueueActivity::BackgroundTerminal => WaitOutcome::BackgroundTerminal,
         InputQueueActivity::Steer => WaitOutcome::Steered,
+    }
+}
+
+#[cfg(test)]
+mod background_terminal_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// Fork (R4.5): only a wait without `timeout_ms` that only terminals hold is capped.
+    #[test]
+    fn caps_only_unbounded_waits_for_terminals() {
+        let default = 1_800_000;
+        assert_eq!(
+            effective_timeout_ms(None, default, /*terminals_only*/ true),
+            BACKGROUND_TERMINAL_WAIT_CAP_MS
+        );
+        assert_eq!(
+            effective_timeout_ms(None, default, /*terminals_only*/ false),
+            default
+        );
+        assert_eq!(
+            effective_timeout_ms(Some(default), default, /*terminals_only*/ true),
+            default
+        );
+        assert_eq!(
+            effective_timeout_ms(None, 60_000, /*terminals_only*/ true),
+            60_000
+        );
+    }
+
+    /// Fork (R4.5): a timeout names each terminal, how long it ran and when it last spoke.
+    #[test]
+    fn timeout_snapshot_describes_each_terminal() {
+        let result = WaitAgentResult::from_outcome(
+            WaitOutcome::TimedOut(
+                ActiveAgentSnapshot::default(),
+                vec![
+                    WaitingTerminal {
+                        session_id: 1000,
+                        running_for: Duration::from_millis(300_000),
+                        quiet_for: Some(Duration::from_millis(298_000)),
+                    },
+                    WaitingTerminal {
+                        session_id: 1001,
+                        running_for: Duration::from_millis(5_000),
+                        quiet_for: None,
+                    },
+                ],
+            ),
+            /*requested_timeout_ms*/ None,
+            /*timeout_ms*/ BACKGROUND_TERMINAL_WAIT_CAP_MS,
+        );
+        assert_eq!(
+            result,
+            WaitAgentResult {
+                message: "Wait timed out. Active agents: pending_init=0, running=0, interrupted=0. Background terminals that will report their exit: 2 (session 1000: running for 300.0s, last output 298.0s ago; session 1001: running for 5.0s, no output yet). Their exits are reported even after this turn ends, so you can end the turn instead of waiting again.".to_string(),
+                timed_out: true,
+            }
+        );
+        assert_eq!(
+            WaitAgentResult::from_outcome(
+                WaitOutcome::TimedOut(ActiveAgentSnapshot::default(), Vec::new()),
+                /*requested_timeout_ms*/ None,
+                /*timeout_ms*/ 1_000,
+            )
+            .message,
+            "Wait timed out. Active agents: pending_init=0, running=0, interrupted=0."
+        );
     }
 }

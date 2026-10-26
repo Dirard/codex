@@ -1109,3 +1109,291 @@ async fn stdin_approval_observes_strict_review_enabled_while_queued() -> anyhow:
     assert!(session.terminate_background_terminal(process_id).await);
     Ok(())
 }
+
+/// Fork (background-exec-notifications): inserts a stored terminal with an exit notifier.
+async fn insert_notifying_terminal(
+    session: &Arc<Session>,
+    turn: &TurnContext,
+    process_id: i32,
+    process: Arc<UnifiedExecProcess>,
+    exit_notifier: Option<Arc<ExitNotifier>>,
+    initial_exec_command_active: bool,
+) {
+    #[allow(deprecated)]
+    let cwd = turn.cwd.clone();
+    session
+        .services
+        .unified_exec_manager
+        .process_store
+        .lock()
+        .await
+        .processes
+        .insert(
+            process_id,
+            ProcessEntry {
+                process,
+                plugin_metrics_sidecar: None,
+                call_id: format!("call-{process_id}"),
+                process_id,
+                cwd: cwd.into(),
+                initial_exec_command_active: Arc::new(std::sync::atomic::AtomicBool::new(
+                    initial_exec_command_active,
+                )),
+                hook_command: "sleep 60".to_string(),
+                tty: false,
+                environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                permissions: TerminalPermissions::for_launch(
+                    turn.initial_environments
+                        .primary()
+                        .expect("turn environment"),
+                    turn,
+                    TerminalSandboxSource::Native,
+                    SandboxPermissions::UseDefault,
+                    /*additional_permissions*/ None,
+                    /*internal_permissions*/ None,
+                ),
+                network_approval: None,
+                session: Arc::downgrade(session),
+                exit_notifier,
+                last_used: Instant::now(),
+            },
+        );
+}
+
+fn exit_report(outcome: exit_notification::ExitOutcome) -> exit_notification::ExitReport {
+    exit_notification::ExitReport {
+        outcome,
+        duration: Duration::from_secs(1),
+        unread_tail: Vec::new(),
+        unread_earlier_bytes: 0,
+        unread_lost_bytes: 0,
+        sandbox_denied: false,
+    }
+}
+
+async fn live_remote_process(terminate_error: Option<&str>) -> Arc<UnifiedExecProcess> {
+    Arc::new(
+        super::process_tests::remote_process(
+            WriteStatus::Accepted,
+            terminate_error.map(str::to_string),
+            SandboxType::None,
+        )
+        .await,
+    )
+}
+
+/// Fork (R2.11): a failed client termination leaves the real outcome of the still-running
+/// process to its later exit notification.
+#[tokio::test]
+async fn failed_terminate_keeps_the_real_exit_outcome() {
+    let (session, turn) = test_session_and_turn().await;
+    let manager = &session.services.unified_exec_manager;
+    let process_id = manager.allocate_process_id().await;
+    let notifier = ExitNotifier::new(process_id, "sleep 60".to_string(), Instant::now());
+    notifier.arm();
+    let process = live_remote_process(Some("exec-server unavailable")).await;
+    insert_notifying_terminal(
+        &session,
+        &turn,
+        process_id,
+        process,
+        Some(Arc::clone(&notifier)),
+        /*initial_exec_command_active*/ false,
+    )
+    .await;
+
+    assert!(!manager.terminate_process(process_id).await);
+
+    let pending = notifier
+        .on_exit(exit_report(exit_notification::ExitOutcome::Exited {
+            exit_code: Some(0),
+        }))
+        .expect("the later exit is reported");
+    assert_eq!(
+        pending.report.outcome,
+        exit_notification::ExitOutcome::Exited { exit_code: Some(0) }
+    );
+    assert!(pending.wakes());
+}
+
+/// Fork (R2.4): Codex records why it stops a terminal only while that terminal still runs.
+#[tokio::test]
+async fn termination_cause_marks_only_live_terminals() {
+    let (session, turn) = test_session_and_turn().await;
+    let live = live_remote_process(/*terminate_error*/ None).await;
+    let exited = live_remote_process(/*terminate_error*/ None).await;
+    exited
+        .terminate_confirmed()
+        .await
+        .expect("exited process should terminate");
+    let mut notifiers = Vec::new();
+    for (process_id, process) in [(1, live), (2, exited)] {
+        let notifier = ExitNotifier::new(process_id, "sleep 60".to_string(), Instant::now());
+        notifier.arm();
+        insert_notifying_terminal(
+            &session,
+            &turn,
+            process_id,
+            process,
+            Some(Arc::clone(&notifier)),
+            /*initial_exec_command_active*/ false,
+        )
+        .await;
+        notifiers.push(notifier);
+    }
+    {
+        let store = session
+            .services
+            .unified_exec_manager
+            .process_store
+            .lock()
+            .await;
+        for entry in store.processes.values() {
+            entry.set_termination_cause(TerminationCause::ProcessLimit);
+        }
+    }
+    let outcomes = notifiers
+        .iter()
+        .map(|notifier| {
+            notifier
+                .on_exit(exit_report(exit_notification::ExitOutcome::Exited {
+                    exit_code: Some(143),
+                }))
+                .expect("reported")
+                .report
+                .outcome
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outcomes,
+        vec![
+            exit_notification::ExitOutcome::Terminated(TerminationCause::ProcessLimit),
+            exit_notification::ExitOutcome::Exited {
+                exit_code: Some(143)
+            },
+        ]
+    );
+}
+
+/// Fork (R2.12): a notification that showed everything frees exactly its own exited entry.
+#[tokio::test]
+async fn release_after_notification_frees_only_its_exited_terminal() {
+    let (session, turn) = test_session_and_turn().await;
+    let manager = &session.services.unified_exec_manager;
+    let exited = live_remote_process(/*terminate_error*/ None).await;
+    exited
+        .terminate_confirmed()
+        .await
+        .expect("exited process should terminate");
+    let live = live_remote_process(/*terminate_error*/ None).await;
+    let owner = ExitNotifier::new(1, "true".to_string(), Instant::now());
+    let other = ExitNotifier::new(1, "true".to_string(), Instant::now());
+    let starting = ExitNotifier::new(2, "true".to_string(), Instant::now());
+    let running = ExitNotifier::new(3, "sleep 60".to_string(), Instant::now());
+    for (process_id, process, notifier, initial_exec_command_active) in [
+        (1, Arc::clone(&exited), &owner, false),
+        (2, Arc::clone(&exited), &starting, true),
+        (3, live, &running, false),
+    ] {
+        insert_notifying_terminal(
+            &session,
+            &turn,
+            process_id,
+            process,
+            Some(Arc::clone(notifier)),
+            initial_exec_command_active,
+        )
+        .await;
+    }
+    let stored = || async {
+        let mut ids = manager
+            .process_store
+            .lock()
+            .await
+            .processes
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids
+    };
+
+    // Another notifier with the same session ID does not own the entry.
+    manager.release_after_notification(&other).await;
+    manager.release_after_notification(&starting).await;
+    manager.release_after_notification(&running).await;
+    assert_eq!(stored().await, vec![1, 2, 3]);
+    manager.release_after_notification(&owner).await;
+    assert_eq!(stored().await, vec![2, 3]);
+}
+
+/// Fork (P3-3, R3.6, R4.5): a terminal stays pending until its notification is queued.
+#[tokio::test]
+async fn pending_terminals_include_deliveries_in_flight() {
+    let (session, turn) = test_session_and_turn().await;
+    let manager = &session.services.unified_exec_manager;
+    let notifier = ExitNotifier::new(7, "sleep 60".to_string(), Instant::now());
+    insert_notifying_terminal(
+        &session,
+        &turn,
+        7,
+        live_remote_process(/*terminate_error*/ None).await,
+        Some(Arc::clone(&notifier)),
+        /*initial_exec_command_active*/ false,
+    )
+    .await;
+    assert!(!manager.has_pending_exit_notifications().await);
+    notifier.arm();
+    assert!(manager.has_pending_exit_notifications().await);
+    let terminals = manager.pending_exit_notifications().await;
+    assert_eq!(
+        terminals
+            .iter()
+            .map(|terminal| (terminal.process_id, terminal.last_output_at))
+            .collect::<Vec<_>>(),
+        vec![(7, None)]
+    );
+    notifier
+        .on_exit(exit_report(exit_notification::ExitOutcome::Exited {
+            exit_code: Some(0),
+        }))
+        .expect("delivers");
+    assert!(manager.has_pending_exit_notifications().await);
+    notifier.finish_delivery();
+    assert!(!manager.has_pending_exit_notifications().await);
+}
+
+/// Fork (R2.5): a shutdown owes a notice for each armed terminal it stops, nothing else.
+#[tokio::test]
+async fn shutdown_reports_armed_terminals_it_stops() {
+    let (session, turn) = test_session_and_turn().await;
+    let manager = &session.services.unified_exec_manager;
+    let armed = ExitNotifier::new(11, "sleep 60".to_string(), Instant::now());
+    armed.arm();
+    let unarmed = ExitNotifier::new(12, "sleep 60".to_string(), Instant::now());
+    for (process_id, notifier) in [(11, Some(armed)), (12, Some(unarmed)), (13, None)] {
+        insert_notifying_terminal(
+            &session,
+            &turn,
+            process_id,
+            live_remote_process(/*terminate_error*/ None).await,
+            notifier,
+            /*initial_exec_command_active*/ false,
+        )
+        .await;
+    }
+
+    let terminated = manager
+        .terminate_all_processes(TerminationCause::Shutdown)
+        .await;
+    assert_eq!(
+        terminated
+            .shutdown_notices
+            .iter()
+            .map(|notice| (notice.process_id, notice.command.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(11, "sleep 60")]
+    );
+    assert!(terminated.deliveries_in_flight.is_empty());
+    assert!(manager.process_store.lock().await.processes.is_empty());
+}

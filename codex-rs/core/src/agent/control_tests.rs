@@ -1160,6 +1160,75 @@ async fn ensure_v2_child_loaded_preserves_evicted_parent_authority() {
     check_v2_agent_reload(V2ReloadRoute::NestedParent).await;
 }
 
+/// Fork (background-exec-notifications R3.6, R2.5): an interrupted V2 agent whose background
+/// terminal notification waits in its queue is unloaded, and the notification is in its
+/// history after the reload instead of blocking residency forever.
+#[tokio::test]
+async fn evicted_v2_agent_keeps_queued_background_terminal_notification() {
+    let (home, mut config) = test_config().await;
+    config.features.enable(Feature::MultiAgentV2).unwrap();
+    config.features.enable(Feature::Sqlite).unwrap();
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let (_parent_id, parent) = harness.start_paginated_thread().await;
+    let control = parent
+        .session
+        .services
+        .local_agent_runtime
+        .control(parent.session.session_id());
+    let child =
+        spawn_v2_reload_test_child(&control, harness.config.clone(), &parent, "worker").await;
+    let child_id = child.thread_id;
+    let thread = harness.manager.get_thread(child_id).await.unwrap();
+    thread
+        .inject_response_items(vec![assistant_message(
+            "child persisted",
+            Some(MessagePhase::FinalAnswer),
+        )])
+        .await
+        .unwrap();
+    const NOTIFICATION: &str = "Background terminal session 1000 exited with code 0 after 1.0s.";
+    thread
+        .session
+        .input_queue
+        .enqueue_background_notification(/*key*/ None, Some(1000), /*wakes*/ true, |_| {
+            ContextualUserFragment::into(crate::context::BackgroundTerminalNotification::new(
+                NOTIFICATION,
+            ))
+        })
+        .await;
+    // The fixture has no task runner to finish the turn; the parent interrupted it.
+    thread.session.mark_interrupted();
+    *thread.session.active_turn.lock().await = None;
+    assert_eq!(
+        harness.manager.try_evict_v2_thread(thread).await.unwrap(),
+        ThreadEvictionOutcome::Evicted,
+    );
+
+    control
+        .ensure_v2_agent_loaded(
+            harness.config.clone(),
+            child_id,
+            /*parent*/ None,
+            Some(TurnSpawnBudget::new(/*limit*/ 1)),
+        )
+        .await
+        .expect("known v2 agent should reload");
+    let reloaded = harness.manager.get_thread(child_id).await.unwrap();
+    let history = reloaded.session.clone_history().await;
+    let notifications = history
+        .raw_items()
+        .filter(|item| crate::context::BackgroundTerminalNotification::is_notification_item(item))
+        .count();
+    assert_eq!(notifications, 1);
+    assert!(
+        !reloaded
+            .session
+            .input_queue
+            .has_background_notifications()
+            .await
+    );
+}
+
 #[tokio::test]
 #[expect(
     clippy::await_holding_invalid_type,

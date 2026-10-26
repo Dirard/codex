@@ -467,8 +467,7 @@ impl ToolOutput for AbortedToolOutput {
 }
 
 /// Fork: header line telling the model that the exit will be reported without polling.
-pub(crate) const EXIT_NOTIFICATION_ARMED_LINE: &str =
-    "Exit notification: on (Codex will report when this process exits; do not poll for completion)";
+pub(crate) const EXIT_NOTIFICATION_ARMED_LINE: &str = "Exit notification: on (Codex will report when this process exits while this Codex session is running; do not poll for completion)";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecCommandToolOutput {
