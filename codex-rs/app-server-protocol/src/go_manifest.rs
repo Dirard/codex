@@ -1,3 +1,5 @@
+#[macro_use]
+mod macros;
 mod builder;
 mod digest;
 mod lifecycle;
@@ -34,3 +36,7 @@ pub(crate) use visibility::request_schema_excluded_reason;
 pub(crate) use visibility::request_sdk_visibility;
 pub(crate) use visibility::serde_shape_requirement_for_type;
 pub(crate) use visibility::server_request_experimental_fields;
+
+#[cfg(test)]
+#[path = "go_manifest_tests.rs"]
+mod go_manifest_tests;

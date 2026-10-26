@@ -14,7 +14,6 @@ use crate::export::write_json_schema;
 use crate::protocol::v1;
 use crate::protocol::v2;
 use codex_experimental_api_macros::ExperimentalApi;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
@@ -88,34 +87,11 @@ impl AuthMode {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub enum ActiveProtocolMode {
-    Stable,
-    Experimental,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct InitializeResponse {
-    pub user_agent: String,
-    /// Absolute path to the server's $CODEX_HOME directory.
-    pub codex_home: AbsolutePathBuf,
-    /// Platform family for the running app-server target, for example
-    /// `"unix"` or `"windows"`.
-    pub platform_family: String,
-    /// Operating system for the running app-server target, for example
-    /// `"macos"`, `"linux"`, or `"windows"`.
-    pub platform_os: String,
-    pub stable_protocol_digest: String,
-    pub experimental_protocol_digest: String,
-    pub stable_schema_digest: String,
-    pub experimental_schema_digest: String,
-    pub stable_manifest_digest: String,
-    pub experimental_manifest_digest: String,
-    pub active_protocol_mode: ActiveProtocolMode,
-}
+// Fork: initialize digests and the Go SDK manifest (specs/go-sdk-features-2026-10-25.md).
+#[macro_use]
+#[path = "fork_protocol.rs"]
+mod fork_protocol;
+pub use fork_protocol::*;
 
 macro_rules! experimental_reason_expr {
     // If a request variant is explicitly marked experimental, that reason wins.
@@ -232,270 +208,6 @@ macro_rules! serialization_scope_expr {
         Some(ClientRequestSerializationScope::McpOauth {
             server_name: $actual_params.$field.clone(),
         })
-    };
-}
-
-macro_rules! go_manifest_method_name {
-    ($variant:ident => $wire:literal) => {
-        $wire
-    };
-    (Initialize) => {
-        "initialize"
-    };
-    (GetConversationSummary) => {
-        "getConversationSummary"
-    };
-    (GitDiffToRemote) => {
-        "gitDiffToRemote"
-    };
-    (GetAuthStatus) => {
-        "getAuthStatus"
-    };
-    (ApplyPatchApproval) => {
-        "applyPatchApproval"
-    };
-    (ExecCommandApproval) => {
-        "execCommandApproval"
-    };
-    (Initialized) => {
-        "initialized"
-    };
-    (AccountLoginCompleted) => {
-        "account/login/completed"
-    };
-}
-
-macro_rules! go_manifest_experimental_marker {
-    (#[experimental($reason:expr)]) => {
-        Some(crate::go_manifest::ExperimentalMarker {
-            reason: $reason,
-            field_paths: Vec::new(),
-        })
-    };
-    () => {
-        None
-    };
-}
-
-macro_rules! go_manifest_inspect_params {
-    (true) => {
-        true
-    };
-    () => {
-        false
-    };
-}
-
-macro_rules! go_manifest_manual_payload_conversion {
-    (manual) => {
-        Some("manual response payload conversion")
-    };
-    () => {
-        None
-    };
-}
-
-macro_rules! go_manifest_serde_shape_requirement {
-    (manual, $payload:ty) => {
-        crate::go_manifest::SerdeShapeRequirement::ManualPayloadConversion
-    };
-    ($payload:ty) => {
-        crate::go_manifest::serde_shape_requirement_for_type(stringify!($payload))
-    };
-}
-
-macro_rules! go_manifest_identity_extractor {
-    ($identity_name:literal, $field:ident, $optional:literal) => {
-        crate::go_manifest::IdentityExtractor {
-            identity_name: $identity_name,
-            field_path: stringify!($field),
-            optional: $optional,
-            terminal_predicate: None,
-        }
-    };
-}
-
-macro_rules! go_manifest_request_serialization_scopes {
-    (None) => {
-        Vec::new()
-    };
-    (global($key:literal)) => {
-        vec![crate::go_manifest::RequestSerializationScope {
-            kind: crate::go_manifest::RequestSerializationScopeKind::Global,
-            queue_key: Some($key),
-            precedence: 0,
-            condition: crate::go_manifest::RequestSerializationCondition::Always,
-            identity_extractors: Vec::new(),
-        }]
-    };
-    (global_shared_read($key:literal)) => {
-        vec![crate::go_manifest::RequestSerializationScope {
-            kind: crate::go_manifest::RequestSerializationScopeKind::GlobalSharedRead,
-            queue_key: Some($key),
-            precedence: 0,
-            condition: crate::go_manifest::RequestSerializationCondition::Always,
-            identity_extractors: Vec::new(),
-        }]
-    };
-    (thread_id($params:ident . $field:ident)) => {
-        vec![crate::go_manifest::RequestSerializationScope {
-            kind: crate::go_manifest::RequestSerializationScopeKind::Thread,
-            queue_key: None,
-            precedence: 0,
-            condition: crate::go_manifest::RequestSerializationCondition::Always,
-            identity_extractors: vec![go_manifest_identity_extractor!("threadId", $field, false)],
-        }]
-    };
-    (optional_thread_id($params:ident . $field:ident)) => {
-        vec![crate::go_manifest::RequestSerializationScope {
-            kind: crate::go_manifest::RequestSerializationScopeKind::Thread,
-            queue_key: None,
-            precedence: 0,
-            condition: crate::go_manifest::RequestSerializationCondition::FieldPresent(stringify!(
-                $field
-            )),
-            identity_extractors: vec![go_manifest_identity_extractor!("threadId", $field, true)],
-        }]
-    };
-    (thread_or_path($params:ident . $thread_field:ident, $params2:ident . $path_field:ident)) => {
-        vec![
-            crate::go_manifest::RequestSerializationScope {
-                kind: crate::go_manifest::RequestSerializationScopeKind::Thread,
-                queue_key: None,
-                precedence: 0,
-                condition: crate::go_manifest::RequestSerializationCondition::StringNonEmpty(
-                    stringify!($thread_field),
-                ),
-                identity_extractors: vec![go_manifest_identity_extractor!(
-                    "threadId",
-                    $thread_field,
-                    false
-                )],
-            },
-            crate::go_manifest::RequestSerializationScope {
-                kind: crate::go_manifest::RequestSerializationScopeKind::ThreadPath,
-                queue_key: None,
-                precedence: 1,
-                condition: crate::go_manifest::RequestSerializationCondition::All(&[
-                    crate::go_manifest::RequestSerializationCondition::StringEmpty(stringify!(
-                        $thread_field
-                    )),
-                    crate::go_manifest::RequestSerializationCondition::FieldPresent(stringify!(
-                        $path_field
-                    )),
-                ]),
-                identity_extractors: vec![go_manifest_identity_extractor!(
-                    "path",
-                    $path_field,
-                    false
-                )],
-            },
-            crate::go_manifest::RequestSerializationScope {
-                kind: crate::go_manifest::RequestSerializationScopeKind::Thread,
-                queue_key: None,
-                precedence: 2,
-                condition: crate::go_manifest::RequestSerializationCondition::All(&[
-                    crate::go_manifest::RequestSerializationCondition::StringEmpty(stringify!(
-                        $thread_field
-                    )),
-                    crate::go_manifest::RequestSerializationCondition::FieldAbsent(stringify!(
-                        $path_field
-                    )),
-                ]),
-                identity_extractors: vec![go_manifest_identity_extractor!(
-                    "threadId",
-                    $thread_field,
-                    false
-                )],
-            },
-        ]
-    };
-    (optional_command_process_id($params:ident . $field:ident)) => {
-        vec![crate::go_manifest::RequestSerializationScope {
-            kind: crate::go_manifest::RequestSerializationScopeKind::CommandExecProcess,
-            queue_key: None,
-            precedence: 0,
-            condition: crate::go_manifest::RequestSerializationCondition::FieldPresent(stringify!(
-                $field
-            )),
-            identity_extractors: vec![go_manifest_identity_extractor!("processId", $field, true)],
-        }]
-    };
-    (command_process_id($params:ident . $field:ident)) => {
-        vec![crate::go_manifest::RequestSerializationScope {
-            kind: crate::go_manifest::RequestSerializationScopeKind::CommandExecProcess,
-            queue_key: None,
-            precedence: 0,
-            condition: crate::go_manifest::RequestSerializationCondition::Always,
-            identity_extractors: vec![go_manifest_identity_extractor!("processId", $field, false)],
-        }]
-    };
-    (process_handle($params:ident . $field:ident)) => {
-        vec![crate::go_manifest::RequestSerializationScope {
-            kind: crate::go_manifest::RequestSerializationScopeKind::Process,
-            queue_key: None,
-            precedence: 0,
-            condition: crate::go_manifest::RequestSerializationCondition::Always,
-            identity_extractors: vec![go_manifest_identity_extractor!(
-                "processHandle",
-                $field,
-                false
-            )],
-        }]
-    };
-    (fuzzy_session_id($params:ident . $field:ident)) => {
-        vec![crate::go_manifest::RequestSerializationScope {
-            kind: crate::go_manifest::RequestSerializationScopeKind::FuzzyFileSearchSession,
-            queue_key: None,
-            precedence: 0,
-            condition: crate::go_manifest::RequestSerializationCondition::Always,
-            identity_extractors: vec![go_manifest_identity_extractor!("sessionId", $field, false)],
-        }]
-    };
-    (fs_watch_id($params:ident . $field:ident)) => {
-        vec![crate::go_manifest::RequestSerializationScope {
-            kind: crate::go_manifest::RequestSerializationScopeKind::FsWatch,
-            queue_key: None,
-            precedence: 0,
-            condition: crate::go_manifest::RequestSerializationCondition::Always,
-            identity_extractors: vec![go_manifest_identity_extractor!("watchId", $field, false)],
-        }]
-    };
-    (mcp_oauth_server($params:ident . $field:ident)) => {
-        vec![crate::go_manifest::RequestSerializationScope {
-            kind: crate::go_manifest::RequestSerializationScopeKind::McpOauth,
-            queue_key: None,
-            precedence: 0,
-            condition: crate::go_manifest::RequestSerializationCondition::Always,
-            identity_extractors: vec![go_manifest_identity_extractor!("serverName", $field, false)],
-        }]
-    };
-}
-
-macro_rules! go_manifest_optional_payload_type {
-    () => {
-        None
-    };
-    ($payload:ty) => {
-        crate::go_manifest::manifest_type_name(stringify!($payload))
-    };
-}
-
-macro_rules! go_manifest_optional_payload_schema_ref {
-    () => {
-        None
-    };
-    ($payload:ty) => {
-        crate::go_manifest::manifest_schema_ref(stringify!($payload))
-    };
-}
-
-macro_rules! go_manifest_optional_payload_serde_shape_requirement {
-    () => {
-        crate::go_manifest::SerdeShapeRequirement::SchemaSufficient
-    };
-    ($payload:ty) => {
-        crate::go_manifest::serde_shape_requirement_for_type(stringify!($payload))
     };
 }
 
@@ -713,60 +425,6 @@ macro_rules! client_request_definitions {
             )*
         ];
 
-        #[allow(clippy::vec_init_then_push)]
-        pub(crate) fn go_sdk_client_request_manifest_entries(
-        ) -> Vec<crate::go_manifest::RequestManifestEntry> {
-            let mut entries = Vec::new();
-            $(
-                let method = $wire;
-                entries.push(crate::go_manifest::RequestManifestEntry {
-                    variant: stringify!($variant),
-                    method,
-                    direction: crate::go_manifest::ProtocolDirection::ClientToServer,
-                    request_serialization_scopes: go_manifest_request_serialization_scopes!(
-                        $serialization $( ( $($serialization_args)* ) )?
-                    ),
-                    params_type: crate::go_manifest::manifest_type_name(stringify!($params)),
-                    params_schema_ref: crate::go_manifest::request_manifest_schema_ref(
-                        crate::go_manifest::ProtocolDirection::ClientToServer,
-                        method,
-                        stringify!($params),
-                    ),
-                    response_type: crate::go_manifest::manifest_type_name(stringify!($response)),
-                    response_schema_ref: crate::go_manifest::request_manifest_schema_ref(
-                        crate::go_manifest::ProtocolDirection::ClientToServer,
-                        method,
-                        stringify!($response),
-                    ),
-                    sdk_visibility: crate::go_manifest::request_sdk_visibility(
-                        crate::go_manifest::ProtocolDirection::ClientToServer,
-                        method,
-                    ),
-                    experimental: go_manifest_experimental_marker!($(#[experimental($reason)])?),
-                    experimental_fields: crate::go_manifest::request_experimental_fields(method),
-                    bounded_model_context_fields: crate::go_manifest::request_bounded_model_context_fields(method),
-                    inspect_params: go_manifest_inspect_params!($($inspect_params)?),
-                    retry: crate::go_manifest::RetryPolicy::NeverRetryAfterWrite,
-                    manual_payload_conversion: go_manifest_manual_payload_conversion!(
-                        $($manual_payload_conversion)?
-                    ),
-                    serde_shape_requirement: go_manifest_serde_shape_requirement!(
-                        $($manual_payload_conversion,)?
-                        $params
-                    ),
-                    schema_excluded_reason: crate::go_manifest::request_schema_excluded_reason(
-                        crate::go_manifest::ProtocolDirection::ClientToServer,
-                        method,
-                    ),
-                    exception: crate::go_manifest::request_exception(
-                        crate::go_manifest::ProtocolDirection::ClientToServer,
-                        method,
-                    ),
-                });
-            )*
-            entries
-        }
-
         #[cfg(test)]
         pub fn export_client_responses(
             out_dir: &::std::path::Path,
@@ -844,10 +502,11 @@ enum GetAccountRateLimitsParamsTypeScript {
     Undefined,
 }
 
-client_request_definitions! {
+fork_with_go_manifest! { client_request_definitions {
     Initialize => "initialize" {
         params: v1::InitializeParams,
         serialization: None,
+        // Fork: the response carries the protocol, schema and manifest digests.
         response: InitializeResponse,
     },
 
@@ -1043,6 +702,7 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadWorkflowCancelResponse,
     },
+    // Fork end
     ThreadMetadataUpdate => "thread/metadata/update" {
         params: v2::ThreadMetadataUpdateParams,
         inspect_params: true,
@@ -1912,7 +1572,7 @@ client_request_definitions! {
         serialization: fuzzy_session_id(params.session_id),
         response: FuzzyFileSearchSessionStopResponse,
     },
-}
+}}
 
 /// Generates an `enum ServerRequest` where each variant is a request that the
 /// server can send to the client along with the corresponding params and
@@ -2038,55 +1698,6 @@ macro_rules! server_request_definitions {
             )*
         ];
 
-        #[allow(clippy::vec_init_then_push)]
-        pub(crate) fn go_sdk_server_request_manifest_entries(
-        ) -> Vec<crate::go_manifest::RequestManifestEntry> {
-            let mut entries = Vec::new();
-            $(
-                let method = go_manifest_method_name!($variant $(=> $wire)?);
-                entries.push(crate::go_manifest::RequestManifestEntry {
-                    variant: stringify!($variant),
-                    method,
-                    direction: crate::go_manifest::ProtocolDirection::ServerToClient,
-                    request_serialization_scopes: Vec::new(),
-                    params_type: crate::go_manifest::manifest_type_name(stringify!($params)),
-                    params_schema_ref: crate::go_manifest::request_manifest_schema_ref(
-                        crate::go_manifest::ProtocolDirection::ServerToClient,
-                        method,
-                        stringify!($params),
-                    ),
-                    response_type: crate::go_manifest::manifest_type_name(stringify!($response)),
-                    response_schema_ref: crate::go_manifest::request_manifest_schema_ref(
-                        crate::go_manifest::ProtocolDirection::ServerToClient,
-                        method,
-                        stringify!($response),
-                    ),
-                    sdk_visibility: crate::go_manifest::request_sdk_visibility(
-                        crate::go_manifest::ProtocolDirection::ServerToClient,
-                        method,
-                    ),
-                    experimental: go_manifest_experimental_marker!($(#[experimental($reason)])?),
-                    experimental_fields: crate::go_manifest::server_request_experimental_fields(method),
-                    bounded_model_context_fields: Vec::new(),
-                    inspect_params: false,
-                    retry: crate::go_manifest::RetryPolicy::NeverRetryAfterWrite,
-                    manual_payload_conversion: None,
-                    serde_shape_requirement: crate::go_manifest::serde_shape_requirement_for_type(
-                        stringify!($params),
-                    ),
-                    schema_excluded_reason: crate::go_manifest::request_schema_excluded_reason(
-                        crate::go_manifest::ProtocolDirection::ServerToClient,
-                        method,
-                    ),
-                    exception: crate::go_manifest::request_exception(
-                        crate::go_manifest::ProtocolDirection::ServerToClient,
-                        method,
-                    ),
-                });
-            )*
-            entries
-        }
-
         #[cfg(test)]
         pub fn export_server_responses(
             out_dir: &::std::path::Path,
@@ -2141,8 +1752,7 @@ macro_rules! server_request_definitions {
 macro_rules! server_notification_definitions {
     (
         $(
-            $(#[doc = $variant_doc:literal])*
-            $(#[experimental($reason:expr)])?
+            $(#[$variant_meta:meta])*
             $variant:ident $(=> $wire:literal)? ( $payload:ty )
         ),* $(,)?
     ) => {
@@ -2162,8 +1772,7 @@ macro_rules! server_notification_definitions {
         #[strum(serialize_all = "camelCase")]
         pub enum ServerNotification {
             $(
-                $(#[doc = $variant_doc])*
-                $(#[experimental($reason)])?
+                $(#[$variant_meta])*
                 $(#[serde(rename = $wire)] #[ts(rename = $wire)] #[strum(serialize = $wire)])?
                 $variant($payload),
             )*
@@ -2194,33 +1803,6 @@ macro_rules! server_notification_definitions {
             $(schemas.push(crate::export::write_json_schema::<$payload>(out_dir, stringify!($payload))?);)*
             Ok(schemas)
         }
-
-        #[allow(clippy::vec_init_then_push)]
-        pub(crate) fn go_sdk_server_notification_manifest_entries(
-        ) -> Vec<crate::go_manifest::NotificationManifestEntry> {
-            let mut entries = Vec::new();
-            $(
-                let method = go_manifest_method_name!($variant $(=> $wire)?);
-                entries.push(crate::go_manifest::NotificationManifestEntry {
-                    variant: stringify!($variant),
-                    method,
-                    direction: crate::go_manifest::ProtocolDirection::ServerNotification,
-                    serde_shape_requirement: crate::go_manifest::serde_shape_requirement_for_type(
-                        stringify!($payload),
-                    ),
-                    payload_type: crate::go_manifest::manifest_type_name(stringify!($payload)),
-                    payload_schema_ref: crate::go_manifest::manifest_schema_ref(stringify!($payload)),
-                    sdk_visibility: crate::go_manifest::notification_sdk_visibility(method),
-                    experimental: go_manifest_experimental_marker!($(#[experimental($reason)])?),
-                    experimental_fields: crate::go_manifest::notification_experimental_fields(method),
-                    routing_strategy: crate::go_manifest::notification_routing_strategy(method),
-                    manual_payload_conversion: None,
-                    schema_excluded_reason: crate::go_manifest::notification_schema_excluded_reason(method),
-                    exception: crate::go_manifest::notification_exception(method),
-                });
-            )*
-            entries
-        }
     };
 }
 /// Notifications sent from the client to the server.
@@ -2228,7 +1810,7 @@ macro_rules! client_notification_definitions {
     (
         $(
             $(#[$variant_meta:meta])*
-            $variant:ident $(=> $wire:literal)? $( ( $payload:ty ) )?
+            $variant:ident $( ( $payload:ty ) )?
         ),* $(,)?
     ) => {
         #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
@@ -2237,7 +1819,6 @@ macro_rules! client_notification_definitions {
         pub enum ClientNotification {
             $(
                 $(#[$variant_meta])*
-                $(#[serde(rename = $wire)] #[ts(rename = $wire)] #[strum(serialize = $wire)])?
                 $variant $( ( $payload ) )?,
             )*
         }
@@ -2250,35 +1831,6 @@ macro_rules! client_notification_definitions {
             $( $(schemas.push(crate::export::write_json_schema::<$payload>(_out_dir, stringify!($payload))?);)? )*
             Ok(schemas)
         }
-
-        #[allow(clippy::vec_init_then_push)]
-        pub(crate) fn go_sdk_client_notification_manifest_entries(
-        ) -> Vec<crate::go_manifest::NotificationManifestEntry> {
-            let mut entries = Vec::new();
-            $(
-                let method = go_manifest_method_name!($variant $(=> $wire)?);
-                entries.push(crate::go_manifest::NotificationManifestEntry {
-                    variant: stringify!($variant),
-                    method,
-                    direction: crate::go_manifest::ProtocolDirection::ClientNotification,
-                    serde_shape_requirement: go_manifest_optional_payload_serde_shape_requirement!(
-                        $($payload)?
-                    ),
-                    payload_type: go_manifest_optional_payload_type!($($payload)?),
-                    payload_schema_ref: go_manifest_optional_payload_schema_ref!($($payload)?),
-                    sdk_visibility: crate::go_manifest::SdkVisibility::Public,
-                    experimental: None,
-                    experimental_fields: Vec::new(),
-                    routing_strategy: crate::go_manifest::NotificationRoutingStrategy::GlobalOnly {
-                        reason: "client notification is sent to the server and is not routed by server-side notification dispatch",
-                    },
-                    manual_payload_conversion: None,
-                    schema_excluded_reason: None,
-                    exception: None,
-                });
-            )*
-            entries
-        }
     };
 }
 
@@ -2290,7 +1842,7 @@ impl TryFrom<JSONRPCRequest> for ServerRequest {
     }
 }
 
-server_request_definitions! {
+fork_with_go_manifest! { server_request_definitions {
     /// NEW APIs
     /// Sent when approval is requested for a specific command execution.
     /// This request is used for Turns started via turn/start.
@@ -2351,17 +1903,17 @@ server_request_definitions! {
     /// DEPRECATED APIs below
     /// Request to approve a patch.
     /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).
-    ApplyPatchApproval => "applyPatchApproval" {
+    ApplyPatchApproval {
         params: v1::ApplyPatchApprovalParams,
         response: v1::ApplyPatchApprovalResponse,
     },
     /// Request to exec a command.
     /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).
-    ExecCommandApproval => "execCommandApproval" {
+    ExecCommandApproval {
         params: v1::ExecCommandApprovalParams,
         response: v1::ExecCommandApprovalResponse,
     },
-}
+}}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -2445,7 +1997,7 @@ pub struct FuzzyFileSearchSessionCompletedNotification {
     pub session_id: String,
 }
 
-server_notification_definitions! {
+fork_with_go_manifest! { server_notification_definitions {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
@@ -2571,9 +2123,12 @@ server_notification_definitions! {
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
     WindowsSandboxSetupCompleted => "windowsSandbox/setupCompleted" (v2::WindowsSandboxSetupCompletedNotification),
 
-    AccountLoginCompleted => "account/login/completed" (v2::AccountLoginCompletedNotification),
+    #[serde(rename = "account/login/completed")]
+    #[ts(rename = "account/login/completed")]
+    #[strum(serialize = "account/login/completed")]
+    AccountLoginCompleted(v2::AccountLoginCompletedNotification),
 
-}
+}}
 
 /// Server notification envelope sent over app-server transports.
 ///
@@ -2594,9 +2149,9 @@ pub struct ServerNotificationEnvelope {
     pub emitted_at_ms: Option<i64>,
 }
 
-client_notification_definitions! {
-    Initialized => "initialized",
-}
+fork_with_go_manifest! { client_notification_definitions {
+    Initialized,
+}}
 
 #[cfg(test)]
 mod tests {
@@ -3329,41 +2884,6 @@ mod tests {
                 }
             }),
             serde_json::to_value(&request)?,
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn initialize_response_serializes_protocol_digests() -> Result<()> {
-        let response = InitializeResponse {
-            user_agent: "codex-test".to_string(),
-            codex_home: test_path_buf("/tmp/codex-home").abs(),
-            platform_family: "unix".to_string(),
-            platform_os: "linux".to_string(),
-            stable_protocol_digest: "a".repeat(64),
-            experimental_protocol_digest: "b".repeat(64),
-            stable_schema_digest: "c".repeat(64),
-            experimental_schema_digest: "d".repeat(64),
-            stable_manifest_digest: "e".repeat(64),
-            experimental_manifest_digest: "f".repeat(64),
-            active_protocol_mode: ActiveProtocolMode::Experimental,
-        };
-
-        assert_eq!(
-            json!({
-                "userAgent": "codex-test",
-                "codexHome": "/tmp/codex-home",
-                "platformFamily": "unix",
-                "platformOs": "linux",
-                "stableProtocolDigest": "a".repeat(64),
-                "experimentalProtocolDigest": "b".repeat(64),
-                "stableSchemaDigest": "c".repeat(64),
-                "experimentalSchemaDigest": "d".repeat(64),
-                "stableManifestDigest": "e".repeat(64),
-                "experimentalManifestDigest": "f".repeat(64),
-                "activeProtocolMode": "experimental"
-            }),
-            serde_json::to_value(&response)?,
         );
         Ok(())
     }

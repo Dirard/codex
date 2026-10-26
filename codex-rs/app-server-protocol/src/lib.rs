@@ -1,12 +1,10 @@
 mod experimental_api;
+// Fork: the Go SDK manifest; its macros must precede `mod protocol`.
+#[macro_use]
 pub mod go_manifest;
 mod precomputed_exports;
 mod protocol;
 pub mod rpc;
-
-#[cfg(test)]
-#[path = "go_manifest_tests.rs"]
-mod go_manifest_tests;
 
 pub use experimental_api::*;
 pub use precomputed_exports::GenerateTsOptions;
