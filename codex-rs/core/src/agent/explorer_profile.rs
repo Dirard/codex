@@ -44,6 +44,12 @@ pub(crate) fn applies_to_source(config: &Config, source: &SessionSource) -> bool
     enabled(config) && source.get_agent_role().as_deref() == Some(EXPLORER_ROLE_NAME)
 }
 
+/// Explorer sessions keep their sandbox for every command: an exec-policy `allow` rule
+/// skips approval but neither bypasses nor widens the read-only sandbox (review P1).
+pub(crate) fn forbids_sandbox_bypass(config: &Config, source: &SessionSource) -> bool {
+    applies_to_source(config, source)
+}
+
 /// Narrows a permission profile to read-only access, keeping its denied reads.
 /// Externally sandboxed profiles become Codex's managed read-only profile.
 pub(crate) fn read_only_ceiling(profile: &PermissionProfile) -> PermissionProfile {

@@ -161,9 +161,26 @@ impl ToolOrchestrator {
             environment.permission_profile_with_workspace_roots()
         };
         let file_system_sandbox_policy = permissions.file_system_sandbox_policy();
+        // Fork: an explorer keeps its read-only sandbox under every exec-policy rule; an
+        // `allow` rule skips approval but never bypasses or widens the sandbox
+        // (specs/explorer-and-questions-2026-10-25.md, R2.7).
+        let sandbox_bypass_forbidden = crate::agent::explorer_profile::forbids_sandbox_bypass(
+            &turn_ctx.config,
+            &turn_ctx.session_source,
+        );
         let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
             default_exec_approval_requirement(approval_policy, &file_system_sandbox_policy)
         });
+        let requirement = match requirement {
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                proposed_execpolicy_amendment,
+            } if sandbox_bypass_forbidden => ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment,
+            },
+            requirement => requirement,
+        };
         match &requirement {
             ExecApprovalRequirement::Skip { .. } => {
                 if strict_auto_review {
@@ -227,12 +244,16 @@ impl ToolOrchestrator {
 
         // 2) First attempt under the selected sandbox.
         let unsandboxed_allowed = unsandboxed_execution_allowed(&file_system_sandbox_policy);
-        let sandbox_override = sandbox_override_for_first_attempt(
-            tool.sandbox_permissions(req),
-            &requirement,
-            &file_system_sandbox_policy,
-            /*already_approved*/ initial_approval_source.is_some(),
-        );
+        let sandbox_override = if sandbox_bypass_forbidden {
+            SandboxOverride::NoOverride
+        } else {
+            sandbox_override_for_first_attempt(
+                tool.sandbox_permissions(req),
+                &requirement,
+                &file_system_sandbox_policy,
+                /*already_approved*/ initial_approval_source.is_some(),
+            )
+        };
         let (escalated_profile, writable_root_metadata) = if sandbox_override
             == SandboxOverride::EscalatedSandboxWithRestrictions
         {
@@ -429,7 +450,8 @@ impl ToolOrchestrator {
                     );
                     return Err(tool_error);
                 }
-                if !tool.escalate_on_failure() {
+                // Fork: an explorer never retries outside its sandbox (R2.7).
+                if !tool.escalate_on_failure() || sandbox_bypass_forbidden {
                     otel.sandbox_outcome(
                         &otel_tn,
                         otel_ci,

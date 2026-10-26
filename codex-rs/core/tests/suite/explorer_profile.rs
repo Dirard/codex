@@ -324,6 +324,98 @@ async fn explorer_cannot_write_files(explorer_profile: bool) -> Result<()> {
     Ok(())
 }
 
+/// Writes a user exec-policy rule file; the parent loads it and children inherit its policy.
+fn write_allow_rule(config: &codex_core::config::Config, pattern: &[&str]) {
+    let rules_dir = config.codex_home.join("rules");
+    std::fs::create_dir_all(&rules_dir).expect("create rules directory");
+    let pattern = pattern
+        .iter()
+        .map(|part| format!("\"{part}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    std::fs::write(
+        rules_dir.join("explorer-test.rules"),
+        format!("prefix_rule(pattern=[{pattern}], decision=\"allow\")\n"),
+    )
+    .expect("write allow rule");
+}
+
+// Review P1: an exec-policy `allow` rule used to run an explorer's command outside its
+// read-only sandbox. The control case proves the rule is real and bypasses a read-only
+// sandbox for an ordinary child, so the explorer case cannot pass for lack of rules.
+#[test_case(true, PermissionProfile::Disabled, false; "explorer_keeps_read_only_sandbox")]
+#[test_case(false, PermissionProfile::read_only(), true; "control_rule_bypasses_read_only_child")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explorer_allow_rule_cannot_bypass_sandbox(
+    explorer_profile: bool,
+    parent_profile: PermissionProfile,
+    expect_written: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    mount_parent_spawn(
+        &server,
+        json!({
+            "message": CHILD_PROMPT,
+            "task_name": "scout",
+            "agent_type": "explorer",
+        }),
+    )
+    .await?;
+    mount_sse_once_match(
+        &server,
+        child_request_without(CHILD_PROMPT, &["explorer-rule-call"]),
+        sse(vec![
+            ev_response_created("resp-child-1"),
+            ev_exec_command_call("explorer-rule-call", "touch explorer-rule.txt"),
+            ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+    let child_last = mount_sse_once_match(
+        &server,
+        child_request_containing("explorer-rule-call"),
+        sse(vec![
+            ev_response_created("resp-child-2"),
+            ev_assistant_message("msg-child-2", "explorer done"),
+            ev_completed("resp-child-2"),
+        ]),
+    )
+    .await;
+
+    let test = build_test(explorer_profile, |config| {
+        write_allow_rule(config, &["touch"]);
+    })
+    .build(&server)
+    .await?;
+    test.submit_turn_with_approval_and_permission_profile(
+        PARENT_PROMPT,
+        AskForApproval::Never,
+        parent_profile,
+    )
+    .await?;
+    let child = wait_for_child(&test).await?;
+    wait_for_event(&child, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let output = child_last
+        .single_request()
+        .function_call_output_text("explorer-rule-call")
+        .unwrap_or_default();
+    assert_eq!(
+        test.cwd.path().join("explorer-rule.txt").exists(),
+        expect_written,
+        "allow-rule command output: {output}"
+    );
+    if !expect_written {
+        assert!(
+            output.contains("Process exited with code") && !output.contains("code 0"),
+            "{output}"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn explorer_cannot_request_escalation() -> Result<()> {
     skip_if_no_network!(Ok(()));
