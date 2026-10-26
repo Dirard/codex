@@ -34,7 +34,9 @@ use codex_worktree::RemoveOutcome;
 use codex_worktree::WorktreeManager;
 use codex_worktree::WorktreeSettings;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -60,7 +62,9 @@ pub struct AgentWorktreeBinding {
     pub(crate) cwd: AbsolutePathBuf,
     /// Root of the parent's repository checkout.
     pub(crate) source_root: AbsolutePathBuf,
-    pub(crate) metadata: AgentWorktreeMetadata,
+    /// Agent metadata. Its branch moves to a free name when a checkpoint finds the recorded
+    /// one taken by another worktree (R4.2).
+    metadata: StdMutex<AgentWorktreeMetadata>,
     parent_checkout_protected: AtomicBool,
     /// Serializes checkpoint and finalize operations of this worktree.
     state: Mutex<BindingState>,
@@ -74,6 +78,24 @@ struct BindingState {
 }
 
 impl AgentWorktreeBinding {
+    /// The agent metadata with the branch that currently holds the child's work.
+    pub(crate) fn metadata(&self) -> AgentWorktreeMetadata {
+        self.metadata
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn record_branch(&self, branch: &str) {
+        branch.clone_into(
+            &mut self
+                .metadata
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .branch,
+        );
+    }
+
     pub(crate) fn parent_checkout_protected(&self) -> bool {
         self.parent_checkout_protected.load(Ordering::Acquire)
     }
@@ -85,11 +107,12 @@ impl AgentWorktreeBinding {
 
     /// Worktree details reported in the `spawn_agent` result.
     pub(crate) fn spawned_worktree(&self) -> SpawnedWorktree {
+        let metadata = self.metadata();
         SpawnedWorktree {
             path: self.root.to_string_lossy().into_owned(),
-            branch: self.metadata.branch.clone(),
-            base: self.metadata.base_sha.clone(),
-            base_kind: self.metadata.base_kind.as_str().to_owned(),
+            branch: metadata.branch,
+            base: metadata.base_sha,
+            base_kind: metadata.base_kind.as_str().to_owned(),
             parent_checkout_protected: self.parent_checkout_protected(),
         }
     }
@@ -282,7 +305,7 @@ pub(crate) async fn prepare_agent_worktree(
         root,
         cwd,
         source_root,
-        metadata,
+        metadata: StdMutex::new(metadata),
         parent_checkout_protected: AtomicBool::new(false),
         state: Mutex::default(),
     });
@@ -411,17 +434,22 @@ async fn discard_worktree(binding: &AgentWorktreeBinding) {
     }
 }
 
-/// `codex/agents/<last agent path segment>-<last 8 hex digits of the thread ID>`.
+/// Hex digits of the thread ID that end an agent branch name.
+const BRANCH_SUFFIX_DIGITS: usize = 16;
+
+/// `codex/agents/<last agent path segment>-<last 16 hex digits of the thread ID>`.
 ///
 /// Thread IDs are UUIDv7: their leading digits are a millisecond timestamp shared by agents
-/// spawned within about a minute, while the trailing digits are random.
+/// spawned within about a minute. The last 16 digits hold the low bits of the generator's
+/// per-millisecond counter and 32 random bits, so siblings with the same task name get
+/// different branches; a remaining collision moves the checkpoint to a free name (R4.2).
 pub(crate) fn agent_branch_name(agent_path: &AgentPath, thread_id: ThreadId) -> String {
     let digits = thread_id
         .to_string()
         .chars()
         .filter(char::is_ascii_hexdigit)
         .collect::<Vec<_>>();
-    let suffix = digits[digits.len().saturating_sub(8)..]
+    let suffix = digits[digits.len().saturating_sub(BRANCH_SUFFIX_DIGITS)..]
         .iter()
         .collect::<String>();
     format!("codex/agents/{}-{suffix}", agent_path.name())
@@ -654,6 +682,7 @@ fn environment_protects_source(
 
 /// Developer instructions appended for an isolated child (R3.5).
 pub(crate) fn isolation_developer_note(binding: &AgentWorktreeBinding) -> String {
+    let metadata = binding.metadata();
     let protection = if binding.parent_checkout_protected() {
         "read-only"
     } else {
@@ -662,10 +691,10 @@ pub(crate) fn isolation_developer_note(binding: &AgentWorktreeBinding) -> String
     format!(
         "You are working in an isolated git worktree at {cwd}. It was created from the {base_description} ({base_short}) of the parent checkout {source_root}, which is {protection} for you. Keep all edits inside your working directory and prefer relative paths. Do not run git commands that write repository metadata (add, commit, switch, stash, merge): they fail in the sandbox. Do not request escalated permissions to edit the parent checkout. When you finish, Codex records your changes on branch {branch} and appends an <agent_worktree> block with the merge command to your result; do not write that block yourself.",
         cwd = binding.cwd.display(),
-        base_description = binding.metadata.base_kind.description(),
-        base_short = short_sha(&binding.metadata.base_sha),
+        base_description = metadata.base_kind.description(),
+        base_short = short_sha(&metadata.base_sha),
         source_root = binding.source_root.display(),
-        branch = binding.metadata.branch,
+        branch = metadata.branch,
     )
 }
 
@@ -689,7 +718,7 @@ pub(crate) fn prepare_reload(
         return Err(format!(
             "its worktree {} no longer exists; changes recorded before it was removed are on branch {}",
             binding.root.display(),
-            binding.metadata.branch
+            binding.metadata().branch
         ));
     }
     rebase_child_config(config, binding)?;
@@ -740,7 +769,7 @@ pub(crate) async fn discover_binding(
             root,
             cwd,
             source_root,
-            metadata,
+            metadata: StdMutex::new(metadata),
             parent_checkout_protected: AtomicBool::new(false),
             state: Mutex::new(BindingState {
                 stopped: true,
@@ -828,13 +857,17 @@ pub(crate) async fn checkpoint_report(binding: &Arc<AgentWorktreeBinding>) -> St
     let _state = binding.state.lock().await;
     let blocking = Arc::clone(binding);
     let result = tokio::task::spawn_blocking(move || {
+        let mut metadata = blocking.metadata();
         let checkpoint = codex_worktree::checkpoint(CheckpointRequest {
             root: blocking.root.as_path(),
-            metadata: &blocking.metadata,
+            metadata: &metadata,
             agent_path: blocking.agent_path.as_str(),
         })
         .map_err(|err| format!("{err:#}"));
-        let changes = codex_worktree::branch_changes(blocking.root.as_path(), &blocking.metadata)
+        if let Ok(CheckpointOutcome::Committed { branch, .. }) = &checkpoint {
+            metadata.branch.clone_from(branch);
+        }
+        let changes = codex_worktree::branch_changes(blocking.root.as_path(), &metadata)
             .map_err(|err| format!("{err:#}"));
         (checkpoint, changes)
     })
@@ -844,48 +877,75 @@ pub(crate) async fn checkpoint_report(binding: &Arc<AgentWorktreeBinding>) -> St
         Err(err) => (Err(format!("checkpoint task failed: {err}")), Ok(None)),
     };
     if let Ok(CheckpointOutcome::Committed {
-        index_refresh_error: Some(error),
+        branch,
+        index_refresh_error,
         ..
     }) = &checkpoint
     {
-        warn!("agent worktree index refresh failed after checkpoint: {error}");
+        binding.record_branch(branch);
+        if let Some(error) = index_refresh_error {
+            warn!("agent worktree index refresh failed after checkpoint: {error}");
+        }
     }
     render_worktree_block(binding, checkpoint.as_ref().err(), changes)
 }
 
-/// Renders the `<agent_worktree>` block appended to the completion message (R4.4, R4.5, R7.2).
+/// The default command that applies an agent branch to the parent's checkout (R7.2).
+///
+/// `git diff-tree` is plumbing, so the user's `diff.external`, textconv, color, prefix and
+/// relative-path settings do not reach the patch. `git apply` runs from the top of the
+/// parent's checkout, because from a subdirectory it silently skips paths outside it, and
+/// `--whitespace=nowarn` keeps `apply.whitespace` from rejecting or rewriting the patch.
+pub(crate) fn apply_command(base_sha: &str, branch: &str) -> String {
+    format!(
+        "git diff-tree -p --binary {base_sha} {branch} | git -C \"$(git rev-parse --show-toplevel)\" apply --whitespace=nowarn"
+    )
+}
+
+/// Renders the `<agent_worktree>` block appended to the completion message (R4.4, R4.5,
+/// R4.7, R7.2): the step "append the worktree block to the completion message".
+///
+/// The child chooses its file names, so paths, the checkout and failure reasons are escaped:
+/// no value can add a line, close the block or split an entry of the `files` list.
 pub(crate) fn render_worktree_block(
     binding: &AgentWorktreeBinding,
     checkpoint_error: Option<&String>,
     changes: Result<Option<BranchChanges>, String>,
 ) -> String {
-    let base_short = short_sha(&binding.metadata.base_sha);
+    let metadata = binding.metadata();
+    let base_short = short_sha(&metadata.base_sha);
     let mut lines = vec!["<agent_worktree>".to_string()];
     let changes = match changes {
         Ok(changes) => changes,
         Err(err) => {
-            lines.push(format!("summary_failed: {}", single_line(&err)));
+            lines.push(format!("summary_failed: {}", block_text(&err)));
             None
         }
     };
     match &changes {
-        Some(_) => lines.push(format!("branch: {}", binding.metadata.branch)),
+        Some(_) => lines.push(format!("branch: {}", metadata.branch)),
         None => lines.push("branch: none".to_string()),
     }
     lines.push(format!(
         "base: {base_short} ({})",
-        binding.metadata.base_kind.description()
+        metadata.base_kind.description()
     ));
     if let Some(err) = checkpoint_error {
-        lines.push(format!("checkpoint_failed: {}", single_line(err)));
+        lines.push(format!("checkpoint_failed: {}", block_text(err)));
     }
     match &changes {
         Some(changes) => {
-            lines.push(format!("changes: {}", changes.shortstat));
+            lines.push(format!("changes: {}", block_text(&changes.shortstat)));
             let mut files = changes
                 .files
                 .iter()
-                .map(|file| format!("{} {}", file.status, file.path))
+                .map(|file| {
+                    format!(
+                        "{} {}",
+                        block_text(&file.status),
+                        quote_block_path(&file.path)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("; ");
             if changes.total_files > changes.files.len() {
@@ -898,15 +958,98 @@ pub(crate) fn render_worktree_block(
         }
         None => lines.push("changes: none".to_string()),
     }
-    lines.push(format!("checkout: {}", binding.root.display()));
+    lines.push(format!(
+        "checkout: {}",
+        quote_block_path(&binding.root.to_string_lossy())
+    ));
     if changes.is_some() {
         lines.push(format!(
-            "apply: git diff --binary {} {} | git apply",
-            binding.metadata.base_sha, binding.metadata.branch
+            "apply: {}",
+            apply_command(&metadata.base_sha, &metadata.branch)
         ));
     }
     lines.push("</agent_worktree>".to_string());
     lines.join("\n")
+}
+
+/// Whether `character` may appear verbatim in a block value: it cannot end a line, open or
+/// close a tag, or hide text the way control, format and separator characters can.
+fn is_plain_block_char(character: char) -> bool {
+    match character {
+        '<' | '>' => false,
+        ' '..='~' => true,
+        _ => !character.is_ascii() && character.is_alphanumeric(),
+    }
+}
+
+/// Appends `character` as a Git-style C escape: a named escape for common control
+/// characters, otherwise its UTF-8 bytes in octal.
+fn push_escaped(out: &mut String, character: char) {
+    let named = match character {
+        '\u{7}' => "\\a",
+        '\u{8}' => "\\b",
+        '\t' => "\\t",
+        '\n' => "\\n",
+        '\u{b}' => "\\v",
+        '\u{c}' => "\\f",
+        '\r' => "\\r",
+        _ => {
+            let mut buffer = [0; 4];
+            for byte in character.encode_utf8(&mut buffer).bytes() {
+                let _ = write!(out, "\\{byte:03o}");
+            }
+            return;
+        }
+    };
+    out.push_str(named);
+}
+
+/// Renders a path for the block (R4.7).
+///
+/// A path of plain characters other than `"`, `\` and `;` stays as is. Any other path is
+/// quoted like Git's `core.quotePath` output, with `<` and `>` escaped too, so `; ` always
+/// separates entries and a file name never starts a line or closes the block.
+fn quote_block_path(path: &str) -> Cow<'_, str> {
+    if path
+        .chars()
+        .all(|character| is_plain_block_char(character) && !matches!(character, '"' | '\\' | ';'))
+    {
+        return Cow::Borrowed(path);
+    }
+    let mut quoted = String::with_capacity(path.len() + 2);
+    quoted.push('"');
+    for character in path.chars() {
+        match character {
+            '"' | '\\' => {
+                quoted.push('\\');
+                quoted.push(character);
+            }
+            character if is_plain_block_char(character) => quoted.push(character),
+            character => push_escaped(&mut quoted, character),
+        }
+    }
+    quoted.push('"');
+    Cow::Owned(quoted)
+}
+
+/// Renders free text, such as a failure reason, on one block line (R4.7): whitespace runs,
+/// including Unicode line separators, become one space and other non-plain characters are
+/// escaped.
+fn block_text(text: &str) -> String {
+    let mut line = String::with_capacity(text.len());
+    for (index, word) in text.split_whitespace().enumerate() {
+        if index > 0 {
+            line.push(' ');
+        }
+        for character in word.chars() {
+            if is_plain_block_char(character) {
+                line.push(character);
+            } else {
+                push_escaped(&mut line, character);
+            }
+        }
+    }
+    line
 }
 
 async fn finalize_tree_worktrees(bindings: Vec<Arc<AgentWorktreeBinding>>) {
@@ -930,17 +1073,22 @@ async fn finalize_tree_worktree(binding: Arc<AgentWorktreeBinding>) {
     state.finalized = true;
     let blocking = Arc::clone(&binding);
     let result = tokio::task::spawn_blocking(move || {
-        if blocking.root.join(".git").exists() {
-            codex_worktree::checkpoint(CheckpointRequest {
-                root: blocking.root.as_path(),
-                metadata: &blocking.metadata,
-                agent_path: blocking.agent_path.as_str(),
-            })?;
+        let mut metadata = blocking.metadata();
+        if blocking.root.join(".git").exists()
+            && let CheckpointOutcome::Committed { branch, .. } =
+                codex_worktree::checkpoint(CheckpointRequest {
+                    root: blocking.root.as_path(),
+                    metadata: &metadata,
+                    agent_path: blocking.agent_path.as_str(),
+                })?
+        {
+            blocking.record_branch(&branch);
+            metadata.branch = branch;
         }
         codex_worktree::remove_if_unchanged(
             blocking.source_root.as_path(),
             blocking.root.as_path(),
-            &blocking.metadata,
+            &metadata,
         )
     })
     .await;
@@ -951,7 +1099,7 @@ async fn finalize_tree_worktree(binding: Arc<AgentWorktreeBinding>) {
         Ok(Ok(RemoveOutcome::Kept(reason))) => {
             tracing::info!(
                 worktree = %binding.root.display(),
-                branch = %binding.metadata.branch,
+                branch = %binding.metadata().branch,
                 ?reason,
                 "kept agent worktree with changes"
             );
@@ -976,10 +1124,6 @@ pub(crate) fn record_worktree_outcome(outcome: &'static str) {
 
 fn short_sha(sha: &str) -> &str {
     sha.get(..12).unwrap_or(sha)
-}
-
-fn single_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]

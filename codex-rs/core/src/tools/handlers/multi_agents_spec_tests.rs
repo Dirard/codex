@@ -513,10 +513,13 @@ fn spawn_agent_tool_v2_exposes_isolation_only_when_enabled() {
             .and_then(|schema| serde_json::to_value(schema).ok())
             .expect("isolation schema");
         assert_eq!(isolation["enum"], serde_json::json!(["none", "worktree"]));
+        // The description shows the same command the completion block carries (R7.2).
+        let apply = crate::agent::worktree_isolation::apply_command("<base>", "<branch>");
         assert!(
             isolation["description"]
                 .as_str()
-                .is_some_and(|description| description.contains("| git apply"))
+                .is_some_and(|description| description.contains(&apply)),
+            "{isolation}"
         );
     }
 }

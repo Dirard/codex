@@ -422,7 +422,10 @@ pub enum AgentIsolation {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentWorktreeBase {
-    /// The parent's HEAD plus tracked modifications and untracked, non-ignored files.
+    /// The parent's HEAD plus tracked modifications and untracked, non-ignored files. Those
+    /// files are written to the repository's object store and become part of the agent
+    /// branch's history, as with `git stash --include-untracked`; keep secrets in ignored
+    /// files or use `head`, and do not push `codex/agents/*` branches.
     #[default]
     WorkingTree,
     /// The parent's HEAD commit.

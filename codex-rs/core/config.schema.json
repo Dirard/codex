@@ -54,7 +54,7 @@
       "description": "The commit an isolated child's worktree starts from.",
       "oneOf": [
         {
-          "description": "The parent's HEAD plus tracked modifications and untracked, non-ignored files.",
+          "description": "The parent's HEAD plus tracked modifications and untracked, non-ignored files. Those files are written to the repository's object store and become part of the agent branch's history, as with `git stash --include-untracked`; keep secrets in ignored files or use `head`, and do not push `codex/agents/*` branches.",
           "enum": [
             "working_tree"
           ],
