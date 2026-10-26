@@ -8,6 +8,8 @@
 use super::*;
 use crate::agent::status::is_final;
 use codex_protocol::AgentPath;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct ActiveAgentSnapshot {
@@ -113,7 +115,7 @@ pub(super) async fn active_agent_snapshot(
             Some(&prefix),
         )
         .await
-        .map_err(collab_spawn_error)?;
+        .map_err(wait_list_error)?;
     let mut snapshot = ActiveAgentSnapshot::default();
     let workflow_children = session.services.local_agent_runtime.workflow_children();
     for agent in agents {
@@ -145,6 +147,20 @@ pub(super) async fn active_agent_snapshot(
         }
     }
     Ok(snapshot)
+}
+
+/// A failed agent listing fails `wait_agent` as a wait, not as a spawn
+/// (B12 in `docs/fork/01-multi-agent-runtime.md`).
+fn wait_list_error(err: CodexErr) -> FunctionCallError {
+    match err.details() {
+        CodexErrorDetails::UnsupportedOperation(message) if message == "thread manager dropped" => {
+            FunctionCallError::RespondToModel("collab manager unavailable".to_string())
+        }
+        CodexErrorDetails::UnsupportedOperation(message) => {
+            FunctionCallError::RespondToModel(message.clone())
+        }
+        _ => FunctionCallError::RespondToModel(format!("collab wait failed: {err}")),
+    }
 }
 
 pub(super) fn ready_activity(
