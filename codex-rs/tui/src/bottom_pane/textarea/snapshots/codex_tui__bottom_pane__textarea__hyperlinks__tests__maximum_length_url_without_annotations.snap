@@ -3,6 +3,6 @@ source: tui/src/bottom_pane/textarea/hyperlinks_tests.rs
 expression: hyperlink_snapshot(&buf)
 ---
 |aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa     |
+|aaaaaaaaaaa                                                                     |
 Hyperlinks:
   none
