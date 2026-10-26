@@ -1343,6 +1343,10 @@ fn append_unreadable_root_args(
     unreadable_root: &Path,
     allowed_write_paths: &[PathBuf],
 ) -> Result<()> {
+    // Fork: bwrap resolves its own `/dev` symlinks outside the new root, so mounts on them fail.
+    if dev_symlinks::defer_denial(bwrap_args, unreadable_root, allowed_write_paths) {
+        return Ok(());
+    }
     if let Some(symlink) =
         first_writable_symlink_component_in_path(unreadable_root, allowed_write_paths)
     {
@@ -1358,10 +1362,6 @@ fn append_unreadable_root_args(
             unreadable_root.display(),
             symlink.display()
         )));
-    }
-    // Fork: bwrap resolves its own `/dev` symlinks outside the new root, so mounts on them fail.
-    if dev_symlinks::defer_denial(bwrap_args, unreadable_root) {
-        return Ok(());
     }
 
     if !unreadable_root.exists() {

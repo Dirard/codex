@@ -160,6 +160,8 @@ pub fn run_main() -> ! {
     if !apply_seccomp_then_exec && !verify_fd_mounts.is_empty() {
         panic!("--verify-fd-mount is only supported in the inner sandbox stage");
     }
+    // Fork: likewise, only the inner stage replaces denied bubblewrap `/dev` symlinks.
+    crate::bwrap::dev_symlinks::ensure_inner_stage(apply_seccomp_then_exec, &deny_dev_symlinks);
     ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec, use_legacy_landlock);
     let EffectivePermissions {
         permission_profile,
@@ -185,10 +187,6 @@ pub fn run_main() -> ! {
         if let Err(err) = crate::fd_mount::verify_fd_mounts(&verify_fd_mounts) {
             panic!("failed to verify descriptor-backed bubblewrap mount: {err}");
         }
-        // Fork: the outer stage left denied bubblewrap `/dev` symlinks to this stage.
-        if let Err(err) = crate::bwrap::dev_symlinks::replace_denied(&deny_dev_symlinks) {
-            panic!("failed to deny bubblewrap /dev symlink: {err}");
-        }
 
         let mut capability_header = [LINUX_CAPABILITY_VERSION_3, 0];
         let mut capability_sets = [[0_u32; 3]; 2];
@@ -212,6 +210,11 @@ pub fn run_main() -> ! {
             .any(|[effective, permitted, _]| effective != 0 || permitted != 0)
         {
             panic!("Linux sandbox retained effective or permitted capabilities");
+        }
+        // Fork: the outer stage left denied bubblewrap `/dev` symlinks to this stage. That needs
+        // no capabilities, and a caller that has some is not inside the sandbox.
+        if let Err(err) = crate::bwrap::dev_symlinks::replace_denied(&deny_dev_symlinks) {
+            panic!("failed to deny bubblewrap /dev symlink: {err}");
         }
 
         if allow_network_for_proxy {
