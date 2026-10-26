@@ -59,6 +59,7 @@ fn file_journal_persists_script_args_and_records() {
         "{\"a\":1}"
     );
     let finished = JournalEvent::AgentFinished {
+        call: None,
         key: "k".to_string(),
         ordinal: 0,
         ok: true,
@@ -68,6 +69,7 @@ fn file_journal_persists_script_args_and_records() {
             charged: 10,
             cached: 5,
         },
+        cached: false,
     };
     assert_eq!(
         journal
@@ -98,6 +100,79 @@ fn file_journal_persists_script_args_and_records() {
                 event: finished,
             },
         ]
+    );
+}
+
+/// R6.1, R6.4: journals written before stage 2 still read, a cut last line is skipped,
+/// `journal_bounds` finds the first and last record of a long journal, and an existing
+/// journal continues its numbering.
+#[test]
+fn existing_journals_read_and_continue() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let run_dir = dir.path().join("wf-00000001");
+    std::fs::create_dir_all(&run_dir).expect("dir");
+    let mut text = String::new();
+    text.push_str(r#"{"seq":1,"kind":"run_started","run_id":"wf-00000001","name":"old","script_sha256":"s","args_sha256":"a","parent_turn_id":"t","resume_from":null}"#);
+    text.push('\n');
+    let filler = "x".repeat(4096);
+    for seq in 2..=60 {
+        text.push_str(&format!(
+            r#"{{"seq":{seq},"kind":"log","message":"{filler}"}}"#
+        ));
+        text.push('\n');
+    }
+    text.push_str(r#"{"seq":61,"kind":"agent_finished","key":"k","ordinal":0,"ok":true,"value":"v","reason":null,"tokens":{"charged":1,"cached":2}}"#);
+    text.push('\n');
+    text.push_str(r#"{"seq":62,"kind":"log","mess"#);
+    std::fs::write(run_dir.join(JOURNAL_FILE), &text).expect("write");
+
+    let records = read_records(&run_dir).expect("records");
+    assert_eq!(records.len(), 61, "the cut last line is skipped");
+    assert_eq!(
+        records[60].event,
+        JournalEvent::AgentFinished {
+            call: None,
+            key: "k".to_string(),
+            ordinal: 0,
+            ok: true,
+            value: Some(json!("v")),
+            reason: None,
+            tokens: TokenCharge {
+                charged: 1,
+                cached: 2,
+            },
+            cached: false,
+        }
+    );
+    let (first, last) = journal_bounds(&run_dir.join(JOURNAL_FILE)).expect("bounds");
+    assert!(matches!(
+        first.map(|record| record.event),
+        Some(JournalEvent::RunStarted {
+            started_at_ms: None,
+            ..
+        })
+    ));
+    assert_eq!(last.map(|record| record.seq), Some(61));
+
+    let journal = Journal::open_existing(&run_dir).expect("open");
+    let seq = journal
+        .append(JournalEvent::RunFinished {
+            status: "interrupted".to_string(),
+            result_bytes: 0,
+            tokens: TokenCharge::default(),
+            error: None,
+            finished_at_ms: Some(5),
+        })
+        .expect("append");
+    assert_eq!(seq, 62);
+    let (_, last) = journal_bounds(&run_dir.join(JOURNAL_FILE)).expect("bounds");
+    assert_eq!(last.map(|record| record.seq), Some(62));
+    // The new record starts on its own line after the cut one.
+    assert_eq!(read_records(&run_dir).expect("records").len(), 62);
+    journal.write_result("{\"ok\":1}").expect("result");
+    assert_eq!(
+        std::fs::read_to_string(run_dir.join(RESULT_FILE)).expect("result"),
+        "{\"ok\":1}"
     );
 }
 

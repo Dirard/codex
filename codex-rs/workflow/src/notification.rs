@@ -93,6 +93,13 @@ pub fn render_notification_with_boundary(
         snapshot.charged_tokens,
         snapshot.cached_tokens,
     );
+    // R6.5: the source run id is validated before a run can resume it.
+    if let Some(resume) = &snapshot.resume {
+        text.push_str(&format!(
+            "\nResumed from {}: {} of {} journaled results reused, {} unused.",
+            resume.from, resume.served, resume.source_results, resume.unused
+        ));
+    }
     if let Some(error) = &snapshot.error {
         text.push('\n');
         text.push_str(&boundary.block(

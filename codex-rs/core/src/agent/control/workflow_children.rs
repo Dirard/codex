@@ -16,6 +16,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TokenUsage;
 use tokio::sync::mpsc;
 
 use super::LocalAgentRuntime;
@@ -30,6 +31,9 @@ pub(crate) struct WorkflowChildOutcome {
     /// The explorer profile's result limit for this child, if any.
     pub(crate) result_max_tokens: Option<usize>,
 }
+
+/// Charges one model response of a workflow child to the call that waits for it (R5.1).
+pub(crate) type WorkflowUsageSink = Arc<dyn Fn(&TokenUsage) + Send + Sync>;
 
 #[derive(Default)]
 pub(crate) struct WorkflowChildren {
@@ -46,6 +50,8 @@ struct WorkflowChildEntry {
     run_id: String,
     /// Present while the run still waits for this child's answer.
     outcomes: Option<mpsc::UnboundedSender<WorkflowChildOutcome>>,
+    /// Live usage charging of the waiting call; dropped with `outcomes`.
+    usage: Option<WorkflowUsageSink>,
 }
 
 impl WorkflowChildren {
@@ -54,10 +60,12 @@ impl WorkflowChildren {
     }
 
     /// Mark `path` as a child of `run_id` before it is spawned and return its outcomes.
+    /// `usage` charges each of its model responses to the call while the call waits (R5.1).
     pub(crate) fn register(
         &self,
         path: &AgentPath,
         run_id: &str,
+        usage: Option<WorkflowUsageSink>,
     ) -> mpsc::UnboundedReceiver<WorkflowChildOutcome> {
         let (tx, rx) = mpsc::unbounded_channel();
         self.state().by_path.insert(
@@ -65,9 +73,23 @@ impl WorkflowChildren {
             WorkflowChildEntry {
                 run_id: run_id.to_string(),
                 outcomes: Some(tx),
+                usage,
             },
         );
         rx
+    }
+
+    /// R5.1: charge one model response of the agent at `path` to the call waiting for it.
+    /// Agents whose call settled, and agents of no run, are not charged.
+    pub(crate) fn charge_usage(&self, path: &str, usage: &TokenUsage) {
+        let sink = self
+            .state()
+            .by_path
+            .get(path)
+            .and_then(|entry| entry.usage.clone());
+        if let Some(sink) = sink {
+            sink(usage);
+        }
     }
 
     pub(crate) fn bind_thread(&self, path: &AgentPath, thread_id: ThreadId) {
@@ -78,6 +100,7 @@ impl WorkflowChildren {
     pub(crate) fn finish_call(&self, path: &AgentPath) {
         if let Some(entry) = self.state().by_path.get_mut(path.as_str()) {
             entry.outcomes = None;
+            entry.usage = None;
         }
     }
 
@@ -89,6 +112,7 @@ impl WorkflowChildren {
         };
         if let Some(entry) = state.by_path.get_mut(&path) {
             entry.outcomes = None;
+            entry.usage = None;
         }
     }
 
@@ -220,9 +244,24 @@ mod tests {
         let path = AgentPath::root().join("wf_1_1").expect("path");
         let other = AgentPath::root().join("worker").expect("path");
         let thread_id = ThreadId::new();
-        let mut outcomes = children.register(&path, "wf-00000001");
+        let charged = Arc::new(std::sync::atomic::AtomicI64::new(0));
+        let sink_charged = Arc::clone(&charged);
+        let mut outcomes = children.register(
+            &path,
+            "wf-00000001",
+            Some(Arc::new(move |usage: &TokenUsage| {
+                sink_charged.fetch_add(usage.output_tokens, std::sync::atomic::Ordering::SeqCst);
+            })),
+        );
         children.bind_thread(&path, thread_id);
         assert!(children.has_pending_call(thread_id));
+        let usage = TokenUsage {
+            output_tokens: 5,
+            ..Default::default()
+        };
+        children.charge_usage(path.as_str(), &usage);
+        children.charge_usage(other.as_str(), &usage);
+        assert_eq!(charged.load(std::sync::atomic::Ordering::SeqCst), 5);
         assert!(children.deliver(&path, &outcome(&path)));
         assert!(!children.deliver(&other, &outcome(&other)));
         assert_eq!(
@@ -232,6 +271,9 @@ mod tests {
 
         children.finish_call(&path);
         assert!(!children.has_pending_call(thread_id));
+        // A settled call is not charged any more.
+        children.charge_usage(path.as_str(), &usage);
+        assert_eq!(charged.load(std::sync::atomic::Ordering::SeqCst), 5);
         assert!(children.is_workflow_thread(thread_id));
         assert_eq!(
             children.owner(path.as_str()).as_deref(),

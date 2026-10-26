@@ -108,3 +108,63 @@ fn final_messages_may_be_fenced() {
     assert_eq!(parse_final_message(" [1] ").expect("json"), json!([1]));
     assert!(parse_final_message("not json").is_err());
 }
+
+/// R3.12: only client errors that name the schema or the response format count as the
+/// provider refusing native structured output.
+#[test]
+fn schema_format_rejections_are_recognized() {
+    let rejected = [
+        (
+            Some(400),
+            false,
+            "unexpected status 400 Bad Request: Invalid schema for response_format 'codex_output_schema'",
+        ),
+        (
+            Some(400),
+            false,
+            "Unsupported parameter: 'text.format' is not supported with this model.",
+        ),
+        (Some(422), false, "json_schema is not supported"),
+        (
+            None,
+            true,
+            "Structured outputs are not available for this provider",
+        ),
+        // A plain HTTP 400 reaches the agent as the provider's error body.
+        (
+            None,
+            false,
+            r#"{"error":{"message":"json_schema is not supported","type":"invalid_request_error"}}"#,
+        ),
+    ];
+    for (status, bad_request, message) in rejected {
+        assert!(
+            is_schema_format_rejection(status, bad_request, message),
+            "{message}"
+        );
+    }
+    let kept = [
+        (
+            Some(400),
+            false,
+            "unexpected status 400 Bad Request: context length exceeded",
+        ),
+        (Some(500), false, "internal error while validating schema"),
+        (Some(429), false, "rate limit: too many schema requests"),
+        (None, false, "the model stopped: schema"),
+        (
+            None,
+            false,
+            r#"{"error":{"message":"context too long","type":"invalid_request_error"}}"#,
+        ),
+    ];
+    for (status, bad_request, message) in kept {
+        assert!(
+            !is_schema_format_rejection(status, bad_request, message),
+            "{message}"
+        );
+    }
+    let schema = json!({"type": "object"});
+    assert!(prompt_schema_suffix(&schema).ends_with("JSON schema:\n{\"type\":\"object\"}"));
+    assert!(native_rejected_follow_up(&schema).starts_with("The model provider rejected"));
+}

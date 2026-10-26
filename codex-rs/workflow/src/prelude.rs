@@ -1,4 +1,5 @@
-//! Generates the Code Mode cell that runs a workflow script (UC2, R2.3, R2.4, R2.6, R2.7, R2.8).
+//! Generates the Code Mode cell that runs a workflow script (UC2, R2.3, R2.4, R2.6, R2.7, R2.8)
+//! and the function a nested `workflow(name)` runs in that cell (UC12, R12.1).
 //!
 //! The prelude occupies the first line in front of the script, so every line of the script
 //! keeps its number inside the cell and V8 errors point at the author's lines.
@@ -9,8 +10,10 @@ pub const TOOL_AGENT: &str = "__wf_agent";
 pub const TOOL_EVENT: &str = "__wf_event";
 /// Host tool that reports budget usage.
 pub const TOOL_BUDGET: &str = "__wf_budget";
+/// Host tool that loads a saved script for `workflow(name)` and records its outcome.
+pub const TOOL_WORKFLOW: &str = "__wf_workflow";
 /// Host tools a workflow cell may call.
-pub const HOST_TOOLS: &[&str] = &[TOOL_AGENT, TOOL_EVENT, TOOL_BUDGET];
+pub const HOST_TOOLS: &[&str] = &[TOOL_AGENT, TOOL_EVENT, TOOL_BUDGET, TOOL_WORKFLOW];
 
 /// Most thunks or items accepted by `parallel` and `pipeline`.
 pub const MAX_FAN_OUT: usize = 4096;
@@ -24,8 +27,9 @@ pub const SCRIPT_DISPLAY_NAME: &str = "workflow.js";
 // Every statement ends with `;` and there are no line comments: the prelude is joined into
 // one line.
 const PRELUDE: &str = r#"
-const { agent, parallel, pipeline, phase, log, workflow, budget, args, WorkflowDeterminismError, WorkflowSchemaError, __wf_finish, __wf_fail } = (() => {
+const { agent, parallel, pipeline, phase, log, workflow, budget, args, WorkflowDeterminismError, WorkflowSchemaError, WorkflowNestingError, __wf_finish, __wf_fail } = (() => {
   const host = globalThis.tools;
+  const indirectEval = globalThis.eval;
   for (const name of ["tools", "EXEC_TOOLS", "notify", "yield_control", "store", "load", "setTimeout", "clearTimeout", "exit", "text", "image", "audio", "generatedImage"]) {
     try { delete globalThis[name]; } catch (_) {}
   }
@@ -37,6 +41,9 @@ const { agent, parallel, pipeline, phase, log, workflow, budget, args, WorkflowD
   }
   class WorkflowSchemaError extends Error {
     constructor(message) { super(message); this.name = "WorkflowSchemaError"; }
+  }
+  class WorkflowNestingError extends Error {
+    constructor(message) { super(message); this.name = "WorkflowNestingError"; }
   }
   const forbid = (api) => () => { throw new WorkflowDeterminismError(api); };
   const NativeDate = Date;
@@ -61,21 +68,27 @@ const { agent, parallel, pipeline, phase, log, workflow, budget, args, WorkflowD
   };
   let eventSeq = 0;
   let callSeq = 0;
-  let currentPhase = null;
+  let nestedSeq = 0;
   const event = (payload) => quiet(host.__wf_event({ ...payload, seq: ++eventSeq }));
-  const phase = (title) => { currentPhase = String(title); event({ kind: "phase", title: currentPhase }); };
-  const log = (...parts) => { event({ kind: "log", message: parts.map(render).join(" ") }); };
-  globalThis.console = Object.freeze({ log, info: log, warn: log, error: log, debug: log });
-  async function agent(prompt, opts) {
-    if (opts !== undefined && (opts === null || typeof opts !== "object" || Array.isArray(opts))) {
-      throw new TypeError("agent(prompt, opts): opts must be an object");
-    }
-    const seq = ++callSeq;
-    const outcome = await host.__wf_agent({ seq, prompt: String(prompt), opts: { ...(opts || {}) }, phase: currentPhase });
-    if (outcome && outcome.error === "schema") { throw new WorkflowSchemaError(outcome.message); }
-    if (outcome && outcome.error === "type") { throw new TypeError(outcome.message); }
-    return outcome && outcome.ok ? outcome.value : null;
-  }
+  const makeScope = (phasePrefix, logPrefix) => {
+    let currentPhase = null;
+    const phase = (title) => { currentPhase = phasePrefix + String(title); event({ kind: "phase", title: currentPhase }); };
+    const log = (...parts) => { event({ kind: "log", message: logPrefix + parts.map(render).join(" ") }); };
+    const agent = async (prompt, opts) => {
+      if (opts !== undefined && (opts === null || typeof opts !== "object" || Array.isArray(opts))) {
+        throw new TypeError("agent(prompt, opts): opts must be an object");
+      }
+      const seq = ++callSeq;
+      const outcome = await host.__wf_agent({ seq, prompt: String(prompt), opts: { ...(opts || {}) }, phase: currentPhase });
+      if (outcome && outcome.error === "schema") { throw new WorkflowSchemaError(outcome.message); }
+      if (outcome && outcome.error === "type") { throw new TypeError(outcome.message); }
+      return outcome && outcome.ok ? outcome.value : null;
+    };
+    const console = Object.freeze({ log, info: log, warn: log, error: log, debug: log });
+    return { phase, log, agent, console };
+  };
+  const root = makeScope("", "");
+  globalThis.console = root.console;
   const settle = (what, index, run) => {
     let promise;
     try { promise = Promise.resolve(run()); } catch (error) { promise = Promise.reject(error); }
@@ -107,9 +120,6 @@ const { agent, parallel, pipeline, phase, log, workflow, budget, args, WorkflowD
       return value;
     }));
   }
-  async function workflow(name) {
-    throw new Error(`workflow(${JSON.stringify(String(name))}): nested workflows are not available yet`);
-  }
   const budget = Object.freeze({
     limit: __BUDGET_LIMIT__,
     used: async () => (await host.__wf_budget({})).used,
@@ -122,6 +132,36 @@ const { agent, parallel, pipeline, phase, log, workflow, budget, args, WorkflowD
     }
     return value;
   };
+  const nestedWorkflow = async (name) => {
+    throw new WorkflowNestingError(`workflow(${JSON.stringify(String(name))}): a nested workflow cannot start another workflow`);
+  };
+  async function workflow(name, nestedArgs) {
+    const call = ++nestedSeq;
+    let argsJson;
+    try { argsJson = JSON.stringify(nestedArgs === undefined ? null : nestedArgs); } catch (error) {
+      throw new TypeError(`workflow(name, args): args must be JSON: ${describe(error)}`);
+    }
+    const loaded = await host.__wf_workflow({ kind: "load", call, name: String(name), args_json: argsJson === undefined ? "null" : argsJson });
+    if (!loaded || !loaded.ok) {
+      throw new Error((loaded && loaded.message) || `workflow(${JSON.stringify(String(name))}) could not be loaded`);
+    }
+    const scope = makeScope(`${loaded.name}/`, `[${loaded.name}] `);
+    let value = null;
+    let ok = true;
+    let error = null;
+    try {
+      const body = indirectEval(loaded.source);
+      const result = await body(scope.agent, parallel, pipeline, scope.phase, scope.log, nestedWorkflow, budget, deepFreeze(JSON.parse(loaded.args_json)), scope.console);
+      const json = JSON.stringify(result === undefined ? null : result);
+      value = json === undefined ? null : JSON.parse(json);
+    } catch (caught) {
+      ok = false;
+      error = describe(caught);
+      value = null;
+    }
+    await host.__wf_workflow({ kind: "finished", call, name: loaded.name, ok, error });
+    return value;
+  }
   const args = deepFreeze(JSON.parse(__ARGS_JSON__));
   const __wf_finish = async (value) => {
     let json;
@@ -132,7 +172,7 @@ const { agent, parallel, pipeline, phase, log, workflow, budget, args, WorkflowD
     await host.__wf_event({ kind: "result", seq: ++eventSeq, value_json: json === undefined ? "null" : json });
   };
   const __wf_fail = async (error) => { await host.__wf_event({ kind: "error", seq: ++eventSeq, message: describe(error) }); };
-  return { agent, parallel, pipeline, phase, log, workflow, budget, args, WorkflowDeterminismError, WorkflowSchemaError, __wf_finish, __wf_fail };
+  return { agent: root.agent, parallel, pipeline, phase: root.phase, log: root.log, workflow, budget, args, WorkflowDeterminismError, WorkflowSchemaError, WorkflowNestingError, __wf_finish, __wf_fail };
 })();
 "#;
 
@@ -157,6 +197,16 @@ pub fn build_cell_source(body: &str, args_json: &str, budget_limit: Option<u64>)
     source.push_str(body);
     source.push_str("\n}\nawait __wf_main().then(__wf_finish, __wf_fail);\n");
     source
+}
+
+/// UC12, R12.1: the source of the function a nested `workflow(name)` runs: an async function
+/// of the workflow globals whose body is the validated saved script. The body starts on the
+/// first line, so V8 locations under `sourceURL=<name>.js` match the saved script's lines.
+/// `name` is validated by the `meta.name` rule.
+pub fn build_nested_source(body: &str, name: &str) -> String {
+    format!(
+        "(async function (agent, parallel, pipeline, phase, log, workflow, budget, args, console) {{\"use strict\";{body}\n}})\n//# sourceURL={name}.js\n"
+    )
 }
 
 /// Rewrites V8 locations in `text` to name the author's script instead of the cell.

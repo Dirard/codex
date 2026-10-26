@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -25,6 +26,7 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use codex_workflow::HOST_TOOLS;
 use codex_workflow::Journal;
+use codex_workflow::JournalCache;
 use codex_workflow::JournalEvent;
 use codex_workflow::MAX_RESULT_BYTES;
 use codex_workflow::RunSnapshot;
@@ -48,6 +50,8 @@ use super::gate::OrderedGate;
 use super::now_ms;
 use super::registry::WorkflowRegistry;
 use crate::agent::api::AgentTarget;
+use crate::config::WorkflowBudgetMode;
+use crate::config::WorkflowStructuredOutput;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 
@@ -65,6 +69,11 @@ pub(crate) struct RunLimits {
     pub(crate) budget_tokens: Option<u64>,
     pub(crate) notification_max_tokens: usize,
     pub(crate) max_heap_bytes: usize,
+    pub(crate) budget_mode: WorkflowBudgetMode,
+    /// R5.4: charged tokens above which running agents are interrupted; only in hard mode
+    /// with a budget.
+    pub(crate) hard_budget_threshold: Option<u64>,
+    pub(crate) structured_output: WorkflowStructuredOutput,
 }
 
 /// A run's state shared by the run task, its cell delegate, tools and clients.
@@ -91,6 +100,15 @@ pub(crate) struct WorkflowRun {
     /// Signalled when an agent of this run finishes, so capacity waits retry.
     pub(crate) capacity_freed: Notify,
     finished: watch::Sender<bool>,
+    /// The script and args the run started with, for `resume_from` without them (R6.3).
+    script: String,
+    args_json: String,
+    /// Answers of the run this one resumes (R6.3).
+    resume_cache: Mutex<Option<JournalCache>>,
+    /// R5.4: cancelled once a hard-mode run spends above its threshold.
+    hard_budget: CancellationToken,
+    /// R3.12: the provider refused native structured output during this run.
+    native_schema_rejected: AtomicBool,
 }
 
 /// Input of [`start_run`] after static validation.
@@ -100,6 +118,19 @@ pub(crate) struct StartRunRequest {
     pub(crate) body: String,
     pub(crate) args_json: String,
     pub(crate) budget_tokens: Option<u64>,
+    /// The journal of the run that `resume_from` names (R6.3).
+    pub(crate) resume: Option<JournalCache>,
+}
+
+/// A run of an earlier process rebuilt from its directory (R6.4, R6.7).
+pub(crate) struct RestoredRun {
+    pub(crate) id: String,
+    pub(crate) meta: WorkflowMeta,
+    pub(crate) tracker: RunTracker,
+    pub(crate) journal: Journal,
+    pub(crate) script: String,
+    pub(crate) args_json: String,
+    pub(crate) result_json: Option<String>,
 }
 
 impl WorkflowRun {
@@ -188,9 +219,145 @@ impl WorkflowRun {
             .is_some_and(|limit| self.charged_tokens.load(Ordering::Acquire) >= limit)
     }
 
-    pub(crate) fn charge(&self, tokens: TokenCharge) {
+    /// UC5, R5.1: charge one model response of the agent of call `seq` as it is recorded.
+    pub(crate) fn charge_live(&self, seq: u64, tokens: TokenCharge) {
         self.charged_tokens
             .fetch_add(tokens.charged, Ordering::AcqRel);
+        self.update(|tracker| tracker.agent_charged(seq, tokens));
+        self.check_hard_budget();
+    }
+
+    /// R5.1: settle the tokens of call `seq` from its agent's total usage; only what live
+    /// charging did not count yet is added. Returns the call's total.
+    pub(crate) fn settle_call_tokens(&self, seq: u64, total: TokenCharge) -> TokenCharge {
+        let live = self
+            .tracker()
+            .agent(seq)
+            .map(|entry| entry.tokens)
+            .unwrap_or_default();
+        let added = total.beyond(live);
+        self.charged_tokens
+            .fetch_add(added.charged, Ordering::AcqRel);
+        self.check_hard_budget();
+        TokenCharge {
+            charged: live.charged.max(total.charged),
+            cached: live.cached.max(total.cached),
+        }
+    }
+
+    /// R5.4: in hard mode, stop running agents once the run spent above its threshold.
+    fn check_hard_budget(&self) {
+        let Some(threshold) = self.limits.hard_budget_threshold else {
+            return;
+        };
+        let spent = self.charged_tokens.load(Ordering::Acquire);
+        if spent > threshold && !self.hard_budget.is_cancelled() {
+            self.hard_budget.cancel();
+            self.log_line(&format!(
+                "the run spent {spent} tokens, above its hard budget of {threshold}; running agents are interrupted"
+            ));
+        }
+    }
+
+    /// R5.4: cancelled once a hard-mode run exceeded its threshold.
+    pub(crate) fn hard_budget(&self) -> &CancellationToken {
+        &self.hard_budget
+    }
+
+    /// Record a line in the run log and the journal.
+    pub(crate) fn log_line(&self, line: &str) {
+        let message = self.update(|tracker| tracker.log(line));
+        self.journal(JournalEvent::Log { message });
+    }
+
+    /// R6.3: the source result of the call with `key` and `ordinal`, if this run resumes a
+    /// run that answered it; the snapshot's resume counts follow.
+    pub(crate) fn take_cached(&self, key: &str, ordinal: u64) -> Option<JsonValue> {
+        let mut cache = self
+            .resume_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let cache = cache.as_mut()?;
+        let value = cache.take(key, ordinal)?;
+        let stats = cache.stats();
+        self.update(|tracker| tracker.set_resume(stats));
+        Some(value)
+    }
+
+    /// R3.12: whether schema calls of this run put the schema in the task.
+    pub(crate) fn schema_in_prompt(&self) -> bool {
+        match self.limits.structured_output {
+            WorkflowStructuredOutput::Prompt => true,
+            WorkflowStructuredOutput::Native => false,
+            WorkflowStructuredOutput::Auto => self.native_schema_rejected.load(Ordering::Acquire),
+        }
+    }
+
+    /// R3.12: the provider refused native structured output; returns whether this is the
+    /// first refusal of the run, which is then logged.
+    pub(crate) fn reject_native_schema(&self) -> bool {
+        let first = !self.native_schema_rejected.swap(true, Ordering::AcqRel);
+        if first {
+            self.log_line(
+                "the model provider rejected native structured output; schema calls of this run now put the schema in the task",
+            );
+        }
+        first
+    }
+
+    /// The script and args the run started with (R6.3).
+    pub(crate) fn script_and_args(&self) -> (String, String) {
+        (self.script.clone(), self.args_json.clone())
+    }
+
+    /// Records of the run's journal (R6.3).
+    pub(crate) fn journal_records(&self) -> std::io::Result<Vec<codex_workflow::JournalRecord>> {
+        self.journal.records()
+    }
+
+    /// R6.4, R6.7: a terminal run of an earlier process, rebuilt from its journal. It has no
+    /// cell; cancelling it returns its snapshot (R9.4).
+    pub(crate) fn restored(run: RestoredRun, updates: broadcast::Sender<String>) -> Self {
+        let revision = run.tracker.revision();
+        let limits = RunLimits {
+            max_concurrent_agents: 1,
+            max_agents_per_run: 0,
+            capacity_wait_ms: 0,
+            budget_tokens: run.tracker.snapshot(false).budget_tokens,
+            notification_max_tokens: 0,
+            max_heap_bytes: 0,
+            budget_mode: WorkflowBudgetMode::Soft,
+            hard_budget_threshold: None,
+            structured_output: WorkflowStructuredOutput::Auto,
+        };
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        Self {
+            id: run.id,
+            meta: run.meta,
+            limits,
+            parent_turn_id: String::new(),
+            tracker: Mutex::new(run.tracker),
+            revision: watch::channel(revision).0,
+            updates,
+            result_json: Mutex::new(run.result_json),
+            script_error: Mutex::new(None),
+            journal: run.journal,
+            gate: OrderedGate::new(1),
+            started_agents: AtomicUsize::new(0),
+            charged_tokens: AtomicU64::new(0),
+            cancel,
+            cancel_status: Mutex::new(None),
+            children: Mutex::new(HashMap::new()),
+            key_ordinals: Mutex::new(HashMap::new()),
+            capacity_freed: Notify::new(),
+            finished: watch::channel(true).0,
+            script: run.script,
+            args_json: run.args_json,
+            resume_cache: Mutex::new(None),
+            hard_budget: CancellationToken::new(),
+            native_schema_rejected: AtomicBool::new(false),
+        }
     }
 
     /// UC5, R5.1: `budget.used()` and `budget.remaining()` of the script.
@@ -346,34 +513,47 @@ pub(crate) fn start_run(
             active.join(", ")
         ));
     }
-    let run_id = registry.allocate_id();
-    let journal = if config.ephemeral {
-        Journal::in_memory()
-    } else {
-        let dir = config
-            .codex_home
-            .join("workflows")
-            .join(session.thread_id.to_string())
-            .join(&run_id);
-        Journal::create(dir.as_path(), &request.script, &request.args_json)
-            .map_err(|error| format!("failed to create the workflow journal: {error}"))?
+    let runs_dir =
+        (!config.ephemeral).then(|| super::resume::thread_runs_dir(config, session.thread_id));
+    // After a restart the registry is empty; an id must not reuse an earlier run's journal.
+    let run_id =
+        registry.allocate_id(|id| runs_dir.as_ref().is_some_and(|dir| dir.join(id).exists()));
+    let journal = match &runs_dir {
+        None => Journal::in_memory(),
+        Some(dir) => Journal::create(
+            dir.join(&run_id).as_path(),
+            &request.script,
+            &request.args_json,
+        )
+        .map_err(|error| format!("failed to create the workflow journal: {error}"))?,
     };
+    let budget_tokens = request.budget_tokens.or(workflows.default_budget_tokens);
     let limits = RunLimits {
         max_concurrent_agents: workflows.max_concurrent_agents,
         max_agents_per_run: workflows.max_agents_per_run,
         capacity_wait_ms: workflows.capacity_wait_ms,
-        budget_tokens: request.budget_tokens.or(workflows.default_budget_tokens),
+        budget_tokens,
         notification_max_tokens: workflows.notification_max_tokens,
         max_heap_bytes: workflows.max_heap_bytes,
+        budget_mode: workflows.budget_mode,
+        hard_budget_threshold: budget_tokens
+            .filter(|_| workflows.budget_mode == WorkflowBudgetMode::Hard)
+            .map(|budget| workflows.hard_budget_threshold(budget)),
+        structured_output: workflows.structured_output,
     };
-    let tracker = RunTracker::new(
+    let started_at_ms = now_ms();
+    let mut tracker = RunTracker::new(
         run_id.clone(),
         request.meta.name.clone(),
         request.meta.description.clone(),
         &request.meta.phases,
         limits.budget_tokens,
-        now_ms(),
+        started_at_ms,
     );
+    let resume_stats = request.resume.as_ref().map(JournalCache::stats);
+    if let Some(stats) = &resume_stats {
+        tracker.set_resume(stats.clone());
+    }
     let revision = tracker.revision();
     let run = Arc::new(WorkflowRun {
         id: run_id.clone(),
@@ -395,6 +575,11 @@ pub(crate) fn start_run(
         key_ordinals: Mutex::new(HashMap::new()),
         capacity_freed: Notify::new(),
         finished: watch::channel(false).0,
+        script: request.script.clone(),
+        args_json: request.args_json.clone(),
+        resume_cache: Mutex::new(request.resume),
+        hard_budget: CancellationToken::new(),
+        native_schema_rejected: AtomicBool::new(false),
     });
     run.journal(JournalEvent::RunStarted {
         run_id: run_id.clone(),
@@ -402,7 +587,10 @@ pub(crate) fn start_run(
         script_sha256: codex_workflow::sha256_hex(request.script.as_bytes()),
         args_sha256: codex_workflow::sha256_hex(request.args_json.as_bytes()),
         parent_turn_id: run.parent_turn_id.clone(),
-        resume_from: None,
+        resume_from: resume_stats.as_ref().map(|stats| stats.from.clone()),
+        started_at_ms: Some(started_at_ms),
+        budget_tokens: limits.budget_tokens,
+        resume_source_results: resume_stats.as_ref().map(|stats| stats.source_results),
     });
     registry.insert(Arc::clone(&run));
     let _ = run.updates.send(run_id);
@@ -599,6 +787,12 @@ async fn finish_run(
     let finished_at = now_ms();
     run.update(|tracker| tracker.finish(status, finished_at, preview.clone(), error.clone()));
     let snapshot = run.snapshot(/*include_agents*/ false);
+    // R6.1, R6.7: keep the result next to the journal for runs rebuilt from disk.
+    if let Some(result) = &result_json
+        && let Err(error) = run.journal.write_result(result)
+    {
+        warn!(run_id = %run.id, %error, "failed to persist the workflow result");
+    }
     run.journal(JournalEvent::RunFinished {
         status: status.as_str().to_string(),
         result_bytes: result_json.as_ref().map_or(0, String::len),
@@ -607,6 +801,7 @@ async fn finish_run(
             cached: snapshot.cached_tokens,
         },
         error,
+        finished_at_ms: Some(finished_at),
     });
     // R8.5: runs by status, duration and charged tokens.
     if let Some(metrics) = codex_otel::global() {

@@ -10,16 +10,21 @@ mod agent_call;
 mod delegate;
 mod gate;
 mod registry;
+mod resume;
 mod run;
+mod saved;
 mod thread_api;
 mod tools;
+mod usage;
 mod world_state;
 
 pub(crate) use registry::WorkflowRegistry;
+pub(crate) use resume::fork_restore_runs;
 pub(crate) use tools::LocalAgentBackend;
 pub(crate) use tools::add_workflow_tools;
 use tools::cancel_run;
 pub(crate) use tools::workflows_available;
+pub(crate) use usage::fork_charge_child_usage;
 pub(crate) use world_state::WorkflowRunsState;
 
 /// Turn trigger of a turn started by a workflow completion notification (UC7).

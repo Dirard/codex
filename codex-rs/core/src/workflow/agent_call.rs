@@ -1,6 +1,8 @@
-//! One `agent()` call of a workflow script (UC3, UC4, UC5, UC10).
+//! One `agent()` call of a workflow script (UC3, UC4, UC5, UC6, UC10).
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_features::AgentIsolation;
@@ -13,6 +15,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::turn_input::TurnStartOptions;
 use codex_workflow::JournalEvent;
 use codex_workflow::TokenCharge;
@@ -20,8 +23,11 @@ use codex_workflow::WORKFLOW_AGENT_INSTRUCTIONS;
 use codex_workflow::call_key;
 use codex_workflow::check_strict_compatible;
 use codex_workflow::child_agent_name;
+use codex_workflow::is_schema_format_rejection;
+use codex_workflow::native_rejected_follow_up;
 use codex_workflow::null_reason;
 use codex_workflow::parse_final_message;
+use codex_workflow::prompt_schema_suffix;
 use codex_workflow::validate_value;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -33,14 +39,17 @@ use tracing::warn;
 
 use super::WORKFLOW_TURN_TRIGGER;
 use super::run::WorkflowRun;
+use super::usage::token_charge;
 use crate::agent::api::AgentInput;
 use crate::agent::api::AgentTarget;
 use crate::agent::api::SendRequest;
 use crate::agent::child_config::build_agent_resume_config;
 use crate::agent::control::workflow_children::WorkflowChildOutcome;
+use crate::agent::control::workflow_children::WorkflowUsageSink;
 use crate::agent::types::AgentMessage;
 use crate::agent::types::MessageDeliveryMode;
 use crate::codex_thread::CodexThread;
+use crate::config::WorkflowStructuredOutput;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::thread_spawn::ThreadSpawnError;
@@ -100,7 +109,8 @@ fn script_error(kind: &str, message: String) -> JsonValue {
 ///
 /// Script errors (unknown options, a non-strict schema) are returned as errors the prelude
 /// throws, before any spawn; every runtime failure resolves to null with a recorded reason.
-/// The result is journaled before it is returned to the script (R6.1).
+/// A call the resumed run already answered resolves from its journal without an agent (UC6,
+/// R6.3). The result is journaled before it is returned to the script (R6.1).
 pub(super) async fn run_agent_call(
     session: &Arc<Session>,
     step_context: &Arc<StepContext>,
@@ -138,6 +148,11 @@ pub(super) async fn run_agent_call(
     let phase = options.phase.clone().or(input.phase);
     let key = call_key(&input.prompt, &input.opts);
     let ordinal = run.next_ordinal(&key);
+    // R6.3: the resumed run's answer needs neither a slot nor an agent start.
+    if let Some(value) = run.take_cached(&key, ordinal) {
+        run.gate.ticket(seq).skip();
+        return record_cached(run, seq, key, ordinal, options.label, phase, value);
+    }
     run.update(|tracker| tracker.agent_queued(seq, options.label.clone(), phase.clone()));
     let call = AgentCall {
         session,
@@ -149,9 +164,41 @@ pub(super) async fn run_agent_call(
         phase,
         key,
         ordinal,
+        schema_in_prompt: AtomicBool::new(false),
     };
     let (outcome, tokens) = call.execute(&cell_cancel).await;
     call.record(outcome, tokens)
+}
+
+/// R6.3, R6.5: settle a call from the resumed run's journal.
+fn record_cached(
+    run: &WorkflowRun,
+    seq: u64,
+    key: String,
+    ordinal: u64,
+    label: Option<String>,
+    phase: Option<String>,
+    value: JsonValue,
+) -> JsonValue {
+    if let Some(metrics) = codex_otel::global() {
+        let _ = metrics.counter(
+            "codex.workflow.agents",
+            /*inc*/ 1,
+            &[("outcome", "cached")],
+        );
+    }
+    run.journal(JournalEvent::AgentFinished {
+        call: Some(seq),
+        key,
+        ordinal,
+        ok: true,
+        value: Some(value.clone()),
+        reason: None,
+        tokens: TokenCharge::default(),
+        cached: true,
+    });
+    run.update(|tracker| tracker.agent_cached(seq, label, phase));
+    json!({ "ok": true, "value": value })
 }
 
 struct AgentCall<'a> {
@@ -164,6 +211,8 @@ struct AgentCall<'a> {
     phase: Option<String>,
     key: String,
     ordinal: u64,
+    /// R3.12: this call carries its schema in the task instead of `final_output_json_schema`.
+    schema_in_prompt: AtomicBool,
 }
 
 struct SpawnedChild {
@@ -178,6 +227,7 @@ enum Waited {
     Gone,
     Timeout,
     Cancelled,
+    HardBudget,
 }
 
 impl AgentCall<'_> {
@@ -227,7 +277,7 @@ impl AgentCall<'_> {
                 TokenCharge::default(),
             );
         }
-        // R4.4: the run's agent limit.
+        // R4.2, R4.4: the run's own count of agent starts.
         if !self.run.reserve_agent_start() {
             return (
                 null(
@@ -266,6 +316,33 @@ impl AgentCall<'_> {
         }
     }
 
+    /// R5.1: charge this call's agent for each model response as it is recorded.
+    fn usage_sink(&self) -> WorkflowUsageSink {
+        let run = Arc::downgrade(self.run);
+        let seq = self.seq;
+        Arc::new(move |usage: &TokenUsage| {
+            if let Some(run) = run.upgrade() {
+                run.charge_live(seq, token_charge(usage));
+            }
+        })
+    }
+
+    /// R3.12: the task text and the native schema of the spawn, in the run's mode.
+    fn task_and_schema(&self) -> (String, Option<JsonValue>) {
+        let Some(schema) = &self.options.schema else {
+            return (self.prompt.clone(), None);
+        };
+        if self.run.schema_in_prompt() {
+            self.schema_in_prompt.store(true, Ordering::Release);
+            (
+                format!("{}\n\n{}", self.prompt, prompt_schema_suffix(schema)),
+                None,
+            )
+        } else {
+            (self.prompt.clone(), Some(schema.clone()))
+        }
+    }
+
     /// UC3, R3.1: spawn a fresh child; wait for residency capacity when it is full (R4.3).
     async fn spawn(&self, cell_cancel: &CancellationToken) -> Result<SpawnedChild, CallOutcome> {
         let name = child_agent_name(&self.run.id, self.seq, self.options.label.as_deref());
@@ -285,11 +362,15 @@ impl AgentCall<'_> {
             .workflow_children();
         let deadline =
             tokio::time::Instant::now() + Duration::from_millis(self.run.limits.capacity_wait_ms);
+        let (task, final_output_json_schema) = self.task_and_schema();
         loop {
-            let outcomes = children.register(&path, &self.run.id);
+            if self.run.budget_exhausted() {
+                return Err(null(null_reason::BUDGET_EXHAUSTED, None));
+            }
+            let outcomes = children.register(&path, &self.run.id, Some(self.usage_sink()));
             let request = ThreadSpawnRequest {
                 task_name: name.clone(),
-                message: AgentMessage::Plaintext(self.prompt.clone()),
+                message: AgentMessage::Plaintext(task.clone()),
                 fork_mode: None,
                 agent_type: self.options.agent_type.clone(),
                 model: self.options.model.clone(),
@@ -297,7 +378,7 @@ impl AgentCall<'_> {
                 isolation: Some(self.isolation()),
             };
             let workflow = WorkflowSpawnOptions {
-                final_output_json_schema: self.options.schema.clone(),
+                final_output_json_schema: final_output_json_schema.clone(),
                 developer_instructions: WORKFLOW_AGENT_INSTRUCTIONS.to_string(),
             };
             let call_id = format!("{}-{}", self.run.id, self.seq);
@@ -347,7 +428,7 @@ impl AgentCall<'_> {
         }
     }
 
-    /// UC3: wait for the child's answer, validate it and charge its tokens (UC5).
+    /// UC3: wait for the child's answer, validate it and settle its tokens (UC5).
     async fn supervise(
         &self,
         spawned: SpawnedChild,
@@ -361,6 +442,7 @@ impl AgentCall<'_> {
         let runtime = &self.session.services.local_agent_runtime;
         self.run.register_child(self.seq, thread_id);
         self.run.journal(JournalEvent::AgentStarted {
+            call: Some(self.seq),
             key: self.key.clone(),
             ordinal: self.ordinal,
             label: self.options.label.clone(),
@@ -375,11 +457,12 @@ impl AgentCall<'_> {
         let outcome = self
             .await_answer(thread_id, thread.as_deref(), &mut outcomes, cell_cancel)
             .await;
-        let tokens = match &thread {
+        let total = match &thread {
             Some(thread) => charged_tokens(thread).await,
             None => TokenCharge::default(),
         };
-        self.run.charge(tokens);
+        // R5.1: live charging already counted most of it; only the rest is added.
+        let tokens = self.run.settle_call_tokens(self.seq, total);
         runtime.workflow_children().finish_call(&path);
         self.run.remove_child(self.seq);
         (outcome, tokens)
@@ -398,6 +481,7 @@ impl AgentCall<'_> {
             .map(|timeout| tokio::time::Instant::now() + Duration::from_millis(timeout));
         let mut status = thread.map(CodexThread::subscribe_status);
         let mut corrected = false;
+        let mut fell_back = false;
         let mut waiting_for_terminal = false;
         loop {
             let waited = self
@@ -420,6 +504,14 @@ impl AgentCall<'_> {
                     self.interrupt(thread_id).await;
                     return null(self.cancel_reason(), None);
                 }
+                Waited::HardBudget => {
+                    // R5.4: a hard-mode run spent above its threshold.
+                    self.interrupt(thread_id).await;
+                    return null(
+                        null_reason::BUDGET_EXHAUSTED,
+                        Some("interrupted by the run's hard token budget".to_string()),
+                    );
+                }
             };
             match outcome.status {
                 AgentStatus::Completed(text) => {
@@ -430,13 +522,10 @@ impl AgentCall<'_> {
                     {
                         if !waiting_for_terminal {
                             waiting_for_terminal = true;
-                            let message = self.run.update(|tracker| {
-                                tracker.log(&format!(
-                                    "agent {} waits for its background terminal before answering",
-                                    self.seq
-                                ))
-                            });
-                            self.run.journal(JournalEvent::Log { message });
+                            self.run.log_line(&format!(
+                                "agent {} waits for its background terminal before answering",
+                                self.seq
+                            ));
                         }
                         continue;
                     }
@@ -463,9 +552,10 @@ impl AgentCall<'_> {
                         // R3.6: one corrective turn with the errors and the same schema.
                         Err(errors) if !corrected => {
                             corrected = true;
-                            if let Err(error) =
-                                self.send_correction(thread_id, schema, &errors).await
-                            {
+                            let message = format!(
+                                "Your final message did not match the required JSON schema: {errors}\nReply again with only a JSON object that matches this schema:\n{schema}"
+                            );
+                            if let Err(error) = self.send_follow_up(thread_id, message).await {
                                 return null(
                                     null_reason::SCHEMA_INVALID,
                                     Some(format!("{errors}; the corrective turn failed: {error}")),
@@ -476,6 +566,26 @@ impl AgentCall<'_> {
                     }
                 }
                 AgentStatus::Errored(message) => {
+                    // R3.12: the provider refused native structured output; ask again with
+                    // the schema in the task, without spending the corrective turn.
+                    if let Some(schema) = &self.options.schema
+                        && !fell_back
+                        && self.native_fallback_applies(outcome.error_info.as_ref(), &message)
+                    {
+                        fell_back = true;
+                        self.run.reject_native_schema();
+                        self.schema_in_prompt.store(true, Ordering::Release);
+                        if let Err(error) = self
+                            .send_follow_up(thread_id, native_rejected_follow_up(schema))
+                            .await
+                        {
+                            return null(
+                                null_reason::ERRORED,
+                                Some(format!("{message}; the prompt-schema turn failed: {error}")),
+                            );
+                        }
+                        continue;
+                    }
                     // R10.3: Guardian's circuit breaker stopped the agent.
                     let reason = if outcome.error_info == Some(CodexErrorInfo::TooManyDenials) {
                         null_reason::GUARDIAN_DENIED
@@ -491,6 +601,25 @@ impl AgentCall<'_> {
                 AgentStatus::PendingInit | AgentStatus::Running => {}
             }
         }
+    }
+
+    /// R3.12: an `auto` run's native schema request was refused by the provider.
+    fn native_fallback_applies(&self, error_info: Option<&CodexErrorInfo>, message: &str) -> bool {
+        if self.run.limits.structured_output != WorkflowStructuredOutput::Auto
+            || self.schema_in_prompt.load(Ordering::Acquire)
+        {
+            return false;
+        }
+        let (http_status, bad_request) = match error_info {
+            Some(
+                CodexErrorInfo::HttpConnectionFailed { http_status_code }
+                | CodexErrorInfo::ResponseStreamConnectionFailed { http_status_code }
+                | CodexErrorInfo::ResponseTooManyFailedAttempts { http_status_code },
+            ) => (*http_status_code, false),
+            Some(CodexErrorInfo::BadRequest | CodexErrorInfo::InvalidPrompt) => (None, true),
+            _ => (None, false),
+        };
+        is_schema_format_rejection(http_status, bad_request, message)
     }
 
     async fn wait_terminal(
@@ -514,6 +643,7 @@ impl AgentCall<'_> {
                 },
                 _ = self.run.cancellation().cancelled() => break Waited::Cancelled,
                 _ = cell_cancel.cancelled() => break Waited::Cancelled,
+                _ = self.run.hard_budget().cancelled() => break Waited::HardBudget,
                 changed = next_status(status) => match changed {
                     AgentStatus::Interrupted => break Waited::Interrupted,
                     AgentStatus::Shutdown | AgentStatus::NotFound => break Waited::Gone,
@@ -552,10 +682,8 @@ impl AgentCall<'_> {
         else {
             return;
         };
-        let message = self
-            .run
-            .update(|tracker| tracker.log(&format!("agent {} worktree:\n{report}", self.seq)));
-        self.run.journal(JournalEvent::Log { message });
+        self.run
+            .log_line(&format!("agent {} worktree:\n{report}", self.seq));
     }
 
     async fn interrupt(&self, thread_id: ThreadId) {
@@ -574,18 +702,16 @@ impl AgentCall<'_> {
         }
     }
 
-    /// R3.6: ask the child once more for a JSON answer matching `schema`.
-    async fn send_correction(
-        &self,
-        thread_id: ThreadId,
-        schema: &JsonValue,
-        errors: &str,
-    ) -> Result<(), String> {
+    /// R3.6, R3.12: send the child one more turn asking for a JSON answer; the native schema
+    /// goes along unless this call carries it in the task.
+    async fn send_follow_up(&self, thread_id: ThreadId, message: String) -> Result<(), String> {
         let turn = &self.step_context.turn;
         let resume_config = build_agent_resume_config(turn)?;
-        let message = format!(
-            "Your final message did not match the required JSON schema: {errors}\nReply again with only a JSON object that matches this schema:\n{schema}"
-        );
+        let final_output_json_schema = if self.schema_in_prompt.load(Ordering::Acquire) {
+            None
+        } else {
+            self.options.schema.clone()
+        };
         self.session
             .services
             .agent_control
@@ -598,7 +724,7 @@ impl AgentCall<'_> {
                     mode: MessageDeliveryMode::TriggerTurn,
                 },
                 start_options: TurnStartOptions {
-                    final_output_json_schema: Some(schema.clone()),
+                    final_output_json_schema,
                     parent_turn_id: Some(self.run.parent_turn_id.clone()),
                     root_turn_id: turn.turn_metadata_state.root_turn_id(),
                     turn_trigger: Some(WORKFLOW_TURN_TRIGGER.to_string()),
@@ -629,12 +755,14 @@ impl AgentCall<'_> {
         match outcome {
             CallOutcome::Value(value) => {
                 self.run.journal(JournalEvent::AgentFinished {
+                    call: Some(self.seq),
                     key: self.key.clone(),
                     ordinal: self.ordinal,
                     ok: true,
                     value: Some(value.clone()),
                     reason: None,
                     tokens,
+                    cached: false,
                 });
                 self.run
                     .update(|tracker| tracker.agent_finished(self.seq, true, None, tokens));
@@ -648,21 +776,20 @@ impl AgentCall<'_> {
                         .as_deref()
                         .map(|label| format!(" ({label})"))
                         .unwrap_or_default();
-                    let message = self.run.update(|tracker| {
-                        tracker.log(&format!(
-                            "agent {}{label} resolved to null ({reason}): {detail}",
-                            self.seq
-                        ))
-                    });
-                    self.run.journal(JournalEvent::Log { message });
+                    self.run.log_line(&format!(
+                        "agent {}{label} resolved to null ({reason}): {detail}",
+                        self.seq
+                    ));
                 }
                 self.run.journal(JournalEvent::AgentFinished {
+                    call: Some(self.seq),
                     key: self.key.clone(),
                     ordinal: self.ordinal,
                     ok: false,
                     value: None,
                     reason: Some(reason.to_string()),
                     tokens,
+                    cached: false,
                 });
                 self.run.update(|tracker| {
                     tracker.agent_finished(self.seq, false, Some(reason), tokens);
@@ -713,15 +840,10 @@ async fn awaits_approval(thread: &CodexThread) -> bool {
     turn_state.lock().await.has_pending_approvals()
 }
 
-/// UC5, R5.1: a fresh child's usage, as non-cached input plus output and cached input.
+/// UC5, R5.1: a fresh child's total usage, as non-cached input plus output and cached input.
 async fn charged_tokens(thread: &CodexThread) -> TokenCharge {
-    let Some(info) = thread.token_usage_info().await else {
-        return TokenCharge::default();
-    };
-    let usage = info.total_token_usage;
-    let non_cached_input = usage.input_tokens.saturating_sub(usage.cached_input_tokens);
-    TokenCharge {
-        charged: u64::try_from(non_cached_input.saturating_add(usage.output_tokens)).unwrap_or(0),
-        cached: u64::try_from(usage.cached_input_tokens).unwrap_or(0),
+    match thread.token_usage_info().await {
+        Some(info) => token_charge(&info.total_token_usage),
+        None => TokenCharge::default(),
     }
 }

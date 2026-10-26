@@ -6,7 +6,10 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::journal::JournalEvent;
+use crate::journal::JournalRecord;
 use crate::journal::TokenCharge;
+use crate::null_reason;
 
 /// Longest recorded `log()` message, in characters (R2.8).
 pub const MAX_LOG_CHARS: usize = 2000;
@@ -114,6 +117,22 @@ pub struct AgentEntry {
     /// Why the call resolved to null.
     pub reason: Option<String>,
     pub tokens: TokenCharge,
+    /// Answered from the journal of the resumed run, without an agent (R6.3).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cached: bool,
+}
+
+/// How a resumed run used the journal of its source run (UC6, R6.5).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResumeStats {
+    /// Id of the run this one resumed.
+    pub from: String,
+    /// Successful agent results in the source journal.
+    pub source_results: u64,
+    /// Calls of this run answered from them.
+    pub served: u64,
+    /// Source results no call of this run used yet.
+    pub unused: u64,
 }
 
 /// Snapshot of a run (R8.1).
@@ -141,6 +160,9 @@ pub struct RunSnapshot {
     /// Every agent call; omitted from summaries.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_list: Vec<AgentEntry>,
+    /// Present for a run started with `resume_from` (R6.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<ResumeStats>,
 }
 
 impl RunSnapshot {
@@ -189,6 +211,7 @@ impl RunTracker {
                 result_preview: None,
                 error: None,
                 agent_list: Vec::new(),
+                resume: None,
             },
             phase_index: HashMap::new(),
             current_phase_seq: 0,
@@ -276,9 +299,39 @@ impl RunTracker {
                 thread_id: None,
                 reason: None,
                 tokens: TokenCharge::default(),
+                cached: false,
             },
         );
         self.snapshot.agents.queued += 1;
+        self.bump();
+    }
+
+    /// R6.5: how the run uses the journal of the run it resumed.
+    pub fn set_resume(&mut self, stats: ResumeStats) {
+        self.snapshot.resume = Some(stats);
+        self.bump();
+    }
+
+    /// R6.3: a call answered from the resumed run's journal settles as completed at once.
+    pub fn agent_cached(&mut self, seq: u64, label: Option<String>, phase: Option<String>) {
+        self.agent_queued(seq, label, phase);
+        if let Some(entry) = self.agents.get_mut(&seq) {
+            entry.cached = true;
+        }
+        self.agent_finished(seq, true, None, TokenCharge::default());
+    }
+
+    /// R5.1: live charging of one model response of a running call.
+    pub fn agent_charged(&mut self, seq: u64, tokens: TokenCharge) {
+        let Some(entry) = self.agents.get_mut(&seq) else {
+            return;
+        };
+        if matches!(entry.state, AgentState::Completed | AgentState::Null) {
+            return;
+        }
+        entry.tokens.add(tokens);
+        self.snapshot.charged_tokens = self.snapshot.charged_tokens.saturating_add(tokens.charged);
+        self.snapshot.cached_tokens = self.snapshot.cached_tokens.saturating_add(tokens.cached);
         self.bump();
     }
 
@@ -318,6 +371,8 @@ impl RunTracker {
         self.bump();
     }
 
+    /// Settle a call. `tokens` is the call's total; only what live charging
+    /// ([`Self::agent_charged`]) did not count yet is added to the run's totals (R5.1).
     pub fn agent_finished(
         &mut self,
         seq: u64,
@@ -339,9 +394,11 @@ impl RunTracker {
             return;
         }
         let phase = self.agents.get(&seq).and_then(|entry| entry.phase.clone());
+        let mut added = TokenCharge::default();
         if let Some(entry) = self.transition(seq, state) {
             entry.reason = reason.map(str::to_string);
-            entry.tokens = tokens;
+            added = tokens.beyond(entry.tokens);
+            entry.tokens.add(added);
         }
         if let Some(phase) = phase {
             let index = self.phase_slot(&phase);
@@ -354,8 +411,8 @@ impl RunTracker {
                 .entry(reason.unwrap_or("unknown").to_string())
                 .or_default() += 1;
         }
-        self.snapshot.charged_tokens = self.snapshot.charged_tokens.saturating_add(tokens.charged);
-        self.snapshot.cached_tokens = self.snapshot.cached_tokens.saturating_add(tokens.cached);
+        self.snapshot.charged_tokens = self.snapshot.charged_tokens.saturating_add(added.charged);
+        self.snapshot.cached_tokens = self.snapshot.cached_tokens.saturating_add(added.cached);
         self.bump();
     }
 
@@ -392,6 +449,141 @@ impl RunTracker {
         self.snapshot.result_preview = result_preview;
         self.snapshot.error = error;
         self.bump();
+    }
+
+    /// R6.4, R6.7: rebuild the tracker of a run from its journal, for a run of an earlier
+    /// process. Calls are matched by their call number, or for journals without one by the
+    /// order in which their key and ordinal appear. Calls still open when the run finished
+    /// settle as null: `interrupted` for an interrupted run, `cancelled` otherwise.
+    /// `fallback_ms` dates a journal without times; `result_preview` is the preview of the
+    /// persisted result.
+    pub fn replay(
+        run_id: String,
+        description: String,
+        declared_phases: &[String],
+        records: &[JournalRecord],
+        fallback_ms: i64,
+        result_preview: Option<String>,
+    ) -> Self {
+        let (name, started_at_ms, budget_tokens, resume) = records
+            .iter()
+            .find_map(|record| match &record.event {
+                JournalEvent::RunStarted {
+                    name,
+                    started_at_ms,
+                    budget_tokens,
+                    resume_from,
+                    resume_source_results,
+                    ..
+                } => Some((
+                    name.clone(),
+                    *started_at_ms,
+                    *budget_tokens,
+                    resume_from
+                        .clone()
+                        .map(|from| (from, *resume_source_results)),
+                )),
+                _ => None,
+            })
+            .unwrap_or_else(|| (run_id.clone(), None, None, None));
+        let mut tracker = Self::new(
+            run_id,
+            name,
+            description,
+            declared_phases,
+            budget_tokens,
+            started_at_ms.unwrap_or(fallback_ms),
+        );
+        let mut synthetic: HashMap<(String, u64), u64> = HashMap::new();
+        let mut next_synthetic = 1;
+        let mut call_of = |call: Option<u64>, key: &str, ordinal: u64| -> u64 {
+            call.unwrap_or_else(|| {
+                *synthetic
+                    .entry((key.to_string(), ordinal))
+                    .or_insert_with(|| {
+                        let seq = next_synthetic;
+                        next_synthetic += 1;
+                        seq
+                    })
+            })
+        };
+        let mut served = 0;
+        for record in records {
+            match &record.event {
+                JournalEvent::Phase { title } => tracker.set_phase(record.seq, title),
+                JournalEvent::Log { message } => {
+                    tracker.log(message);
+                }
+                JournalEvent::AgentStarted {
+                    call,
+                    key,
+                    ordinal,
+                    label,
+                    phase,
+                    thread_id,
+                    agent_path,
+                } => {
+                    let seq = call_of(*call, key, *ordinal);
+                    tracker.agent_queued(seq, label.clone(), phase.clone());
+                    tracker.agent_started(seq, agent_path.clone(), thread_id.clone());
+                }
+                JournalEvent::AgentFinished {
+                    call,
+                    key,
+                    ordinal,
+                    ok,
+                    reason,
+                    tokens,
+                    cached,
+                    ..
+                } => {
+                    let seq = call_of(*call, key, *ordinal);
+                    if *cached {
+                        served += 1;
+                        tracker.agent_cached(seq, None, None);
+                        continue;
+                    }
+                    if tracker.agent(seq).is_none() {
+                        tracker.agent_queued(seq, None, None);
+                    }
+                    tracker.agent_finished(seq, *ok, reason.as_deref(), *tokens);
+                }
+                JournalEvent::RunFinished {
+                    status,
+                    error,
+                    finished_at_ms,
+                    ..
+                } => {
+                    let status = RunStatus::parse(status)
+                        .filter(|status| status.is_terminal())
+                        .unwrap_or(RunStatus::Interrupted);
+                    tracker.settle_open_calls(if status == RunStatus::Interrupted {
+                        null_reason::INTERRUPTED
+                    } else {
+                        null_reason::CANCELLED
+                    });
+                    tracker.finish(
+                        status,
+                        finished_at_ms.unwrap_or(fallback_ms),
+                        result_preview.clone(),
+                        error.clone(),
+                    );
+                }
+                JournalEvent::RunStarted { .. }
+                | JournalEvent::WorkflowStarted { .. }
+                | JournalEvent::WorkflowFinished { .. } => {}
+            }
+        }
+        if let Some((from, source_results)) = resume {
+            let source_results = source_results.unwrap_or(served).max(served);
+            tracker.set_resume(ResumeStats {
+                from,
+                source_results,
+                served,
+                unused: source_results - served,
+            });
+        }
+        tracker
     }
 }
 

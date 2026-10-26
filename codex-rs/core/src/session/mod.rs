@@ -1718,6 +1718,7 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => {
                 let turn_context = self.new_default_turn().await;
+                crate::workflow::fork_restore_runs(self, &turn_context).await; // Fork: R6.4
                 let rollout_items = resumed_history.history;
                 if matches!(
                     rollout_items.iter().rev().find_map(|item| match item {
@@ -5325,6 +5326,7 @@ impl Session {
                 );
             }
             let budget_result = self.record_rollout_budget_usage(token_usage).await;
+            crate::workflow::fork_charge_child_usage(self, turn_context, token_usage); // Fork: R5.1
             if let Some(token_info) = token_info.as_ref() {
                 for contributor in self.services.extensions.token_usage_contributors() {
                     contributor

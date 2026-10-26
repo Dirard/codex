@@ -14,6 +14,7 @@ use codex_code_mode::ToolInvocationFuture;
 use codex_workflow::TOOL_AGENT;
 use codex_workflow::TOOL_BUDGET;
 use codex_workflow::TOOL_EVENT;
+use codex_workflow::TOOL_WORKFLOW;
 use tokio_util::sync::CancellationToken;
 
 use super::agent_call::run_agent_call;
@@ -61,6 +62,12 @@ impl CodeModeSessionDelegate for WorkflowCellDelegate {
                 .await),
                 TOOL_EVENT => self.run.record_event(invocation.input),
                 TOOL_BUDGET => Ok(self.run.budget_json()),
+                // UC12: `workflow(name, args)` loads a saved script into this cell.
+                TOOL_WORKFLOW => super::saved::handle_workflow_call(
+                    &self.step_context.turn.config,
+                    &self.run,
+                    invocation.input,
+                ),
                 other => Err(format!("unknown workflow host call `{other}`")),
             }
         })

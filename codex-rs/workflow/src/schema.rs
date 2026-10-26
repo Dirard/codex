@@ -374,6 +374,45 @@ fn type_name(value: &Value) -> &'static str {
 }
 
 /// Parses a final message as JSON, tolerating a single surrounding Markdown code fence.
+/// R3.12: the text appended to an agent's task when the schema goes in the prompt instead of
+/// `final_output_json_schema`.
+pub fn prompt_schema_suffix(schema: &Value) -> String {
+    format!(
+        "Your final message must be only a JSON object that matches the JSON schema below, with no other text and no code fence.\nJSON schema:\n{schema}"
+    )
+}
+
+/// R3.12: the follow-up asking an agent whose native structured-output request the provider
+/// rejected to answer with the schema in the prompt.
+pub fn native_rejected_follow_up(schema: &Value) -> String {
+    format!(
+        "The model provider rejected the structured-output format of the previous request. Complete the task above. {}",
+        prompt_schema_suffix(schema)
+    )
+}
+
+/// R3.12: whether a failed agent turn is the provider refusing the structured-output format:
+/// a client error whose message names a schema, `text.format`, `response_format` or
+/// structured output. A client error is HTTP 400 or 422, a bad request, or a message that
+/// carries the provider's `invalid_request_error` body or a 400/422 status: Codex reports a
+/// plain HTTP 400 as an invalid request whose text is the provider's error body.
+pub fn is_schema_format_rejection(
+    http_status: Option<u16>,
+    bad_request: bool,
+    message: &str,
+) -> bool {
+    let message = message.to_ascii_lowercase();
+    let client_error = bad_request
+        || matches!(http_status, Some(400 | 422))
+        || ["invalid_request_error", "status 400", "status 422"]
+            .iter()
+            .any(|marker| message.contains(marker));
+    client_error
+        && ["schema", "text.format", "response_format", "structured"]
+            .iter()
+            .any(|needle| message.contains(needle))
+}
+
 pub fn parse_final_message(text: &str) -> Result<Value, String> {
     let trimmed = text.trim();
     let unfenced = trimmed

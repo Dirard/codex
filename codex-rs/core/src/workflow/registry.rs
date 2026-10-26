@@ -55,15 +55,27 @@ impl WorkflowRegistry {
             .collect()
     }
 
-    /// A fresh `wf-` id with eight hex characters, unique in this thread.
-    pub(crate) fn allocate_id(&self) -> String {
+    /// A fresh `wf-` id with eight hex characters, unique in this thread: not used by a run of
+    /// this process nor `taken` by an earlier one (R6.7).
+    pub(crate) fn allocate_id(&self, taken: impl Fn(&str) -> bool) -> String {
         let runs = self.runs();
         loop {
             let id = format!("wf-{:08x}", rand::random::<u32>());
-            if !runs.iter().any(|run| run.id == id) {
+            if !runs.iter().any(|run| run.id == id) && !taken(&id) {
                 return id;
             }
         }
+    }
+
+    /// Register a run rebuilt from disk unless a run with its id is already known; returns
+    /// the registered run (R6.4, R6.7).
+    pub(crate) fn insert_restored(&self, run: Arc<WorkflowRun>) -> Arc<WorkflowRun> {
+        let mut runs = self.runs();
+        if let Some(existing) = runs.iter().find(|known| known.id == run.id) {
+            return Arc::clone(existing);
+        }
+        runs.push(Arc::clone(&run));
+        run
     }
 
     pub(crate) fn insert(&self, run: Arc<WorkflowRun>) {

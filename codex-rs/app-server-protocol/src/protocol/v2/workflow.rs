@@ -253,6 +253,8 @@ impl WorkflowRun {
             result_preview,
             error,
             agent_list,
+            // Fork: resume counts stay in core until the `/workflows` screen needs them.
+            resume: _,
         } = snapshot;
         Self {
             run_id,
