@@ -48,7 +48,6 @@ use super::gate::OrderedGate;
 use super::now_ms;
 use super::registry::WorkflowRegistry;
 use crate::agent::api::AgentTarget;
-use crate::agent::types::TurnSpawnBudget;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 
@@ -81,7 +80,7 @@ pub(crate) struct WorkflowRun {
     script_error: Mutex<Option<String>>,
     journal: Journal,
     pub(crate) gate: OrderedGate,
-    pub(crate) spawn_budget: TurnSpawnBudget,
+    /// Agents this run started: its only start limit (UC4, R4.2), not a `TurnSpawnBudget`.
     started_agents: AtomicUsize,
     charged_tokens: AtomicU64,
     /// Cancels queued calls, running agents and the cell.
@@ -204,7 +203,8 @@ impl WorkflowRun {
         })
     }
 
-    /// UC4, R4.4: reserve one of the run's agent starts.
+    /// UC4, R4.2, R4.4: reserve one of the run's agent starts before a spawn; a spawned agent
+    /// keeps it, a failed spawn returns it with [`Self::release_agent_start`].
     pub(crate) fn reserve_agent_start(&self) -> bool {
         self.started_agents
             .try_update(Ordering::AcqRel, Ordering::Acquire, |started| {
@@ -387,7 +387,6 @@ pub(crate) fn start_run(
         script_error: Mutex::new(None),
         journal,
         gate: OrderedGate::new(limits.max_concurrent_agents),
-        spawn_budget: TurnSpawnBudget::new(limits.max_agents_per_run),
         started_agents: AtomicUsize::new(0),
         charged_tokens: AtomicU64::new(0),
         cancel: CancellationToken::new(),

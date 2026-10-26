@@ -297,7 +297,6 @@ impl AgentCall<'_> {
                 isolation: Some(self.isolation()),
             };
             let workflow = WorkflowSpawnOptions {
-                run_spawn_budget: self.run.spawn_budget.clone(),
                 final_output_json_schema: self.options.schema.clone(),
                 developer_instructions: WORKFLOW_AGENT_INSTRUCTIONS.to_string(),
             };
@@ -605,7 +604,8 @@ impl AgentCall<'_> {
                     turn_trigger: Some(WORKFLOW_TURN_TRIGGER.to_string()),
                     ..Default::default()
                 },
-                turn_spawn_budget: Some(self.run.spawn_budget.clone()),
+                // R4.2: the run counts its agents; workflow children get no spawn budget.
+                turn_spawn_budget: None,
             })
             .await
             .map(|_| ())
