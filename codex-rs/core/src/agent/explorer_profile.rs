@@ -245,6 +245,27 @@ pub(crate) fn cap_outgoing_message(
 /// MCP servers run outside the Codex sandbox, and a tool that needs no approval (an
 /// auto-approved server, a non-destructive hint, a remembered approval) would otherwise run
 /// with the server's own access. A tool without the annotation counts as writing.
+/// Why an MCP call is skipped: the app configuration blocks it first; otherwise a read-only
+/// explorer calls only MCP tools annotated `readOnlyHint: true` (R2.8).
+pub(crate) fn mcp_call_blocked_message(
+    app_blocked: bool,
+    turn_context: &crate::session::turn_context::TurnContext,
+    server: &str,
+    tool: &str,
+    annotations: Option<&rmcp::model::ToolAnnotations>,
+) -> Option<String> {
+    if app_blocked {
+        return Some("MCP tool call blocked by app configuration".to_string());
+    }
+    mcp_tool_denial(
+        &turn_context.config,
+        &turn_context.session_source,
+        server,
+        tool,
+        annotations,
+    )
+}
+
 pub(crate) fn mcp_tool_denial(
     config: &Config,
     source: &SessionSource,

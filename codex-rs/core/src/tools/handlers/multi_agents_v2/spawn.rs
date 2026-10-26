@@ -114,21 +114,15 @@ async fn handle_spawn_agent(
     let turn = &step_context.turn;
     let arguments = function_arguments(payload)?;
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
+    // Fork: `isolation` is checked first; profiled explorers default to no parent history.
     let isolation = args.isolation()?;
+    let fork_mode = args.fork_mode(args.default_fork_turns(&turn.config))?;
+    let message = message_content(args.message)?;
     let role_name = args
         .agent_type
         .as_deref()
         .map(str::trim)
         .filter(|role| !role.is_empty());
-    // Fork: profiled explorers start without parent history unless `fork_turns` says otherwise.
-    let default_fork_turns =
-        if crate::agent::explorer_profile::applies_to_role(&turn.config, role_name) {
-            "none"
-        } else {
-            "all"
-        };
-    let fork_mode = args.fork_mode(default_fork_turns)?;
-    let message = message_content(args.message)?;
 
     let spawned = crate::thread_spawn::spawn(
         &session,
@@ -239,21 +233,6 @@ struct SpawnAgentArgs {
 }
 
 impl SpawnAgentArgs {
-    fn isolation(&self) -> Result<Option<codex_features::AgentIsolation>, FunctionCallError> {
-        match self.isolation.as_deref().map(str::trim) {
-            None | Some("") => Ok(None),
-            Some(value) if value.eq_ignore_ascii_case("none") => {
-                Ok(Some(codex_features::AgentIsolation::None))
-            }
-            Some(value) if value.eq_ignore_ascii_case("worktree") => {
-                Ok(Some(codex_features::AgentIsolation::Worktree))
-            }
-            Some(_) => Err(FunctionCallError::RespondToModel(
-                "isolation must be `none` or `worktree`".to_string(),
-            )),
-        }
-    }
-
     fn fork_mode(
         &self,
         default_fork_turns: &str,
@@ -284,6 +263,10 @@ impl SpawnAgentArgs {
         ))
     }
 }
+
+// Fork: `isolation` and the explorer default of `fork_turns`.
+#[path = "spawn_fork.rs"]
+mod fork;
 
 #[derive(Debug, Serialize)]
 #[serde(untagged)]

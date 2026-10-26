@@ -1,9 +1,7 @@
 use super::*;
-use crate::agent::status::is_final;
 use crate::session::InputQueueActivity;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
-use codex_protocol::AgentPath;
 use codex_tools::ToolSpec;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -253,13 +251,6 @@ impl ToolOutput for WaitAgentResult {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct ActiveAgentSnapshot {
-    pending_init: usize,
-    running: usize,
-    interrupted: usize,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum WaitOutcome {
     MailboxActivity,
@@ -271,159 +262,6 @@ enum WaitOutcome {
     NoActiveAgents,
     /// Agent snapshot and the terminals whose exit will still be reported.
     TimedOut(ActiveAgentSnapshot, Vec<WaitingTerminal>),
-}
-
-/// Fork: the longest wait without `timeout_ms` that only background terminals hold (R4.5).
-pub(crate) const BACKGROUND_TERMINAL_WAIT_CAP_MS: i64 = 300_000;
-
-/// Fork: a wait that the model did not bound and that only terminals hold ends early.
-fn effective_timeout_ms(
-    requested_timeout_ms: Option<i64>,
-    timeout_ms: i64,
-    terminals_only: bool,
-) -> i64 {
-    if requested_timeout_ms.is_none() && terminals_only {
-        timeout_ms.min(BACKGROUND_TERMINAL_WAIT_CAP_MS)
-    } else {
-        timeout_ms
-    }
-}
-
-/// Fork: one terminal that will still report its exit, as a timeout snapshot shows it.
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct WaitingTerminal {
-    session_id: i32,
-    running_for: Duration,
-    /// `None` while the process printed nothing.
-    quiet_for: Option<Duration>,
-}
-
-fn describe_background_terminals(terminals: &[WaitingTerminal]) -> String {
-    let details = terminals
-        .iter()
-        .map(|terminal| {
-            let output = match terminal.quiet_for {
-                Some(quiet_for) => format!("last output {:.1}s ago", quiet_for.as_secs_f64()),
-                None => "no output yet".to_string(),
-            };
-            format!(
-                "session {}: running for {:.1}s, {output}",
-                terminal.session_id,
-                terminal.running_for.as_secs_f64()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("; ");
-    format!(
-        "Background terminals that will report their exit: {} ({details}). Their exits are reported even after this turn ends, so you can end the turn instead of waiting again.",
-        terminals.len()
-    )
-}
-
-/// A bound board delivers posts from agents outside the caller's subtree. Remote and
-/// host-connected boards have authors outside this runtime; a tree-local board can only
-/// receive posts from the other agents of this tree.
-async fn board_posts_may_arrive(
-    session: &crate::session::session::Session,
-    turn: &crate::session::turn_context::TurnContext,
-) -> Result<bool, FunctionCallError> {
-    use crate::agent_message_board::BoardAudience;
-    match crate::agent_message_board::board_audience(&session.services.thread_extension_data) {
-        BoardAudience::None => Ok(false),
-        BoardAudience::External => Ok(true),
-        BoardAudience::Tree => Ok(
-            active_agent_snapshot(session, turn, &AgentPath::root()).await?
-                != ActiveAgentSnapshot::default(),
-        ),
-    }
-}
-
-async fn active_descendant_snapshot(
-    session: &crate::session::session::Session,
-    turn: &crate::session::turn_context::TurnContext,
-) -> Result<ActiveAgentSnapshot, FunctionCallError> {
-    let current_agent_path = turn
-        .session_source
-        .get_agent_path()
-        .unwrap_or_else(AgentPath::root);
-    active_agent_snapshot(session, turn, &current_agent_path).await
-}
-
-/// Counts active agents under `prefix`, excluding the caller.
-async fn active_agent_snapshot(
-    session: &crate::session::session::Session,
-    turn: &crate::session::turn_context::TurnContext,
-    prefix: &AgentPath,
-) -> Result<ActiveAgentSnapshot, FunctionCallError> {
-    let current_agent_path = turn
-        .session_source
-        .get_agent_path()
-        .unwrap_or_else(AgentPath::root);
-    let prefix = prefix.to_string();
-    let agents = session
-        .services
-        .agent_control
-        .list(
-            session.thread_id,
-            turn.parent_thread_id,
-            &turn.session_source,
-            Some(&prefix),
-        )
-        .await
-        .map_err(collab_spawn_error)?;
-    let mut snapshot = ActiveAgentSnapshot::default();
-    let workflow_children = session.services.local_agent_runtime.workflow_children();
-    for agent in agents {
-        if agent
-            .metadata
-            .agent_path
-            .as_deref()
-            .is_some_and(|path| *path == *current_agent_path.as_str())
-        {
-            continue;
-        }
-        // Fork: workflow agents report to their run, not to this wait (dynamic workflow, R3.3).
-        if agent
-            .metadata
-            .agent_path
-            .as_ref()
-            .is_some_and(|path| workflow_children.owner(path.as_str()).is_some())
-        {
-            continue;
-        }
-        match &agent.status {
-            AgentStatus::PendingInit => snapshot.pending_init += 1,
-            AgentStatus::Running => snapshot.running += 1,
-            AgentStatus::Interrupted => snapshot.interrupted += 1,
-            status @ (AgentStatus::Completed(_)
-            | AgentStatus::Errored(_)
-            | AgentStatus::Shutdown
-            | AgentStatus::NotFound) => debug_assert!(is_final(status)),
-        }
-    }
-    Ok(snapshot)
-}
-
-fn ready_activity(
-    activity_rx: &mut tokio::sync::watch::Receiver<InputQueueActivity>,
-    pending_activity: Option<InputQueueActivity>,
-) -> Option<WaitOutcome> {
-    if let Some(activity) = pending_activity {
-        return Some(wait_outcome_for_activity(activity));
-    }
-    match activity_rx.has_changed() {
-        Ok(true) => Some(wait_outcome_for_activity(*activity_rx.borrow_and_update())),
-        Ok(false) | Err(_) => None,
-    }
-}
-
-async fn recheck_activity(
-    session: &crate::session::session::Session,
-    turn_state: Option<&tokio::sync::Mutex<crate::state::TurnState>>,
-) -> Option<WaitOutcome> {
-    let (mut activity_rx, pending_activity) =
-        session.input_queue.subscribe_activity(turn_state).await;
-    ready_activity(&mut activity_rx, pending_activity)
 }
 
 async fn wait_for_activity(
@@ -446,99 +284,17 @@ async fn wait_for_activity(
             if let Some(outcome) = recheck_activity(session, turn_state).await {
                 return Ok(outcome);
             }
-            let now = Instant::now();
-            let background_terminals = session
-                .services
-                .unified_exec_manager
-                .pending_exit_notifications()
-                .await
-                .into_iter()
-                .map(|terminal| WaitingTerminal {
-                    session_id: terminal.process_id,
-                    running_for: now.saturating_duration_since(terminal.started_at),
-                    quiet_for: terminal
-                        .last_output_at
-                        .map(|last_output_at| now.saturating_duration_since(last_output_at)),
-                })
-                .collect();
+            let background_terminals = waiting_terminals(session).await;
             Ok(WaitOutcome::TimedOut(snapshot, background_terminals))
         }
     }
 }
 
-fn wait_outcome_for_activity(activity: InputQueueActivity) -> WaitOutcome {
-    match activity {
-        InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
-        InputQueueActivity::BackgroundTerminal => WaitOutcome::BackgroundTerminal,
-        InputQueueActivity::Workflow => WaitOutcome::Workflow,
-        InputQueueActivity::Steer => WaitOutcome::Steered,
-    }
-}
+// Fork: active-agent snapshots, background terminals and workflow runs of a wait.
+#[path = "wait_fork.rs"]
+mod fork;
+use fork::*;
 
 #[cfg(test)]
-mod background_terminal_tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    /// Fork (R4.5): only a wait without `timeout_ms` that only terminals hold is capped.
-    #[test]
-    fn caps_only_unbounded_waits_for_terminals() {
-        let default = 1_800_000;
-        assert_eq!(
-            effective_timeout_ms(None, default, /*terminals_only*/ true),
-            BACKGROUND_TERMINAL_WAIT_CAP_MS
-        );
-        assert_eq!(
-            effective_timeout_ms(None, default, /*terminals_only*/ false),
-            default
-        );
-        assert_eq!(
-            effective_timeout_ms(Some(default), default, /*terminals_only*/ true),
-            default
-        );
-        assert_eq!(
-            effective_timeout_ms(None, 60_000, /*terminals_only*/ true),
-            60_000
-        );
-    }
-
-    /// Fork (R4.5): a timeout names each terminal, how long it ran and when it last spoke.
-    #[test]
-    fn timeout_snapshot_describes_each_terminal() {
-        let result = WaitAgentResult::from_outcome(
-            WaitOutcome::TimedOut(
-                ActiveAgentSnapshot::default(),
-                vec![
-                    WaitingTerminal {
-                        session_id: 1000,
-                        running_for: Duration::from_millis(300_000),
-                        quiet_for: Some(Duration::from_millis(298_000)),
-                    },
-                    WaitingTerminal {
-                        session_id: 1001,
-                        running_for: Duration::from_millis(5_000),
-                        quiet_for: None,
-                    },
-                ],
-            ),
-            /*requested_timeout_ms*/ None,
-            /*timeout_ms*/ BACKGROUND_TERMINAL_WAIT_CAP_MS,
-        );
-        assert_eq!(
-            result,
-            WaitAgentResult {
-                message: "Wait timed out. Active agents: pending_init=0, running=0, interrupted=0. Background terminals that will report their exit: 2 (session 1000: running for 300.0s, last output 298.0s ago; session 1001: running for 5.0s, no output yet). Their exits are reported even after this turn ends, so you can end the turn instead of waiting again.".to_string(),
-                timed_out: true,
-            }
-        );
-        assert_eq!(
-            WaitAgentResult::from_outcome(
-                WaitOutcome::TimedOut(ActiveAgentSnapshot::default(), Vec::new()),
-                /*requested_timeout_ms*/ None,
-                /*timeout_ms*/ 1_000,
-            )
-            .message,
-            "Wait timed out. Active agents: pending_init=0, running=0, interrupted=0."
-        );
-    }
-}
+#[path = "wait_fork_tests.rs"]
+mod background_terminal_tests;

@@ -231,14 +231,23 @@ pub(crate) async fn handle_mcp_tool_call(
     let connector_id = metadata.connector_id.clone();
     let connector_name = metadata.connector_name.clone();
 
-    if server == CODEX_APPS_MCP_SERVER_NAME && !app_tool_policy.enabled {
+    // Fork: after the app configuration, a read-only explorer allows only MCP tools annotated
+    // `readOnlyHint: true`, whatever their approval settings (explorer-and-questions, R2.8).
+    let blocked_message = crate::agent::explorer_profile::mcp_call_blocked_message(
+        server == CODEX_APPS_MCP_SERVER_NAME && !app_tool_policy.enabled,
+        turn_context.as_ref(),
+        &server,
+        &tool_name,
+        prepared_call.tool_info().tool.annotations.as_ref(),
+    );
+    if let Some(blocked_message) = blocked_message {
         let result = notify_mcp_tool_call_skip(
             sess.as_ref(),
             turn_context.as_ref(),
             &call_id,
             invocation,
             item_metadata.clone(),
-            "MCP tool call blocked by app configuration".to_string(),
+            blocked_message,
             /*already_started*/ false,
         )
         .await;
@@ -247,40 +256,6 @@ pub(crate) async fn handle_mcp_tool_call(
         emit_mcp_call_metrics(
             &step_context.session_telemetry,
             &outcome,
-            &server,
-            &tool_name,
-            connector_id.as_deref(),
-            connector_name.as_deref(),
-            /*duration*/ None,
-        );
-        return HandledMcpToolCall {
-            result: CallToolResult::from_result(result),
-            tool_input: arguments_value
-                .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
-        };
-    }
-    // Fork: a read-only explorer calls only MCP tools annotated `readOnlyHint: true`, whatever
-    // their approval settings (specs/explorer-and-questions-2026-10-25.md, R2.8).
-    if let Some(denial) = crate::agent::explorer_profile::mcp_tool_denial(
-        &turn_context.config,
-        &turn_context.session_source,
-        &server,
-        &tool_name,
-        prepared_call.tool_info().tool.annotations.as_ref(),
-    ) {
-        let result = notify_mcp_tool_call_skip(
-            sess.as_ref(),
-            turn_context.as_ref(),
-            &call_id,
-            invocation,
-            item_metadata.clone(),
-            denial,
-            /*already_started*/ false,
-        )
-        .await;
-        emit_mcp_call_metrics(
-            &step_context.session_telemetry,
-            &McpCallMetricOutcome::from_status("error"),
             &server,
             &tool_name,
             connector_id.as_deref(),
