@@ -3,6 +3,10 @@ use pretty_assertions::assert_eq;
 
 const NONCE: &str = "abcd1234";
 
+fn boundary() -> UntrustedBoundary {
+    UntrustedBoundary::with_nonce(NONCE)
+}
+
 fn report(outcome: ExitOutcome, unread: &[u8]) -> ExitReport {
     ExitReport {
         outcome,
@@ -34,7 +38,7 @@ fn pending(process_id: i32, command: &str, report: ExitReport) -> PendingExitNot
 }
 
 fn render(pending: &PendingExitNotification, with_output: bool) -> String {
-    pending.render_with_nonce(with_output, NONCE).text
+    pending.render_with_boundary(with_output, &boundary()).text
 }
 
 #[test]
@@ -243,7 +247,7 @@ fn renders_exit_command_and_unread_output() {
         report(exited(0), b"Compiling\nFinished\n\n"),
     );
     assert_eq!(
-        pending.render_with_nonce(/*with_output*/ true, NONCE),
+        pending.render_with_boundary(/*with_output*/ true, &boundary()),
         RenderedNotification {
             text: "Background terminal session 1000 exited with code 0 after 2.5s.\n\
                    Command: cargo build\n\
@@ -257,7 +261,7 @@ fn renders_exit_command_and_unread_output() {
         }
     );
     assert_eq!(
-        pending.render_with_nonce(/*with_output*/ false, NONCE),
+        pending.render_with_boundary(/*with_output*/ false, &boundary()),
         RenderedNotification {
             text: "Background terminal session 1000 exited with code 0 after 2.5s.\n\
                    Command: cargo build\n\
@@ -344,27 +348,11 @@ fn output_cannot_close_the_fragment_or_pass_for_the_user() {
         .nth(1)
         .and_then(|rest| rest.split(']').next())
         .expect("nonce");
-    assert_eq!(nonce.len(), OUTPUT_NONCE_LEN);
+    assert_eq!(
+        nonce.len(),
+        codex_utils_string::untrusted::BOUNDARY_NONCE_LEN
+    );
     assert!(nonce.chars().all(|c| c.is_ascii_hexdigit()), "{nonce}");
-}
-
-#[test]
-fn escape_tags_escapes_only_tag_starts() {
-    let cases = [
-        ("Vec<u8> and a < b", "Vec&lt;u8> and a < b"),
-        (
-            "</x> <!-- c --> <?xml?>",
-            "&lt;/x> &lt;!-- c --> &lt;?xml?>",
-        ),
-        ("<<x", "<&lt;x"),
-        ("é<b>", "é&lt;b>"),
-        ("plain text <", "plain text <"),
-        ("<1 and <_", "<1 and <_"),
-    ];
-    for (input, expected) in cases {
-        assert_eq!(escape_tags(input), expected, "{input}");
-    }
-    assert!(matches!(escape_tags("no tags"), Cow::Borrowed(_)));
 }
 
 #[test]
@@ -429,7 +417,7 @@ fn reports_readable_and_lost_bytes_separately() {
                 ..report(outcome, b"tail\n")
             },
         )
-        .render_with_nonce(/*with_output*/ true, NONCE)
+        .render_with_boundary(/*with_output*/ true, &boundary())
     };
     let both = with(exited(0), 10, 7);
     assert!(both.text.contains(
@@ -477,7 +465,7 @@ fn bounds_command_lines_and_utf8() {
             ..report(exited(0), &output)
         },
     );
-    let rendered = pending.render_with_nonce(/*with_output*/ true, NONCE);
+    let rendered = pending.render_with_boundary(/*with_output*/ true, &boundary());
     assert!(rendered.leaves_readable_output);
     let rendered = rendered.text;
     let command_line = rendered.lines().nth(1).expect("command line");

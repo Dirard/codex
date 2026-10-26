@@ -1,5 +1,7 @@
 mod json;
 mod truncate;
+// Fork: untrusted text inside harness context (workflow and terminal notifications).
+pub mod untrusted;
 
 pub use json::to_ascii_json_string;
 pub use json::to_json_string_bounded;

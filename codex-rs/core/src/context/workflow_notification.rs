@@ -7,6 +7,8 @@ use codex_extension_items::workflow::WorkflowRunStatus;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::ContentItemMetadata;
+use codex_protocol::models::ContentItemNamespace;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::input_text;
 use codex_workflow::RunStatus;
@@ -14,6 +16,10 @@ use codex_workflow::RunStatus;
 use super::ContextualUserFragment;
 
 /// Runtime-authored run summary; never user authorization.
+///
+/// It carries tool provenance, like `SubagentNotification` and the background terminal
+/// notification: it is tool-related context the harness writes, and the result preview and
+/// error inside it come from the script and its agents (R7.6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WorkflowNotification {
     body: String,
@@ -68,6 +74,10 @@ impl WorkflowNotification {
 }
 
 impl ContextualUserFragment for WorkflowNotification {
+    fn content_metadata(&self) -> ContentItemMetadata {
+        ContentItemMetadata::tool(Some(ContentItemNamespace::Functions))
+    }
+
     fn content_kind(&self) -> ContentItemKind {
         ContentItemKind(Self::KIND.to_string())
     }
@@ -116,6 +126,31 @@ mod tests {
         assert!(WorkflowNotification::is_notification_item(&item));
         assert!(crate::context::is_background_notification_item(&item));
         assert!(crate::context::is_contextual_user_fragment(&content[0]));
+    }
+
+    /// R7.6: the notification is tool-related context, like `SubagentNotification` and the
+    /// background terminal notification, so the model is not told that the user wrote the
+    /// agent answers inside it. It stays a background notification and a run item.
+    #[test]
+    fn carries_tool_provenance() {
+        let text = "Workflow \"x\" (wf-1) completed in 1.0s: 0 agents (0 ok, 0 null), 0 tokens charged, 0 cached input tokens.";
+        let item = ContextualUserFragment::into(WorkflowNotification::new(text));
+        let ResponseItem::Message {
+            internal_chat_message_metadata_passthrough: Some(metadata),
+            ..
+        } = &item
+        else {
+            panic!("expected message metadata, got {item:?}");
+        };
+        assert_eq!(
+            metadata.content_item_metadata,
+            Some(vec![ContentItemMetadata::tool(Some(
+                ContentItemNamespace::Functions
+            ))])
+        );
+        assert!(WorkflowNotification::is_notification_item(&item));
+        assert!(crate::context::is_background_notification_item(&item));
+        assert!(WorkflowNotification::turn_item(&item).is_some());
     }
 
     /// R8.3: a recorded notification shows as the terminal item of its run.

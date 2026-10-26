@@ -13,6 +13,7 @@ path = "src/lib.rs"
 doctest = false
 
 [dependencies]
+codex-utils-string = { workspace = true }
 regex-lite = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

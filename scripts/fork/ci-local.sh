@@ -101,6 +101,7 @@ fork_clippy_packages=(
   codex-tools
   codex-tui
   codex-utils-output-truncation
+  codex-utils-string
   codex-workflow
   codex-worktree
 )
@@ -112,6 +113,7 @@ default_test_packages=(
   codex-workflow
   codex-worktree
   codex-exec
+  codex-utils-string
 )
 
 # Binaries that codex-core integration tests locate next to their test

@@ -5367,6 +5367,7 @@ name = "codex-utils-string"
 version = "0.164.0"
 dependencies = [
  "pretty_assertions",
+ "rand 0.9.3",
  "regex-lite",
  "serde",
  "serde_json",
@@ -5530,6 +5531,7 @@ dependencies = [
 name = "codex-workflow"
 version = "0.164.0"
 dependencies = [
+ "codex-utils-string",
  "pretty_assertions",
  "regex-lite",
  "serde",
