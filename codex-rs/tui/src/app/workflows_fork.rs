@@ -3,24 +3,42 @@
 //! `thread/workflow/*` requests run in background tasks, as the agent picker refresh does,
 //! because `thread/workflow/cancel` can hold the thread's request queue for up to 30 seconds.
 //! Their answers come back as `AppEvent::Workflows` and go to the chat widget, which owns the
-//! views.
+//! views. The `/subagents` hooks group workflow agents under their run (R8.6.7).
+
+use std::collections::BTreeMap;
 
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadWorkflowCancelParams;
 use codex_app_server_protocol::ThreadWorkflowCancelResponse;
 use codex_app_server_protocol::ThreadWorkflowListParams;
 use codex_app_server_protocol::ThreadWorkflowListResponse;
 use codex_app_server_protocol::ThreadWorkflowReadParams;
 use codex_app_server_protocol::ThreadWorkflowReadResponse;
+use codex_app_server_protocol::WorkflowRunStatus;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 use uuid::Uuid;
 
 use super::App;
+use super::thread_events::ThreadBufferedEvent;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
+use crate::bottom_pane::SelectionItem;
 use crate::workflows::RunLoadOrigin;
 use crate::workflows::WorkflowsEvent;
+use crate::workflows::picker::PickerLayout;
+use crate::workflows::view::one_line;
+use crate::workflows::view::run_mark;
+use crate::workflows::view::status_text;
+
+/// Name and, when known, status of a run for its `/subagents` row.
+struct RunLabel {
+    name: String,
+    status: Option<WorkflowRunStatus>,
+}
 
 impl App {
     /// UC 8.1: route a `/workflows` event. User actions start background requests; their
@@ -152,4 +170,164 @@ impl App {
             }));
         });
     }
+
+    /// R8.6.7: the grouped `/subagents` layout, or `None` when the upstream rows stay as they
+    /// are (feature disabled or no workflow agents).
+    fn fork_workflow_picker_layout(&self) -> Option<PickerLayout> {
+        if !self.config.features.enabled(Feature::Workflows) {
+            return None;
+        }
+        PickerLayout::build(
+            self.agent_navigation
+                .visible_threads()
+                .into_iter()
+                .map(|(_, entry)| entry.agent_path.as_deref()),
+        )
+    }
+
+    /// Hook of `agent_picker_selection_view_params`: reorder the rows (one per visible thread)
+    /// into the grouped layout and translate the selection. `selected` is the caller's row
+    /// number; `initial` is the upstream choice, a `visible_threads()` index when `selected`
+    /// was `None`.
+    pub(super) fn fork_group_workflow_picker_items(
+        &self,
+        items: Vec<SelectionItem>,
+        selected: Option<usize>,
+        initial: Option<usize>,
+    ) -> (Vec<SelectionItem>, Option<usize>) {
+        let Some(layout) = self.fork_workflow_picker_layout() else {
+            return (items, initial);
+        };
+        let labels = self.workflow_run_labels();
+        let primary_thread_id = self.primary_thread_id;
+        let items = layout.group_items(items, |run_id, children| {
+            workflow_run_row(primary_thread_id, run_id, children, labels.get(run_id))
+        });
+        let initial = match selected {
+            Some(display) => Some(display),
+            None => initial.and_then(|visible| layout.display_index(visible)),
+        };
+        (items, initial)
+    }
+
+    /// Hook of `selected_agent_picker_thread_id`: the `visible_threads()` index shown at a
+    /// picker row; `None` for a run row.
+    pub(super) fn fork_picker_visible_index(&self, display: usize) -> Option<usize> {
+        match self.fork_workflow_picker_layout() {
+            Some(layout) => layout.visible_index(display),
+            None => Some(display),
+        }
+    }
+
+    /// Hook of `replace_agent_picker_view`: the picker row of a `visible_threads()` index.
+    pub(super) fn fork_picker_display_index(&self, visible: usize) -> Option<usize> {
+        match self.fork_workflow_picker_layout() {
+            Some(layout) => layout.display_index(visible),
+            None => Some(visible),
+        }
+    }
+
+    /// Q38: run names and statuses from the primary thread's stored events, then from the
+    /// chat widget's live runs; later sources win.
+    fn workflow_run_labels(&self) -> BTreeMap<String, RunLabel> {
+        let mut labels = BTreeMap::new();
+        let mut note = |run_id: &str, name: &str, status: WorkflowRunStatus| {
+            labels.insert(
+                run_id.to_string(),
+                RunLabel {
+                    name: name.to_string(),
+                    status: Some(status),
+                },
+            );
+        };
+        if let Some(store) = self
+            .primary_thread_id
+            .and_then(|thread_id| self.thread_event_channels.get(&thread_id))
+            .and_then(|channel| channel.store.try_lock().ok())
+        {
+            for item in store.turns.iter().flat_map(|turn| turn.items.iter()) {
+                if let ThreadItem::Workflow(item) = item {
+                    note(&item.run_id, &item.name, item.status);
+                }
+            }
+            for event in &store.buffer {
+                let ThreadBufferedEvent::Notification(notification) = event else {
+                    continue;
+                };
+                match notification.as_ref() {
+                    ServerNotification::ItemStarted(started) => {
+                        if let ThreadItem::Workflow(item) = &started.item {
+                            note(&item.run_id, &item.name, item.status);
+                        }
+                    }
+                    ServerNotification::ItemCompleted(completed) => {
+                        if let ThreadItem::Workflow(item) = &completed.item {
+                            note(&item.run_id, &item.name, item.status);
+                        }
+                    }
+                    ServerNotification::ThreadWorkflowUpdated(updated) => {
+                        note(&updated.run.run_id, &updated.run.name, updated.run.status);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if self.chat_widget.thread_id() == self.primary_thread_id {
+            for (run_id, name, status) in self.chat_widget.known_workflow_runs() {
+                note(&run_id, &name, status);
+            }
+        }
+        labels
+    }
 }
+
+/// The `/subagents` row of a run: opens its run view (R8.6.7).
+fn workflow_run_row(
+    primary_thread_id: Option<ThreadId>,
+    run_id: &str,
+    children: usize,
+    label: Option<&RunLabel>,
+) -> SelectionItem {
+    let name = format!(
+        "Workflow {}",
+        label.map_or_else(|| run_id.to_string(), |label| one_line(&label.name))
+    );
+    let mut description = vec![run_id.to_string()];
+    if let Some(status) = label.and_then(|label| label.status) {
+        description.push(status_text(status, /*cancelling*/ false));
+    }
+    description.push(format!(
+        "{children} {}",
+        if children == 1 { "agent" } else { "agents" }
+    ));
+    let name_prefix_spans = match label.and_then(|label| label.status) {
+        Some(status) => vec![run_mark(status), " ".into()],
+        None => vec!["•".into(), " ".into()],
+    };
+    let actions: Vec<crate::bottom_pane::SelectionAction> = match primary_thread_id {
+        Some(thread_id) => {
+            let run_id = run_id.to_string();
+            vec![Box::new(move |tx| {
+                tx.send(AppEvent::Workflows(WorkflowsEvent::OpenRun {
+                    thread_id,
+                    run_id: run_id.clone(),
+                }));
+            })]
+        }
+        None => Vec::new(),
+    };
+    SelectionItem {
+        search_value: Some(format!("{name} {run_id}")),
+        name,
+        name_prefix_spans,
+        description: Some(description.join(" · ")),
+        is_disabled: actions.is_empty(),
+        actions,
+        dismiss_on_select: true,
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
+#[path = "workflows_fork_tests.rs"]
+mod tests;

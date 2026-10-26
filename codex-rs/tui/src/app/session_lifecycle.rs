@@ -212,6 +212,9 @@ impl App {
                 }
             })
             .collect();
+        // Fork: workflow agents under their run (specs/dynamic-workflow-2026-10-25.md, R8.6.7).
+        let (items, initial_selected_idx) =
+            self.fork_group_workflow_picker_items(items, selected, initial_selected_idx);
 
         SelectionViewParams {
             view_id: Some(AGENT_PICKER_VIEW_ID),

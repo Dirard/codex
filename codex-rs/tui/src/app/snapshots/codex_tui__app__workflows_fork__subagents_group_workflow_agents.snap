@@ -1,0 +1,15 @@
+---
+source: tui/src/app/workflows_fork_tests.rs
+expression: "render_bottom_popup(&app.chat_widget, 90)"
+---
+  Subagents
+  Select an agent to watch. ⌥← previous, ⌥→ next.
+
+
+› 1. • /root/worker        00000000-0000-0000-0000-000000000101
+  2. ● Workflow find-bugs  wf-1a2b3c4d · running · 2 agents
+  3.   • #1 find_src_a_py  00000000-0000-0000-0000-000000000102
+  4.   • #2 verify         00000000-0000-0000-0000-000000000103
+  5. • Main [default]      00000000-0000-0000-0000-000000000100
+
+  enter select · esc back

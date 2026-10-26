@@ -286,6 +286,24 @@ impl ChatWidget {
         self.replace_workflow_run_view();
     }
 
+    /// Name and status of the runs this widget knows, for the `/subagents` run rows.
+    pub(crate) fn known_workflow_runs(&self) -> Vec<(String, String, WorkflowRunStatus)> {
+        let mut known: BTreeMap<&str, &WorkflowRun> = BTreeMap::new();
+        if let Some(screen) = &self.workflows.screen {
+            known.extend(screen.runs.iter().map(|(id, run)| (id.as_str(), run)));
+        }
+        known.extend(
+            self.workflows
+                .active
+                .iter()
+                .map(|(id, run)| (id.as_str(), run)),
+        );
+        known
+            .into_iter()
+            .map(|(id, run)| (id.to_string(), run.name.clone(), run.status))
+            .collect()
+    }
+
     fn open_workflow_run(&mut self, thread_id: ThreadId, run: WorkflowRun) {
         let screen = self.workflows.screen_for(thread_id);
         let mut summary = run.clone();

@@ -240,6 +240,7 @@ impl App {
         let selected = self
             .chat_widget
             .selected_index_for_present_view(AGENT_PICKER_VIEW_ID)?;
+        let selected = self.fork_picker_visible_index(selected)?; // Fork: R8.6.7
         self.agent_navigation
             .visible_threads()
             .get(selected)
@@ -253,6 +254,7 @@ impl App {
                 .iter()
                 .position(|(thread_id, _)| *thread_id == selected_thread_id)
         });
+        let selected = selected.and_then(|visible| self.fork_picker_display_index(visible)); // Fork: R8.6.7
         let params = self.agent_picker_selection_view_params(selected);
         self.chat_widget
             .replace_selection_view_if_present(AGENT_PICKER_VIEW_ID, params);

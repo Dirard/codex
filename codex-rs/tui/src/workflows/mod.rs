@@ -5,6 +5,7 @@
 //! their run. The state of an open screen lives in `chatwidget/workflow.rs`; app-server
 //! requests and the picker hooks live in `app/workflows_fork.rs`.
 
+pub(crate) mod picker;
 #[cfg(test)]
 pub(crate) mod test_fixtures;
 pub(crate) mod view;
