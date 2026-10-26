@@ -298,17 +298,6 @@ impl FeatureConfig for GuardianV3ConfigToml {
     }
 }
 
-/// How multi-agent V2 task and message arguments are delivered to child agents.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum MultiAgentMessageDelivery {
-    /// Keep OpenAI's encrypted collaboration arguments.
-    #[default]
-    Encrypted,
-    /// Deliver provider-neutral plain text for cross-provider agents.
-    Plaintext,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MultiAgentV2ConfigToml {
@@ -347,9 +336,10 @@ pub struct MultiAgentV2ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = 64), regex(pattern = r"^[a-zA-Z0-9_-]+$"))]
     pub tool_namespace: Option<String>,
+    // Fork: plaintext cross-provider agent messages (docs/fork/03-tools-mcp-code-mode.md).
     /// Plaintext delivery requires a non-reserved tool namespace such as `agents`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub message_delivery: Option<MultiAgentMessageDelivery>,
+    pub message_delivery: Option<fork::MultiAgentMessageDelivery>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_spawn_agent_metadata: Option<bool>,
     /// Exposes `model` and `reasoning_effort` on the multi-agent v2 spawn tool and adds
@@ -381,78 +371,8 @@ impl FeatureConfig for MultiAgentV2ConfigToml {
     }
 }
 
-/// Fork: settings for `explorer` children (read-only, cheaper, capped result).
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ExplorerProfileConfigToml {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
-    /// Model for explorer children. Defaults to the parent's model.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    /// Reasoning effort for explorer children. Defaults to the cheapest effort, not below
-    /// `low`, that the selected model supports.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_effort: Option<ReasoningEffort>,
-    /// Largest explorer final answer, in tokens, delivered to the parent. Defaults to 2000.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 200))]
-    pub max_result_tokens: Option<usize>,
-}
-
-impl FeatureConfig for ExplorerProfileConfigToml {
-    fn enabled(&self) -> Option<bool> {
-        self.enabled
-    }
-}
-
-// Fork: worktree isolation for MultiAgentV2 children.
-/// Where a MultiAgentV2 child runs relative to its parent's checkout.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentIsolation {
-    /// The child shares its parent's checkout.
-    #[default]
-    None,
-    /// The child works in its own managed git worktree.
-    Worktree,
-}
-
-/// The commit an isolated child's worktree starts from.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentWorktreeBase {
-    /// The parent's HEAD plus tracked modifications and untracked, non-ignored files. Those
-    /// files are written to the repository's object store and become part of the agent
-    /// branch's history, as with `git stash --include-untracked`; keep secrets in ignored
-    /// files or use `head`, and do not push `codex/agents/*` branches.
-    #[default]
-    WorkingTree,
-    /// The parent's HEAD commit.
-    Head,
-}
-
-/// `[features.agent_worktree_isolation]` settings for isolated MultiAgentV2 children. The
-/// feature requires `features.multi_agent_v2.tool_namespace` to name a custom namespace such
-/// as `agents`.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct AgentWorktreeIsolationConfigToml {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
-    /// Isolation used when `spawn_agent` omits `isolation`. Role config files may set it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_isolation: Option<AgentIsolation>,
-    /// Commit an isolated child's worktree starts from.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base: Option<AgentWorktreeBase>,
-}
-
-impl FeatureConfig for AgentWorktreeIsolationConfigToml {
-    fn enabled(&self) -> Option<bool> {
-        self.enabled
-    }
-}
+// Fork: settings of the fork's features; `lib.rs` re-exports them.
+pub(crate) mod fork;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]

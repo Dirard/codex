@@ -17,9 +17,6 @@ use toml::Table;
 mod feature_configs;
 mod legacy;
 mod runtime_auth;
-pub use feature_configs::AgentIsolation;
-pub use feature_configs::AgentWorktreeBase;
-pub use feature_configs::AgentWorktreeIsolationConfigToml;
 pub use feature_configs::AsyncCompactionConfigToml;
 pub use feature_configs::CodeModeConfigToml;
 pub use feature_configs::CodeModeHostConfigToml;
@@ -27,13 +24,11 @@ pub use feature_configs::ContextManagementConfigToml;
 pub use feature_configs::CurrentTimeReminderConfigToml;
 pub use feature_configs::CurrentTimeReminderDeliveryMode;
 pub use feature_configs::CurrentTimeSource;
-pub use feature_configs::ExplorerProfileConfigToml;
 pub use feature_configs::GuardianV2ConfigToml;
 pub use feature_configs::GuardianV2ReviewScopeConfigToml;
 pub use feature_configs::GuardianV2TranscriptConfigToml;
 pub use feature_configs::GuardianV2TranscriptSource;
 pub use feature_configs::GuardianV3ConfigToml;
-pub use feature_configs::MultiAgentMessageDelivery;
 pub use feature_configs::MultiAgentV2ConfigToml;
 pub use feature_configs::NetworkProxyConfigToml;
 pub use feature_configs::NetworkProxyDomainPermissionToml;
@@ -51,6 +46,10 @@ use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
 pub use runtime_auth::RuntimeAgentInstancesConfigToml;
 pub use runtime_auth::RuntimeAuthMode;
+
+// Fork: settings and `FeaturesToml` entries of the fork's features.
+pub use feature_configs::fork::*;
+mod fork;
 
 /// High-level lifecycle stage for a feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,7 +238,7 @@ pub enum Feature {
     RespectSystemProxy,
     /// Retry eligible bootstrap requests through the system proxy after normal routing fails.
     SystemProxyFallback,
-    /// Select the V1 fallback backend when multi-agent tools are enabled.
+    /// Enable collab tools.
     Collab,
     /// Enable task-path-based multi-agent routing.
     MultiAgentV2,
@@ -919,10 +918,12 @@ pub struct FeaturesToml {
     pub guardianv3: Option<FeatureToml<GuardianV3ConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
+    // Fork: explorer profile and worktree isolation settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explorer_profile: Option<FeatureToml<ExplorerProfileConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_worktree_isolation: Option<FeatureToml<AgentWorktreeIsolationConfigToml>>,
+    // Fork end
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<FeatureToml<TokenBudgetConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -990,20 +991,7 @@ impl FeaturesToml {
         if let Some(enabled) = self.multi_agent_v2.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::MultiAgentV2.key().to_string(), enabled);
         }
-        if let Some(enabled) = self
-            .explorer_profile
-            .as_ref()
-            .and_then(FeatureToml::enabled)
-        {
-            entries.insert(Feature::ExplorerProfile.key().to_string(), enabled);
-        }
-        if let Some(enabled) = self
-            .agent_worktree_isolation
-            .as_ref()
-            .and_then(FeatureToml::enabled)
-        {
-            entries.insert(Feature::AgentWorktreeIsolation.key().to_string(), enabled);
-        }
+        self.fork_entries(&mut entries);
         if let Some(enabled) = self.token_budget.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::TokenBudget.key().to_string(), enabled);
         }
@@ -1167,6 +1155,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Stable,
         default_enabled: true,
     },
+    // Fork: background exec notifications and dynamic workflows.
     FeatureSpec {
         id: Feature::ExecExitNotifications,
         key: "exec_exit_notifications",
@@ -1179,6 +1168,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
+    // Fork end
     FeatureSpec {
         id: Feature::ShellZshFork,
         key: "shell_zsh_fork",
@@ -1577,7 +1567,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Stable,
         default_enabled: false,
     },
-    // Fork: explorer profile (specs/explorer-and-questions-2026-10-25.md).
+    // Fork: explorer profile (specs/explorer-and-questions-2026-10-25.md) and worktree
+    // isolation (specs/agent-worktree-isolation-2026-10-25.md).
     FeatureSpec {
         id: Feature::ExplorerProfile,
         key: "explorer_profile",
@@ -1590,6 +1581,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
+    // Fork end
     FeatureSpec {
         id: Feature::ModelCatalogInContext,
         key: "model_catalog_in_context",
