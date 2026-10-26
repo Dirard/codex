@@ -29475,20 +29475,22 @@ func (v *WindowsWorldWritableWarningNotification) UnmarshalJSON(data []byte) err
 }
 
 type WorkflowAgent struct {
-	AgentPath     Optional[string]   `json:"agentPath,omitzero"`
-	CachedTokens  uint64             `json:"cachedTokens"`
-	ChargedTokens uint64             `json:"chargedTokens"`
-	Label         Optional[string]   `json:"label,omitzero"`
-	Phase         Optional[string]   `json:"phase,omitzero"`
-	Reason        Optional[string]   `json:"reason,omitzero"`
-	Seq           uint64             `json:"seq"`
-	State         WorkflowAgentState `json:"state"`
-	ThreadID      Optional[string]   `json:"threadId,omitzero"`
+	AgentPath     Optional[string]      `json:"agentPath,omitzero"`
+	Cached        OptionalNonNull[bool] `json:"cached,omitzero"`
+	CachedTokens  uint64                `json:"cachedTokens"`
+	ChargedTokens uint64                `json:"chargedTokens"`
+	Label         Optional[string]      `json:"label,omitzero"`
+	Phase         Optional[string]      `json:"phase,omitzero"`
+	Reason        Optional[string]      `json:"reason,omitzero"`
+	Seq           uint64                `json:"seq"`
+	State         WorkflowAgentState    `json:"state"`
+	ThreadID      Optional[string]      `json:"threadId,omitzero"`
 }
 
 var workflowAgentSpec = objectSpec{
 	fields: []objectField{
 		{name: "agentPath"},
+		{name: "cached", flags: fieldNonNullOptional},
 		{name: "cachedTokens", flags: fieldRequired | fieldRejectNull},
 		{name: "chargedTokens", flags: fieldRequired | fieldRejectNull},
 		{name: "label"},
@@ -29615,25 +29617,68 @@ func (v *WorkflowPhase) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type WorkflowResumeStats struct {
+	From          string `json:"from"`
+	Served        uint64 `json:"served"`
+	SourceResults uint64 `json:"sourceResults"`
+	Unused        uint64 `json:"unused"`
+}
+
+var workflowResumeStatsSpec = objectSpec{
+	fields: []objectField{
+		{name: "from", flags: fieldRequired | fieldRejectNull},
+		{name: "served", flags: fieldRequired | fieldRejectNull},
+		{name: "sourceResults", flags: fieldRequired | fieldRejectNull},
+		{name: "unused", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v WorkflowResumeStats) MarshalJSON() ([]byte, error) {
+	type wire WorkflowResumeStats
+	return json.Marshal(wire(v))
+}
+
+func (v *WorkflowResumeStats) UnmarshalJSON(data []byte) error {
+	type wire WorkflowResumeStats
+	var s objectScan
+	if _, err := s.begin(data, &workflowResumeStatsSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if v.Served < 0 {
+		return DecodeError{Field: "served", Reason: "below minimum 0"}
+	}
+	if v.SourceResults < 0 {
+		return DecodeError{Field: "sourceResults", Reason: "below minimum 0"}
+	}
+	if v.Unused < 0 {
+		return DecodeError{Field: "unused", Reason: "below minimum 0"}
+	}
+	return nil
+}
+
 type WorkflowRun struct {
-	AgentCounts   WorkflowAgentCounts       `json:"agentCounts"`
-	Agents        Optional[[]WorkflowAgent] `json:"agents,omitzero"`
-	BudgetTokens  Optional[uint64]          `json:"budgetTokens,omitzero"`
-	CachedTokens  uint64                    `json:"cachedTokens"`
-	ChargedTokens uint64                    `json:"chargedTokens"`
-	CurrentPhase  Optional[string]          `json:"currentPhase,omitzero"`
-	Description   string                    `json:"description"`
-	Error         Optional[string]          `json:"error,omitzero"`
-	FinishedAtMs  Optional[int64]           `json:"finishedAtMs,omitzero"`
-	LogsTail      []string                  `json:"logsTail"`
-	Name          string                    `json:"name"`
-	NullReasons   map[string]uint64         `json:"nullReasons"`
-	Phases        []WorkflowPhase           `json:"phases"`
-	ResultPreview Optional[string]          `json:"resultPreview,omitzero"`
-	Revision      uint64                    `json:"revision"`
-	RunID         string                    `json:"runId"`
-	StartedAtMs   int64                     `json:"startedAtMs"`
-	Status        WorkflowRunStatus         `json:"status"`
+	AgentCounts   WorkflowAgentCounts           `json:"agentCounts"`
+	Agents        Optional[[]WorkflowAgent]     `json:"agents,omitzero"`
+	BudgetTokens  Optional[uint64]              `json:"budgetTokens,omitzero"`
+	CachedTokens  uint64                        `json:"cachedTokens"`
+	ChargedTokens uint64                        `json:"chargedTokens"`
+	CurrentPhase  Optional[string]              `json:"currentPhase,omitzero"`
+	Description   string                        `json:"description"`
+	Error         Optional[string]              `json:"error,omitzero"`
+	FinishedAtMs  Optional[int64]               `json:"finishedAtMs,omitzero"`
+	LogsTail      []string                      `json:"logsTail"`
+	Name          string                        `json:"name"`
+	NullReasons   map[string]uint64             `json:"nullReasons"`
+	Phases        []WorkflowPhase               `json:"phases"`
+	ResultPreview Optional[string]              `json:"resultPreview,omitzero"`
+	Resume        Optional[WorkflowResumeStats] `json:"resume,omitzero"`
+	Revision      uint64                        `json:"revision"`
+	RunID         string                        `json:"runId"`
+	StartedAtMs   int64                         `json:"startedAtMs"`
+	Status        WorkflowRunStatus             `json:"status"`
 }
 
 var workflowRunSpec = objectSpec{
@@ -29652,6 +29697,7 @@ var workflowRunSpec = objectSpec{
 		{name: "nullReasons", flags: fieldRequired | fieldRejectNull},
 		{name: "phases", flags: fieldRequired | fieldRejectNull},
 		{name: "resultPreview"},
+		{name: "resume"},
 		{name: "revision", flags: fieldRequired | fieldRejectNull},
 		{name: "runId", flags: fieldRequired | fieldRejectNull},
 		{name: "startedAtMs", flags: fieldRequired | fieldRejectNull},

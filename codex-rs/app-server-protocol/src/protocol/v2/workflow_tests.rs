@@ -130,3 +130,46 @@ fn workflow_read_params_default_to_no_result() {
         }
     );
 }
+
+/// R8.7: a resumed run reports its journal use and the calls answered from it; other
+/// runs serialize without either field.
+#[test]
+fn resumed_runs_carry_resume_counts_and_cached_calls() {
+    let mut tracker = RunTracker::new(
+        "wf-0a1b2c3e".to_string(),
+        "find-bugs".to_string(),
+        "Find bugs".to_string(),
+        &[],
+        /*budget_tokens*/ None,
+        1_000,
+    );
+    tracker.set_resume(codex_workflow::ResumeStats {
+        from: "wf-0a1b2c3d".to_string(),
+        source_results: 2,
+        served: 1,
+        unused: 1,
+    });
+    tracker.agent_cached(1, Some("first".to_string()), /*phase*/ None);
+    let run = WorkflowRun::from_snapshot(
+        tracker.snapshot(/*include_agents*/ true),
+        /*include_agents*/ true,
+    );
+    let value = serde_json::to_value(&run).expect("serialize run");
+    assert_eq!(
+        value["resume"],
+        json!({"from": "wf-0a1b2c3d", "sourceResults": 2, "served": 1, "unused": 1})
+    );
+    assert_eq!(value["agents"][0]["cached"], json!(true));
+    assert_eq!(
+        serde_json::from_value::<WorkflowRun>(value).expect("deserialize run"),
+        run
+    );
+
+    let plain = serde_json::to_value(WorkflowRun::from_snapshot(
+        finished_snapshot(),
+        /*include_agents*/ true,
+    ))
+    .expect("serialize run");
+    assert_eq!(plain.get("resume"), None);
+    assert_eq!(plain["agents"][0].get("cached"), None);
+}

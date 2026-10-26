@@ -18,4 +18,9 @@ agentPath: string | null, threadId: string | null,
 /**
  * Why the call resolved to null.
  */
-reason: string | null, chargedTokens: number, cachedTokens: number, };
+reason: string | null, chargedTokens: number, cachedTokens: number,
+/**
+ * Answered from the journal of the resumed run without starting an agent; sent only
+ * when true.
+ */
+cached?: boolean, };

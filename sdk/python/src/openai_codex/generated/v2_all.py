@@ -6692,6 +6692,23 @@ class WorkflowPhase(BaseModel):
     title: str
 
 
+class WorkflowResumeStats(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    from_: Annotated[str, Field(alias="from", description="Id of the run this one resumed.")]
+    served: Annotated[int, Field(description="Calls of this run answered from them.", ge=0)]
+    source_results: Annotated[
+        int,
+        Field(
+            alias="sourceResults",
+            description="Successful agent results in the source journal.",
+            ge=0,
+        ),
+    ]
+    unused: Annotated[int, Field(description="Source results no call of this run used yet.", ge=0)]
+
+
 class WorkflowRunStatus(Enum):
     running = "running"
     completed = "completed"
@@ -10648,6 +10665,12 @@ class WorkflowAgent(BaseModel):
         str | None,
         Field(alias="agentPath", description="Agent path of the child thread, once spawned."),
     ] = None
+    cached: Annotated[
+        bool | None,
+        Field(
+            description="Answered from the journal of the resumed run without starting an agent; sent only when true."
+        ),
+    ] = None
     cached_tokens: Annotated[int, Field(alias="cachedTokens", ge=0)]
     charged_tokens: Annotated[int, Field(alias="chargedTokens", ge=0)]
     label: str | None = None
@@ -10700,6 +10723,12 @@ class WorkflowRun(BaseModel):
     ]
     phases: list[WorkflowPhase]
     result_preview: Annotated[str | None, Field(alias="resultPreview")] = None
+    resume: Annotated[
+        WorkflowResumeStats | None,
+        Field(
+            description="How a run started with `resume_from` used the journal of its source run; absent for other runs."
+        ),
+    ] = None
     revision: Annotated[int, Field(ge=0)]
     run_id: Annotated[str, Field(alias="runId")]
     started_at_ms: Annotated[

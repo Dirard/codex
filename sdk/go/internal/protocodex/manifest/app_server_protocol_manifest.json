@@ -6000,9 +6000,9 @@
       }
     ],
     "digests": {
-      "manifestDigest": "0eda54f4599268f52abacc9bfb18f51dfca8a4d81fef33167deea633b1a99678",
-      "protocolDigest": "618dc8ab64a47969eda02ff64f0d11d985c0079d5cc2ba88e02c95e1e1b1cd6a",
-      "schemaDigest": "d7a627048fb380bf8244cb56bae0ee3291cbfa65a6b7b5d626a7d27646a2019f"
+      "manifestDigest": "c3340b8dfbfb430057d3852b0a05b695993628acb90ec762e65acfdd4c7c77fc",
+      "protocolDigest": "9ccc13a718121d1adbe94c464d0f3aaa7c8eb9b7cdae5330447f57ec8e45da0b",
+      "schemaDigest": "a34908ebbe6187d67a1958f535b42e3aae3a4cb7c7fbcdd0f506a6e0ad22a621"
     },
     "protocolMode": "experimental",
     "routingLifecycle": [
@@ -26126,6 +26126,27 @@
         "metadataStatus": "schemaSufficient",
         "rustType": "WorkflowPhase",
         "schemaRef": "#/definitions/v2/WorkflowPhase",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "WorkflowResumeStats",
+        "schemaRef": "#/definitions/v2/WorkflowResumeStats",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,

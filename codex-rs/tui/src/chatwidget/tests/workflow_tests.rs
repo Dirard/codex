@@ -34,6 +34,7 @@ fn workflow_run(status: WorkflowRunStatus) -> WorkflowRun {
         result_preview: None,
         error: None,
         agents: None,
+        resume: None,
     }
 }
 

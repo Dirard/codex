@@ -655,6 +655,7 @@ export type { WorkflowAgent } from "./WorkflowAgent";
 export type { WorkflowAgentCounts } from "./WorkflowAgentCounts";
 export type { WorkflowAgentState } from "./WorkflowAgentState";
 export type { WorkflowPhase } from "./WorkflowPhase";
+export type { WorkflowResumeStats } from "./WorkflowResumeStats";
 export type { WorkflowRun } from "./WorkflowRun";
 export type { WorkspaceMessage } from "./WorkspaceMessage";
 export type { WorkspaceMessageType } from "./WorkspaceMessageType";

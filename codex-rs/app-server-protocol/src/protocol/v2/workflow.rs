@@ -49,6 +49,29 @@ pub struct WorkflowRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub agents: Option<Vec<WorkflowAgent>>,
+    /// How a run started with `resume_from` used the journal of its source run; absent
+    /// for other runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub resume: Option<WorkflowResumeStats>,
+}
+
+/// Journal use of a resumed run.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowResumeStats {
+    /// Id of the run this one resumed.
+    pub from: String,
+    /// Successful agent results in the source journal.
+    #[ts(type = "number")]
+    pub source_results: u64,
+    /// Calls of this run answered from them.
+    #[ts(type = "number")]
+    pub served: u64,
+    /// Source results no call of this run used yet.
+    #[ts(type = "number")]
+    pub unused: u64,
 }
 
 /// `agent()` calls attributed to a phase.
@@ -115,6 +138,10 @@ pub struct WorkflowAgent {
     pub charged_tokens: u64,
     #[ts(type = "number")]
     pub cached_tokens: u64,
+    /// Answered from the journal of the resumed run without starting an agent; sent only
+    /// when true.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cached: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -227,6 +254,7 @@ impl From<codex_workflow::AgentEntry> for WorkflowAgent {
             reason: value.reason,
             charged_tokens: value.tokens.charged,
             cached_tokens: value.tokens.cached,
+            cached: value.cached,
         }
     }
 }
@@ -253,8 +281,7 @@ impl WorkflowRun {
             result_preview,
             error,
             agent_list,
-            // Fork: resume counts stay in core until the `/workflows` screen needs them.
-            resume: _,
+            resume,
         } = snapshot;
         Self {
             run_id,
@@ -283,6 +310,12 @@ impl WorkflowRun {
             error,
             agents: include_agents
                 .then(|| agent_list.into_iter().map(WorkflowAgent::from).collect()),
+            resume: resume.map(|resume| WorkflowResumeStats {
+                from: resume.from,
+                source_results: resume.source_results,
+                served: resume.served,
+                unused: resume.unused,
+            }),
         }
     }
 }

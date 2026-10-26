@@ -127,6 +127,7 @@ mod tests {
             result_preview: None,
             error: None,
             agents: None,
+            resume: None,
         }
     }
 

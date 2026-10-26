@@ -5,6 +5,7 @@ import type { WorkflowRunStatus } from "../WorkflowRunStatus";
 import type { WorkflowAgent } from "./WorkflowAgent";
 import type { WorkflowAgentCounts } from "./WorkflowAgentCounts";
 import type { WorkflowPhase } from "./WorkflowPhase";
+import type { WorkflowResumeStats } from "./WorkflowResumeStats";
 
 /**
  * Snapshot of a workflow run; `revision` grows on every change.
@@ -37,4 +38,9 @@ finishedAtMs: number | null, resultPreview: string | null, error: string | null,
 /**
  * Every `agent()` call; returned only by `thread/workflow/read`.
  */
-agents?: Array<WorkflowAgent>, };
+agents?: Array<WorkflowAgent>,
+/**
+ * How a run started with `resume_from` used the journal of its source run; absent
+ * for other runs.
+ */
+resume?: WorkflowResumeStats, };

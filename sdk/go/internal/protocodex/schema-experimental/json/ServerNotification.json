@@ -7263,6 +7263,10 @@
             "null"
           ]
         },
+        "cached": {
+          "description": "Answered from the journal of the resumed run without starting an agent; sent only when true.",
+          "type": "boolean"
+        },
         "cachedTokens": {
           "format": "uint64",
           "minimum": 0.0,
@@ -7400,6 +7404,40 @@
       ],
       "type": "object"
     },
+    "WorkflowResumeStats": {
+      "description": "Journal use of a resumed run.",
+      "properties": {
+        "from": {
+          "description": "Id of the run this one resumed.",
+          "type": "string"
+        },
+        "served": {
+          "description": "Calls of this run answered from them.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "sourceResults": {
+          "description": "Successful agent results in the source journal.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "unused": {
+          "description": "Source results no call of this run used yet.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "from",
+        "served",
+        "sourceResults",
+        "unused"
+      ],
+      "type": "object"
+    },
     "WorkflowRun": {
       "description": "Snapshot of a workflow run; `revision` grows on every change.",
       "properties": {
@@ -7493,6 +7531,17 @@
             "string",
             "null"
           ]
+        },
+        "resume": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkflowResumeStats"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How a run started with `resume_from` used the journal of its source run; absent for other runs."
         },
         "revision": {
           "format": "uint64",
