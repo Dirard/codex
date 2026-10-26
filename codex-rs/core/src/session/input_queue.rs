@@ -348,11 +348,13 @@ impl InputQueue {
 
     /// Clear any pending waiters and input buffered for the current turn.
     pub(crate) async fn clear_pending(&self, active_turn: &ActiveTurn) {
-        let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.clear_pending_waiters();
-        // Pending mail can own extension attachments whose destructors need the lock released.
-        let pending_input = std::mem::take(&mut turn_state.pending_input);
-        drop(turn_state);
+        // Fork: the guard ends with this block, so the requeue below may await.
+        let pending_input = {
+            let mut turn_state = active_turn.turn_state.lock().await;
+            turn_state.clear_pending_waiters();
+            // Pending mail can own extension attachments whose destructors need the lock released.
+            std::mem::take(&mut turn_state.pending_input)
+        };
         // Fork: drops the rest of the input, then requeues its background notifications.
         self.fork_requeue_background_notifications(pending_input)
             .await;
