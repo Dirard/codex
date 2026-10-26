@@ -1072,6 +1072,14 @@ async fn status_snapshot_includes_monthly_limit() {
     assert_snapshot!(sanitized);
 }
 
+// Fork: credit counts use the host locale's digit separators (`8 000` under
+// ru_RU); the snapshots keep the en-US form.
+fn en_us_credit_counts(text: String) -> String {
+    let format = codex_protocol::num_format::format_with_separators;
+    text.replace(&format(8_000), "8,000")
+        .replace(&format(25_000), "25,000")
+}
+
 #[tokio::test]
 async fn status_snapshot_includes_enterprise_monthly_credit_limit() {
     let temp_home = TempDir::new().expect("temp home");
@@ -1134,7 +1142,7 @@ async fn status_snapshot_includes_enterprise_monthly_credit_limit() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = en_us_credit_counts(sanitize_directory(rendered_lines).join("\n"));
     assert_snapshot!(sanitized);
 
     let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 46));
@@ -1143,7 +1151,7 @@ async fn status_snapshot_includes_enterprise_monthly_credit_limit() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = en_us_credit_counts(sanitize_directory(rendered_lines).join("\n"));
     assert_snapshot!(
         "status_snapshot_wraps_enterprise_monthly_credit_details_in_narrow_terminal",
         sanitized
