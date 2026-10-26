@@ -11,6 +11,8 @@ mod event_processor;
 mod event_processor_with_human_output;
 pub(crate) mod event_processor_with_jsonl_output;
 pub(crate) mod exec_events;
+// Fork: wait for workflow runs before exiting.
+mod workflow_wait;
 mod worktree;
 
 pub use cli::Cli;
@@ -1327,12 +1329,38 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let mut error_seen = false;
     let mut interrupt_channel_open = true;
     let primary_thread_id_for_requests = primary_thread_id.to_string();
+    // Fork: turns started by workflow notifications become the task (R7.5).
+    let mut task_id = task_id;
+    let mut workflow_wait: Option<workflow_wait::WorkflowWait> = None;
     loop {
+        let workflow_deadline = workflow_wait.as_ref().map_or_else(
+            || tokio::time::Instant::now() + std::time::Duration::from_secs(24 * 60 * 60),
+            workflow_wait::WorkflowWait::deadline,
+        );
         let server_event = tokio::select! {
+            () = tokio::time::sleep_until(workflow_deadline), if workflow_wait.is_some() => {
+                let Some(wait) = workflow_wait.as_mut() else {
+                    continue;
+                };
+                if wait.cancelled() {
+                    warn!("the turn after cancelling workflow runs did not finish in time");
+                    break;
+                }
+                wait.cancel_remaining(&client, &mut request_ids, &primary_thread_id_for_requests)
+                    .await;
+                continue;
+            }
             maybe_interrupt = interrupt_rx.recv(), if interrupt_channel_open => {
                 if maybe_interrupt.is_none() {
                     interrupt_channel_open = false;
                     continue;
+                }
+                // Fork: between workflow turns there is nothing to interrupt; stop waiting.
+                if workflow_wait
+                    .as_ref()
+                    .is_some_and(|wait| !wait.turn_in_progress)
+                {
+                    break;
                 }
                 if let Err(err) = send_request_with_response::<TurnInterruptResponse>(
                     &client,
@@ -1364,6 +1392,13 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             }
             InProcessServerEvent::ServerNotification(notification) => {
                 let mut notification = *notification;
+                if let Some(wait) = workflow_wait.as_mut()
+                    && let ServerNotification::TurnStarted(payload) = &notification
+                    && payload.thread_id == primary_thread_id_for_requests
+                {
+                    task_id = payload.turn.id.clone();
+                    wait.turn_in_progress = true;
+                }
                 if let ServerNotification::Error(payload) = &notification {
                     if payload.thread_id == primary_thread_id_for_requests
                         && payload.turn_id == task_id
@@ -1399,6 +1434,27 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     match event_processor.process_server_notification(notification) {
                         CodexStatus::Running => {}
                         CodexStatus::InitiateShutdown => {
+                            // Fork: keep processing workflow notification turns while runs
+                            // of this thread are active (R7.5).
+                            if workflow_wait.as_ref().is_none_or(|wait| !wait.cancelled())
+                                && !workflow_wait::active_workflow_runs(
+                                    &client,
+                                    &mut request_ids,
+                                    &primary_thread_id_for_requests,
+                                )
+                                .await
+                                .is_empty()
+                            {
+                                let wait = workflow_wait.get_or_insert_with(|| {
+                                    workflow_wait::WorkflowWait::new(
+                                        std::time::Duration::from_millis(
+                                            config.workflows.exec_wait_timeout_ms,
+                                        ),
+                                    )
+                                });
+                                wait.turn_in_progress = false;
+                                continue;
+                            }
                             if let Err(err) = request_shutdown(
                                 &client,
                                 &mut request_ids,
