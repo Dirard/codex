@@ -7395,10 +7395,68 @@
         }
       ]
     },
+    "WorkflowBudgetModeToml": {
+      "description": "What a workflow run does when its agents spend the token budget.",
+      "oneOf": [
+        {
+          "description": "Calls that have not started resolve to null; running agents finish their turn.",
+          "enum": [
+            "soft"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "As `soft`, and running agents are interrupted once the run spends more than its budget times `budget_hard_overshoot`.",
+          "enum": [
+            "hard"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "WorkflowStructuredOutputToml": {
+      "description": "How workflow agents are asked for answers that match a JSON schema.",
+      "oneOf": [
+        {
+          "description": "Native structured output until the provider rejects it, then the schema in the task.",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Native structured output (`text.format` with a JSON schema).",
+          "enum": [
+            "native"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The schema in the agent's task, for providers without JSON schema output.",
+          "enum": [
+            "prompt"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "WorkflowsToml": {
       "additionalProperties": false,
       "description": "Fork: limits and defaults of background workflow runs (`features.workflows`).",
       "properties": {
+        "budget_hard_overshoot": {
+          "description": "In `hard` budget mode, the multiple of the budget at which running agents are interrupted; values below 1.0 count as 1.0. Default: 1.0.",
+          "format": "double",
+          "type": "number"
+        },
+        "budget_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkflowBudgetModeToml"
+            }
+          ],
+          "description": "What happens when a run spends its token budget. Default: `soft`."
+        },
         "capacity_wait_ms": {
           "description": "How long a call waits for agent capacity before resolving to null, in milliseconds. Default: 600000.",
           "format": "uint64",
@@ -7454,6 +7512,14 @@
             }
           ],
           "description": "Whether the user approves a run before it starts. Default: `auto`."
+        },
+        "structured_output": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkflowStructuredOutputToml"
+            }
+          ],
+          "description": "How agents are asked for answers that match a JSON schema. Default: `auto`."
         }
       },
       "type": "object"

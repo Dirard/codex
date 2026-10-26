@@ -39,8 +39,37 @@ pub enum WorkflowApproval {
     Never,
 }
 
+/// Fork: what a workflow run does once its agents spent the token budget (R5.2, R5.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkflowBudgetMode {
+    /// Calls that have not started resolve to null; running agents finish their turn.
+    #[default]
+    Soft,
+    /// As `Soft`, and running agents are interrupted above the overshoot threshold.
+    Hard,
+}
+
+impl WorkflowBudgetMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Soft => "soft",
+            Self::Hard => "hard",
+        }
+    }
+}
+
+/// Fork: how workflow agents are asked for schema answers (R3.12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkflowStructuredOutput {
+    /// Native until the provider rejects it, then the schema in the task.
+    #[default]
+    Auto,
+    Native,
+    Prompt,
+}
+
 /// Fork: resolved `[workflows]` limits (`specs/dynamic-workflow-2026-10-25.md`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WorkflowsConfig {
     pub max_active_runs: usize,
     pub max_concurrent_agents: usize,
@@ -51,6 +80,10 @@ pub struct WorkflowsConfig {
     pub max_heap_bytes: usize,
     pub exec_wait_timeout_ms: u64,
     pub require_approval: WorkflowApproval,
+    pub budget_mode: WorkflowBudgetMode,
+    /// At least 1.0.
+    pub budget_hard_overshoot: f64,
+    pub structured_output: WorkflowStructuredOutput,
 }
 
 impl WorkflowsConfig {
@@ -60,8 +93,13 @@ impl WorkflowsConfig {
         cpus.saturating_sub(2).clamp(1, 16)
     }
 
+    /// Most `budget_hard_overshoot` accepted; larger values are cut to it.
+    pub const MAX_BUDGET_HARD_OVERSHOOT: f64 = 100.0;
+
     pub(super) fn from_toml(toml: Option<&codex_config::config_toml::WorkflowsToml>) -> Self {
         use codex_config::config_toml::WorkflowApprovalToml;
+        use codex_config::config_toml::WorkflowBudgetModeToml;
+        use codex_config::config_toml::WorkflowStructuredOutputToml;
         let defaults = Self::default();
         let Some(toml) = toml else {
             return defaults;
@@ -92,6 +130,31 @@ impl WorkflowsConfig {
                 WorkflowApprovalToml::Always => WorkflowApproval::Always,
                 WorkflowApprovalToml::Never => WorkflowApproval::Never,
             },
+            budget_mode: match toml.budget_mode.unwrap_or_default() {
+                WorkflowBudgetModeToml::Soft => WorkflowBudgetMode::Soft,
+                WorkflowBudgetModeToml::Hard => WorkflowBudgetMode::Hard,
+            },
+            budget_hard_overshoot: toml
+                .budget_hard_overshoot
+                .filter(|overshoot| overshoot.is_finite())
+                .map_or(defaults.budget_hard_overshoot, |overshoot| {
+                    overshoot.clamp(1.0, Self::MAX_BUDGET_HARD_OVERSHOOT)
+                }),
+            structured_output: match toml.structured_output.unwrap_or_default() {
+                WorkflowStructuredOutputToml::Auto => WorkflowStructuredOutput::Auto,
+                WorkflowStructuredOutputToml::Native => WorkflowStructuredOutput::Native,
+                WorkflowStructuredOutputToml::Prompt => WorkflowStructuredOutput::Prompt,
+            },
+        }
+    }
+
+    /// R5.4: charged tokens above which a hard-mode run interrupts its running agents.
+    pub fn hard_budget_threshold(&self, budget_tokens: u64) -> u64 {
+        let threshold = (budget_tokens as f64) * self.budget_hard_overshoot;
+        if threshold >= u64::MAX as f64 {
+            u64::MAX
+        } else {
+            threshold.ceil() as u64
         }
     }
 }
@@ -108,6 +171,9 @@ impl Default for WorkflowsConfig {
             max_heap_bytes: 256 * 1024 * 1024,
             exec_wait_timeout_ms: 7_200_000,
             require_approval: WorkflowApproval::Auto,
+            budget_mode: WorkflowBudgetMode::Soft,
+            budget_hard_overshoot: 1.0,
+            structured_output: WorkflowStructuredOutput::Auto,
         }
     }
 }

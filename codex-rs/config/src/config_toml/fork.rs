@@ -28,8 +28,33 @@ pub enum WorkflowApprovalToml {
     Never,
 }
 
+/// What a workflow run does when its agents spend the token budget.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowBudgetModeToml {
+    /// Calls that have not started resolve to null; running agents finish their turn.
+    #[default]
+    Soft,
+    /// As `soft`, and running agents are interrupted once the run spends more than its
+    /// budget times `budget_hard_overshoot`.
+    Hard,
+}
+
+/// How workflow agents are asked for answers that match a JSON schema.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowStructuredOutputToml {
+    /// Native structured output until the provider rejects it, then the schema in the task.
+    #[default]
+    Auto,
+    /// Native structured output (`text.format` with a JSON schema).
+    Native,
+    /// The schema in the agent's task, for providers without JSON schema output.
+    Prompt,
+}
+
 /// Fork: limits and defaults of background workflow runs (`features.workflows`).
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct WorkflowsToml {
     /// Non-terminal runs allowed per thread. Default: 3.
@@ -52,4 +77,11 @@ pub struct WorkflowsToml {
     pub exec_wait_timeout_ms: Option<u64>,
     /// Whether the user approves a run before it starts. Default: `auto`.
     pub require_approval: Option<WorkflowApprovalToml>,
+    /// What happens when a run spends its token budget. Default: `soft`.
+    pub budget_mode: Option<WorkflowBudgetModeToml>,
+    /// In `hard` budget mode, the multiple of the budget at which running agents are
+    /// interrupted; values below 1.0 count as 1.0. Default: 1.0.
+    pub budget_hard_overshoot: Option<f64>,
+    /// How agents are asked for answers that match a JSON schema. Default: `auto`.
+    pub structured_output: Option<WorkflowStructuredOutputToml>,
 }
