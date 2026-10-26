@@ -71,7 +71,7 @@
     },
     "AgentWorktreeIsolationConfigToml": {
       "additionalProperties": false,
-      "description": "`[features.agent_worktree_isolation]` settings for isolated MultiAgentV2 children.",
+      "description": "`[features.agent_worktree_isolation]` settings for isolated MultiAgentV2 children. The feature requires `features.multi_agent_v2.tool_namespace` to name a custom namespace such as `agents`.",
       "properties": {
         "base": {
           "allOf": [

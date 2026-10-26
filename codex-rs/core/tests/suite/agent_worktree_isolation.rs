@@ -46,7 +46,8 @@ use tokio::sync::broadcast;
 use tokio::time::timeout;
 use wiremock::MockServer;
 
-const NAMESPACE: &str = "collaboration";
+/// Worktree isolation requires a custom MultiAgentV2 tool namespace (R1.5).
+const NAMESPACE: &str = "agents";
 /// Every root request carries this first prompt in its history; child requests never do.
 const ROOT_PROMPT: &str = "root: coordinate isolated workers";
 const PARENT_FILE: &str = "base\nparent edit\n";
@@ -113,6 +114,7 @@ fn enable_isolation(config: &mut Config) {
             .expect("test config should allow feature update");
     }
     config.multi_agent_v2.max_concurrent_threads_per_session = 4;
+    config.multi_agent_v2.tool_namespace = Some(NAMESPACE.to_string());
 }
 
 async fn isolation_codex(
@@ -492,6 +494,7 @@ async fn worktree_isolation_requires_the_feature_and_a_known_value() -> Result<(
         .with_config(|config| {
             config.features.enable(Feature::Collab).expect("collab");
             config.features.enable(Feature::MultiAgentV2).expect("v2");
+            config.multi_agent_v2.tool_namespace = Some(NAMESPACE.to_string());
         })
         .with_workspace_setup(|cwd, _fs| async move { init_repository(cwd.as_path()) })
         .build_with_auto_env(&server)
@@ -1463,6 +1466,19 @@ async fn evict(test: &TestCodex, child: Child) -> Result<()> {
     Ok(())
 }
 
+/// Restarts the process. Config mutators run once per build, so the custom tool namespace
+/// (R1.5) is set again for the resumed session.
+async fn restart(
+    builder: TestCodexBuilder,
+    server: &MockServer,
+    previous: &TestCodex,
+) -> Result<TestCodex> {
+    let mut builder = builder.with_config(|config| {
+        config.multi_agent_v2.tool_namespace = Some(NAMESPACE.to_string());
+    });
+    builder.restart(server, previous).await
+}
+
 fn followup_arguments(message: &str) -> Value {
     json!({ "target": "worker", "message": message })
 }
@@ -1643,7 +1659,7 @@ async fn a_restarted_parent_reloads_its_child_into_the_worktree() -> Result<()> 
     child.thread.shutdown_and_wait().await?;
     initial.codex.flush_rollout().await?;
 
-    let resumed = builder.restart(&server, &initial).await?;
+    let resumed = restart(builder, &server, &initial).await?;
     // R6.2: the worktree with changes survived the previous process's tree shutdown.
     assert!(root.join("restarted.txt").exists());
     assert_eq!(resumed.thread_manager.list_thread_ids().await.len(), 1);
@@ -1700,7 +1716,7 @@ async fn a_worktree_owned_by_another_thread_is_not_accepted_after_restart() -> R
         format!(r#"{{"version":1,"ownerThreadId":"{}"}}"#, ThreadId::new()),
     )?;
 
-    let resumed = builder.restart(&server, &initial).await?;
+    let resumed = restart(builder, &server, &initial).await?;
     let followup = mount_root_call(
         &server,
         "follow up a tampered worktree",

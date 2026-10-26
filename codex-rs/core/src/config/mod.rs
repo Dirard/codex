@@ -3359,6 +3359,25 @@ fn validate_multi_agent_v2_wait_timeout(label: &str, value: i64) -> std::io::Res
     Ok(())
 }
 
+/// Fork: worktree isolation adds an `isolation` parameter to `spawn_agent`. The Responses
+/// backend checks the tools of the reserved default namespace against its own definitions
+/// and rejects every request that carries the extra parameter, so the feature needs a custom
+/// namespace (spec `specs/agent-worktree-isolation-2026-10-25.md`, R1.5).
+fn validate_agent_worktree_isolation_namespace(
+    isolation_enabled: bool,
+    namespace: Option<&str>,
+) -> std::io::Result<()> {
+    if isolation_enabled
+        && namespace.is_none_or(|namespace| namespace == DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.agent_worktree_isolation requires features.multi_agent_v2.tool_namespace to be set to a non-reserved namespace such as \"agents\"",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_multi_agent_v2_tool_namespace(
     namespace: Option<&str>,
     message_delivery: MultiAgentMessageDelivery,
@@ -4205,6 +4224,11 @@ impl Config {
         validate_multi_agent_v2_tool_namespace(
             multi_agent_v2.tool_namespace.as_deref(),
             multi_agent_v2.message_delivery,
+        )?;
+        validate_agent_worktree_isolation_namespace(
+            features.enabled(Feature::MultiAgentV2)
+                && features.enabled(Feature::AgentWorktreeIsolation),
+            multi_agent_v2.tool_namespace.as_deref(),
         )?;
         let agents_enabled = cfg
             .agents

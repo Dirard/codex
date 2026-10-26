@@ -432,7 +432,9 @@ pub enum AgentWorktreeBase {
     Head,
 }
 
-/// `[features.agent_worktree_isolation]` settings for isolated MultiAgentV2 children.
+/// `[features.agent_worktree_isolation]` settings for isolated MultiAgentV2 children. The
+/// feature requires `features.multi_agent_v2.tool_namespace` to name a custom namespace such
+/// as `agents`.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AgentWorktreeIsolationConfigToml {

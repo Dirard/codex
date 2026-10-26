@@ -25,7 +25,8 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const NAMESPACE: &str = "collaboration";
+/// Worktree isolation requires a custom MultiAgentV2 tool namespace (R1.5).
+const NAMESPACE: &str = "agents";
 const PARENT_PROMPT: &str = "spawn an isolated worker";
 const CHILD_PROMPT: &str = "work in the isolated checkout";
 const SPAWN_CALL_ID: &str = "spawn-isolated-worker";
@@ -102,7 +103,7 @@ async fn thread_read_reports_the_isolated_child_worktree() -> Result<()> {
     MockResponsesConfig::new(&server.uri())
         .with_model("gpt-5.4")
         .with_extra_config(
-            "[features.multi_agent_v2]\nenabled = true\n\n[features.agent_worktree_isolation]\nenabled = true",
+            "[features.multi_agent_v2]\nenabled = true\ntool_namespace = \"agents\"\n\n[features.agent_worktree_isolation]\nenabled = true",
         )
         .write(codex_home.path())?;
     write_models_cache(codex_home.path()).await?;

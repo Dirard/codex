@@ -12566,6 +12566,48 @@ message_delivery = "plaintext"
     Ok(())
 }
 
+/// Fork: the backend rejects `spawn_agent` with an `isolation` parameter in the reserved
+/// default namespace, so worktree isolation needs a custom one (R1.5).
+#[tokio::test]
+async fn agent_worktree_isolation_requires_a_custom_tool_namespace() -> std::io::Result<()> {
+    async fn load(contents: &str) -> std::io::Result<Config> {
+        let codex_home = TempDir::new()?;
+        std::fs::write(codex_home.path().join(CONFIG_TOML_FILE), contents)?;
+        ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .build()
+            .await
+    }
+
+    for reserved in [
+        "[features.multi_agent_v2]\nenabled = true\n\n[features.agent_worktree_isolation]\nenabled = true\n",
+        "[features.multi_agent_v2]\nenabled = true\ntool_namespace = \"collaboration\"\n\n[features.agent_worktree_isolation]\nenabled = true\n",
+    ] {
+        let err = load(reserved)
+            .await
+            .expect_err("isolation with the reserved default namespace should fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            err.to_string(),
+            "features.agent_worktree_isolation requires features.multi_agent_v2.tool_namespace to be set to a non-reserved namespace such as \"agents\""
+        );
+    }
+
+    let custom = load(
+        "[features.multi_agent_v2]\nenabled = true\ntool_namespace = \"agents\"\n\n[features.agent_worktree_isolation]\nenabled = true\nbase = \"head\"\n",
+    )
+    .await?;
+    assert!(custom.features.enabled(Feature::AgentWorktreeIsolation));
+    assert_eq!(
+        custom.agent_worktree_isolation.base,
+        AgentWorktreeBase::Head
+    );
+    // Without MultiAgentV2 there is no `spawn_agent` V2 schema to reject.
+    load("[features.agent_worktree_isolation]\nenabled = true\n").await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn multi_agent_v2_config_from_feature_table() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
