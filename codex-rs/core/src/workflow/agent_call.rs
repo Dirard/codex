@@ -399,6 +399,7 @@ impl AgentCall<'_> {
             .map(|timeout| tokio::time::Instant::now() + Duration::from_millis(timeout));
         let mut status = thread.map(CodexThread::subscribe_status);
         let mut corrected = false;
+        let mut waiting_for_terminal = false;
         loop {
             let waited = self
                 .wait_terminal(thread, outcomes, &mut status, deadline, cell_cancel)
@@ -423,6 +424,23 @@ impl AgentCall<'_> {
             };
             match outcome.status {
                 AgentStatus::Completed(text) => {
+                    // R3.10: an agent that ended its turn while a background terminal will
+                    // still report its exit answers in the turn that notification starts.
+                    if let Some(thread) = thread
+                        && thread.session.background_terminals_block_eviction().await
+                    {
+                        if !waiting_for_terminal {
+                            waiting_for_terminal = true;
+                            let message = self.run.update(|tracker| {
+                                tracker.log(&format!(
+                                    "agent {} waits for its background terminal before answering",
+                                    self.seq
+                                ))
+                            });
+                            self.run.journal(JournalEvent::Log { message });
+                        }
+                        continue;
+                    }
                     let text = text.unwrap_or_default();
                     self.report_worktree(thread_id).await;
                     let Some(schema) = &self.options.schema else {

@@ -1440,3 +1440,196 @@ async fn agent_approval_requests_show_in_the_snapshot() -> Result<()> {
     assert!(!test.config.cwd.as_path().join("escalated.txt").exists());
     Ok(())
 }
+
+fn git(cwd: &std::path::Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .status()
+        .expect("run git");
+    assert!(status.success(), "git {args:?}");
+}
+
+/// R3.8: `isolation: 'worktree'` gives the agent its own checkout through agent worktree
+/// isolation, and the run logs where its changes are.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn worktree_isolation_reaches_workflow_agents() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    let script = "export const meta = { name: 'isolated', description: 'd' };\nreturn await agent('TASK-ISOLATED', { isolation: 'worktree' });\n";
+    responses.parent_runs_workflow(script, Value::Null);
+    responses.agent("TASK-ISOLATED", "isolated answer", (0, 0, 0));
+    let test = test_codex()
+        .with_config(|config| {
+            for feature in [
+                Feature::Collab,
+                Feature::MultiAgentV2,
+                Feature::Workflows,
+                Feature::AgentWorktreeIsolation,
+            ] {
+                config.features.enable(feature).expect("feature");
+            }
+            // Agent worktree isolation needs a custom collaboration namespace (R1.5).
+            config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+            config.workspace_roots = vec![config.cwd.clone()];
+            config.workflows.require_approval = codex_core::config::WorkflowApproval::Never;
+        })
+        .with_workspace_setup(|cwd, _fs| async move {
+            let cwd = cwd.as_path();
+            git(cwd, &["init", "--quiet", "-b", "main"]);
+            git(cwd, &["config", "user.name", "Codex Test"]);
+            git(cwd, &["config", "user.email", "codex@example.invalid"]);
+            std::fs::write(cwd.join("a.txt"), "base\n")?;
+            git(cwd, &["add", "."]);
+            git(
+                cwd,
+                &["commit", "--quiet", "--no-gpg-sign", "-m", "initial"],
+            );
+            Ok(())
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("run it").await?;
+    let run = finished_run(&test.codex).await;
+    assert_eq!(run.status, RunStatus::Completed, "{run:?}");
+    assert_eq!(
+        run_result(&test.codex, &run.run_id),
+        json!("isolated answer")
+    );
+    assert!(
+        run.logs_tail
+            .iter()
+            .any(|line| line.starts_with("agent 1 worktree:")),
+        "{:?}",
+        run.logs_tail
+    );
+    Ok(())
+}
+
+/// Explorer workflow agents keep the explorer profile: its instructions, its read-only
+/// sandbox and its result cap for text answers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn explorer_profile_applies_to_workflow_agents() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    let script = "export const meta = { name: 'explore', description: 'd' };\nreturn await agent('TASK-EXPLORE', { agent_type: 'explorer' });\n";
+    responses.parent_runs_workflow(script, Value::Null);
+    let long_answer = "finding ".repeat(400);
+    responses.agent("TASK-EXPLORE", &long_answer, (0, 0, 0));
+    let test = build(&server, |config| {
+        config
+            .features
+            .enable(Feature::ExplorerProfile)
+            .expect("feature");
+        config.explorer_profile.max_result_tokens = 50;
+    })
+    .await?;
+
+    test.submit_turn("run it").await?;
+    let run = finished_run(&test.codex).await;
+    let result = run_result(&test.codex, &run.run_id);
+    let text = result.as_str().expect("text result");
+    assert!(
+        text.contains("[explorer_profile: this result was truncated"),
+        "{text}"
+    );
+    assert!(text.len() < long_answer.len());
+    let agent_request = &responses.served("TASK-EXPLORE")[0];
+    assert!(
+        agent_request.contains("# Explorer profile"),
+        "{agent_request}"
+    );
+    let (snapshot, _) = test.codex.workflow_run(&run.run_id, false).expect("run");
+    let thread = test
+        .thread_manager
+        .get_thread(codex_protocol::ThreadId::from_string(
+            snapshot.agent_list[0].thread_id.as_deref().expect("thread"),
+        )?)
+        .await?;
+    let child_config = thread.config_snapshot().await;
+    assert!(
+        child_config
+            .permission_profile
+            .file_system_sandbox_policy()
+            .entries
+            .iter()
+            .all(|entry| entry.access != codex_protocol::permissions::FileSystemAccessMode::Write),
+        "{:?}",
+        child_config.permission_profile
+    );
+    Ok(())
+}
+
+const TERMINAL_MARKER: &str = "<background_terminal_notification>";
+
+/// R3.10: an agent that ends its turn while its background terminal will report an exit
+/// answers in the turn that the exit notification starts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agents_waiting_for_background_terminals_answer_after_the_exit() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    let script =
+        "export const meta = { name: 'bg', description: 'd' };\nreturn await agent('TASK-BG');\n";
+    responses.parent_runs_workflow(script, Value::Null);
+    let is_bg_agent = |body: &str| body.contains(AGENT_MARKER) && body.contains("TASK-BG");
+    responses.rule(
+        "bg_notified",
+        1,
+        Duration::ZERO,
+        move |body| is_bg_agent(body) && body.contains(TERMINAL_MARKER),
+        message("resp-bg-notified", "terminal finished"),
+    );
+    responses.rule(
+        "bg_after_exec",
+        1,
+        Duration::ZERO,
+        move |body| is_bg_agent(body) && has_call_output(body, "bg-exec"),
+        message("resp-bg-after-exec", "started; waiting for the exit"),
+    );
+    let exec_arguments = json!({
+        "cmd": "sleep 1; echo bg-done",
+        "yield_time_ms": 200,
+        "login": false,
+        "notify_on_exit": true,
+    })
+    .to_string();
+    responses.rule(
+        "bg_start",
+        1,
+        Duration::ZERO,
+        is_bg_agent,
+        sse(vec![
+            ev_response_created("resp-bg-start"),
+            ev_function_call("bg-exec", "exec_command", &exec_arguments),
+            completed("resp-bg-start", 0, 0, 0),
+        ]),
+    );
+    let test = build(&server, |config| {
+        config
+            .features
+            .enable(Feature::ExecExitNotifications)
+            .expect("feature");
+    })
+    .await?;
+
+    test.submit_turn("run it").await?;
+    let run = finished_run(&test.codex).await;
+    assert_eq!(run.status, RunStatus::Completed, "{run:?}");
+    assert_eq!(
+        run_result(&test.codex, &run.run_id),
+        json!("terminal finished")
+    );
+    assert!(
+        run.logs_tail
+            .iter()
+            .any(|line| line.contains("waits for its background terminal")),
+        "{:?}",
+        run.logs_tail
+    );
+    assert_eq!(responses.served("bg_notified").len(), 1);
+    Ok(())
+}
