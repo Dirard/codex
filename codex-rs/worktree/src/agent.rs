@@ -29,6 +29,9 @@ pub const AGENT_COMMIT_AUTHOR_EMAIL: &str = "codex-agent@localhost.invalid";
 /// Changed paths listed in a branch summary before the remainder is only counted.
 pub const MAX_LISTED_CHANGED_PATHS: usize = 20;
 
+/// Highest suffix of a free agent branch name: `<branch>-2` through `<branch>-20`.
+const LAST_FREE_BRANCH_SUFFIX: usize = 20;
+
 const THREAD_KEY: &str = "codex.agentThread";
 const BASE_KEY: &str = "codex.agentBase";
 const BASE_KIND_KEY: &str = "codex.agentBaseKind";
@@ -129,20 +132,25 @@ pub fn write_agent_metadata(root: &Path, metadata: &AgentWorktreeMetadata) -> Re
         if value.is_empty() {
             continue;
         }
-        git_output(
-            root,
-            GitOperation::Metadata,
-            [
-                OsStr::new("config"),
-                OsStr::new("--file"),
-                config.as_os_str(),
-                OsStr::new(key),
-                OsStr::new(value),
-            ],
-        )
-        .with_context(|| format!("cannot record {key} for the agent worktree"))?;
+        set_metadata_value(root, &config, key, value)?;
     }
     Ok(())
+}
+
+fn set_metadata_value(root: &Path, config: &Path, key: &str, value: &str) -> Result<()> {
+    git_output(
+        root,
+        GitOperation::Metadata,
+        [
+            OsStr::new("config"),
+            OsStr::new("--file"),
+            config.as_os_str(),
+            OsStr::new(key),
+            OsStr::new(value),
+        ],
+    )
+    .map(|_| ())
+    .with_context(|| format!("cannot record {key} for the agent worktree"))
 }
 
 /// Reads metadata written by [`write_agent_metadata`]; `None` when the worktree has none.
@@ -190,6 +198,13 @@ pub fn read_agent_metadata(root: &Path) -> Result<Option<AgentWorktreeMetadata>>
     };
     let base_kind = AgentWorktreeBaseKind::parse(&base_kind)
         .with_context(|| format!("unknown agent worktree base kind `{base_kind}`"))?;
+    // The base and branch reach the parent's merge command and the completion block, so
+    // only values the host itself could have written are accepted.
+    if !matches!(base_sha.len(), 40 | 64) || !base_sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        bail!("agent worktree base `{base_sha}` is not a full object ID");
+    }
+    branch_ref(&branch)?;
     Ok(Some(AgentWorktreeMetadata {
         thread_id,
         base_sha,
@@ -211,9 +226,12 @@ pub struct CheckpointRequest<'a> {
 pub enum CheckpointOutcome {
     /// Nothing changed since the base or the last checkpoint; no commit or branch was made.
     Unchanged,
-    /// The agent branch now points at `commit` and the worktree HEAD is attached to it.
+    /// `branch` now points at `commit` and the worktree HEAD is attached to it.
     Committed {
         commit: String,
+        /// The agent branch that holds the work. It differs from the recorded branch when
+        /// that name belonged to another worktree; the new name is already persisted.
+        branch: String,
         /// Set when the commit succeeded but refreshing the worktree index did not.
         index_refresh_error: Option<String>,
     },
@@ -222,29 +240,23 @@ pub enum CheckpointOutcome {
 /// Commits the worktree's changes onto the agent branch (spec step "checkpoint the worktree").
 ///
 /// Tracked changes and untracked, non-ignored files are committed through a temporary
-/// index onto `refs/heads/<branch>`. The update refuses to drop commits: an existing branch
-/// must be an ancestor of the new commit, and a branch created or moved concurrently fails
-/// the compare-and-swap. The worktree HEAD is then attached to the branch and its index
-/// refreshed without touching files. A clean worktree at its last recorded commit produces
-/// no commit; a failure leaves the branch, HEAD, index and files unchanged.
+/// index onto the worktree's own agent branch. A branch is the worktree's own while it does
+/// not exist or its tip lies in the worktree history, so a checkpoint never drops commits or
+/// moves another worktree's branch. When the recorded name belongs to someone else, the
+/// first own `<branch>-<n>` is persisted as the agent branch and used instead. A branch
+/// created or moved concurrently fails the compare-and-swap. The worktree HEAD is then
+/// attached to the branch and its index refreshed without touching files. A clean worktree
+/// at its last recorded commit produces no commit; a failure leaves branches, HEAD, index
+/// and files unchanged.
 pub fn checkpoint(request: CheckpointRequest<'_>) -> Result<CheckpointOutcome> {
     let root = request.root;
     let metadata = request.metadata;
-    let branch_ref = branch_ref(&metadata.branch)?;
     let head = optional_commit(root, "HEAD")?.context("the agent worktree has no HEAD commit")?;
-    let branch_tip = optional_commit(root, &branch_ref)?;
-    let recorded = branch_tip.as_deref().unwrap_or(&metadata.base_sha);
+    let branch = owned_branch(root, &metadata.branch, &head)?;
+    let recorded = branch.tip.as_deref().unwrap_or(&metadata.base_sha);
     let dirty = has_changes(root)?;
     if !dirty && head == recorded {
         return Ok(CheckpointOutcome::Unchanged);
-    }
-    if let Some(tip) = branch_tip.as_deref()
-        && !is_ancestor(root, tip, &head)?
-    {
-        bail!(
-            "agent branch {} points at {tip}, which is not in the worktree history; refusing to overwrite it",
-            metadata.branch
-        );
     }
 
     let commit = if dirty {
@@ -264,6 +276,11 @@ pub fn checkpoint(request: CheckpointRequest<'_>) -> Result<CheckpointOutcome> {
         head
     };
 
+    if branch.name != metadata.branch {
+        // Persist the free name before any ref moves, so a failure leaves refs as they were
+        // and a restart finds the branch that holds the work.
+        set_metadata_value(root, &worktree_config_path(root)?, BRANCH_KEY, &branch.name)?;
+    }
     git_output(
         root,
         GitOperation::Metadata,
@@ -271,16 +288,16 @@ pub fn checkpoint(request: CheckpointRequest<'_>) -> Result<CheckpointOutcome> {
             OsStr::new("update-ref"),
             OsStr::new("-m"),
             OsStr::new("codex agent checkpoint"),
-            OsStr::new(&branch_ref),
+            OsStr::new(&branch.reference),
             OsStr::new(&commit),
-            OsStr::new(branch_tip.as_deref().unwrap_or("")),
+            OsStr::new(branch.tip.as_deref().unwrap_or("")),
         ],
     )
     .context("cannot update the agent branch")?;
     git_output(
         root,
         GitOperation::Metadata,
-        ["symbolic-ref", "HEAD", branch_ref.as_str()],
+        ["symbolic-ref", "HEAD", branch.reference.as_str()],
     )
     .context("cannot attach the agent worktree to its branch")?;
     let index_refresh_error = git_output(root, GitOperation::WorkingTree, ["reset", "-q"])
@@ -288,8 +305,58 @@ pub fn checkpoint(request: CheckpointRequest<'_>) -> Result<CheckpointOutcome> {
         .map(|error| error.to_string());
     Ok(CheckpointOutcome::Committed {
         commit,
+        branch: branch.name,
         index_refresh_error,
     })
+}
+
+/// The agent branch a checkpoint records onto.
+struct OwnedBranch {
+    name: String,
+    reference: String,
+    /// Current tip; `None` while the branch does not exist yet.
+    tip: Option<String>,
+}
+
+/// Picks the worktree's own agent branch: the recorded one, or the first own free name.
+///
+/// A branch is the worktree's own while it does not exist or its tip is an ancestor of
+/// `head`. A colliding sibling's branch or one moved outside the worktree is someone else's
+/// and is never moved; `<branch>-2` through `<branch>-20` are tried instead. A candidate
+/// that already holds this worktree's history is reused, which also covers a free name
+/// whose persistence failed earlier.
+fn owned_branch(root: &Path, recorded: &str, head: &str) -> Result<OwnedBranch> {
+    let candidates = std::iter::once(recorded.to_owned())
+        .chain((2..=LAST_FREE_BRANCH_SUFFIX).map(|suffix| format!("{recorded}-{suffix}")));
+    for name in candidates {
+        let reference = branch_ref(&name)?;
+        let tip = optional_commit(root, &reference)?;
+        if let Some(tip) = tip.as_deref()
+            && !is_ancestor(root, tip, head)?
+        {
+            continue;
+        }
+        return Ok(OwnedBranch {
+            name,
+            reference,
+            tip,
+        });
+    }
+    bail!(
+        "agent branch {recorded} and its free names up to {recorded}-{LAST_FREE_BRANCH_SUFFIX} hold other work; refusing to overwrite them"
+    )
+}
+
+/// Tip of `branch` when it exists and lies in the worktree history.
+fn own_branch_tip(root: &Path, branch: &str) -> Result<Option<String>> {
+    let reference = branch_ref(branch)?;
+    let (Some(tip), Some(head)) = (
+        optional_commit(root, &reference)?,
+        optional_commit(root, "HEAD")?,
+    ) else {
+        return Ok(None);
+    };
+    Ok(is_ancestor(root, &tip, &head)?.then_some(tip))
 }
 
 /// One path changed between the base and the agent branch.
@@ -310,13 +377,16 @@ pub struct BranchChanges {
     pub total_files: usize,
 }
 
-/// Summarizes the agent branch against its base; `None` when the branch does not exist.
+/// Summarizes the agent branch against its base.
+///
+/// `None` when the branch does not exist or is not the worktree's own: a branch of the same
+/// name outside the worktree history holds someone else's work.
 pub fn branch_changes(
     root: &Path,
     metadata: &AgentWorktreeMetadata,
 ) -> Result<Option<BranchChanges>> {
     let branch_ref = branch_ref(&metadata.branch)?;
-    if optional_commit(root, &branch_ref)?.is_none() {
+    if own_branch_tip(root, &metadata.branch)?.is_none() {
         return Ok(None);
     }
     let range = [metadata.base_sha.as_str(), branch_ref.as_str()];
@@ -405,8 +475,9 @@ pub enum RemoveOutcome {
 
 /// Removes an agent worktree that never changed (spec step "remove the worktree").
 ///
-/// Keeps the worktree when its branch exists, when it has tracked or untracked non-ignored
-/// changes, or when its HEAD left the base. Ignored files such as build output do not prevent
+/// Keeps the worktree when its own branch exists, when it has tracked or untracked
+/// non-ignored changes, or when its HEAD left the base. A branch of the same name outside the
+/// worktree history is not its own. Ignored files such as build output do not prevent
 /// removal.
 pub fn remove_if_unchanged(
     source_root: &Path,
@@ -420,8 +491,7 @@ pub fn remove_if_unchanged(
         remove_empty_bucket(root);
         return Ok(RemoveOutcome::AlreadyMissing);
     }
-    let branch_ref = branch_ref(&metadata.branch)?;
-    if optional_commit(root, &branch_ref)?.is_some() {
+    if own_branch_tip(root, &metadata.branch)?.is_some() {
         return Ok(RemoveOutcome::Kept(KeptReason::Branch));
     }
     if has_changes(root)? {
@@ -484,12 +554,15 @@ pub fn discard_agent_worktree(source_root: &Path, root: &Path) -> Result<()> {
 }
 
 /// Validates an agent branch name and returns its full ref.
+///
+/// Only ASCII letters, digits, `_`, `-`, `.` and `/` are accepted: the name appears verbatim
+/// in the parent's merge command and in the completion block.
 fn branch_ref(branch: &str) -> Result<String> {
     if !branch.starts_with("codex/agents/")
         || branch.contains("..")
-        || branch
+        || !branch
             .chars()
-            .any(|character| character.is_whitespace() || "~^:?*[\\".contains(character))
+            .all(|character| character.is_ascii_alphanumeric() || "_-./".contains(character))
     {
         bail!("invalid agent branch name `{branch}`");
     }

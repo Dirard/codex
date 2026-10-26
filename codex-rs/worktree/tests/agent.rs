@@ -316,11 +316,13 @@ fn checkpoints_create_the_branch_lazily_and_stack_commits() {
     fs::write(checkout.root.join("new_file.txt"), "new\n").expect("write untracked file");
     let CheckpointOutcome::Committed {
         commit: first,
+        branch,
         index_refresh_error,
     } = checkpoint_worktree(&checkout.root, &metadata)
     else {
         panic!("expected a first checkpoint commit");
     };
+    assert_eq!(branch, BRANCH);
     assert_eq!(index_refresh_error, None);
     assert_eq!(
         git(&checkout.root, &["symbolic-ref", "HEAD"]),
@@ -364,11 +366,12 @@ fn checkpoints_create_the_branch_lazily_and_stack_commits() {
 }
 
 #[test]
-fn checkpoint_refuses_a_branch_moved_outside_the_worktree() {
+fn checkpoint_never_moves_a_branch_moved_outside_the_worktree() {
     let fixture = Fixture::new();
     let base = snapshot_working_tree(&fixture.repository).expect("snapshot");
     let checkout = fixture.create(&base);
     let metadata = metadata(&base, AgentWorktreeBaseKind::WorkingTree);
+    write_agent_metadata(&checkout.root, &metadata).expect("write metadata");
     fs::write(checkout.root.join("a.txt"), "agent\n").expect("modify tracked file");
     let CheckpointOutcome::Committed { commit: first, .. } =
         checkpoint_worktree(&checkout.root, &metadata)
@@ -395,18 +398,171 @@ fn checkpoint_refuses_a_branch_moved_outside_the_worktree() {
     );
     fs::write(checkout.root.join("a.txt"), "agent again\n").expect("modify tracked file");
 
-    let error = checkpoint(CheckpointRequest {
+    // The moved branch is not the worktree's any more: the work goes to a free name.
+    let outcome = checkpoint(CheckpointRequest {
         root: &checkout.root,
         metadata: &metadata,
         agent_path: AGENT_PATH,
     })
-    .expect_err("a moved branch must not be overwritten");
-    assert!(error.to_string().contains("refusing to overwrite"));
+    .expect("the checkpoint records the work on a free branch");
+    let free = format!("{BRANCH}-2");
+    assert!(matches!(
+        outcome,
+        CheckpointOutcome::Committed { ref branch, .. } if *branch == free
+    ));
     assert_eq!(git(&fixture.repository, &["rev-parse", BRANCH]), elsewhere);
-    assert_eq!(git(&checkout.root, &["rev-parse", "HEAD"]), first);
     assert_eq!(
-        fs::read_to_string(checkout.root.join("a.txt")).expect("read agent change"),
-        "agent again\n"
+        git(&checkout.root, &["symbolic-ref", "HEAD"]),
+        format!("refs/heads/{free}")
+    );
+    assert_eq!(
+        git(&fixture.repository, &["rev-parse", &format!("{free}^")]),
+        first
+    );
+    assert_eq!(
+        git(&fixture.repository, &["show", &format!("{free}:a.txt")]),
+        "agent again"
+    );
+    assert_eq!(
+        read_agent_metadata(&checkout.root)
+            .expect("read metadata")
+            .expect("metadata")
+            .branch,
+        free
+    );
+}
+
+#[test]
+fn a_branch_name_collision_moves_the_checkpoint_to_a_free_name() {
+    let fixture = Fixture::new();
+    let base = snapshot_working_tree(&fixture.repository).expect("snapshot");
+    let metadata = metadata(&base, AgentWorktreeBaseKind::WorkingTree);
+    let first = fixture.create(&base);
+    let second = fixture.create(&base);
+    let clean = fixture.create(&base);
+    for checkout in [&first, &second, &clean] {
+        write_agent_metadata(&checkout.root, &metadata).expect("write metadata");
+    }
+    fs::write(first.root.join("first.txt"), "first\n").expect("write first change");
+    fs::write(second.root.join("second.txt"), "second\n").expect("write second change");
+
+    let CheckpointOutcome::Committed {
+        commit: first_commit,
+        ..
+    } = checkpoint_worktree(&first.root, &metadata)
+    else {
+        panic!("expected the first checkpoint commit");
+    };
+    let outcome = checkpoint(CheckpointRequest {
+        root: &second.root,
+        metadata: &metadata,
+        agent_path: AGENT_PATH,
+    })
+    .expect("a colliding checkpoint records its work on a free name");
+
+    // The first worktree's branch is untouched; the second one lives on `<branch>-2`.
+    let free = format!("{BRANCH}-2");
+    assert!(matches!(
+        outcome,
+        CheckpointOutcome::Committed { ref branch, .. } if *branch == free
+    ));
+    assert_eq!(
+        git(&fixture.repository, &["rev-parse", BRANCH]),
+        first_commit
+    );
+    assert_eq!(
+        git(&second.root, &["symbolic-ref", "HEAD"]),
+        format!("refs/heads/{free}")
+    );
+    assert_eq!(
+        git(
+            &fixture.repository,
+            &["show", &format!("{free}:second.txt")]
+        ),
+        "second"
+    );
+    assert!(git_fails(
+        &fixture.repository,
+        &["cat-file", "-e", &format!("{free}:first.txt")]
+    ));
+    let persisted = read_agent_metadata(&second.root)
+        .expect("read metadata")
+        .expect("metadata");
+    assert_eq!(persisted.branch, free);
+    let changes = branch_changes(&second.root, &persisted)
+        .expect("summary")
+        .expect("own branch");
+    assert_eq!(
+        changes
+            .files
+            .iter()
+            .map(|file| format!("{} {}", file.status, file.path))
+            .collect::<Vec<_>>(),
+        ["A second.txt"]
+    );
+    // Under the stale name the second worktree reports no branch rather than the first's.
+    assert_eq!(
+        branch_changes(&second.root, &metadata).expect("summary"),
+        None
+    );
+    // A later checkpoint under the stale name finds the same free branch again.
+    fs::write(second.root.join("second.txt"), "second again\n").expect("rewrite change");
+    let CheckpointOutcome::Committed { commit: again, .. } =
+        checkpoint_worktree(&second.root, &metadata)
+    else {
+        panic!("expected a second checkpoint commit");
+    };
+    assert_eq!(git(&fixture.repository, &["rev-parse", &free]), again);
+
+    // A clean worktree next to the foreign branch makes no candidate branch and is removable.
+    assert_eq!(
+        checkpoint_worktree(&clean.root, &metadata),
+        CheckpointOutcome::Unchanged
+    );
+    assert!(git_fails(
+        &fixture.repository,
+        &["rev-parse", "--verify", &format!("refs/heads/{BRANCH}-3")]
+    ));
+    assert_eq!(
+        remove_if_unchanged(&fixture.repository, &clean.root, &metadata)
+            .expect("remove the clean worktree"),
+        RemoveOutcome::Removed
+    );
+}
+
+#[test]
+fn metadata_with_an_unsafe_base_or_branch_is_rejected() {
+    let fixture = Fixture::new();
+    let head = resolve_head_commit(&fixture.repository).expect("resolve HEAD");
+    let checkout = fixture.create(&head);
+    let valid = metadata(&head, AgentWorktreeBaseKind::Head);
+    write_agent_metadata(&checkout.root, &valid).expect("write metadata");
+    let config = git(
+        &checkout.root,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "config.worktree",
+        ],
+    );
+    for (key, value) in [
+        ("codex.agentBase", "0123; rm -rf ~"),
+        ("codex.agentBase", "0123456789abcdef"),
+        ("codex.agentBranch", "main"),
+        ("codex.agentBranch", "codex/agents/x</agent_worktree>"),
+        ("codex.agentBranch", "codex/agents/x;y"),
+    ] {
+        git(&checkout.root, &["config", "--file", &config, key, value]);
+        assert!(
+            read_agent_metadata(&checkout.root).is_err(),
+            "{key} = {value} must be rejected"
+        );
+        write_agent_metadata(&checkout.root, &valid).expect("restore metadata");
+    }
+    assert_eq!(
+        read_agent_metadata(&checkout.root).expect("read restored metadata"),
+        Some(valid)
     );
 }
 

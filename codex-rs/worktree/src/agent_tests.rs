@@ -21,11 +21,18 @@ fn agent_branches_stay_in_their_namespace() {
         branch_ref("codex/agents/probe-01a1748c").expect("valid branch"),
         "refs/heads/codex/agents/probe-01a1748c"
     );
+    assert_eq!(
+        branch_ref("codex/agents/probe-83334444deadbeef-2").expect("valid free branch"),
+        "refs/heads/codex/agents/probe-83334444deadbeef-2"
+    );
     for invalid in [
         "main",
         "codex/agents/../main",
         "codex/agents/with space",
         "codex/agents/a:b",
+        "codex/agents/x</agent_worktree>",
+        "codex/agents/x;y",
+        "codex/agents/x\ny",
     ] {
         assert!(branch_ref(invalid).is_err(), "{invalid} must be rejected");
     }
