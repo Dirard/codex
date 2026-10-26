@@ -155,6 +155,108 @@ async fn partial_usage_keeps_reported_counters() {
     }
 }
 
+/// Review R7-3 and R7-4 (docs/fork/reviews/2026-10-26-sandbox-compaction-review.md): output
+/// that is not reported is at least its reported reasoning, and a total below its parts, such
+/// as `0`, is not a total.
+#[tokio::test]
+async fn derived_counters_stay_consistent() {
+    for kind in ["response.completed", "response.incomplete"] {
+        for (reported, expected) in [
+            (
+                json!({ "input_tokens": 10, "output_tokens_details": { "reasoning_tokens": 5 } }),
+                TokenUsage {
+                    reasoning_output_tokens: 5,
+                    ..usage(10, 5, 15)
+                },
+            ),
+            (
+                json!({
+                    "input_tokens": 10,
+                    "output_tokens_details": { "reasoning_tokens": 5 },
+                    "total_tokens": 12,
+                }),
+                TokenUsage {
+                    reasoning_output_tokens: 5,
+                    ..usage(10, 5, 15)
+                },
+            ),
+            (
+                json!({ "input_tokens": 10, "output_tokens": 4, "total_tokens": 0 }),
+                usage(10, 4, 14),
+            ),
+            // Zero usage stays as reported; core decides what it says about the context.
+            (
+                json!({ "input_tokens": 0, "output_tokens": 0, "total_tokens": 0 }),
+                usage(0, 0, 0),
+            ),
+        ] {
+            assert_eq!(
+                reported_usage(kind, reported.clone()).await,
+                Some(expected),
+                "{kind} {reported}"
+            );
+        }
+    }
+}
+
+/// Review R7-5: a malformed optional field costs only that field, and a `null` detail counter
+/// is an absent counter, as at the top level.
+#[tokio::test]
+async fn malformed_optional_field_keeps_the_others() {
+    for kind in ["response.completed", "response.incomplete"] {
+        for (reported, expected) in [
+            (
+                json!({
+                    "input_tokens": 10,
+                    "input_tokens_details": { "cached_tokens": null },
+                    "output_tokens": 4,
+                    "output_tokens_details": { "reasoning_tokens": 3 },
+                    "total_tokens": 14,
+                    "codex_rollout_budget_units": 7,
+                }),
+                TokenUsage {
+                    reasoning_output_tokens: 3,
+                    codex_rollout_budget_units: Some(serde_json::Number::from(7)),
+                    ..usage(10, 4, 14)
+                },
+            ),
+            (
+                json!({
+                    "input_tokens": 10,
+                    "input_tokens_details": { "cached_tokens": "6" },
+                    "output_tokens": 4,
+                    "output_tokens_details": { "reasoning_tokens": 3 },
+                    "codex_rollout_budget_units": 7,
+                }),
+                TokenUsage {
+                    reasoning_output_tokens: 3,
+                    codex_rollout_budget_units: Some(serde_json::Number::from(7)),
+                    ..usage(10, 4, 14)
+                },
+            ),
+            (
+                json!({
+                    "input_tokens": 10,
+                    "input_tokens_details": { "cached_tokens": 6 },
+                    "output_tokens": 4,
+                    "output_tokens_details": { "reasoning_tokens": null },
+                    "codex_rollout_budget_units": "seven",
+                }),
+                TokenUsage {
+                    cached_input_tokens: 6,
+                    ..usage(10, 4, 14)
+                },
+            ),
+        ] {
+            assert_eq!(
+                reported_usage(kind, reported.clone()).await,
+                Some(expected),
+                "{kind} {reported}"
+            );
+        }
+    }
+}
+
 /// Without input or total tokens the usage says nothing about the context size; core estimates
 /// the context instead.
 #[tokio::test]
