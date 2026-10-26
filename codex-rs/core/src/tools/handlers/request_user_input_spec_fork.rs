@@ -41,6 +41,30 @@ pub(crate) fn modes_for_session(
         .collect()
 }
 
+/// In Default mode an empty response means nobody answered (client error, unsupported
+/// client, or auto-resolution), not that the user chose nothing: the model gets
+/// [`DEFAULT_MODE_NO_ANSWER_MESSAGE`] instead of the serialized `content`.
+pub(crate) fn default_mode_content(
+    mode: ModeKind,
+    questions: &[codex_protocol::request_user_input::RequestUserInputQuestion],
+    response: &codex_protocol::request_user_input::RequestUserInputResponse,
+    content: String,
+) -> String {
+    let answered = questions.iter().any(|question| {
+        response.answers.get(&question.id).is_some_and(|answer| {
+            answer
+                .answers
+                .iter()
+                .any(|answer| !answer.trim().is_empty())
+        })
+    });
+    if mode == ModeKind::Default && !answered {
+        DEFAULT_MODE_NO_ANSWER_MESSAGE.to_string()
+    } else {
+        content
+    }
+}
+
 /// The description says when to ask whenever Default mode allows the tool.
 pub(super) fn with_default_mode_guidance(
     description: String,

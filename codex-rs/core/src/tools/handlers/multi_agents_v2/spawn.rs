@@ -1,7 +1,6 @@
 use super::*;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::types::SpawnAgentForkMode;
-use crate::agent::worktree_isolation::SpawnedWorktree;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::thread_spawn::ThreadSpawnError;
 use crate::thread_spawn::ThreadSpawnRequest;
@@ -275,12 +274,12 @@ pub(crate) enum SpawnAgentResult {
         task_name: String,
         nickname: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        worktree: Option<SpawnedWorktree>,
+        worktree: Option<crate::agent::worktree_isolation::SpawnedWorktree>,
     },
     HiddenMetadata {
         task_name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        worktree: Option<SpawnedWorktree>,
+        worktree: Option<crate::agent::worktree_isolation::SpawnedWorktree>,
     },
 }
 

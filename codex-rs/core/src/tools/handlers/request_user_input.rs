@@ -4,7 +4,6 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::handlers::request_user_input_spec::DEFAULT_MODE_NO_ANSWER_MESSAGE;
 use crate::tools::handlers::request_user_input_spec::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::tools::handlers::request_user_input_spec::RequestUserInputToolArgs;
 use crate::tools::handlers::request_user_input_spec::create_request_user_input_tool;
@@ -95,26 +94,16 @@ impl RequestUserInputHandler {
             })?;
 
         let response = accepted.response;
-        // Fork: in Default mode an empty response means nobody answered (client error,
-        // unsupported client, or auto-resolution), not that the user chose nothing.
-        let answered = questions.iter().any(|question| {
-            response.answers.get(&question.id).is_some_and(|answer| {
-                answer
-                    .answers
-                    .iter()
-                    .any(|answer| !answer.trim().is_empty())
-            })
-        });
 
-        let content = if mode == ModeKind::Default && !answered {
-            DEFAULT_MODE_NO_ANSWER_MESSAGE.to_string()
-        } else {
-            serde_json::to_string(&response).map_err(|err| {
-                FunctionCallError::Fatal(format!(
-                    "failed to serialize {REQUEST_USER_INPUT_TOOL_NAME} response: {err}"
-                ))
-            })?
-        };
+        let content = serde_json::to_string(&response).map_err(|err| {
+            FunctionCallError::Fatal(format!(
+                "failed to serialize {REQUEST_USER_INPUT_TOOL_NAME} response: {err}"
+            ))
+        })?;
+        // Fork: in Default mode an empty response means nobody answered.
+        let content = crate::tools::handlers::request_user_input_spec::default_mode_content(
+            mode, &questions, &response, content,
+        );
         // Persist answers even while an older checkpoint needs compatibility review.
         if turn.config.features.enabled(Feature::GuardianApproval) {
             let user_input = questions
