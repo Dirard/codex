@@ -2071,6 +2071,112 @@ async fn remote_compact_progress_resets_loop_guard() -> Result<()> {
     Ok(())
 }
 
+/// Serves the optional-candidate guard scenario by request content, because the background
+/// compaction and the foreground samples race for arrival order.
+#[derive(Default)]
+struct OptionalCandidateResponses {
+    compactions: std::sync::atomic::AtomicUsize,
+}
+
+impl wiremock::Respond for OptionalCandidateResponses {
+    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+        let body: Value =
+            serde_json::from_slice(&request.body).expect("uncompressed JSON request body");
+        let is_compaction = body["input"].as_array().is_some_and(|input| {
+            input
+                .iter()
+                .any(|item| item["type"] == "compaction_trigger")
+        });
+        if is_compaction {
+            let number = self
+                .compactions
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            return responses::sse_response(remote_compaction_sse(
+                &format!("compact-{number}"),
+                &format!("SUMMARY_{number}"),
+            ));
+        }
+        let text = body.to_string();
+        let events = if text.contains("SUMMARY_3") {
+            vec![
+                responses::ev_response_created("final"),
+                responses::ev_assistant_message("final-message", "done"),
+                responses::ev_completed("final"),
+            ]
+        } else if text.contains("SUMMARY_2") {
+            // Below the auto-compact limit but above the async threshold: a response without
+            // progress that starts the background compaction and polls for its candidate.
+            let mut completed =
+                responses::ev_completed_with_tokens("below-limit", /*total_tokens*/ 50_000);
+            completed["response"]["end_turn"] = json!(false);
+            vec![responses::ev_response_created("below-limit"), completed]
+        } else {
+            vec![
+                responses::ev_response_created("at-limit"),
+                ev_follow_up_at_limit("at-limit"),
+            ]
+        };
+        responses::sse_response(responses::sse(events))
+    }
+}
+
+/// Fork R9 (docs/fork/02-compaction-context.md): after two forced compactions without progress,
+/// a ready background candidate is optional because the context still fits. The no-progress
+/// guard must let it install instead of failing the turn with `ContextWindowExceeded`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_loop_guard_lets_optional_candidate_install() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.turn_lifecycle_contributor(Arc::new(TurnErrorRecorder {
+        errors: Arc::clone(&errors),
+    }));
+    let harness = TestCodexHarness::with_builder(
+        loop_guard_test_codex()
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::AsyncCompaction);
+                // The responder reads raw request bodies.
+                let _ = config.features.disable(Feature::EnableRequestCompression);
+                config.async_compaction_threshold_percent = 1;
+            })
+            .with_extensions(Arc::new(extensions.build())),
+    )
+    .await?;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path_regex(".*/responses$"))
+        .respond_with(OptionalCandidateResponses::default())
+        .mount(harness.server())
+        .await;
+
+    tokio::time::timeout(
+        Duration::from_secs(60),
+        harness
+            .test()
+            .submit_turn("optional candidate after the loop guard"),
+    )
+    .await??;
+
+    assert_eq!(
+        errors.lock().expect("turn error records lock").as_slice(),
+        &[] as &[CodexErrorInfo]
+    );
+    let requests = responses::received_responses_requests(harness.server()).await;
+    // Two forced compactions, then the background one whose candidate the turn installs.
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| is_compact_request(request))
+            .count(),
+        3
+    );
+    let last = requests.last().expect("final sample");
+    assert!(!is_compact_request(last));
+    assert!(last.body_json().to_string().contains("SUMMARY_3"));
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result<()> {
     skip_if_no_network!(Ok(()));

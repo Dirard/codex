@@ -80,17 +80,23 @@ impl TurnLoop {
         model_needs_follow_up
     }
 
-    /// Before a mid-turn compaction: after two compactions in a row without progress, another
-    /// one cannot make the context fit.
-    pub(super) fn check_compaction_progress(&self) -> CodexResult<()> {
-        if !self.made_progress && self.consecutive_compactions_without_progress >= 2 {
+    /// Before a mid-turn compaction: after two forced compactions in a row without progress,
+    /// another one cannot make the context fit. The guard checks and counts only compactions
+    /// the token limit forces (docs/fork/02-compaction-context.md R9): an optional one, such as
+    /// a ready background candidate, runs while the context still fits, so it neither fails
+    /// the turn nor counts.
+    pub(super) fn check_compaction_progress(&self, token_limit_reached: bool) -> CodexResult<()> {
+        if token_limit_reached
+            && !self.made_progress
+            && self.consecutive_compactions_without_progress >= 2
+        {
             return Err(CodexErr::ContextWindowExceeded);
         }
         Ok(())
     }
 
-    pub(super) fn on_compacted(&mut self) {
-        if !self.made_progress {
+    pub(super) fn on_compacted(&mut self, token_limit_reached: bool) {
+        if token_limit_reached && !self.made_progress {
             self.consecutive_compactions_without_progress += 1;
         }
     }
@@ -136,3 +142,7 @@ impl TurnLoop {
         !blocked
     }
 }
+
+#[cfg(test)]
+#[path = "fork_turn_tests.rs"]
+mod tests;
