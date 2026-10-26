@@ -273,8 +273,7 @@ pub(crate) fn mcp_tool_denial(
     tool: &str,
     annotations: Option<&rmcp::model::ToolAnnotations>,
 ) -> Option<String> {
-    let read_only = annotations.and_then(|annotations| annotations.read_only_hint) == Some(true);
-    (applies_to_source(config, source) && !read_only).then(|| {
+    (applies_to_source(config, source) && !is_read_only(annotations)).then(|| {
         format!(
             "explorer_profile: MCP tool `{server}/{tool}` is not annotated read-only (readOnlyHint), so a read-only explorer cannot call it. Report what you need to your parent instead."
         )
@@ -293,6 +292,48 @@ pub(crate) fn dynamic_tool_denial(
             "explorer_profile: client tool `{tool}` is not available to a read-only explorer. Report what you need to your parent instead."
         )
     })
+}
+
+/// Built-in and extension tools whose only purpose is writing files (R2.9).
+const WRITE_TOOL_NAMES: [&str; 2] = ["apply_patch", "multi_env_copy_file"];
+
+/// Explorer sessions: hides the tools an explorer may not call (spec UC2, R2.9).
+///
+/// `apply_patch`, `multi_env_copy_file`, MCP tools not annotated `readOnlyHint: true` and
+/// client-defined tools leave the tool list, `tool_search` and the Code Mode nested tools.
+/// They stay registered as [`ToolExposure::Hidden`], so a call that names one anyway still
+/// reaches its handler and gets the refusal of R2.6 or R2.8. `mcp_tools` carries the
+/// annotations of the session's MCP tools; an MCP tool missing from it counts as writing.
+pub(crate) fn hide_unavailable_tools<'a>(
+    config: &Config,
+    source: &SessionSource,
+    mcp_tools: impl IntoIterator<Item = &'a codex_mcp::ToolInfo>,
+    registry: &mut crate::tools::registry::ToolRegistry,
+) {
+    if !applies_to_source(config, source) {
+        return;
+    }
+    let read_only_mcp_tools = mcp_tools
+        .into_iter()
+        .filter(|tool| is_read_only(tool.tool.annotations.as_ref()))
+        .map(codex_mcp::ToolInfo::canonical_tool_name)
+        .collect::<std::collections::HashSet<_>>();
+    for tool in registry.entries_mut() {
+        let name = tool.runtime.tool_name();
+        let hidden = if tool.runtime.mcp_server_name().is_some() {
+            !read_only_mcp_tools.contains(&name)
+        } else {
+            tool.runtime.is_third_party_tool()
+                || (name.is_default_namespace() && WRITE_TOOL_NAMES.contains(&name.name.as_str()))
+        };
+        if hidden {
+            tool.exposure = codex_tools::ToolExposure::Hidden;
+        }
+    }
+}
+
+fn is_read_only(annotations: Option<&rmcp::model::ToolAnnotations>) -> bool {
+    annotations.and_then(|annotations| annotations.read_only_hint) == Some(true)
 }
 
 /// Default worktree isolation does not apply to explorers: they never write, so a worktree

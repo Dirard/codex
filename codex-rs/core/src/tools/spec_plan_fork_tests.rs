@@ -38,3 +38,237 @@ async fn direct_only_stub_does_not_shadow_a_nested_tool() {
     ));
     assert!(exec.description.contains("request_user_input(args:"));
 }
+
+/// Explorer-and-questions R2.9: the `multi_env_copy_file` extension tool, stubbed for the plan.
+struct CopyFileStub;
+
+impl<'call> ToolExecutor<ExtensionToolCall<'call>> for CopyFileStub {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("multi_env_copy_file")
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Function(ResponsesApiTool {
+            name: "multi_env_copy_file".to_string(),
+            description: "Copy a file between two environments.".to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: codex_tools::JsonSchema::default(),
+            output_schema: None,
+        })
+    }
+
+    fn handle<'a>(&'a self, _call: ExtensionToolCall<'call>) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        'call: 'a,
+    {
+        Box::pin(async { panic!("spec planning should not execute extension tools") })
+    }
+}
+
+fn annotated_mcp_tool(name: &str, read_only_hint: Option<bool>) -> ToolInfo {
+    let mut info = mcp_tool("probe", "mcp__probe", name);
+    info.tool.annotations =
+        read_only_hint.map(|read_only| rmcp::model::ToolAnnotations::new().read_only(read_only));
+    info
+}
+
+fn explorer_source(role: &str) -> SessionSource {
+    SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: ThreadId::new(),
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: Some(role.to_string()),
+    })
+}
+
+/// The plan of a child with `role`, `apply_patch`, three MCP tools (`peek` annotated
+/// read-only, `poke` annotated writing, `plain` without annotations), a client tool and the
+/// `multi_env_copy_file` extension, after the explorer hook ran.
+async fn explorer_plan(explorer_profile: bool, role: &str, code_mode: bool) -> ToolPlanProbe {
+    let (_session, mut turn) = make_session_and_context().await;
+    set_feature(&mut turn, Feature::ExplorerProfile, explorer_profile);
+    if code_mode {
+        set_features(&mut turn, &[Feature::CodeMode]);
+    }
+    update_turn_settings_for_test(&mut turn, |settings| {
+        Arc::make_mut(&mut settings.model_info).apply_patch_tool_type =
+            Some(ApplyPatchToolType::Freeform);
+    });
+    turn.session_source = explorer_source(role);
+    let mcp_tools = [
+        annotated_mcp_tool("peek", Some(true)),
+        annotated_mcp_tool("poke", Some(false)),
+        annotated_mcp_tool("plain", /*read_only_hint*/ None),
+    ];
+    let mcp = codex_mcp::McpBinding::empty(mcp_config_for_test(&turn.config));
+    let model_info = turn.model_info();
+    let mut registry = build_core_tool_registry(
+        &turn,
+        model_info,
+        &turn.initial_environments,
+        &mcp,
+        /*tool_suggest_candidates*/ None,
+        /*wait_for_environment_tool_config*/ None,
+    );
+    let runtimes = mcp_tools
+        .iter()
+        .map(|info| {
+            let runtime: Arc<dyn CoreToolRuntime> =
+                Arc::new(McpHandler::new(info.clone()).expect("MCP tool spec should build"));
+            RegisteredTool {
+                runtime,
+                exposure: ToolExposure::Direct,
+                model_spec: None,
+            }
+        })
+        .collect();
+    let hosted_specs = append_source_tools(
+        &turn,
+        model_info,
+        &mut registry,
+        runtimes,
+        vec![Arc::new(CopyFileStub) as Arc<dyn for<'call> ToolExecutor<ExtensionToolCall<'call>>>],
+        &[dynamic_tool(
+            /*namespace*/ None,
+            "client_echo",
+            /*defer_loading*/ false,
+        )],
+    );
+    crate::agent::explorer_profile::hide_unavailable_tools(
+        &turn.config,
+        &turn.session_source,
+        mcp_tools.iter(),
+        &mut registry,
+    );
+    ToolPlanProbe::from_router(ToolRouter::from_registry(
+        &turn,
+        model_info,
+        registry,
+        hosted_specs,
+        &Default::default(),
+    ))
+}
+
+fn explorer_hidden_tools() -> [ToolName; 5] {
+    [
+        ToolName::plain("apply_patch"),
+        ToolName::plain("multi_env_copy_file"),
+        ToolName::plain("client_echo"),
+        ToolName::namespaced("mcp__probe", "poke"),
+        ToolName::namespaced("mcp__probe", "plain"),
+    ]
+}
+
+/// R2.9: an explorer sees neither `apply_patch`, `multi_env_copy_file`, MCP tools without
+/// `readOnlyHint: true` nor client tools, in its tool list or in Code Mode; they stay
+/// registered, so a call still reaches the handler's refusal. Other children see them all.
+#[tokio::test]
+async fn explorer_hides_tools_it_cannot_call() {
+    for (explorer_profile, role, hidden) in [
+        (true, "explorer", true),
+        (false, "explorer", false),
+        (true, "worker", false),
+    ] {
+        let plan = explorer_plan(explorer_profile, role, /*code_mode*/ false).await;
+        let case = format!("profile={explorer_profile} role={role}");
+        for name in explorer_hidden_tools() {
+            let exposure = plan.exposure(&name.to_string());
+            assert_eq!(exposure == ToolExposure::Hidden, hidden, "{case}: {name:?}");
+        }
+        assert_eq!(
+            plan.exposure(&ToolName::namespaced("mcp__probe", "peek").to_string()),
+            ToolExposure::Direct,
+            "{case}"
+        );
+        plan.assert_visible_contains(&["exec_command", "mcp__probe"]);
+        assert_eq!(
+            plan.visible_names.iter().any(|name| name == "apply_patch"),
+            !hidden,
+            "{case}: {:?}",
+            plan.visible_names
+        );
+        assert_eq!(
+            plan.visible_names
+                .iter()
+                .any(|name| name == "multi_env_copy_file" || name == "client_echo"),
+            !hidden,
+            "{case}: {:?}",
+            plan.visible_names
+        );
+        let expected_mcp: &[&str] = if hidden {
+            &["peek"]
+        } else {
+            &["peek", "plain", "poke"]
+        };
+        let mut mcp_functions = plan.namespace_function_names("mcp__probe").to_vec();
+        mcp_functions.sort();
+        assert_eq!(mcp_functions, expected_mcp, "{case}");
+    }
+}
+
+/// R2.9: hidden tools stay out of the nested Code Mode tools too.
+#[tokio::test]
+async fn explorer_hides_tools_from_code_mode() {
+    for (explorer_profile, hidden) in [(true, true), (false, false)] {
+        let plan = explorer_plan(explorer_profile, "explorer", /*code_mode*/ true).await;
+        let nested = plan.code_mode_tool_names.values().collect::<Vec<_>>();
+        assert!(
+            nested.contains(&&ToolName::namespaced("mcp__probe", "peek")),
+            "{nested:?}"
+        );
+        for name in explorer_hidden_tools() {
+            assert_eq!(
+                nested.contains(&&name),
+                !hidden,
+                "profile={explorer_profile}: {name:?} in {nested:?}"
+            );
+        }
+    }
+}
+
+/// R2.9: `build_tool_router` runs the explorer hook, so an explorer's real tool plan has no
+/// `apply_patch` and no client tools.
+#[tokio::test]
+async fn explorer_tool_router_hides_write_and_client_tools() {
+    for (explorer_profile, hidden) in [(true, true), (false, false)] {
+        let (session, mut turn) = make_session_and_context().await;
+        set_feature(&mut turn, Feature::ExplorerProfile, explorer_profile);
+        update_turn_settings_for_test(&mut turn, |settings| {
+            Arc::make_mut(&mut settings.model_info).apply_patch_tool_type =
+                Some(ApplyPatchToolType::Freeform);
+        });
+        turn.session_source = explorer_source("explorer");
+        turn.dynamic_tools = vec![dynamic_tool(
+            /*namespace*/ None,
+            "client_echo",
+            /*defer_loading*/ false,
+        )]
+        .into();
+        let turn = Arc::new(turn);
+        let step_context = StepContext::for_test(Arc::clone(&turn));
+        let router = crate::tools::spec_plan::build_tool_router(
+            &session,
+            step_context.turn.as_ref(),
+            &step_context.settings.model_info,
+            &step_context.environments,
+            &step_context.mcp,
+            /*apps_enabled*/ false,
+            &turn.extension_data,
+            /*tool_suggest_candidates*/ None,
+        )
+        .expect("build explorer tool router");
+        let plan = ToolPlanProbe::from_router(router);
+        plan.assert_visible_contains(&["exec_command"]);
+        plan.assert_registered_contains(&["apply_patch", "client_echo"]);
+        for name in ["apply_patch", "client_echo"] {
+            assert_eq!(
+                plan.visible_names.iter().any(|visible| visible == name),
+                !hidden,
+                "profile={explorer_profile}: {name} in {:?}",
+                plan.visible_names
+            );
+        }
+    }
+}

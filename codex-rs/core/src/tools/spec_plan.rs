@@ -178,6 +178,8 @@ pub(crate) fn build_tool_router(
         &mut registry,
     );
     append_dynamic_tool_runtimes(&turn_context.dynamic_tools, &mut registry);
+    // Fork: a read-only explorer does not see the tools it may not call (explorer_profile).
+    fork::hide_explorer_tools(turn_context, mcp, &mut registry);
     let hosted_specs = hosted_model_tool_specs(
         turn_context,
         model_info,

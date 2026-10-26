@@ -197,6 +197,25 @@ fn find_tool<'a>(value: &'a Value, name: &str) -> Option<&'a Value> {
     }
 }
 
+/// Names of every tool in a tool list, including the functions inside namespaces.
+fn tool_names(tools: &Value) -> Vec<String> {
+    let mut names = Vec::new();
+    for tool in tools.as_array().into_iter().flatten() {
+        if let Some(name) = tool.get("name").and_then(Value::as_str) {
+            names.push(name.to_string());
+        }
+        if let Some(nested) = tool.get("tools") {
+            names.extend(tool_names(nested));
+        }
+    }
+    names
+}
+
+/// Names of the tools a request offers the model directly (R2.9).
+fn offered_tool_names(request: &ResponsesRequest) -> Vec<String> {
+    tool_names(&request.body_json()["tools"])
+}
+
 fn spawn_parameter_description(request: &ResponsesRequest, parameter: &str) -> Option<String> {
     let body = request.body_json();
     let tool = find_tool(&body["tools"], "spawn_agent")?;
@@ -284,7 +303,18 @@ async fn explorer_cannot_write_files(explorer_profile: bool) -> Result<()> {
         .message_input_text_groups("developer")
         .concat()
         .join("\n");
+    let child_tools = offered_tool_names(&child_first.single_request());
 
+    // R2.9: the explorer does not see `apply_patch`; a call that names it is still refused.
+    assert_eq!(
+        child_tools.iter().any(|name| name == "apply_patch"),
+        !explorer_profile,
+        "{child_tools:?}"
+    );
+    assert!(
+        child_tools.iter().any(|name| name == "exec_command"),
+        "{child_tools:?}"
+    );
     if explorer_profile {
         assert!(!patch_file.exists(), "explorer wrote with apply_patch");
         assert!(!shell_file.exists(), "explorer wrote with a shell command");
@@ -1339,10 +1369,18 @@ for line in sys.stdin:
 "#;
 
 const EXPLORER_TOOLS_PROMPT: &str = "explorer: call the probe tools";
+const PROBE_SEARCH_CALL_ID: &str = "explorer-probe-search";
+
+/// Names of the tools a `tool_search` call returned, including namespace children.
+fn searched_tool_names(request: &ResponsesRequest, call_id: &str) -> Vec<String> {
+    tool_names(&request.tool_search_output(call_id)["tools"])
+}
 
 // Review P4: MCP tools that need no approval (auto-approved servers, non-destructive hints)
 // ran outside the sandbox and could write. Explorers may only call tools annotated
 // `readOnlyHint: true`; client-defined dynamic tools carry no annotations and are refused.
+// R2.9: the explorer does not see those tools either, neither in its tool list nor in
+// `tool_search` (MCP tools are deferred for models with tool search).
 #[test_case(true; "profile_enabled")]
 #[test_case(false; "profile_disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1392,11 +1430,27 @@ async fn explorer_calls_only_read_only_mcp_tools(explorer_profile: bool) -> Resu
         ));
     }
     calls.push(ev_completed("resp-explorer-1"));
-    mount_sse_once_match(
+    let search = mount_sse_once_match(
         &server,
         move |req: &wiremock::Request| {
             let body = decoded_body(req);
-            body.contains(EXPLORER_TOOLS_PROMPT) && !body.contains("mcp-poke-call")
+            body.contains(EXPLORER_TOOLS_PROMPT) && !body.contains(PROBE_SEARCH_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-explorer-0"),
+            core_test_support::responses::ev_tool_search_call(
+                PROBE_SEARCH_CALL_ID,
+                &json!({ "query": "probe peek poke plain", "limit": 8 }),
+            ),
+            ev_completed("resp-explorer-0"),
+        ]),
+    )
+    .await;
+    let after_search = mount_sse_once_match(
+        &server,
+        move |req: &wiremock::Request| {
+            let body = decoded_body(req);
+            body.contains(PROBE_SEARCH_CALL_ID) && !body.contains("mcp-poke-call")
         },
         sse(calls),
     )
@@ -1463,6 +1517,23 @@ async fn explorer_calls_only_read_only_mcp_tools(explorer_profile: bool) -> Resu
         matches!(event, EventMsg::TurnComplete(_)),
         "the explorer must not reach the client tool: {event:?}"
     );
+
+    // R2.9: the tool list and `tool_search` offer only what the explorer may call.
+    let offered = offered_tool_names(&search.single_request());
+    assert_eq!(
+        offered.iter().any(|name| name == "client_echo"),
+        !explorer_profile,
+        "{offered:?}"
+    );
+    let searched = searched_tool_names(&after_search.single_request(), PROBE_SEARCH_CALL_ID);
+    assert!(searched.iter().any(|name| name == "peek"), "{searched:?}");
+    for hidden in ["poke", "plain"] {
+        assert_eq!(
+            searched.iter().any(|name| name == hidden),
+            !explorer_profile,
+            "{hidden}: {searched:?}"
+        );
+    }
 
     let request = follow_up.single_request();
     // MCP results arrive as content items, so compare the serialized output.

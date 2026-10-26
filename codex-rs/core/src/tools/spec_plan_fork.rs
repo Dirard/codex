@@ -139,6 +139,20 @@ pub(super) fn expose_agent_type(config: &crate::config::Config) -> bool {
     !config.agent_roles.is_empty() || crate::agent::explorer_profile::enabled(config)
 }
 
+/// A read-only explorer does not see the tools it may not call (explorer-and-questions, R2.9).
+pub(super) fn hide_explorer_tools(
+    turn_context: &TurnContext,
+    mcp: &codex_mcp::McpBinding,
+    registry: &mut ToolRegistry,
+) {
+    crate::agent::explorer_profile::hide_unavailable_tools(
+        &turn_context.config,
+        &turn_context.session_source,
+        mcp.tools(),
+        registry,
+    );
+}
+
 /// The `spawn_agent` (V2) options of the explorer profile and worktree isolation.
 pub(super) fn spawn_agent_options(
     config: &crate::config::Config,
