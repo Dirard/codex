@@ -910,21 +910,29 @@ fn sample_thread_start_response() -> ThreadStartResponse {
     }
 }
 
-/// Fork: `codex exec` keeps exit notifications off because its session ends with the turn.
-#[test]
-fn exec_override_disables_exit_notifications() {
-    let overrides = codex_utils_cli::CliConfigOverrides {
-        raw_overrides: vec![EXEC_EXIT_NOTIFICATIONS_DISABLED_OVERRIDE.to_string()],
-    }
-    .parse_overrides()
-    .expect("parse override");
-    assert_eq!(overrides.len(), 1);
-    assert_eq!(
-        overrides[0].0,
-        format!(
-            "features.{}",
+/// Fork: `codex exec` keeps exit notifications off because its session ends with the turn,
+/// even when the user turns them on with `-c` (background-exec-notifications R1.4).
+#[tokio::test]
+async fn exec_overrides_disable_exit_notifications_in_the_built_config() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let overrides = exec_cli_kv_overrides(codex_utils_cli::CliConfigOverrides {
+        raw_overrides: vec![format!(
+            "features.{}=true",
             codex_features::Feature::ExecExitNotifications.key()
-        )
+        )],
+    })
+    .expect("parse overrides");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(overrides)
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config with exec overrides");
+    assert!(
+        !config
+            .features
+            .enabled(codex_features::Feature::ExecExitNotifications)
     );
-    assert_eq!(overrides[0].1.as_bool(), Some(false));
 }

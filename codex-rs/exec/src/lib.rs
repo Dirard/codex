@@ -111,6 +111,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
+use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::SharedCliOptions;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
@@ -267,6 +268,26 @@ fn exec_stderr_env_filter() -> EnvFilter {
 /// Fork: config override that keeps exit notifications off in `codex exec`.
 const EXEC_EXIT_NOTIFICATIONS_DISABLED_OVERRIDE: &str = "features.exec_exit_notifications=false";
 
+/// Parses the `-c` overrides of `codex exec`. Fork: the exec-only feature overrides come
+/// last, so they win over the user's `-c` and `--enable` flags.
+fn exec_cli_kv_overrides(
+    mut config_overrides: CliConfigOverrides,
+) -> Result<Vec<(String, codex_config::TomlValue)>, String> {
+    // `codex exec` ends its session after the first turn, which kills background
+    // processes, so it never offers `exec_command` exit notifications that could not arrive.
+    config_overrides
+        .raw_overrides
+        .push(EXEC_EXIT_NOTIFICATIONS_DISABLED_OVERRIDE.to_string());
+    let mut cli_kv_overrides = config_overrides.parse_overrides()?;
+    // exec has no client that can answer questions, so Default mode never offers
+    // `request_user_input` here (specs/explorer-and-questions-2026-10-25.md).
+    cli_kv_overrides.push((
+        "features.default_mode_request_user_input".to_string(),
+        codex_config::TomlValue::Boolean(false),
+    ));
+    Ok(cli_kv_overrides)
+}
+
 pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
@@ -354,13 +375,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)
     };
 
-    // Fork: `codex exec` ends its session after the first turn, which kills background
-    // processes, so it never offers `exec_command` exit notifications that could not arrive.
-    config_overrides
-        .raw_overrides
-        .push(EXEC_EXIT_NOTIFICATIONS_DISABLED_OVERRIDE.to_string());
     // Parse `-c` overrides from the CLI.
-    let mut cli_kv_overrides = match config_overrides.parse_overrides() {
+    let cli_kv_overrides = match exec_cli_kv_overrides(config_overrides) {
         Ok(v) => v,
         #[allow(clippy::print_stderr)]
         Err(e) => {
@@ -368,12 +384,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             std::process::exit(1);
         }
     };
-    // Fork: exec has no client that can answer questions, so Default mode never offers
-    // `request_user_input` here (specs/explorer-and-questions-2026-10-25.md).
-    cli_kv_overrides.push((
-        "features.default_mode_request_user_input".to_string(),
-        codex_config::TomlValue::Boolean(false),
-    ));
 
     let mut resolved_cwd = cwd.clone();
     let mut config_cwd = match resolved_cwd.as_deref() {
