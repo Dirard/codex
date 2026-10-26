@@ -1,0 +1,29 @@
+---
+source: tui/src/chatwidget/tests/workflow_tests.rs
+expression: "render_bottom_popup(&chat, 100)"
+---
+  Workflow find-bugs
+  wf-1a2b3c4d · running · 1m 20s
+
+  Fan-out bug search, adversarial verification and synthesis
+  Phases   ✓ Find 3/3 · ▸ Verify 1/4 · Synthesize 0/1
+  Agents   1 queued · 2 running · 1 awaiting approval · 3 done · 1 null (timeout 1)
+  Tokens   48.2K charged · 157K cached · budget 200K
+  Resumed  from wf-0a0b0c0d: 2 of 3 journaled results reused, 1 unused
+  Log      log line 3
+           log line 4
+           log line 5
+           log line 6
+           log line 7
+
+
+› 1. Cancel run           interrupt its agents and stop the script
+     ✓ #1 find src/a.py   Find · done · from journal
+  2. ✓ #2 find src/b.py   Find · done · 15.2K tokens
+     ✓ #3 find src/c.py   Find · done · from journal
+  3. ● #4 verify a.py:12  Verify · running · 3.1K tokens
+  4. ? #5 verify b.py:40  Verify · awaiting approval
+  5. ✗ #6 verify c.py:7   Verify · null: timeout · 9K tokens
+  6. ● #7                 Verify · running
+↓
+  enter select · esc back

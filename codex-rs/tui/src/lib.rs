@@ -267,6 +267,8 @@ mod width;
 mod windows_sandbox;
 mod workspace_command;
 mod workspace_messages;
+// Fork: the `/workflows` screen (specs/dynamic-workflow-2026-10-25.md, UC 8.1).
+mod workflows;
 
 mod wrapping;
 

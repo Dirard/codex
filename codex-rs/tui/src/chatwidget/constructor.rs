@@ -290,7 +290,7 @@ impl ChatWidget {
             status_line_workspace_messages_disabled: false,
             thread_usage: thread_usage::ThreadUsageState::default(),
             current_goal_status_indicator: None,
-            workflow_runs: Default::default(),
+            workflows: Default::default(),
             current_goal_status: None,
             external_editor_state: ExternalEditorState::Closed,
             last_rendered_user_message_display: None,
@@ -323,6 +323,7 @@ impl ChatWidget {
         widget.sync_worktrees_enabled();
         widget.sync_plugins_command_enabled();
         widget.sync_goal_command_enabled();
+        widget.fork_sync_workflows_command(); // Fork: `/workflows` (UC 8.1)
         widget
             .bottom_pane
             .set_voice_command_enabled(/*enabled*/ false);

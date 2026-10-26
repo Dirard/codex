@@ -3116,6 +3116,8 @@ impl App {
                 self.select_agent_thread(tui, app_server, thread_id)
                     .await?;
             }
+            // Fork: the `/workflows` screen (specs/dynamic-workflow-2026-10-25.md, UC 8.1).
+            AppEvent::Workflows(event) => self.handle_workflows_event(app_server, event),
             AppEvent::StartSide {
                 parent_thread_id,
                 user_message,

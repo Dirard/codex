@@ -45,6 +45,8 @@ pub enum SlashCommand {
     Voice,
     Goal,
     Agents,
+    // Fork: dynamic workflows (specs/dynamic-workflow-2026-10-25.md, UC 8.1).
+    Workflows,
     Side,
     Btw,
     Copy,
@@ -143,6 +145,7 @@ impl SlashCommand {
             SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Agents => "open the agent command center",
             SlashCommand::MultiAgents => "switch between this session's subagents",
+            SlashCommand::Workflows => "list and manage workflow runs of this thread", // Fork
             SlashCommand::Side | SlashCommand::Btw => {
                 "start a side conversation in an ephemeral fork"
             }
@@ -309,6 +312,7 @@ impl SlashCommand {
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Agents | SlashCommand::MultiAgents => true,
+            SlashCommand::Workflows => true, // Fork: UC 8.1, R8.6.1
             SlashCommand::Config | SlashCommand::Theme | SlashCommand::Pets => false,
         }
     }

@@ -182,6 +182,7 @@ impl<'a> SlashInput<'a> {
                 worktrees_enabled: self.command_flags.worktrees_enabled,
                 windows_degraded_sandbox_active: self.command_flags.allow_elevate_sandbox,
                 side_conversation_active: self.command_flags.side_conversation_active,
+                workflows_command_enabled: self.command_flags.workflows_command_enabled,
             },
             self.service_tier_commands.to_vec(),
         );
@@ -221,6 +222,7 @@ impl ChatComposer {
             worktrees_enabled: self.worktrees_enabled,
             allow_elevate_sandbox: self.windows_degraded_sandbox_active,
             side_conversation_active: self.side_conversation_active,
+            workflows_command_enabled: self.workflows_command_enabled,
         }
     }
 
@@ -232,6 +234,11 @@ impl ChatComposer {
 
     pub fn set_worktrees_enabled(&mut self, enabled: bool) {
         self.update_slash_command_catalog(|composer| composer.worktrees_enabled = enabled);
+    }
+
+    /// Fork: `/workflows` follows `features.workflows` (specs/dynamic-workflow-2026-10-25.md).
+    pub fn set_workflows_command_enabled(&mut self, enabled: bool) {
+        self.update_slash_command_catalog(|composer| composer.workflows_command_enabled = enabled);
     }
 
     /// Handle key event when the slash-command popup is visible.

@@ -646,6 +646,11 @@ impl BottomPane {
         self.composer.workflow_status_indicator()
     }
 
+    /// Fork: `/workflows` follows `features.workflows`.
+    pub fn set_workflows_command_enabled(&mut self, enabled: bool) {
+        self.composer.set_workflows_command_enabled(enabled);
+    }
+
     pub fn set_ide_context_active(&mut self, active: bool) {
         self.composer.set_ide_context_active(active);
         self.request_redraw();

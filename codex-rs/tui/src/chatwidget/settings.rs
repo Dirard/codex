@@ -153,6 +153,7 @@ impl ChatWidget {
         if feature == Feature::PreventIdleSleep {
             self.turn_lifecycle.set_prevent_idle_sleep(enabled);
         }
+        self.fork_on_feature_toggled(feature); // Fork: `/workflows` follows `features.workflows`
         enabled
     }
 

@@ -414,6 +414,7 @@ impl ChatWidget {
             SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
+            SlashCommand::Workflows => self.open_workflows(), // Fork: UC 8.1, R8.6.2
             SlashCommand::Permissions => {
                 // Hold queued prompts while the app checks whether it can open the menu.
                 self.set_queue_autosend_suppressed(/*suppressed*/ true);
@@ -1273,6 +1274,7 @@ impl ChatWidget {
             worktrees_enabled: self.local_worktree_operations,
             allow_elevate_sandbox,
             side_conversation_active: self.active_side_conversation,
+            workflows_command_enabled: self.config.features.enabled(Feature::Workflows), // Fork
         }
     }
 
@@ -1345,6 +1347,7 @@ impl ChatWidget {
             | SlashCommand::Keymap
             | SlashCommand::Agents
             | SlashCommand::MultiAgents
+            | SlashCommand::Workflows // Fork: opens a view, like `/subagents`
             | SlashCommand::Permissions
             | SlashCommand::ElevateSandbox
             | SlashCommand::Experimental

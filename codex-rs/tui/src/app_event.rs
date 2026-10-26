@@ -417,6 +417,9 @@ pub(crate) enum AppEvent {
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
 
+    /// Fork: the `/workflows` screen (specs/dynamic-workflow-2026-10-25.md, UC 8.1).
+    Workflows(crate::workflows::WorkflowsEvent),
+
     /// Fork the current thread into a transient side conversation.
     StartSide {
         parent_thread_id: ThreadId,

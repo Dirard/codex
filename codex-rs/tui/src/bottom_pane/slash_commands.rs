@@ -66,6 +66,8 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) worktrees_enabled: bool,
     pub(crate) allow_elevate_sandbox: bool,
     pub(crate) side_conversation_active: bool,
+    /// Fork: `features.workflows` (specs/dynamic-workflow-2026-10-25.md, R8.6.1).
+    pub(crate) workflows_command_enabled: bool,
 }
 
 /// Return the built-ins that should be visible/usable for the current input.
@@ -80,6 +82,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.goal_command_enabled || *cmd != SlashCommand::Goal)
         .filter(|(_, cmd)| flags.worktrees_enabled || *cmd != SlashCommand::Worktree)
         .filter(|(_, cmd)| flags.voice_command_enabled || *cmd != SlashCommand::Voice)
+        .filter(|(_, cmd)| flags.workflows_command_enabled || *cmd != SlashCommand::Workflows)
         .filter(|(_, cmd)| {
             flags.daybreak_command_description.is_some() || *cmd != SlashCommand::Daybreak
         })
@@ -190,6 +193,7 @@ mod tests {
             worktrees_enabled: true,
             allow_elevate_sandbox: true,
             side_conversation_active: false,
+            workflows_command_enabled: true,
         }
     }
 

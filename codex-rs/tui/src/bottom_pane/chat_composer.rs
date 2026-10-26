@@ -513,6 +513,7 @@ fn parent_owned_command_is_allowed(command: SlashCommand, args: &str) -> bool {
                 | SlashCommand::Btw
                 | SlashCommand::Agents
                 | SlashCommand::MultiAgents
+                | SlashCommand::Workflows // Fork: R8.6.1
                 | SlashCommand::Vim
                 | SlashCommand::Keymap
                 | SlashCommand::Config
@@ -653,6 +654,7 @@ pub(crate) struct ChatComposer {
     goal_command_enabled: bool,
     voice_command_enabled: bool,
     worktrees_enabled: bool,
+    workflows_command_enabled: bool, // Fork: R8.6.1
     windows_degraded_sandbox_active: bool,
     side_conversation_active: bool,
     history_search: Option<HistorySearchSession>,
@@ -828,6 +830,7 @@ impl ChatComposer {
             goal_command_enabled: false,
             voice_command_enabled: false,
             worktrees_enabled: false,
+            workflows_command_enabled: false,
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
             history_search: None,
