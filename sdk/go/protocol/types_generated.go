@@ -13618,6 +13618,7 @@ type HookMetadata struct {
 	CurrentHash            string                  `json:"currentHash"`
 	DisplayOrder           int64                   `json:"displayOrder"`
 	Enabled                bool                    `json:"enabled"`
+	EnvironmentID          Optional[string]        `json:"environmentId,omitzero"`
 	EventName              HookEventName           `json:"eventName"`
 	HandlerType            OptionalNonNull[string] `json:"handlerType,omitzero"`
 	IsManaged              bool                    `json:"isManaged"`
@@ -13642,6 +13643,7 @@ var hookMetadataSpec = objectSpec{
 		{name: "currentHash", flags: fieldRequired | fieldRejectNull},
 		{name: "displayOrder", flags: fieldRequired | fieldRejectNull},
 		{name: "enabled", flags: fieldRequired | fieldRejectNull},
+		{name: "environmentId"},
 		{name: "eventName", flags: fieldRequired | fieldRejectNull},
 		{name: "handlerType", flags: fieldNonNullOptional},
 		{name: "isManaged", flags: fieldRequired | fieldRejectNull},
@@ -13672,6 +13674,9 @@ func (v HookMetadata) MarshalJSON() ([]byte, error) {
 	out["currentHash"] = v.CurrentHash
 	out["displayOrder"] = v.DisplayOrder
 	out["enabled"] = v.Enabled
+	if v.EnvironmentID.IsSet() {
+		out["environmentId"] = v.EnvironmentID
+	}
 	out["eventName"] = v.EventName
 	if v.HandlerType.IsSet() {
 		out["handlerType"] = v.HandlerType
@@ -13947,7 +13952,7 @@ type HookRunSummary struct {
 	ID            string                      `json:"id"`
 	Scope         HookScope                   `json:"scope"`
 	Source        OptionalNonNull[HookSource] `json:"source,omitzero"`
-	SourcePath    AbsolutePathBuf             `json:"sourcePath"`
+	SourcePath    LegacyAppPathString         `json:"sourcePath"`
 	StartedAt     int64                       `json:"startedAt"`
 	Status        HookRunStatus               `json:"status"`
 	StatusMessage Optional[string]            `json:"statusMessage,omitzero"`
@@ -14065,12 +14070,14 @@ func (v *HooksListEntry) UnmarshalJSON(data []byte) error {
 }
 
 type HooksListParams struct {
-	Cwds OptionalNonNull[[]string] `json:"cwds,omitzero"`
+	Cwds     OptionalNonNull[[]string] `json:"cwds,omitzero"`
+	ThreadID Optional[string]          `json:"threadId,omitzero"`
 }
 
 var hooksListParamsSpec = objectSpec{
 	fields: []objectField{
 		{name: "cwds", flags: fieldNonNullOptional, defaultJSON: "[]"},
+		{name: "threadId"},
 	},
 }
 

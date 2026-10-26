@@ -367,10 +367,10 @@ pub struct InitializeDigestSnapshot {
 
 pub fn initialize_digest_snapshot() -> InitializeDigestSnapshot {
     InitializeDigestSnapshot {
-        stable_protocol_digest: "af17265ff53339aebf28d9769b8e5168b04ffcae0dacce057c4411a125bc8107",
-        experimental_protocol_digest: "9508a699190cc97403f2ab65738ad56d77db41450146b2dcca573f27d77d0d4c",
-        stable_schema_digest: "a3c65ae2304ee8ea9673a908b9143f02789759ca61f8942e775be4ff509aeda0",
-        experimental_schema_digest: "8079dce67c0bcf88e8e979894ed4fcb228e59724bb5fe699825fae86c837b625",
+        stable_protocol_digest: "7574da0694af0c76a3195bee840c454ae4d0f150bc46dc217ebf5909f2955376",
+        experimental_protocol_digest: "618dc8ab64a47969eda02ff64f0d11d985c0079d5cc2ba88e02c95e1e1b1cd6a",
+        stable_schema_digest: "b672c54c2b3a32d43af2c7e34253164daa27ca9a91739729041899610ffb33fe",
+        experimental_schema_digest: "d7a627048fb380bf8244cb56bae0ee3291cbfa65a6b7b5d626a7d27646a2019f",
         stable_manifest_digest: "e00463ae071d2d40587fe08f8cde82465122e663604fb8a5b22dd7e18c9feb2a",
         experimental_manifest_digest: "0eda54f4599268f52abacc9bfb18f51dfca8a4d81fef33167deea633b1a99678",
     }

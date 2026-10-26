@@ -6001,8 +6001,8 @@
     ],
     "digests": {
       "manifestDigest": "0eda54f4599268f52abacc9bfb18f51dfca8a4d81fef33167deea633b1a99678",
-      "protocolDigest": "9508a699190cc97403f2ab65738ad56d77db41450146b2dcca573f27d77d0d4c",
-      "schemaDigest": "8079dce67c0bcf88e8e979894ed4fcb228e59724bb5fe699825fae86c837b625"
+      "protocolDigest": "618dc8ab64a47969eda02ff64f0d11d985c0079d5cc2ba88e02c95e1e1b1cd6a",
+      "schemaDigest": "d7a627048fb380bf8244cb56bae0ee3291cbfa65a6b7b5d626a7d27646a2019f"
     },
     "protocolMode": "experimental",
     "routingLifecycle": [
@@ -33248,8 +33248,8 @@
     ],
     "digests": {
       "manifestDigest": "e00463ae071d2d40587fe08f8cde82465122e663604fb8a5b22dd7e18c9feb2a",
-      "protocolDigest": "af17265ff53339aebf28d9769b8e5168b04ffcae0dacce057c4411a125bc8107",
-      "schemaDigest": "a3c65ae2304ee8ea9673a908b9143f02789759ca61f8942e775be4ff509aeda0"
+      "protocolDigest": "7574da0694af0c76a3195bee840c454ae4d0f150bc46dc217ebf5909f2955376",
+      "schemaDigest": "b672c54c2b3a32d43af2c7e34253164daa27ca9a91739729041899610ffb33fe"
     },
     "protocolMode": "stable",
     "routingLifecycle": [
