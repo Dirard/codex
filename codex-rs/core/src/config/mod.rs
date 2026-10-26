@@ -4711,7 +4711,7 @@ impl Config {
             multi_agent_v2,
             // Fork: settings of the fork's features (config/fork.rs).
             output_truncation: fork::output_truncation_config(cfg.output_truncation),
-            workflows: WorkflowsConfig::from_toml(cfg.workflows.as_ref()),
+            workflows: WorkflowsConfig::from_toml(cfg.workflows.as_ref())?,
             max_spawned_threads_per_turn,
             explorer_profile,
             agent_worktree_isolation,

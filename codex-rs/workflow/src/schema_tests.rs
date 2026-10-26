@@ -136,6 +136,22 @@ fn schema_format_rejections_are_recognized() {
             false,
             r#"{"error":{"message":"json_schema is not supported","type":"invalid_request_error"}}"#,
         ),
+        // The provider names the answer format as the rejected parameter.
+        (
+            None,
+            false,
+            r#"{"error":{"message":"Invalid schema for response_format 'codex_output_schema': json_schema is not supported by this provider","type":"invalid_request_error","param":"text.format","code":"invalid_json_schema"}}"#,
+        ),
+        (
+            None,
+            false,
+            r#"{"error":{"message":"This model does not support it.","type":"invalid_request_error","param":"text.format.schema","code":"unsupported_parameter"}}"#,
+        ),
+        (
+            Some(400),
+            false,
+            r#"unexpected status 400 Bad Request: {"error":{"message":"Unsupported value","type":"invalid_request_error","param":"response_format","code":"unsupported_value"}}"#,
+        ),
     ];
     for (status, bad_request, message) in rejected {
         assert!(
@@ -156,6 +172,34 @@ fn schema_format_rejections_are_recognized() {
             None,
             false,
             r#"{"error":{"message":"context too long","type":"invalid_request_error"}}"#,
+        ),
+        // The schema of a tool, not of the answer format.
+        (
+            None,
+            false,
+            r#"{"error":{"message":"Invalid schema for function 'mcp__docs__search': In context=(), 'additionalProperties' is required to be supplied and to be false.","type":"invalid_request_error","param":"tools[3].parameters","code":"invalid_function_parameters"}}"#,
+        ),
+        (
+            Some(400),
+            false,
+            "unexpected status 400 Bad Request: Invalid schema for function 'lookup': json_schema keyword 'patternProperties' is not supported",
+        ),
+        // A parameter other than the answer format, even with schema words in the text.
+        (
+            None,
+            false,
+            r#"{"error":{"message":"Invalid value: the json_schema of input[2] is malformed","type":"invalid_request_error","param":"input","code":"invalid_value"}}"#,
+        ),
+        // "structured" about something else.
+        (
+            Some(400),
+            false,
+            "unexpected status 400 Bad Request: the input contains structured content that is not supported",
+        ),
+        (
+            None,
+            true,
+            "Bad request: structured data in the message is too large",
         ),
     ];
     for (status, bad_request, message) in kept {

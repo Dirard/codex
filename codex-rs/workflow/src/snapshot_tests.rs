@@ -158,6 +158,91 @@ fn live_charges_and_totals_do_not_double_count() {
     assert!(!snapshot.agent_list[0].cached);
 }
 
+/// R5.1: a call's tokens settle once from its agent's total; a live charge the hook reports
+/// after that, whatever the interleaving, is refused and counted nowhere.
+#[test]
+fn settled_calls_refuse_late_live_charges() {
+    let mut tracker = tracker();
+    tracker.agent_queued(1, None, None);
+    tracker.agent_started(1, "/root/wf_1".to_string(), "t-1".to_string());
+    assert!(tracker.agent_charged(
+        1,
+        TokenCharge {
+            charged: 100,
+            cached: 4
+        }
+    ));
+    let settled = tracker.settle_agent_tokens(
+        1,
+        TokenCharge {
+            charged: 150,
+            cached: 4,
+        },
+    );
+    assert_eq!(
+        settled,
+        TokenCharge {
+            charged: 150,
+            cached: 4
+        }
+    );
+    // The response of 50 is in the total; its live report comes too late.
+    assert!(!tracker.agent_charged(
+        1,
+        TokenCharge {
+            charged: 50,
+            cached: 0
+        }
+    ));
+    // Settling again changes nothing.
+    assert_eq!(
+        tracker.settle_agent_tokens(
+            1,
+            TokenCharge {
+                charged: 999,
+                cached: 9
+            }
+        ),
+        settled
+    );
+    tracker.agent_finished(1, true, None, settled);
+    assert!(!tracker.agent_charged(
+        1,
+        TokenCharge {
+            charged: 50,
+            cached: 0
+        }
+    ));
+    let snapshot = tracker.snapshot(true);
+    assert_eq!((snapshot.charged_tokens, snapshot.cached_tokens), (150, 4));
+    assert_eq!(tracker.charged_tokens(), 150);
+    assert_eq!(snapshot.agent_list[0].tokens, settled);
+    // A total below the live charges keeps the live charges.
+    tracker.agent_queued(2, None, None);
+    tracker.agent_started(2, "/root/wf_2".to_string(), "t-2".to_string());
+    assert!(tracker.agent_charged(
+        2,
+        TokenCharge {
+            charged: 30,
+            cached: 0
+        }
+    ));
+    assert_eq!(
+        tracker.settle_agent_tokens(
+            2,
+            TokenCharge {
+                charged: 10,
+                cached: 2
+            }
+        ),
+        TokenCharge {
+            charged: 30,
+            cached: 2
+        }
+    );
+    assert_eq!(tracker.charged_tokens(), 180);
+}
+
 /// R6.4, R6.7: a journal rebuilds phases, logs, calls, null reasons, tokens and status; an
 /// open call of an interrupted run settles as null `interrupted`; journals without call
 /// numbers match calls by key and ordinal.
@@ -253,6 +338,51 @@ fn replay_rebuilds_a_run_from_its_journal() {
             .map(|agent| (agent.seq, agent.thread_id.as_deref()))
             .collect::<Vec<_>>(),
         vec![(1, Some("t-1")), (2, Some("t-2"))]
+    );
+}
+
+/// R6.7, R8.1: a call answered from a resumed run's journal keeps its label and phase when
+/// the run is rebuilt from disk, so the phase counts of the rebuilt snapshot match the live
+/// run's; so does a call that settled before it started an agent.
+#[test]
+fn replay_keeps_labels_and_phases_of_calls_without_an_agent() {
+    let records: Vec<JournalRecord> = [
+        r#"{"seq":1,"kind":"run_started","run_id":"wf-00000004","name":"resumed","script_sha256":"s","args_sha256":"a","parent_turn_id":"t","resume_from":"wf-00000001","resume_source_results":1}"#,
+        r#"{"seq":2,"kind":"phase","title":"Find"}"#,
+        r#"{"seq":3,"kind":"agent_finished","call":1,"key":"a","ordinal":0,"label":"cached one","phase":"Find","ok":true,"value":"x","reason":null,"tokens":{"charged":0,"cached":0},"cached":true}"#,
+        r#"{"seq":4,"kind":"agent_finished","call":2,"key":"b","ordinal":0,"label":"skipped","phase":"Find","ok":false,"value":null,"reason":"budget_exhausted","tokens":{"charged":0,"cached":0}}"#,
+        r#"{"seq":5,"kind":"run_finished","status":"completed","result_bytes":3,"tokens":{"charged":0,"cached":0},"error":null}"#,
+    ]
+    .iter()
+    .map(|line| serde_json::from_str(line).expect("record"))
+    .collect();
+    let snapshot = RunTracker::replay(
+        "wf-00000004".to_string(),
+        String::new(),
+        &["Find".to_string()],
+        &records,
+        /*fallback_ms*/ 1,
+        /*result_preview*/ None,
+    )
+    .snapshot(true);
+    assert_eq!(
+        snapshot
+            .agent_list
+            .iter()
+            .map(|agent| (agent.label.as_deref(), agent.phase.as_deref(), agent.cached))
+            .collect::<Vec<_>>(),
+        vec![
+            (Some("cached one"), Some("Find"), true),
+            (Some("skipped"), Some("Find"), false),
+        ]
+    );
+    assert_eq!(
+        snapshot.phases,
+        vec![PhaseSnapshot {
+            title: "Find".to_string(),
+            started: 2,
+            finished: 2,
+        }]
     );
 }
 

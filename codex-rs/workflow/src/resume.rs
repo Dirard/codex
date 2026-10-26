@@ -9,6 +9,15 @@ use crate::journal::JournalEvent;
 use crate::journal::JournalRecord;
 use crate::snapshot::ResumeStats;
 
+/// A successful answer of the source journal.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CachedAnswer {
+    pub value: Value,
+    /// Where the source's isolated agent left its changes (R3.8); `None` when the agent was
+    /// not isolated or the journal predates this field.
+    pub worktree: Option<String>,
+}
+
 /// UC6: successful agent results of a source journal by call key and ordinal.
 ///
 /// Results the source itself took from its own source are included, so a chain of resumes
@@ -16,7 +25,7 @@ use crate::snapshot::ResumeStats;
 #[derive(Clone, Debug, Default)]
 pub struct JournalCache {
     from: String,
-    results: HashMap<(String, u64), Value>,
+    results: HashMap<(String, u64), CachedAnswer>,
     served: HashSet<(String, u64)>,
 }
 
@@ -30,10 +39,17 @@ impl JournalCache {
                 ordinal,
                 ok: true,
                 value: Some(value),
+                worktree,
                 ..
             } = &record.event
             {
-                results.insert((key.clone(), *ordinal), value.clone());
+                results.insert(
+                    (key.clone(), *ordinal),
+                    CachedAnswer {
+                        value: value.clone(),
+                        worktree: worktree.clone(),
+                    },
+                );
             }
         }
         Self {
@@ -48,16 +64,16 @@ impl JournalCache {
         &self.from
     }
 
-    /// R6.3: the source result of the call with `key` and `ordinal`, if it succeeded there.
+    /// R6.3: the source answer of the call with `key` and `ordinal`, if it succeeded there.
     /// Each pair is served once.
-    pub fn take(&mut self, key: &str, ordinal: u64) -> Option<Value> {
+    pub fn take(&mut self, key: &str, ordinal: u64) -> Option<CachedAnswer> {
         let pair = (key.to_string(), ordinal);
         if self.served.contains(&pair) {
             return None;
         }
-        let value = self.results.get(&pair).cloned()?;
+        let answer = self.results.get(&pair).cloned()?;
         self.served.insert(pair);
-        Some(value)
+        Some(answer)
     }
 
     /// R6.5: counts reported for the resumed run.

@@ -373,7 +373,6 @@ fn type_name(value: &Value) -> &'static str {
     }
 }
 
-/// Parses a final message as JSON, tolerating a single surrounding Markdown code fence.
 /// R3.12: the text appended to an agent's task when the schema goes in the prompt instead of
 /// `final_output_json_schema`.
 pub fn prompt_schema_suffix(schema: &Value) -> String {
@@ -391,28 +390,76 @@ pub fn native_rejected_follow_up(schema: &Value) -> String {
     )
 }
 
-/// R3.12: whether a failed agent turn is the provider refusing the structured-output format:
-/// a client error whose message names a schema, `text.format`, `response_format` or
-/// structured output. A client error is HTTP 400 or 422, a bad request, or a message that
-/// carries the provider's `invalid_request_error` body or a 400/422 status: Codex reports a
-/// plain HTTP 400 as an invalid request whose text is the provider's error body.
+/// Request parameters that carry the answer format: `text.format` of the Responses API and
+/// `response_format` of Chat Completions-style providers.
+const FORMAT_PARAMS: [&str; 2] = ["text.format", "response_format"];
+
+/// R3.12: whether a failed agent turn is the provider refusing the structured-output format,
+/// not another client error such as an invalid tool schema.
+///
+/// The turn must have failed with a client error: HTTP 400 or 422, a bad request, or a
+/// message that carries the provider's `invalid_request_error` body or a 400/422 status
+/// (Codex reports a plain HTTP 400 as an invalid request whose text is the provider's error
+/// body). When that body names the rejected parameter (`param`), the parameter decides: the
+/// answer format (`text.format…`, `response_format…`) or nothing. Otherwise the text must
+/// name the answer format (`text.format`, `response_format`, `json_schema` or "structured
+/// output") and must not name a function or a tool (`function`, `tools[`), whose schemas
+/// providers reject with the same words.
 pub fn is_schema_format_rejection(
     http_status: Option<u16>,
     bad_request: bool,
     message: &str,
 ) -> bool {
-    let message = message.to_ascii_lowercase();
+    let lower = message.to_ascii_lowercase();
     let client_error = bad_request
         || matches!(http_status, Some(400 | 422))
         || ["invalid_request_error", "status 400", "status 422"]
             .iter()
-            .any(|marker| message.contains(marker));
-    client_error
-        && ["schema", "text.format", "response_format", "structured"]
+            .any(|marker| lower.contains(marker));
+    if !client_error {
+        return false;
+    }
+    if let Some(param) = provider_error_param(message) {
+        let param = param.to_ascii_lowercase();
+        return FORMAT_PARAMS
             .iter()
-            .any(|needle| message.contains(needle))
+            .any(|format| param == *format || param.starts_with(&format!("{format}.")));
+    }
+    let names_format = [
+        "text.format",
+        "response_format",
+        "json_schema",
+        "structured output",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    let names_tool = ["function", "tools["]
+        .iter()
+        .any(|needle| lower.contains(needle));
+    names_format && !names_tool
 }
 
+/// The `param` of the provider's JSON error body in `message`, when it names one. The body
+/// is the whole message or follows a prefix such as `unexpected status 400 Bad Request: `;
+/// both `{"error": {...}}` and a bare error object are accepted.
+fn provider_error_param(message: &str) -> Option<String> {
+    let start = message.find('{')?;
+    let body = serde_json::Deserializer::from_str(&message[start..])
+        .into_iter::<Value>()
+        .next()?
+        .ok()?;
+    let error = body
+        .get("error")
+        .filter(|error| error.is_object())
+        .unwrap_or(&body);
+    error
+        .get("param")
+        .and_then(Value::as_str)
+        .filter(|param| !param.is_empty())
+        .map(str::to_string)
+}
+
+/// Parses a final message as JSON, tolerating a single surrounding Markdown code fence.
 pub fn parse_final_message(text: &str) -> Result<Value, String> {
     let trimmed = text.trim();
     let unfenced = trimmed

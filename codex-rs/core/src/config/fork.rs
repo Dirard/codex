@@ -93,18 +93,40 @@ impl WorkflowsConfig {
         cpus.saturating_sub(2).clamp(1, 16)
     }
 
-    /// Most `budget_hard_overshoot` accepted; larger values are cut to it.
+    /// Most `budget_hard_overshoot` accepted; a larger value is a configuration error.
     pub const MAX_BUDGET_HARD_OVERSHOOT: f64 = 100.0;
 
-    pub(super) fn from_toml(toml: Option<&codex_config::config_toml::WorkflowsToml>) -> Self {
+    /// `[workflows]` with defaults for absent keys. A `budget_hard_overshoot` above
+    /// [`Self::MAX_BUDGET_HARD_OVERSHOOT`] or not finite is rejected rather than cut, so a
+    /// typo such as `120` for `1.20` does not silently allow 100 times the budget (R5.4).
+    pub(super) fn from_toml(
+        toml: Option<&codex_config::config_toml::WorkflowsToml>,
+    ) -> std::io::Result<Self> {
         use codex_config::config_toml::WorkflowApprovalToml;
         use codex_config::config_toml::WorkflowBudgetModeToml;
         use codex_config::config_toml::WorkflowStructuredOutputToml;
         let defaults = Self::default();
         let Some(toml) = toml else {
-            return defaults;
+            return Ok(defaults);
         };
-        Self {
+        let budget_hard_overshoot = match toml.budget_hard_overshoot {
+            None => defaults.budget_hard_overshoot,
+            Some(overshoot)
+                if overshoot.is_finite() && overshoot <= Self::MAX_BUDGET_HARD_OVERSHOOT =>
+            {
+                overshoot.max(1.0)
+            }
+            Some(overshoot) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "workflows.budget_hard_overshoot must be a number from 1.0 to {} (values below 1.0 count as 1.0), got {overshoot}",
+                        Self::MAX_BUDGET_HARD_OVERSHOOT
+                    ),
+                ));
+            }
+        };
+        Ok(Self {
             max_active_runs: toml
                 .max_active_runs
                 .unwrap_or(defaults.max_active_runs)
@@ -134,18 +156,13 @@ impl WorkflowsConfig {
                 WorkflowBudgetModeToml::Soft => WorkflowBudgetMode::Soft,
                 WorkflowBudgetModeToml::Hard => WorkflowBudgetMode::Hard,
             },
-            budget_hard_overshoot: toml
-                .budget_hard_overshoot
-                .filter(|overshoot| overshoot.is_finite())
-                .map_or(defaults.budget_hard_overshoot, |overshoot| {
-                    overshoot.clamp(1.0, Self::MAX_BUDGET_HARD_OVERSHOOT)
-                }),
+            budget_hard_overshoot,
             structured_output: match toml.structured_output.unwrap_or_default() {
                 WorkflowStructuredOutputToml::Auto => WorkflowStructuredOutput::Auto,
                 WorkflowStructuredOutputToml::Native => WorkflowStructuredOutput::Native,
                 WorkflowStructuredOutputToml::Prompt => WorkflowStructuredOutput::Prompt,
             },
-        }
+        })
     }
 
     /// R5.4: charged tokens above which a hard-mode run interrupts its running agents.
@@ -367,3 +384,7 @@ pub(super) fn validate_tool_namespace(
         namespace,
     )
 }
+
+#[cfg(test)]
+#[path = "fork_tests.rs"]
+mod tests;

@@ -15,16 +15,16 @@ use codex_workflow::Journal;
 use codex_workflow::JournalCache;
 use codex_workflow::JournalEvent;
 use codex_workflow::JournalRecord;
-use codex_workflow::RESULT_FILE;
 use codex_workflow::RunStatus;
 use codex_workflow::RunTracker;
+use codex_workflow::SCRIPT_FILE;
 use codex_workflow::TokenCharge;
 use codex_workflow::WorkflowMeta;
 use codex_workflow::is_valid_run_id;
 use codex_workflow::journal_bounds;
 use codex_workflow::parse_script;
 use codex_workflow::read_records;
-use codex_workflow::read_run_files;
+use codex_workflow::read_result;
 use tracing::warn;
 
 use super::now_ms;
@@ -138,10 +138,26 @@ fn restore_interrupted_runs(dir: &Path) -> Vec<RestoredRun> {
         .collect()
 }
 
+/// Serializes the marking of stopped runs in this process: two lookups of one run, such as
+/// `workflow_status` and `workflow {resume_from}` in one model response, would otherwise both
+/// see a journal without `run_finished` and both append one. Other processes cannot reach a
+/// thread's journals while this one owns the thread (its writer lock, R6.4 and Q5).
+static MARKING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// R6.4: append `run_finished` with status `interrupted` to the journal of a run whose
-/// process stopped, with the tokens its calls were charged.
+/// process stopped, with the tokens its calls were charged. A journal that already ends with
+/// `run_finished` is left as it is, so concurrent lookups mark a run once.
 fn mark_interrupted(run_dir: &Path) -> std::io::Result<()> {
+    let _marking = MARKING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let records = read_records(run_dir)?;
+    if matches!(
+        records.last().map(|record| &record.event),
+        Some(JournalEvent::RunFinished { .. })
+    ) {
+        return Ok(());
+    }
     let mut tokens = TokenCharge::default();
     for record in &records {
         if let JournalEvent::AgentFinished { tokens: call, .. } = &record.event {
@@ -160,11 +176,11 @@ fn mark_interrupted(run_dir: &Path) -> std::io::Result<()> {
 }
 
 /// R6.7: rebuild a run of an earlier process from its directory. Its meta comes from
-/// `script.js`, or, when that cannot be read, its name from the journal.
+/// `script.js`, or, when that cannot be read, its name from the journal. The script and args
+/// stay on disk; `resume_from` reads them when it needs them (R6.3).
 fn load_run(run_id: &str, run_dir: &Path) -> std::io::Result<RestoredRun> {
     let records = read_records(run_dir)?;
-    let (script, args_json) =
-        read_run_files(run_dir).unwrap_or_else(|_| (String::new(), "null".to_string()));
+    let script = std::fs::read_to_string(run_dir.join(SCRIPT_FILE)).unwrap_or_default();
     let meta = parse_script(&script)
         .map(|parsed| parsed.meta)
         .unwrap_or_else(|_| {
@@ -181,7 +197,7 @@ fn load_run(run_id: &str, run_dir: &Path) -> std::io::Result<RestoredRun> {
                 phases: Vec::new(),
             }
         });
-    let result_json = std::fs::read_to_string(run_dir.join(RESULT_FILE)).ok();
+    let result_json = read_result(run_dir);
     let preview = result_json
         .as_deref()
         .map(|json| truncate_text(json, TruncationPolicy::Tokens(RESTORED_PREVIEW_TOKENS)));
@@ -205,8 +221,6 @@ fn load_run(run_id: &str, run_dir: &Path) -> std::io::Result<RestoredRun> {
         meta,
         tracker,
         journal: Journal::open_existing(run_dir)?,
-        script,
-        args_json,
         result_json,
     })
 }
@@ -241,6 +255,7 @@ pub(super) async fn find_or_restore_run(
             last.map(|record| record.event),
             Some(JournalEvent::RunFinished { .. })
         ) {
+            // A second lookup of the same run that raced this one finds it marked.
             mark_interrupted(&run_dir)?;
         }
         load_run(&owned_id, &run_dir)
@@ -281,3 +296,7 @@ pub(super) async fn resume_source(
         run,
     })
 }
+
+#[cfg(test)]
+#[path = "resume_tests.rs"]
+mod tests;

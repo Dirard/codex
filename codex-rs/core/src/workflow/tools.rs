@@ -32,6 +32,7 @@ use super::run::StartRunRequest;
 use super::run::WorkflowRun;
 use super::run::start_run;
 use crate::config::WorkflowApproval;
+use crate::config::WorkflowBudgetMode;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -214,7 +215,10 @@ struct ScriptSource {
 }
 
 /// UC1, R1.8, R6.3, R12.3: resolve the script, its args and the resume cache of a call.
-/// Explicit `script`, `name` or `args` replace those of the `resume_from` source.
+/// Explicit `script`, `name` or `args` replace those of the `resume_from` source. Errors of
+/// the arguments themselves and of the saved-script lookup come first: looking up
+/// `resume_from` may mark a stopped run interrupted and register it (R6.4, R6.7), and a call
+/// that fails anyway must not do that.
 async fn resolve_script_source(
     session: &Session,
     turn: &TurnContext,
@@ -227,38 +231,48 @@ async fn resolve_script_source(
         resume_from,
         ..
     } = args;
-    let source = match &resume_from {
-        Some(run_id) => Some(super::resume::resume_source(session, &turn.config, run_id).await?),
-        None => None,
-    };
-    let script = match (script, name) {
-        (Some(_), Some(_)) => {
+    let explicit_script = match (script, name, &resume_from) {
+        (Some(_), Some(_), _) => {
             return Err(
                 "pass either `script` or `name`, not both; with `resume_from` both may be omitted to rerun the source run's script".to_string(),
             );
         }
-        (Some(script), None) => script,
-        (None, Some(name)) => super::saved::load_saved_script(&turn.config, &name)?.source,
-        (None, None) => match &source {
-            Some(source) => source.run.script_and_args().0,
-            None => {
-                return Err(
-                    "pass `script`, the `name` of a saved script, or `resume_from` with the id of a finished run".to_string(),
-                );
-            }
-        },
-    };
-    let args_json = match (args, &source) {
-        (Some(args), _) => {
-            serde_json::to_string(&args).map_err(|error| format!("args are not JSON: {error}"))?
+        (None, None, None) => {
+            return Err(
+                "pass `script`, the `name` of a saved script, or `resume_from` with the id of a finished run".to_string(),
+            );
         }
-        (None, Some(source)) => source.run.script_and_args().1,
-        (None, None) => "null".to_string(),
+        (Some(script), None, _) => Some(script),
+        (None, Some(name), _) => Some(super::saved::load_saved_script(&turn.config, &name)?.source),
+        (None, None, Some(_)) => None,
+    };
+    let explicit_args = args
+        .map(|args| {
+            serde_json::to_string(&args).map_err(|error| format!("args are not JSON: {error}"))
+        })
+        .transpose()?;
+    let Some(run_id) = resume_from else {
+        return Ok(ScriptSource {
+            script: explicit_script.unwrap_or_default(),
+            args_json: explicit_args.unwrap_or_else(|| "null".to_string()),
+            resume: None,
+        });
+    };
+    let source = super::resume::resume_source(session, &turn.config, &run_id).await?;
+    let (script, args_json) = match (explicit_script, explicit_args) {
+        (Some(script), Some(args_json)) => (script, args_json),
+        (script, args_json) => {
+            let (source_script, source_args) = source.run.script_and_args().await?;
+            (
+                script.unwrap_or(source_script),
+                args_json.unwrap_or(source_args),
+            )
+        }
     };
     Ok(ScriptSource {
         script,
         args_json,
-        resume: source.map(|source| source.cache),
+        resume: Some(source.cache),
     })
 }
 
@@ -363,8 +377,17 @@ impl ToolExecutor<ToolInvocation> for WorkflowStartHandler {
             };
             check_args_size(&args_json).map_err(reject)?;
             let parsed = parse_script(&script).map_err(reject)?;
+            let resume_stats = resume.as_ref().map(codex_workflow::JournalCache::stats);
             if needs_approval(&turn)
-                && !approve_run(&session, &turn, &call_id, &parsed.meta, budget_tokens).await
+                && !approve_run(
+                    &session,
+                    &turn,
+                    &call_id,
+                    &parsed.meta,
+                    budget_tokens,
+                    resume_stats.as_ref(),
+                )
+                .await
             {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "The user declined to run workflow \"{}\". No run was created.",
@@ -429,32 +452,66 @@ fn needs_approval(turn: &TurnContext) -> bool {
     }
 }
 
-/// R10.4: ask the user to approve the run, showing its name, description, limits and budget.
+/// R10.4: the header and text of the question that asks the user to approve a run: its
+/// name, description, limits, budget and budget mode, and for a resumed run the source run
+/// and how many of its journaled answers may be reused.
+fn approval_question(
+    meta: &codex_workflow::WorkflowMeta,
+    workflows: &crate::config::WorkflowsConfig,
+    budget_tokens: Option<u64>,
+    resume: Option<&codex_workflow::ResumeStats>,
+) -> (String, String) {
+    let budget = match budget_tokens.or(workflows.default_budget_tokens) {
+        None => "no token budget".to_string(),
+        Some(budget) => match workflows.budget_mode {
+            WorkflowBudgetMode::Soft => format!("a soft budget of {budget} tokens"),
+            WorkflowBudgetMode::Hard => format!(
+                "a hard budget of {budget} tokens: running agents are interrupted above {} tokens",
+                workflows.hard_budget_threshold(budget)
+            ),
+        },
+    };
+    let description = meta.description.trim_end_matches('.').to_string() + ".";
+    let limits = format!(
+        "It may start up to {} agents, {} at a time, with {budget}.",
+        workflows.max_agents_per_run, workflows.max_concurrent_agents,
+    );
+    match resume {
+        None => (
+            "Run workflow?".to_string(),
+            format!(
+                "Run workflow \"{}\" in the background? {description} {limits}",
+                meta.name
+            ),
+        ),
+        Some(resume) => (
+            "Resume workflow?".to_string(),
+            format!(
+                "Resume workflow run {from} as \"{name}\" in the background? {description} Up to {count} journaled agent answers of {from} are reused without starting agents; the other calls run live. {limits}",
+                from = resume.from,
+                name = meta.name,
+                count = resume.source_results,
+            ),
+        ),
+    }
+}
+
+/// R10.4: ask the user to approve the run, showing its name, description, limits, budget
+/// and, for `resume_from`, what it reuses.
 async fn approve_run(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
     call_id: &str,
     meta: &codex_workflow::WorkflowMeta,
     budget_tokens: Option<u64>,
+    resume: Option<&codex_workflow::ResumeStats>,
 ) -> bool {
-    let workflows = turn.config.workflows;
-    let budget = budget_tokens
-        .or(workflows.default_budget_tokens)
-        .map_or_else(
-            || "no token budget".to_string(),
-            |budget| format!("a budget of {budget} tokens"),
-        );
+    let (header, text) = approval_question(meta, &turn.config.workflows, budget_tokens, resume);
     let question_id = format!("{APPROVAL_QUESTION_PREFIX}_{call_id}");
     let question = RequestUserInputQuestion {
         id: question_id.clone(),
-        header: "Run workflow?".to_string(),
-        question: format!(
-            "Run workflow \"{}\" in the background? {} It may start up to {} agents, {} at a time, with {budget}.",
-            meta.name,
-            meta.description.trim_end_matches('.').to_string() + ".",
-            workflows.max_agents_per_run,
-            workflows.max_concurrent_agents,
-        ),
+        header,
+        question: text,
         is_other: false,
         is_secret: false,
         options: Some(vec![
@@ -600,11 +657,18 @@ impl ToolExecutor<ToolInvocation> for WorkflowStatusHandler {
             // R7.3: wait for a newer revision or the end of the run, without polling.
             let wait_ms = args.wait_ms.unwrap_or(0).min(MAX_STATUS_WAIT_MS);
             if wait_ms > 0 {
-                // Without since_revision the wait lasts until the run ends.
+                // Without since_revision the wait lasts until the run ends. A run ends once
+                // its notification is queued, so the turn that waited samples it next (R7.2).
                 let since = args.since_revision.unwrap_or(u64::MAX);
                 let mut revision = run.subscribe_revision();
-                let wait =
-                    revision.wait_for(|revision| *revision > since || run.status().is_terminal());
+                let wait = async {
+                    let _ = revision
+                        .wait_for(|revision| *revision > since || run.status().is_terminal())
+                        .await;
+                    if run.status().is_terminal() {
+                        run.wait_finished().await;
+                    }
+                };
                 tokio::select! {
                     _ = wait => {}
                     _ = tokio::time::sleep(Duration::from_millis(wait_ms)) => {}
@@ -732,5 +796,44 @@ mod tests {
                 approx_token_count(description)
             );
         }
+    }
+
+    /// R10.4: the approval names the budget mode and, for a resumed run, its source run and
+    /// how many journaled answers it may reuse.
+    #[test]
+    fn approval_names_resume_and_budget_mode() {
+        let meta = codex_workflow::WorkflowMeta {
+            name: "find-bugs".to_string(),
+            description: "Find bugs".to_string(),
+            phases: Vec::new(),
+        };
+        let mut workflows = crate::config::WorkflowsConfig {
+            max_agents_per_run: 10,
+            max_concurrent_agents: 2,
+            ..Default::default()
+        };
+        let (header, fresh) = approval_question(&meta, &workflows, Some(500), None);
+        assert_eq!(header, "Run workflow?");
+        assert_eq!(
+            fresh,
+            "Run workflow \"find-bugs\" in the background? Find bugs. It may start up to 10 agents, 2 at a time, with a soft budget of 500 tokens."
+        );
+
+        workflows.budget_mode = crate::config::WorkflowBudgetMode::Hard;
+        workflows.budget_hard_overshoot = 1.2;
+        let resume = codex_workflow::ResumeStats {
+            from: "wf-00000001".to_string(),
+            source_results: 3,
+            served: 0,
+            unused: 3,
+        };
+        let (header, resumed) = approval_question(&meta, &workflows, Some(500), Some(&resume));
+        assert_eq!(header, "Resume workflow?");
+        assert_eq!(
+            resumed,
+            "Resume workflow run wf-00000001 as \"find-bugs\" in the background? Find bugs. Up to 3 journaled agent answers of wf-00000001 are reused without starting agents; the other calls run live. It may start up to 10 agents, 2 at a time, with a hard budget of 500 tokens: running agents are interrupted above 600 tokens."
+        );
+        let (_, unlimited) = approval_question(&meta, &workflows, None, None);
+        assert!(unlimited.ends_with("with no token budget."), "{unlimited}");
     }
 }

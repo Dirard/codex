@@ -80,7 +80,9 @@ pub struct WorkflowsToml {
     /// What happens when a run spends its token budget. Default: `soft`.
     pub budget_mode: Option<WorkflowBudgetModeToml>,
     /// In `hard` budget mode, the multiple of the budget at which running agents are
-    /// interrupted; values below 1.0 count as 1.0. Default: 1.0.
+    /// interrupted, at most 100; values below 1.0 count as 1.0, larger values are a
+    /// configuration error. Default: 1.0.
+    #[schemars(range(max = 100))]
     pub budget_hard_overshoot: Option<f64>,
     /// How agents are asked for answers that match a JSON schema. Default: `auto`.
     pub structured_output: Option<WorkflowStructuredOutputToml>,

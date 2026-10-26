@@ -1,10 +1,10 @@
 //! Append-only JSONL journal of a workflow run (UC6, R6.1, R6.6).
 //!
-//! Persistent runs keep `script.js`, `args.json`, `journal.jsonl` and, once the run returned a
-//! value, `result.json` in `$CODEX_HOME/workflows/<thread_id>/<run_id>/`; ephemeral threads
-//! keep the journal in memory. Every record is flushed before the call that produced it
-//! returns to the script. Fields added in stage 2 are optional, so journals of earlier
-//! versions still read.
+//! Persistent runs keep `script.js`, `args.json`, `journal.jsonl` and, once a run that returned
+//! a value recorded `run_finished`, `result.json` in `$CODEX_HOME/workflows/<thread_id>/<run_id>/`;
+//! ephemeral threads keep the journal in memory. Every record is flushed before the call that
+//! produced it returns to the script. Fields added in stage 2 are optional, so journals of
+//! earlier versions still read, and a line a stopped process cut costs only that line.
 
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -96,6 +96,12 @@ pub enum JournalEvent {
         call: Option<u64>,
         key: String,
         ordinal: u64,
+        /// The call's label and phase, so a call without `agent_started` (answered from a
+        /// journal or settled before its spawn) keeps them in a rebuilt run (R6.7).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<String>,
         ok: bool,
         value: Option<Value>,
         reason: Option<String>,
@@ -103,6 +109,10 @@ pub enum JournalEvent {
         /// The value came from the journal of the run this one resumed (R6.3).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         cached: bool,
+        /// Where an isolated agent left its changes (R3.8), so a resume that reuses the
+        /// answer can report them (R6.3).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worktree: Option<String>,
     },
     /// A nested `workflow(name)` started (UC12).
     WorkflowStarted {
@@ -247,31 +257,52 @@ impl Journal {
                 }
             }
         };
-        parse_lines(lines.iter().map(String::as_str))
+        Ok(lines
+            .iter()
+            .filter_map(|line| parse_record(line.as_bytes()))
+            .collect())
     }
 
     /// Persist the run's result next to its journal, so a run rebuilt from disk can show it
-    /// (R6.1, R6.7). Ephemeral runs keep it in memory only.
+    /// (R6.1, R6.7). A process that stops while writing leaves no cut file: the result goes
+    /// to a temporary file that then replaces it. Like the journal it is not synced to disk;
+    /// [`read_result`] rejects a file that is not JSON. Ephemeral runs keep the result in
+    /// memory only.
     pub fn write_result(&self, result_json: &str) -> io::Result<()> {
-        match &self.dir {
-            Some(dir) => std::fs::write(dir.join(RESULT_FILE), result_json),
-            None => Ok(()),
-        }
+        let Some(dir) = &self.dir else {
+            return Ok(());
+        };
+        let temporary = dir.join(format!("{RESULT_FILE}.tmp"));
+        std::fs::write(&temporary, result_json)?;
+        std::fs::rename(&temporary, dir.join(RESULT_FILE))
     }
 }
 
 /// Records of the journal in `dir`. Lines that do not parse are skipped: a process that
-/// stopped mid-write leaves a cut line, and records written after a restart follow it.
+/// stopped mid-write leaves a cut line, possibly inside a multibyte character, and records
+/// written after a restart follow it.
 pub fn read_records(dir: &Path) -> io::Result<Vec<JournalRecord>> {
-    let text = std::fs::read_to_string(dir.join(JOURNAL_FILE))?;
-    parse_lines(text.lines())
+    let bytes = std::fs::read(dir.join(JOURNAL_FILE))?;
+    Ok(bytes
+        .split(|byte| *byte == b'\n')
+        .filter_map(parse_record)
+        .collect())
 }
 
-fn parse_lines<'a>(lines: impl Iterator<Item = &'a str>) -> io::Result<Vec<JournalRecord>> {
-    Ok(lines
-        .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect())
+/// One journal line, or `None` for a blank, cut or foreign line.
+fn parse_record(line: &[u8]) -> Option<JournalRecord> {
+    if line.trim_ascii().is_empty() {
+        return None;
+    }
+    serde_json::from_slice(line).ok()
+}
+
+/// R6.1, R6.7: the persisted result of the run in `dir`, if it is there and is JSON. A cut
+/// file, which a crash before atomic writes could leave, is not a result.
+pub fn read_result(dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(dir.join(RESULT_FILE)).ok()?;
+    serde_json::from_str::<serde::de::IgnoredAny>(&text).ok()?;
+    Some(text)
 }
 
 /// R6.4: the first and the last readable record of the journal at `path`, read without
@@ -280,9 +311,9 @@ pub fn journal_bounds(path: &Path) -> io::Result<(Option<JournalRecord>, Option<
     let mut file = File::open(path)?;
     let first = {
         let mut reader = io::BufReader::new(&mut file);
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        serde_json::from_str(line.trim()).ok()
+        let mut line = Vec::new();
+        reader.read_until(b'\n', &mut line)?;
+        parse_record(&line)
     };
     let len = file.metadata()?.len();
     let mut window: u64 = 64 * 1024;
@@ -291,19 +322,15 @@ pub fn journal_bounds(path: &Path) -> io::Result<(Option<JournalRecord>, Option<
         file.seek(SeekFrom::Start(start))?;
         let mut tail = Vec::new();
         file.read_to_end(&mut tail)?;
-        let text = String::from_utf8_lossy(&tail);
-        let mut lines: Vec<&str> = text
-            .lines()
-            .filter(|line| !line.trim().is_empty())
+        let mut lines: Vec<&[u8]> = tail
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.trim_ascii().is_empty())
             .collect();
         // The first line of a window that does not start at the beginning may be cut.
         if start > 0 && !lines.is_empty() {
             lines.remove(0);
         }
-        let last = lines
-            .iter()
-            .rev()
-            .find_map(|line| serde_json::from_str::<JournalRecord>(line).ok());
+        let last = lines.iter().rev().find_map(|line| parse_record(line));
         if last.is_some() || start == 0 {
             return Ok((first, last));
         }

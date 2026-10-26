@@ -62,6 +62,8 @@ fn file_journal_persists_script_args_and_records() {
         call: None,
         key: "k".to_string(),
         ordinal: 0,
+        label: None,
+        phase: None,
         ok: true,
         value: Some(json!({"items": []})),
         reason: None,
@@ -70,6 +72,7 @@ fn file_journal_persists_script_args_and_records() {
             cached: 5,
         },
         cached: false,
+        worktree: None,
     };
     assert_eq!(
         journal
@@ -134,6 +137,8 @@ fn existing_journals_read_and_continue() {
             call: None,
             key: "k".to_string(),
             ordinal: 0,
+            label: None,
+            phase: None,
             ok: true,
             value: Some(json!("v")),
             reason: None,
@@ -142,6 +147,7 @@ fn existing_journals_read_and_continue() {
                 cached: 2,
             },
             cached: false,
+            worktree: None,
         }
     );
     let (first, last) = journal_bounds(&run_dir.join(JOURNAL_FILE)).expect("bounds");
@@ -174,6 +180,71 @@ fn existing_journals_read_and_continue() {
         std::fs::read_to_string(run_dir.join(RESULT_FILE)).expect("result"),
         "{\"ok\":1}"
     );
+    // The result replaces the file whole and leaves no temporary file behind.
+    journal.write_result("[2]").expect("result");
+    assert_eq!(read_result(&run_dir).as_deref(), Some("[2]"));
+    assert_eq!(
+        std::fs::read_dir(&run_dir)
+            .expect("dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name.starts_with(RESULT_FILE))
+            .collect::<Vec<_>>(),
+        vec![RESULT_FILE.to_string()]
+    );
+    // A cut result is no result.
+    std::fs::write(run_dir.join(RESULT_FILE), "{\"ok\":").expect("cut result");
+    assert_eq!(read_result(&run_dir), None);
+}
+
+/// R6.1, R6.4: a line cut inside a multibyte character, as a process killed while writing a
+/// long answer leaves it, costs only that line: every whole record before and after it reads,
+/// as `journal_bounds` reads them, so the run can be marked, shown and resumed.
+#[test]
+fn a_line_cut_inside_a_multibyte_character_is_skipped() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let run_dir = dir.path().join("wf-00000002");
+    std::fs::create_dir_all(&run_dir).expect("dir");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(br#"{"seq":1,"kind":"run_started","run_id":"wf-00000002","name":"cut","script_sha256":"s","args_sha256":"a","parent_turn_id":"t","resume_from":null}"#);
+    bytes.push(b'\n');
+    let answer = r#"{"seq":2,"kind":"agent_finished","call":1,"key":"k","ordinal":0,"ok":true,"value":"ответ","reason":null,"tokens":{"charged":1,"cached":0}}"#;
+    bytes.extend_from_slice(answer.as_bytes());
+    bytes.push(b'\n');
+    // The next answer stops after the first byte of a two-byte Cyrillic letter.
+    let cut =
+        r#"{"seq":3,"kind":"agent_finished","call":2,"key":"k","ordinal":1,"ok":true,"value":"о"#;
+    bytes.extend_from_slice(&cut.as_bytes()[..cut.len() - 1]);
+    std::fs::write(run_dir.join(JOURNAL_FILE), &bytes).expect("write");
+    assert!(
+        std::str::from_utf8(&bytes).is_err(),
+        "the journal is not UTF-8"
+    );
+
+    let records = read_records(&run_dir).expect("records");
+    assert_eq!(
+        records.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    let (_, last) = journal_bounds(&run_dir.join(JOURNAL_FILE)).expect("bounds");
+    assert_eq!(last.map(|record| record.seq), Some(2));
+
+    let journal = Journal::open_existing(&run_dir).expect("open");
+    journal
+        .append(JournalEvent::RunFinished {
+            status: "interrupted".to_string(),
+            result_bytes: 0,
+            tokens: TokenCharge::default(),
+            error: None,
+            finished_at_ms: None,
+        })
+        .expect("append");
+    let records = journal.records().expect("records");
+    assert_eq!(
+        records.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert!(matches!(records[2].event, JournalEvent::RunFinished { .. }));
 }
 
 /// R6.6: ephemeral journals keep records in memory only.

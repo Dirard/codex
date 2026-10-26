@@ -7445,8 +7445,9 @@
       "description": "Fork: limits and defaults of background workflow runs (`features.workflows`).",
       "properties": {
         "budget_hard_overshoot": {
-          "description": "In `hard` budget mode, the multiple of the budget at which running agents are interrupted; values below 1.0 count as 1.0. Default: 1.0.",
+          "description": "In `hard` budget mode, the multiple of the budget at which running agents are interrupted, at most 100; values below 1.0 count as 1.0, larger values are a configuration error. Default: 1.0.",
           "format": "double",
+          "maximum": 100.0,
           "type": "number"
         },
         "budget_mode": {

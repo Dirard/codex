@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -180,6 +181,9 @@ pub struct RunTracker {
     phase_index: HashMap<String, usize>,
     current_phase_seq: u64,
     agents: BTreeMap<u64, AgentEntry>,
+    /// Calls whose tokens were settled from their agent's total (R5.1): live charges that
+    /// arrive later are already part of that total.
+    settled_tokens: HashSet<u64>,
 }
 
 impl RunTracker {
@@ -216,6 +220,7 @@ impl RunTracker {
             phase_index: HashMap::new(),
             current_phase_seq: 0,
             agents: BTreeMap::new(),
+            settled_tokens: HashSet::new(),
         };
         for phase in declared_phases {
             tracker.phase_slot(phase);
@@ -229,6 +234,11 @@ impl RunTracker {
 
     pub fn status(&self) -> RunStatus {
         self.snapshot.status
+    }
+
+    /// Tokens charged to the run so far: the run's budget counts exactly these (R5.1).
+    pub fn charged_tokens(&self) -> u64 {
+        self.snapshot.charged_tokens
     }
 
     /// The snapshot, with the per-call list only when `include_agents` is set.
@@ -321,18 +331,50 @@ impl RunTracker {
         self.agent_finished(seq, true, None, TokenCharge::default());
     }
 
-    /// R5.1: live charging of one model response of a running call.
-    pub fn agent_charged(&mut self, seq: u64, tokens: TokenCharge) {
+    /// R5.1: live charging of one model response of a running call. Returns whether the
+    /// charge counted: a call that settled its tokens or its outcome takes no more, since
+    /// its agent's total already holds every response it recorded.
+    pub fn agent_charged(&mut self, seq: u64, tokens: TokenCharge) -> bool {
+        if self.settled_tokens.contains(&seq) {
+            return false;
+        }
         let Some(entry) = self.agents.get_mut(&seq) else {
-            return;
+            return false;
         };
         if matches!(entry.state, AgentState::Completed | AgentState::Null) {
-            return;
+            return false;
         }
         entry.tokens.add(tokens);
         self.snapshot.charged_tokens = self.snapshot.charged_tokens.saturating_add(tokens.charged);
         self.snapshot.cached_tokens = self.snapshot.cached_tokens.saturating_add(tokens.cached);
         self.bump();
+        true
+    }
+
+    /// R5.1: settle the tokens of call `seq` from its agent's `total`, once: only what live
+    /// charging did not count yet is added, and later live charges of the call are refused.
+    /// Returns the call's tokens.
+    pub fn settle_agent_tokens(&mut self, seq: u64, total: TokenCharge) -> TokenCharge {
+        if !self.settled_tokens.insert(seq) {
+            return self
+                .agents
+                .get(&seq)
+                .map(|entry| entry.tokens)
+                .unwrap_or_default();
+        }
+        let Some(entry) = self.agents.get_mut(&seq) else {
+            return total;
+        };
+        let added = total.beyond(entry.tokens);
+        entry.tokens.add(added);
+        let tokens = entry.tokens;
+        if added != TokenCharge::default() {
+            self.snapshot.charged_tokens =
+                self.snapshot.charged_tokens.saturating_add(added.charged);
+            self.snapshot.cached_tokens = self.snapshot.cached_tokens.saturating_add(added.cached);
+            self.bump();
+        }
+        tokens
     }
 
     fn transition(&mut self, seq: u64, state: AgentState) -> Option<&mut AgentEntry> {
@@ -531,6 +573,8 @@ impl RunTracker {
                     call,
                     key,
                     ordinal,
+                    label,
+                    phase,
                     ok,
                     reason,
                     tokens,
@@ -540,11 +584,11 @@ impl RunTracker {
                     let seq = call_of(*call, key, *ordinal);
                     if *cached {
                         served += 1;
-                        tracker.agent_cached(seq, None, None);
+                        tracker.agent_cached(seq, label.clone(), phase.clone());
                         continue;
                     }
                     if tracker.agent(seq).is_none() {
-                        tracker.agent_queued(seq, None, None);
+                        tracker.agent_queued(seq, label.clone(), phase.clone());
                     }
                     tracker.agent_finished(seq, *ok, reason.as_deref(), *tokens);
                 }

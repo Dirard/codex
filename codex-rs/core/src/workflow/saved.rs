@@ -86,6 +86,8 @@ pub(super) fn handle_workflow_call(
             ok,
             error,
         } => {
+            // The log and the journal show the same error, with the author's file names.
+            let error = error.map(|error| codex_workflow::display_error(&error));
             if let Some(error) = &error {
                 run.log_line(&format!("workflow {name} failed: {error}"));
             } else {
@@ -95,7 +97,7 @@ pub(super) fn handle_workflow_call(
                 call,
                 name,
                 ok,
-                error: error.map(|error| codex_workflow::display_error(&error)),
+                error,
             });
             Ok(json!({}))
         }

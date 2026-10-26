@@ -16,11 +16,14 @@ fn finished(
             call: Some(seq),
             key: key.to_string(),
             ordinal,
+            label: None,
+            phase: None,
             ok: value.is_some(),
             reason: value.is_none().then(|| "timeout".to_string()),
             value,
             tokens: TokenCharge::default(),
             cached,
+            worktree: None,
         },
     }
 }
@@ -43,10 +46,16 @@ fn cache_serves_successful_results_by_key_and_ordinal() {
     ];
     let mut cache = JournalCache::from_records("wf-00000001", &records);
     assert_eq!(cache.stats().source_results, 3);
-    assert_eq!(cache.take("a", 1), Some(json!("second a")));
+    assert_eq!(
+        cache.take("a", 1).map(|answer| answer.value),
+        Some(json!("second a"))
+    );
     assert_eq!(cache.take("a", 1), None, "a pair is served once");
     assert_eq!(cache.take("b", 0), None, "null outcomes run again");
-    assert_eq!(cache.take("c", 0), Some(json!({"x": 1})));
+    assert_eq!(
+        cache.take("c", 0).map(|answer| answer.value),
+        Some(json!({"x": 1}))
+    );
     assert_eq!(cache.take("a", 2), None);
     assert_eq!(
         cache.stats(),
@@ -56,5 +65,32 @@ fn cache_serves_successful_results_by_key_and_ordinal() {
             served: 2,
             unused: 1,
         }
+    );
+}
+
+/// R6.3, R3.8: an isolated agent's worktree report travels with its cached answer; a
+/// journal that predates the report has none.
+#[test]
+fn cached_answers_keep_the_worktree_report() {
+    let report = "<agent_worktree>\nbranch: b\n</agent_worktree>".to_string();
+    let mut reported = finished(1, "w", 0, Some(json!("isolated")), false);
+    if let JournalEvent::AgentFinished { worktree, .. } = &mut reported.event {
+        *worktree = Some(report.clone());
+    }
+    let records = vec![reported, finished(2, "w", 1, Some(json!("older")), false)];
+    let mut cache = JournalCache::from_records("wf-00000001", &records);
+    assert_eq!(
+        cache.take("w", 0),
+        Some(CachedAnswer {
+            value: json!("isolated"),
+            worktree: Some(report),
+        })
+    );
+    assert_eq!(
+        cache.take("w", 1),
+        Some(CachedAnswer {
+            value: json!("older"),
+            worktree: None,
+        })
     );
 }

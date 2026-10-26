@@ -17,6 +17,7 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::turn_input::TurnStartOptions;
+use codex_workflow::CachedAnswer;
 use codex_workflow::JournalEvent;
 use codex_workflow::TokenCharge;
 use codex_workflow::WORKFLOW_AGENT_INSTRUCTIONS;
@@ -149,9 +150,21 @@ pub(super) async fn run_agent_call(
     let key = call_key(&input.prompt, &input.opts);
     let ordinal = run.next_ordinal(&key);
     // R6.3: the resumed run's answer needs neither a slot nor an agent start.
-    if let Some(value) = run.take_cached(&key, ordinal) {
+    if let Some((answer, from)) = run.take_cached(&key, ordinal) {
         run.gate.ticket(seq).skip();
-        return record_cached(run, seq, key, ordinal, options.label, phase, value);
+        return record_cached(
+            run,
+            CachedCall {
+                seq,
+                key,
+                ordinal,
+                label: options.label,
+                phase,
+                isolated: options.isolation == Some(AgentIsolation::Worktree),
+            },
+            answer,
+            &from,
+        );
     }
     run.update(|tracker| tracker.agent_queued(seq, options.label.clone(), phase.clone()));
     let call = AgentCall {
@@ -165,21 +178,40 @@ pub(super) async fn run_agent_call(
         key,
         ordinal,
         schema_in_prompt: AtomicBool::new(false),
+        worktree_report: std::sync::Mutex::new(None),
     };
     let (outcome, tokens) = call.execute(&cell_cancel).await;
     call.record(outcome, tokens)
 }
 
-/// R6.3, R6.5: settle a call from the resumed run's journal.
-fn record_cached(
-    run: &WorkflowRun,
+/// A call answered from the resumed run's journal.
+struct CachedCall {
     seq: u64,
     key: String,
     ordinal: u64,
     label: Option<String>,
     phase: Option<String>,
-    value: JsonValue,
+    /// The call asked for `isolation: "worktree"`.
+    isolated: bool,
+}
+
+/// R6.3, R6.5: settle a call from the journal of run `from`. An isolated agent's answer
+/// carries the report of where its changes are (R3.8): the resumed run logs it and keeps it
+/// in its own journal, and says explicitly when the source journal does not record it.
+fn record_cached(
+    run: &WorkflowRun,
+    call: CachedCall,
+    answer: CachedAnswer,
+    from: &str,
 ) -> JsonValue {
+    let CachedCall {
+        seq,
+        key,
+        ordinal,
+        label,
+        phase,
+        isolated,
+    } = call;
     if let Some(metrics) = codex_otel::global() {
         let _ = metrics.counter(
             "codex.workflow.agents",
@@ -187,15 +219,29 @@ fn record_cached(
             &[("outcome", "cached")],
         );
     }
+    if isolated {
+        match &answer.worktree {
+            Some(report) => run.log_line(&format!(
+                "agent {seq} answered from the journal of {from}; its worktree:\n{report}"
+            )),
+            None => run.log_line(&format!(
+                "agent {seq} answered from the journal of {from}, which does not record that isolated agent's worktree; look for its branch in the log of {from}"
+            )),
+        }
+    }
+    let CachedAnswer { value, worktree } = answer;
     run.journal(JournalEvent::AgentFinished {
         call: Some(seq),
         key,
         ordinal,
+        label: label.clone(),
+        phase: phase.clone(),
         ok: true,
         value: Some(value.clone()),
         reason: None,
         tokens: TokenCharge::default(),
         cached: true,
+        worktree,
     });
     run.update(|tracker| tracker.agent_cached(seq, label, phase));
     json!({ "ok": true, "value": value })
@@ -213,6 +259,9 @@ struct AgentCall<'a> {
     ordinal: u64,
     /// R3.12: this call carries its schema in the task instead of `final_output_json_schema`.
     schema_in_prompt: AtomicBool,
+    /// R3.8: the last report of where the isolated agent left its changes; journaled with
+    /// the answer, so a resume that reuses it can report them (R6.3).
+    worktree_report: std::sync::Mutex<Option<String>>,
 }
 
 struct SpawnedChild {
@@ -684,6 +733,10 @@ impl AgentCall<'_> {
         };
         self.run
             .log_line(&format!("agent {} worktree:\n{report}", self.seq));
+        *self
+            .worktree_report
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(report);
     }
 
     async fn interrupt(&self, thread_id: ThreadId) {
@@ -754,15 +807,23 @@ impl AgentCall<'_> {
         }
         match outcome {
             CallOutcome::Value(value) => {
+                let worktree = self
+                    .worktree_report
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
                 self.run.journal(JournalEvent::AgentFinished {
                     call: Some(self.seq),
                     key: self.key.clone(),
                     ordinal: self.ordinal,
+                    label: self.options.label.clone(),
+                    phase: self.phase.clone(),
                     ok: true,
                     value: Some(value.clone()),
                     reason: None,
                     tokens,
                     cached: false,
+                    worktree,
                 });
                 self.run
                     .update(|tracker| tracker.agent_finished(self.seq, true, None, tokens));
@@ -785,11 +846,14 @@ impl AgentCall<'_> {
                     call: Some(self.seq),
                     key: self.key.clone(),
                     ordinal: self.ordinal,
+                    label: self.options.label.clone(),
+                    phase: self.phase.clone(),
                     ok: false,
                     value: None,
                     reason: Some(reason.to_string()),
                     tokens,
                     cached: false,
+                    worktree: None,
                 });
                 self.run.update(|tracker| {
                     tracker.agent_finished(self.seq, false, Some(reason), tokens);
