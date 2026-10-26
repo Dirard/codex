@@ -577,7 +577,9 @@ async fn script_errors_fail_the_run_with_script_lines() -> Result<()> {
     let error = run.error.expect("error");
     assert!(error.contains("broken on purpose"), "{error}");
     assert!(error.contains("workflow.js:4"), "{error}");
-    wait_for_turns(&test, 1).await;
+    // The run fails at once, so its notification may join the first turn instead of
+    // starting a second one; either way the parent samples it.
+    wait_for_served(&responses, "parent_notified", 1).await;
     let notified = responses.served("parent_notified");
     assert!(notified[0].contains("failed in"), "{}", notified[0]);
     Ok(())
