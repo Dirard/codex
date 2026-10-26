@@ -1,11 +1,16 @@
 //! Fork: `thread/workflow/*` requests over the dynamic workflow runs of a loaded thread
-//! (`specs/dynamic-workflow-2026-10-25.md`, UC8 R8.2, UC9 R9.1).
+//! (`specs/dynamic-workflow-2026-10-25.md`, UC8 R8.2, UC9 R9.1), and
+//! `thread/backgroundTerminals/pending` over the background terminal notifications it still
+//! owes the model (`specs/background-exec-notifications-2026-10-25.md`, UC7 R7.4).
 
 use std::sync::Arc;
 
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::PendingBackgroundTerminal;
+use codex_app_server_protocol::ThreadBackgroundTerminalsPendingParams;
+use codex_app_server_protocol::ThreadBackgroundTerminalsPendingResponse;
 use codex_app_server_protocol::ThreadWorkflowCancelParams;
 use codex_app_server_protocol::ThreadWorkflowCancelResponse;
 use codex_app_server_protocol::ThreadWorkflowListParams;
@@ -45,6 +50,10 @@ impl ThreadWorkflowRequestProcessor {
                 .map(|response| Some(response.into())),
             ClientRequest::ThreadWorkflowCancel { params, .. } => self
                 .cancel(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadBackgroundTerminalsPending { params, .. } => self
+                .pending_background_terminals(params)
                 .await
                 .map(|response| Some(response.into())),
             other => Err(internal_error(format!(
@@ -94,6 +103,31 @@ impl ThreadWorkflowRequestProcessor {
             .ok_or_else(|| run_not_found(&params.run_id))?;
         Ok(ThreadWorkflowCancelResponse {
             run: WorkflowRun::from_snapshot(snapshot, /*include_agents*/ false),
+        })
+    }
+
+    /// What the thread still owes the model from background terminals (R7.4).
+    pub(crate) async fn pending_background_terminals(
+        &self,
+        params: ThreadBackgroundTerminalsPendingParams,
+    ) -> Result<ThreadBackgroundTerminalsPendingResponse, JSONRPCErrorError> {
+        let thread = self.loaded_thread(&params.thread_id).await?;
+        let pending = thread.pending_background_terminals().await;
+        Ok(ThreadBackgroundTerminalsPendingResponse {
+            terminals: pending
+                .terminals
+                .into_iter()
+                .map(|terminal| PendingBackgroundTerminal {
+                    process_id: terminal.process_id.to_string(),
+                    command: terminal.command,
+                    running_for_ms: u64::try_from(terminal.running_for.as_millis())
+                        .unwrap_or(u64::MAX),
+                    output_watch: terminal.output_watch,
+                })
+                .collect(),
+            notification_queued: pending.notification_queued,
+            active_turn_id: pending.active_turn_id,
+            turn_starting: pending.turn_starting,
         })
     }
 

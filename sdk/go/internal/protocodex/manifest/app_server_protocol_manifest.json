@@ -1389,6 +1389,44 @@
         "boundedModelContextFields": [],
         "direction": "clientToServer",
         "exception": null,
+        "experimental": {
+          "fieldPaths": [],
+          "reason": "thread/backgroundTerminals/pending"
+        },
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": null,
+        "method": "thread/backgroundTerminals/pending",
+        "paramsSchemaRef": "#/definitions/ThreadBackgroundTerminalsPendingParams",
+        "paramsType": "ThreadBackgroundTerminalsPendingParams",
+        "requestSerializationScopes": [
+          {
+            "condition": "always",
+            "identityExtractors": [
+              {
+                "fieldPath": "thread_id",
+                "identityName": "threadId",
+                "optional": false,
+                "terminalPredicate": null
+              }
+            ],
+            "kind": "thread",
+            "precedence": 0,
+            "queueKey": null
+          }
+        ],
+        "responseSchemaRef": "#/definitions/ThreadBackgroundTerminalsPendingResponse",
+        "responseType": "ThreadBackgroundTerminalsPendingResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "ThreadBackgroundTerminalsPending"
+      },
+      {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
         "experimental": null,
         "experimentalFields": [
           {
@@ -6000,9 +6038,9 @@
       }
     ],
     "digests": {
-      "manifestDigest": "c3340b8dfbfb430057d3852b0a05b695993628acb90ec762e65acfdd4c7c77fc",
-      "protocolDigest": "9ccc13a718121d1adbe94c464d0f3aaa7c8eb9b7cdae5330447f57ec8e45da0b",
-      "schemaDigest": "a34908ebbe6187d67a1958f535b42e3aae3a4cb7c7fbcdd0f506a6e0ad22a621"
+      "manifestDigest": "738152aa67db25a36ae95fa09b06bc4a30789b5c9d9fdf036909b373e491520d",
+      "protocolDigest": "36aac592f0f8e0703ecb45b3618e398b5ff792d8add1d31557b0a7bfeb007608",
+      "schemaDigest": "eeb34f897b3adeabb244f59eb20ea9ea89b610c30ad77b8a5f24f589dd7502ec"
     },
     "protocolMode": "experimental",
     "routingLifecycle": [
@@ -15872,6 +15910,27 @@
         "fields": [],
         "manualPayloadConversion": null,
         "metadataStatus": "schemaSufficient",
+        "rustType": "PendingBackgroundTerminal",
+        "schemaRef": "#/definitions/v2/PendingBackgroundTerminal",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
         "rustType": "PermissionGrantScope",
         "schemaRef": "#/definitions/PermissionGrantScope",
         "schemaSufficientProof": {
@@ -20679,6 +20738,48 @@
         "metadataStatus": "schemaSufficient",
         "rustType": "ThreadBackgroundTerminalsListResponse",
         "schemaRef": "#/definitions/v2/ThreadBackgroundTerminalsListResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadBackgroundTerminalsPendingParams",
+        "schemaRef": "#/definitions/v2/ThreadBackgroundTerminalsPendingParams",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadBackgroundTerminalsPendingResponse",
+        "schemaRef": "#/definitions/v2/ThreadBackgroundTerminalsPendingResponse",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,

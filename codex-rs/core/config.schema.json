@@ -1044,7 +1044,7 @@
               "type": "boolean"
             },
             "exec_exit_notifications": {
-              "type": "boolean"
+              "$ref": "#/definitions/FeatureToml_for_ExecExitNotificationsConfigToml"
             },
             "exec_permission_approvals": {
               "type": "boolean"
@@ -1711,6 +1711,22 @@
       ],
       "type": "string"
     },
+    "ExecExitNotificationsConfigToml": {
+      "additionalProperties": false,
+      "description": "Fork: settings of background exec notifications (`specs/background-exec-notifications-2026-10-25.md`, UC7).",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "exec_wait_timeout_ms": {
+          "description": "How long `codex exec` waits for background terminals whose exit or matching output is still owed to the model before it stops them and exits with code 1, in milliseconds. Defaults to 1800000 (30 minutes).",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "ExperimentalRequestUserInput": {
       "additionalProperties": false,
       "properties": {
@@ -1849,6 +1865,16 @@
         },
         {
           "$ref": "#/definitions/CurrentTimeReminderConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_ExecExitNotificationsConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/ExecExitNotificationsConfigToml"
         }
       ]
     },
@@ -7891,7 +7917,7 @@
           "type": "boolean"
         },
         "exec_exit_notifications": {
-          "type": "boolean"
+          "$ref": "#/definitions/FeatureToml_for_ExecExitNotificationsConfigToml"
         },
         "exec_permission_approvals": {
           "type": "boolean"

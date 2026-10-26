@@ -1165,6 +1165,8 @@ pub struct Config {
     /// Fork: defaults for MultiAgentV2 children isolated in managed git worktrees.
     /// The `agent_worktree_isolation` feature flag gates the behavior itself.
     pub agent_worktree_isolation: AgentWorktreeIsolationConfig,
+    /// Fork: how long `codex exec` waits for background terminal notifications.
+    pub exec_exit_notifications: ExecExitNotificationsConfig,
     // Fork end
     /// Context-window token budget configuration, when enabled.
     pub token_budget: Option<TokenBudgetConfig>,
@@ -4715,6 +4717,9 @@ impl Config {
             max_spawned_threads_per_turn,
             explorer_profile,
             agent_worktree_isolation,
+            exec_exit_notifications: ExecExitNotificationsConfig::from_features_toml(
+                cfg.features.as_ref(),
+            ),
             // Fork end
             token_budget,
             token_budget_startup_config: None,

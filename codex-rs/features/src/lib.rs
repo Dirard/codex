@@ -923,6 +923,8 @@ pub struct FeaturesToml {
     pub explorer_profile: Option<FeatureToml<ExplorerProfileConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_worktree_isolation: Option<FeatureToml<AgentWorktreeIsolationConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec_exit_notifications: Option<FeatureToml<ExecExitNotificationsConfigToml>>,
     // Fork end
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<FeatureToml<TokenBudgetConfigToml>>,

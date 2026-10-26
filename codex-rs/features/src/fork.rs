@@ -1,6 +1,7 @@
 //! Fork: `FeaturesToml` entries of the fork's features with a settings table
 //! (`specs/explorer-and-questions-2026-10-25.md`,
-//! `specs/agent-worktree-isolation-2026-10-25.md`).
+//! `specs/agent-worktree-isolation-2026-10-25.md`,
+//! `specs/background-exec-notifications-2026-10-25.md`).
 
 use std::collections::BTreeMap;
 
@@ -24,6 +25,13 @@ impl FeaturesToml {
             .and_then(FeatureToml::enabled)
         {
             entries.insert(Feature::AgentWorktreeIsolation.key().to_string(), enabled);
+        }
+        if let Some(enabled) = self
+            .exec_exit_notifications
+            .as_ref()
+            .and_then(FeatureToml::enabled)
+        {
+            entries.insert(Feature::ExecExitNotifications.key().to_string(), enabled);
         }
     }
 }

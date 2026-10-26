@@ -1316,7 +1316,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     loop {
         let server_event = tokio::select! {
             () = tokio::time::sleep_until(workflow_wait.fork_deadline()), if workflow_wait.fork_is_waiting() => {
-                if workflow_wait.fork_on_timeout(&client, &mut request_ids).await {
+                if workflow_wait.fork_on_timeout(&client, &mut request_ids, event_processor.as_mut(), &mut error_seen).await {
                     break;
                 }
                 continue;

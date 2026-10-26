@@ -387,6 +387,7 @@ async fn new_config(
         multi_agent_v2: MultiAgentV2Config::default(),
         explorer_profile: Default::default(),
         agent_worktree_isolation: Default::default(),
+        exec_exit_notifications: Default::default(),
         max_goal_token_budget: None,
         token_budget: None,
         token_budget_startup_config: None,

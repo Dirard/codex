@@ -215,6 +215,40 @@ pub struct ExplorerProfileConfig {
 }
 
 pub const DEFAULT_EXPLORER_PROFILE_MAX_RESULT_TOKENS: usize = 2_000;
+
+/// Fork: resolved `[features.exec_exit_notifications]` settings
+/// (`specs/background-exec-notifications-2026-10-25.md`, UC7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ExecExitNotificationsConfig {
+    /// How long `codex exec` waits for background terminals before it gives up.
+    pub exec_wait_timeout_ms: u64,
+}
+
+pub const DEFAULT_EXEC_WAIT_TIMEOUT_MS: u64 = 30 * 60 * 1000;
+
+impl Default for ExecExitNotificationsConfig {
+    fn default() -> Self {
+        Self {
+            exec_wait_timeout_ms: DEFAULT_EXEC_WAIT_TIMEOUT_MS,
+        }
+    }
+}
+
+impl ExecExitNotificationsConfig {
+    /// Resolves the settings from a features table, keeping defaults for omitted values.
+    pub(crate) fn from_features_toml(features: Option<&FeaturesToml>) -> Self {
+        let configured =
+            match features.and_then(|features| features.exec_exit_notifications.as_ref()) {
+                Some(FeatureToml::Config(config)) => Some(config),
+                Some(FeatureToml::Enabled(_)) | None => None,
+            };
+        Self {
+            exec_wait_timeout_ms: configured
+                .and_then(|config| config.exec_wait_timeout_ms)
+                .unwrap_or(DEFAULT_EXEC_WAIT_TIMEOUT_MS),
+        }
+    }
+}
 pub const MIN_EXPLORER_PROFILE_MAX_RESULT_TOKENS: usize = 200;
 
 impl Default for ExplorerProfileConfig {

@@ -183,6 +183,8 @@ mod view_image;
 mod web_search;
 mod windows_sandbox_setup;
 mod workflow;
+// Fork: background terminal notifications a thread still owes the model.
+mod background_terminals_pending;
 mod workspace_routing;
 
 mod user_verification;

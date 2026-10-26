@@ -190,6 +190,12 @@ func (c RawClient) ThreadWorkflowCancel(ctx context.Context, params ThreadWorkfl
 	return result, err
 }
 
+func (c RawClient) ThreadBackgroundTerminalsPending(ctx context.Context, params ThreadBackgroundTerminalsPendingParams) (ThreadBackgroundTerminalsPendingResponse, error) {
+	var result ThreadBackgroundTerminalsPendingResponse
+	err := c.sender.Call(ctx, "thread/backgroundTerminals/pending", params, &result, MethodMetadataByMethod["thread/backgroundTerminals/pending"])
+	return result, err
+}
+
 func (c RawClient) ThreadMetadataUpdate(ctx context.Context, params ThreadMetadataUpdateParams) (ThreadMetadataUpdateResponse, error) {
 	var result ThreadMetadataUpdateResponse
 	err := c.sender.Call(ctx, "thread/metadata/update", params, &result, MethodMetadataByMethod["thread/metadata/update"])

@@ -16548,6 +16548,36 @@
       "PathUri": {
         "type": "string"
       },
+      "PendingBackgroundTerminal": {
+        "description": "A live background terminal whose exit Codex will still report.",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "outputWatch": {
+            "description": "The pattern of the terminal's output watch, if one is on.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "processId": {
+            "description": "The `session_id` of the terminal.",
+            "type": "string"
+          },
+          "runningForMs": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "command",
+          "processId",
+          "runningForMs"
+        ],
+        "type": "object"
+      },
       "PermissionProfileListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {

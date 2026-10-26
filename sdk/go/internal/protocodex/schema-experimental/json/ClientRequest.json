@@ -5247,6 +5247,17 @@
       ],
       "type": "object"
     },
+    "ThreadBackgroundTerminalsPendingParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadBackgroundTerminalsTerminateParams": {
       "properties": {
         "processId": {
@@ -9140,6 +9151,30 @@
         "params"
       ],
       "title": "Thread/workflow/cancelRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/backgroundTerminals/pending"
+          ],
+          "title": "Thread/backgroundTerminals/pendingRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadBackgroundTerminalsPendingParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/backgroundTerminals/pendingRequest",
       "type": "object"
     },
     {

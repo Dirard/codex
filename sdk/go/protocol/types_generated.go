@@ -637,6 +637,20 @@ func (v ClientRequest) ThreadWorkflowCancelParams() (ThreadWorkflowCancelParams,
 	return params, true, nil
 }
 
+func (v ClientRequest) ThreadBackgroundTerminalsPendingParams() (ThreadBackgroundTerminalsPendingParams, bool, error) {
+	if v.Method != "thread/backgroundTerminals/pending" {
+		return ThreadBackgroundTerminalsPendingParams{}, false, nil
+	}
+	var params ThreadBackgroundTerminalsPendingParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
 func (v ClientRequest) ThreadMetadataUpdateParams() (ThreadMetadataUpdateParams, bool, error) {
 	if v.Method != "thread/metadata/update" {
 		return ThreadMetadataUpdateParams{}, false, nil
@@ -16703,6 +16717,42 @@ func (v *PatchChangeKind) UnmarshalJSON(data []byte) error {
 
 type PathUri string
 
+type PendingBackgroundTerminal struct {
+	Command      string           `json:"command"`
+	OutputWatch  Optional[string] `json:"outputWatch,omitzero"`
+	ProcessID    string           `json:"processId"`
+	RunningForMs uint64           `json:"runningForMs"`
+}
+
+var pendingBackgroundTerminalSpec = objectSpec{
+	fields: []objectField{
+		{name: "command", flags: fieldRequired | fieldRejectNull},
+		{name: "outputWatch"},
+		{name: "processId", flags: fieldRequired | fieldRejectNull},
+		{name: "runningForMs", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v PendingBackgroundTerminal) MarshalJSON() ([]byte, error) {
+	type wire PendingBackgroundTerminal
+	return json.Marshal(wire(v))
+}
+
+func (v *PendingBackgroundTerminal) UnmarshalJSON(data []byte) error {
+	type wire PendingBackgroundTerminal
+	var s objectScan
+	if _, err := s.begin(data, &pendingBackgroundTerminalSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if v.RunningForMs < 0 {
+		return DecodeError{Field: "runningForMs", Reason: "below minimum 0"}
+	}
+	return nil
+}
+
 type PermissionProfileListParams struct {
 	Cursor Optional[string] `json:"cursor,omitzero"`
 	Cwd    Optional[string] `json:"cwd,omitzero"`
@@ -22408,6 +22458,52 @@ func (v ThreadBackgroundTerminalsListResponse) MarshalJSON() ([]byte, error) {
 func (v *ThreadBackgroundTerminalsListResponse) UnmarshalJSON(data []byte) error {
 	type wire ThreadBackgroundTerminalsListResponse
 	return decodeObject(data, &threadBackgroundTerminalsListResponseSpec, (*wire)(v))
+}
+
+type ThreadBackgroundTerminalsPendingParams struct {
+	ThreadID string `json:"threadId"`
+}
+
+var threadBackgroundTerminalsPendingParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "threadId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadBackgroundTerminalsPendingParams) MarshalJSON() ([]byte, error) {
+	type wire ThreadBackgroundTerminalsPendingParams
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadBackgroundTerminalsPendingParams) UnmarshalJSON(data []byte) error {
+	type wire ThreadBackgroundTerminalsPendingParams
+	return decodeObject(data, &threadBackgroundTerminalsPendingParamsSpec, (*wire)(v))
+}
+
+type ThreadBackgroundTerminalsPendingResponse struct {
+	ActiveTurnID       Optional[string]            `json:"activeTurnId,omitzero"`
+	NotificationQueued bool                        `json:"notificationQueued"`
+	Terminals          []PendingBackgroundTerminal `json:"terminals"`
+	TurnStarting       bool                        `json:"turnStarting"`
+}
+
+var threadBackgroundTerminalsPendingResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "activeTurnId"},
+		{name: "notificationQueued", flags: fieldRequired | fieldRejectNull},
+		{name: "terminals", flags: fieldRequired | fieldRejectNull},
+		{name: "turnStarting", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadBackgroundTerminalsPendingResponse) MarshalJSON() ([]byte, error) {
+	type wire ThreadBackgroundTerminalsPendingResponse
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadBackgroundTerminalsPendingResponse) UnmarshalJSON(data []byte) error {
+	type wire ThreadBackgroundTerminalsPendingResponse
+	return decodeObject(data, &threadBackgroundTerminalsPendingResponseSpec, (*wire)(v))
 }
 
 type ThreadBackgroundTerminalsTerminateParams struct {

@@ -702,6 +702,13 @@ fork_with_go_manifest! { client_request_definitions {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadWorkflowCancelResponse,
     },
+    // Fork: background terminal notifications a loaded thread still owes the model.
+    #[experimental("thread/backgroundTerminals/pending")]
+    ThreadBackgroundTerminalsPending => "thread/backgroundTerminals/pending" {
+        params: v2::ThreadBackgroundTerminalsPendingParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadBackgroundTerminalsPendingResponse,
+    },
     // Fork end
     ThreadMetadataUpdate => "thread/metadata/update" {
         params: v2::ThreadMetadataUpdateParams,

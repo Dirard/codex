@@ -3014,6 +3014,24 @@ class PathUri(RootModel[str]):
     root: str
 
 
+class PendingBackgroundTerminal(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    command: str
+    output_watch: Annotated[
+        str | None,
+        Field(
+            alias="outputWatch",
+            description="The pattern of the terminal's output watch, if one is on.",
+        ),
+    ] = None
+    process_id: Annotated[
+        str, Field(alias="processId", description="The `session_id` of the terminal.")
+    ]
+    running_for_ms: Annotated[int, Field(alias="runningForMs", ge=0)]
+
+
 class PermissionProfileListParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,

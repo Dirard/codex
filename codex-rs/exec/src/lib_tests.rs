@@ -910,29 +910,54 @@ fn sample_thread_start_response() -> ThreadStartResponse {
     }
 }
 
-/// Fork: `codex exec` keeps exit notifications off because its session ends with the turn,
-/// even when the user turns them on with `-c` (background-exec-notifications R1.4).
+/// Fork: `codex exec` keeps the configured `exec_exit_notifications` and its wait timeout:
+/// with the feature on, exec waits for background terminal notifications
+/// (background-exec-notifications R1.4, UC7).
 #[tokio::test]
-async fn exec_overrides_disable_exit_notifications_in_the_built_config() {
-    let codex_home = tempdir().expect("create temp codex home");
-    let cwd = tempdir().expect("create temp cwd");
-    let overrides = exec_cli_kv_overrides(codex_utils_cli::CliConfigOverrides {
-        raw_overrides: vec![format!(
-            "features.{}=true",
-            codex_features::Feature::ExecExitNotifications.key()
-        )],
-    })
-    .expect("parse overrides");
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .cli_overrides(overrides)
-        .fallback_cwd(Some(cwd.path().to_path_buf()))
-        .build()
-        .await
-        .expect("build config with exec overrides");
+async fn exec_overrides_keep_the_exit_notifications_flag() {
+    async fn build(raw_overrides: Vec<String>) -> codex_core::config::Config {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+        let overrides =
+            exec_cli_kv_overrides(codex_utils_cli::CliConfigOverrides { raw_overrides })
+                .expect("parse overrides");
+        ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .cli_overrides(overrides)
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("build config with exec overrides")
+    }
+    let key = codex_features::Feature::ExecExitNotifications.key();
+
+    let default = build(Vec::new()).await;
     assert!(
-        !config
+        !default
             .features
             .enabled(codex_features::Feature::ExecExitNotifications)
     );
+    assert_eq!(
+        default.exec_exit_notifications.exec_wait_timeout_ms,
+        30 * 60 * 1000
+    );
+
+    let enabled = build(vec![format!("features.{key}=true")]).await;
+    assert!(
+        enabled
+            .features
+            .enabled(codex_features::Feature::ExecExitNotifications)
+    );
+
+    let table = build(vec![
+        format!("features.{key}.enabled=true"),
+        format!("features.{key}.exec_wait_timeout_ms=1500"),
+    ])
+    .await;
+    assert!(
+        table
+            .features
+            .enabled(codex_features::Feature::ExecExitNotifications)
+    );
+    assert_eq!(table.exec_exit_notifications.exec_wait_timeout_ms, 1500);
 }

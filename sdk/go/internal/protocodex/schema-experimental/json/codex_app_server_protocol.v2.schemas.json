@@ -2733,6 +2733,30 @@
             },
             "method": {
               "enum": [
+                "thread/backgroundTerminals/pending"
+              ],
+              "title": "Thread/backgroundTerminals/pendingRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadBackgroundTerminalsPendingParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/backgroundTerminals/pendingRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/metadata/update"
               ],
               "title": "Thread/metadata/updateRequestMethod",
@@ -14879,6 +14903,36 @@
     "PathUri": {
       "type": "string"
     },
+    "PendingBackgroundTerminal": {
+      "description": "A live background terminal whose exit Codex will still report.",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "outputWatch": {
+          "description": "The pattern of the terminal's output watch, if one is on.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "processId": {
+          "description": "The `session_id` of the terminal.",
+          "type": "string"
+        },
+        "runningForMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command",
+        "processId",
+        "runningForMs"
+      ],
+      "type": "object"
+    },
     "PermissionProfileListParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -22895,6 +22949,54 @@
         "data"
       ],
       "title": "ThreadBackgroundTerminalsListResponse",
+      "type": "object"
+    },
+    "ThreadBackgroundTerminalsPendingParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadBackgroundTerminalsPendingParams",
+      "type": "object"
+    },
+    "ThreadBackgroundTerminalsPendingResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "What a loaded thread still owes the model from background terminals.",
+      "properties": {
+        "activeTurnId": {
+          "description": "The turn running on the thread, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "notificationQueued": {
+          "description": "A queued background notification will start a turn of the thread.",
+          "type": "boolean"
+        },
+        "terminals": {
+          "description": "Live terminals whose exit Codex will still report, by session ID.",
+          "items": {
+            "$ref": "#/definitions/PendingBackgroundTerminal"
+          },
+          "type": "array"
+        },
+        "turnStarting": {
+          "description": "A turn for pending work was reserved and is about to start.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "notificationQueued",
+        "terminals",
+        "turnStarting"
+      ],
+      "title": "ThreadBackgroundTerminalsPendingResponse",
       "type": "object"
     },
     "ThreadBackgroundTerminalsTerminateParams": {

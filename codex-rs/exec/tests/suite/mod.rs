@@ -24,4 +24,6 @@ mod seatbelt;
 mod server_error_exit;
 // Fork: exec waits for workflow runs.
 mod workflow;
+// Fork: exec waits for background terminal notifications.
+mod background_terminals;
 mod worktree;

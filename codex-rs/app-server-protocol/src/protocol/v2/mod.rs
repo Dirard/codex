@@ -4,6 +4,7 @@ mod account;
 mod application;
 mod apps;
 mod attestation;
+mod background_terminal_pending; // Fork: background-exec-notifications UC7
 mod bedrock;
 mod browser_use_config;
 mod collaboration_mode;
@@ -46,6 +47,7 @@ pub use account::*;
 pub use application::*;
 pub use apps::*;
 pub use attestation::*;
+pub use background_terminal_pending::*;
 pub use bedrock::*;
 pub use browser_use_config::*;
 pub use collaboration_mode::*;

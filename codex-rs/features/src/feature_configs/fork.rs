@@ -43,6 +43,26 @@ impl FeatureConfig for ExplorerProfileConfigToml {
     }
 }
 
+/// Fork: settings of background exec notifications
+/// (`specs/background-exec-notifications-2026-10-25.md`, UC7).
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExecExitNotificationsConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// How long `codex exec` waits for background terminals whose exit or matching output is
+    /// still owed to the model before it stops them and exits with code 1, in milliseconds.
+    /// Defaults to 1800000 (30 minutes).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exec_wait_timeout_ms: Option<u64>,
+}
+
+impl FeatureConfig for ExecExitNotificationsConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+}
+
 // Fork: worktree isolation for MultiAgentV2 children.
 /// Where a MultiAgentV2 child runs relative to its parent's checkout.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]

@@ -1445,10 +1445,11 @@ impl MessageProcessor {
                 .start(&request_id, params)
                 .await
                 .map(|response| Some(response.into())),
-            // Fork: dynamic workflow runs of a loaded thread.
+            // Fork: workflow runs and pending background terminals of a loaded thread.
             request @ (ClientRequest::ThreadWorkflowList { .. }
             | ClientRequest::ThreadWorkflowRead { .. }
-            | ClientRequest::ThreadWorkflowCancel { .. }) => {
+            | ClientRequest::ThreadWorkflowCancel { .. }
+            | ClientRequest::ThreadBackgroundTerminalsPending { .. }) => {
                 self.thread_workflow_processor.handle(request).await
             }
             ClientRequest::ThreadMetadataUpdate { params, .. } => {
