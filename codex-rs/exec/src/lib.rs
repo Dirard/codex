@@ -1442,7 +1442,8 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         CodexStatus::InitiateShutdown => {
                             // Fork: keep processing workflow notification turns while runs
                             // of this thread are active (R7.5).
-                            if workflow_wait.as_ref().is_none_or(|wait| !wait.cancelled())
+                            if config.features.enabled(codex_features::Feature::Workflows)
+                                && workflow_wait.as_ref().is_none_or(|wait| !wait.cancelled())
                                 && !workflow_wait::active_workflow_runs(
                                     &client,
                                     &mut request_ids,
