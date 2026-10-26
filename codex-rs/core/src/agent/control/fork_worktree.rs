@@ -1,0 +1,232 @@
+//! Fork: worktree isolation hooks of the local agent backend (`spawn.rs`).
+//!
+//! Spec: `specs/agent-worktree-isolation-2026-10-25.md` (UC2 spawn, UC4 forked history,
+//! UC5 reload and restore). The worktree logic itself lives in `agent/worktree_isolation.rs`.
+
+use super::*;
+use crate::agent::worktree_isolation::AgentWorktreeBinding;
+use crate::agent::worktree_isolation::discover_binding;
+use crate::agent::worktree_isolation::prepare_reload;
+use crate::codex_thread::CodexThread;
+use crate::context::DeveloperInstructions;
+use crate::thread_manager::StartThreadOptions;
+use std::path::Path;
+use std::path::PathBuf;
+
+/// Keeps an isolated child's worktree binding registered only if its spawn commits.
+pub(super) struct WorktreeRegistration {
+    registered: Option<(LocalAgentRuntime, ThreadId)>,
+}
+
+impl WorktreeRegistration {
+    /// An isolated child starts under the thread ID its worktree is bound to, and its binding
+    /// is visible before its first turn can finish (spec UC2, UC4).
+    pub(super) fn for_spawn(
+        runtime: &LocalAgentRuntime,
+        options: &crate::agent::types::SpawnAgentOptions,
+        start_options: &mut StartThreadOptions,
+    ) -> Self {
+        let registered = options.worktree.as_ref().map(|worktree| {
+            let binding = Arc::clone(&worktree.binding);
+            let thread_id = binding.thread_id;
+            start_options.reserved_thread_id = Some(thread_id);
+            runtime.worktrees.insert(binding);
+            (runtime.clone(), thread_id)
+        });
+        Self { registered }
+    }
+
+    pub(super) fn commit(mut self) {
+        self.registered = None;
+    }
+}
+
+impl Drop for WorktreeRegistration {
+    fn drop(&mut self) {
+        if let Some((runtime, thread_id)) = self.registered.take() {
+            runtime.worktrees.remove(thread_id);
+        }
+    }
+}
+
+/// The worktree binding of a child being reloaded, if it is isolated.
+pub(super) struct ReloadWorktree(Option<Arc<AgentWorktreeBinding>>);
+
+impl ReloadWorktree {
+    /// Without saved bindings an isolated child inherits the parent's environments moved
+    /// onto its worktree; `inherits_parent` says that `inherited` came from the parent.
+    pub(super) fn rebase_inherited(
+        &self,
+        inherited: Option<TurnEnvironmentSnapshot>,
+        inherits_parent: bool,
+        thread_id: ThreadId,
+    ) -> CodexResult<Option<TurnEnvironmentSnapshot>> {
+        match (self.0.as_ref(), inherited) {
+            (Some(binding), Some(environments)) if inherits_parent => Ok(Some(
+                environments
+                    .rebase_onto_worktree(
+                        &binding.environment_id,
+                        &binding.source_root,
+                        &binding.root,
+                        &binding.cwd,
+                    )
+                    .map_err(|err| {
+                        CodexErr::InvalidRequest(format!(
+                            "cannot resume multi-agent v2 child {thread_id}: {err}"
+                        ))
+                    })?,
+            )),
+            (Some(_), None) if inherits_parent => Err(CodexErr::InvalidRequest(format!(
+                "cannot resume multi-agent v2 child {thread_id}: its parent environments are unavailable"
+            ))),
+            (_, environments) => Ok(environments),
+        }
+    }
+
+    /// A loaded runtime owns the worktree again until it stops.
+    pub(super) async fn finish_reload<T>(self, reloaded: CodexResult<T>) -> CodexResult<T> {
+        if reloaded.is_ok()
+            && let Some(binding) = self.0
+        {
+            binding.mark_running().await;
+        }
+        reloaded
+    }
+}
+
+/// A reloaded parent and the environments it hands to the child.
+type ReloadParent = Option<(Arc<CodexThread>, TurnEnvironmentSnapshot)>;
+
+impl LocalAgentControl {
+    /// Restores an isolated child's worktree binding with its identity, without loading its
+    /// runtime (R5.4). A rejected binding fails that child's reload.
+    pub(super) async fn restore_worktree_binding(
+        &self,
+        config: &Config,
+        thread_id: ThreadId,
+        restored: Option<(Option<AgentPath>, PathBuf)>,
+    ) {
+        let Some((Some(agent_path), cwd)) = restored else {
+            return;
+        };
+        match discover_binding(config, thread_id, agent_path, &cwd).await {
+            Ok(Some(binding)) => self.runtime.worktrees.insert(binding),
+            Ok(None) => {}
+            Err(err) => {
+                warn!("failed to restore the worktree of V2 agent {thread_id}: {err}");
+            }
+        }
+    }
+
+    /// An isolated child reloads into its worktree, never into the parent's checkout, bounded
+    /// by the parent's current authority moved onto the worktree (spec UC5).
+    pub(super) async fn prepare_worktree_reload(
+        &self,
+        config: &mut Config,
+        thread_id: ThreadId,
+        stored_cwd: &Path,
+        session_source: &SessionSource,
+        parent: ReloadParent,
+    ) -> CodexResult<(ReloadWorktree, ReloadParent)> {
+        let worktree = self
+            .worktree_binding_for_reload(config, thread_id, stored_cwd, session_source)
+            .await?;
+        let parent = match (worktree.as_ref(), parent) {
+            (Some(binding), Some((parent, environments))) => {
+                // A reloaded explorer's worktree note judges the parent checkout by its
+                // read-only access (explorer-and-questions spec, R9.2).
+                let environments =
+                    if crate::agent::explorer_profile::applies_to_source(config, session_source) {
+                        crate::agent::explorer_profile::clamp_environment_snapshot(&environments)
+                    } else {
+                        environments
+                    };
+                let environments = prepare_reload(binding, config, Some(environments))
+                    .map_err(|err| {
+                        CodexErr::InvalidRequest(format!(
+                            "cannot resume multi-agent v2 child {thread_id}: {err}"
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        CodexErr::Fatal("rebased parent environments are missing".to_string())
+                    })?;
+                Some((parent, environments))
+            }
+            (Some(binding), None) => {
+                prepare_reload(binding, config, None).map_err(|err| {
+                    CodexErr::InvalidRequest(format!(
+                        "cannot resume multi-agent v2 child {thread_id}: {err}"
+                    ))
+                })?;
+                None
+            }
+            (None, parent) => parent,
+        };
+        Ok((ReloadWorktree(worktree), parent))
+    }
+
+    /// The worktree binding of a child being reloaded, recovered from its stored cwd after a
+    /// restart (spec UC5 step "find the worktree binding").
+    async fn worktree_binding_for_reload(
+        &self,
+        config: &Config,
+        thread_id: ThreadId,
+        stored_cwd: &Path,
+        session_source: &SessionSource,
+    ) -> CodexResult<Option<Arc<AgentWorktreeBinding>>> {
+        if let Some(binding) = self.runtime.worktrees.get(thread_id) {
+            return Ok(Some(binding));
+        }
+        let Some(agent_path) = session_source.get_agent_path() else {
+            return Ok(None);
+        };
+        match discover_binding(config, thread_id, agent_path, stored_cwd).await {
+            Ok(Some(binding)) => {
+                self.runtime.worktrees.insert(Arc::clone(&binding));
+                Ok(Some(binding))
+            }
+            Ok(None) => Ok(None),
+            Err(err) => Err(CodexErr::InvalidRequest(format!(
+                "cannot resume multi-agent v2 child {thread_id}: {err}"
+            ))),
+        }
+    }
+}
+
+impl LocalAgentControl {
+    /// Records an isolated child's changes on its branch before the parent hears about the
+    /// turn, and tells the parent how to apply them (spec UC4).
+    pub(super) async fn with_worktree_checkpoint(
+        &self,
+        thread_id: ThreadId,
+        mut message: String,
+    ) -> String {
+        if let Some(binding) = self.runtime.worktrees.get(thread_id) {
+            let block = crate::agent::worktree_isolation::checkpoint_report(&binding).await;
+            message.push_str("\n\n");
+            message.push_str(&block);
+        }
+        message
+    }
+}
+
+/// A reused parent context does not carry the child's developer instructions, so an
+/// isolated child would never learn about its worktree. Appends the note once.
+pub(super) fn append_isolation_note(
+    options: &crate::agent::types::SpawnAgentOptions,
+    forked_rollout_items: &mut Vec<RolloutItem>,
+) {
+    let Some(worktree) = options.worktree.as_ref() else {
+        return;
+    };
+    let note = crate::agent::worktree_isolation::isolation_developer_note(&worktree.binding);
+    let already_present = forked_rollout_items.iter().any(|item| {
+        matches!(item, RolloutItem::ResponseItem(envelope)
+            if serde_json::to_string(&envelope.item)
+                .is_ok_and(|text| text.contains(&note)))
+    });
+    if !already_present {
+        let note_message = ContextualUserFragment::into(DeveloperInstructions::new(note));
+        forked_rollout_items.push(RolloutItem::ResponseItem(note_message.into()));
+    }
+}

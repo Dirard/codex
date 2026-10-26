@@ -28,9 +28,21 @@ impl ThreadSpawnOutcome {
             Self::Spawned(thread) | Self::AlreadyRunning(thread) => thread,
         }
     }
+
+    /// The thread, and whether it was already running.
+    pub(crate) fn into_parts(self) -> (NewThread, bool) {
+        match self {
+            Self::Spawned(thread) => (thread, false),
+            Self::AlreadyRunning(thread) => (thread, true),
+        }
+    }
 }
 
 impl ThreadManagerState {
+    /// Every child inherits its parent's dynamic tools, not only V2 children with
+    /// `MultiAgentV2DynamicTools`.
+    pub(crate) const CHILDREN_INHERIT_DYNAMIC_TOOLS: bool = true;
+
     /// Spawn a new thread with optional history and register it with the manager; a resume
     /// of a running thread returns that thread.
     pub(super) async fn spawn_thread(&self, request: ThreadSpawnRequest) -> CodexResult<NewThread> {

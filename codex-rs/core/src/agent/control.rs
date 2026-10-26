@@ -2,14 +2,11 @@ use crate::TurnInputRequest;
 use crate::TurnInputSubmission;
 use crate::TurnStartOptions;
 use crate::agent::AgentStatus;
-#[cfg(test)]
-pub(crate) use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
 use crate::agent::types::AgentMetadata;
 use crate::agent::types::LiveAgent;
-pub(crate) use crate::agent::types::TurnSpawnBudget;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::agent_communication::MessageDelivery;
@@ -23,7 +20,6 @@ use crate::session_prefix::format_inter_agent_completion_message;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadIdGenerator;
 use crate::thread_manager::ThreadManagerState;
-use crate::thread_manager::ThreadSpawnOutcome;
 use crate::thread_manager::default_thread_id_generator;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_history::InitialHistory;
@@ -59,8 +55,6 @@ use codex_protocol::user_input::UserInput;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::ReadThreadParams;
 use futures::StreamExt;
-use futures::future::AbortHandle;
-use futures::future::Abortable;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -97,18 +91,16 @@ mod spawn_telemetry;
 mod target;
 mod user_authorization;
 mod watch;
-// Fork: agents started by workflow runs.
+
+// Fork: workflow children, worktree isolation, result delivery and legacy follow-up watchers.
+mod fork_completion;
+mod fork_delivery;
+mod fork_worktree;
 pub(crate) mod workflow_children;
-
-enum CompletionWatcherStart {
-    CurrentStatus,
-    AfterCurrentTurn(StatusSubscription),
-}
-
-enum PreviousWatcherAction {
-    Wait,
-    Abort,
-}
+#[cfg(test)]
+pub(crate) use crate::agent::registry::AgentRegistry;
+pub(crate) use crate::agent::types::TurnSpawnBudget;
+use fork_completion::CompletionWatcherStart;
 
 /// Per-session controller handle for a local agent tree.
 /// Handles retain a session identity and share their tree's `LocalAgentRuntime`.
@@ -235,17 +227,15 @@ impl LocalAgentControl {
                 .ensure_execution_capacity_for_turn_start(self)
                 .await?;
         }
-        let submission_id = self
-            .send_inter_agent_communication_after_capacity_check(
-                agent_id,
-                &state,
-                communication,
-                agent_communication_context,
-                start_options,
-                turn_spawn_budget,
-            )
-            .await?;
-        Ok(submission_id)
+        self.send_inter_agent_communication_after_capacity_check(
+            agent_id,
+            &state,
+            communication,
+            agent_communication_context,
+            start_options,
+            turn_spawn_budget,
+        )
+        .await
     }
 
     pub(crate) async fn emit_sub_agent_activity(
@@ -295,94 +285,6 @@ impl LocalAgentControl {
                 .await;
         }
         Ok(())
-    }
-
-    /// Delivers a terminal result to a loaded or unloaded parent.
-    ///
-    /// Loaded recipients receive the mail synchronously, before the sender publishes its
-    /// terminal status, while their residency is pinned. Queue-only mail for an unloaded
-    /// recipient is retained in the runtime mailbox, as `submit_inter_agent_communication` does.
-    /// Results are queue-only; turn-triggering mail belongs to `send_inter_agent_communication`,
-    /// which also carries turn start options and spawn budgets.
-    pub(crate) async fn enqueue_inter_agent_communication(
-        &self,
-        agent_id: ThreadId,
-        mut communication: InterAgentCommunication,
-        context: AgentCommunicationContext,
-    ) -> CodexResult<String> {
-        let state = self.runtime.upgrade()?;
-        let observers = state.extensions.message_lifecycle_contributors();
-        let delivery = (!observers.is_empty()).then(|| {
-            let message_id = communication
-                .id
-                .take()
-                .filter(|id| !id.is_empty())
-                .unwrap_or_else(|| ResponseItemId::new("amsg"));
-            communication.id = Some(message_id.clone());
-            MessageDelivery::publish(context.sender_thread_id, message_id, observers)
-        });
-        let communication_for_log =
-            crate::agent_communication::logging_enabled().then(|| communication.clone());
-        // A second attempt observes the registry after an eviction that raced the pin.
-        let mut attempts_left = 2;
-        let communication_id = loop {
-            attempts_left -= 1;
-            let thread = {
-                let threads = state.threads.read().await;
-                match threads.get(&agent_id) {
-                    Some(thread) if !thread.session_source.is_internal() => Arc::clone(thread),
-                    None if !communication.trigger_turn => {
-                        let _membership = self.runtime.admit_start()?;
-                        self.runtime.ensure_agent_known(agent_id)?;
-                        let submission_id = uuid::Uuid::now_v7().to_string();
-                        self.runtime.mailboxes.enqueue(
-                            agent_id,
-                            Some(submission_id.clone()),
-                            vec![crate::PendingAgentMessage::new(communication, delivery)],
-                        )?;
-                        break submission_id;
-                    }
-                    Some(_) | None => return Err(CodexErr::ThreadNotFound(agent_id)),
-                }
-            };
-            if communication.trigger_turn {
-                thread
-                    .ensure_execution_capacity_for_turn_start(self)
-                    .await?;
-            }
-            let _residency_guard = match thread
-                .session
-                .services
-                .local_agent_runtime
-                .pin_v2_residency(&state, &thread)
-                .await
-            {
-                Ok(guard) => guard,
-                Err(err)
-                    if attempts_left > 0
-                        && matches!(err.details(), CodexErrorDetails::ThreadNotFound(_)) =>
-                {
-                    continue;
-                }
-                Err(err) => return Err(err),
-            };
-            break thread
-                .session
-                .enqueue_inter_agent_communication(crate::PendingAgentMessage::new(
-                    communication,
-                    delivery,
-                ))
-                .await;
-        };
-        if let Some(communication) = communication_for_log {
-            crate::agent_communication::emit_agent_communication_send(
-                &communication_id,
-                &context,
-                &communication,
-                agent_id,
-            );
-        }
-        Ok(communication_id)
     }
 
     async fn send_inter_agent_communication_after_capacity_check(
@@ -619,67 +521,8 @@ impl LocalAgentControl {
     ///
     /// This is only enabled for `SubAgentSource::ThreadSpawn`, where a parent thread exists and
     /// can receive completion notifications.
-    fn maybe_start_completion_watcher(
-        &self,
-        child_thread_id: ThreadId,
-        session_source: Option<SessionSource>,
-        child_reference: String,
-        child_agent_path: Option<AgentPath>,
-    ) {
-        self.start_completion_watcher(
-            child_thread_id,
-            session_source,
-            child_reference,
-            child_agent_path,
-            CompletionWatcherStart::CurrentStatus,
-        );
-    }
-
-    pub(crate) async fn start_followup_completion_watcher(
-        &self,
-        child_thread_id: ThreadId,
-        session_source: SessionSource,
-        child_reference: String,
-        child_agent_path: Option<AgentPath>,
-        mut status_updates: StatusSubscription,
-    ) {
-        let Some(Ok(initial_snapshot)) = status_updates.next().await else {
-            return;
-        };
-        let Some(initial_status) = initial_snapshot.status() else {
-            return;
-        };
-        let previous_watcher_action = match initial_status {
-            AgentStatus::Completed(_) | AgentStatus::Errored(_) => PreviousWatcherAction::Wait,
-            AgentStatus::Interrupted => PreviousWatcherAction::Abort,
-            AgentStatus::PendingInit | AgentStatus::Running => {
-                // The first or still-active turn already owns its completion watcher.
-                return;
-            }
-            AgentStatus::Shutdown | AgentStatus::NotFound => return,
-        };
-        let previous_watcher = self
-            .runtime
-            .completion_watchers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&child_thread_id);
-        if let Some((abort, completion)) = previous_watcher {
-            match previous_watcher_action {
-                PreviousWatcherAction::Wait => {}
-                PreviousWatcherAction::Abort => abort.abort(),
-            }
-            let _ = completion.await;
-        }
-        self.start_completion_watcher(
-            child_thread_id,
-            Some(session_source),
-            child_reference,
-            child_agent_path,
-            CompletionWatcherStart::AfterCurrentTurn(status_updates),
-        );
-    }
-
+    // Fork: `watcher_start` lets a follow-up turn continue a subscription; the upstream name
+    // `maybe_start_completion_watcher` is a wrapper in `fork_completion.rs`.
     fn start_completion_watcher(
         &self,
         child_thread_id: ThreadId,
@@ -700,31 +543,27 @@ impl LocalAgentControl {
         let teardown = membership.into_teardown_guard("completion_watcher", Some(child_thread_id));
         let control = self.clone();
         let watcher = async move {
-            let mut status_updates = match watcher_start {
-                CompletionWatcherStart::CurrentStatus => {
-                    match control.subscribe_status(child_thread_id).await {
-                        Ok(status_updates) => status_updates,
-                        Err(_) => futures::stream::empty().boxed(),
+            let status = match watcher_start.subscribe(&control, child_thread_id).await {
+                Ok(mut updates) => {
+                    let mut final_status = None;
+                    while let Some(Ok(snapshot)) = tokio::select! {
+                        biased;
+                        _ = control.runtime.shutdown.cancelled() => return,
+                        update = updates.next() => update,
+                    } {
+                        if let Some(status) = snapshot.status()
+                            && is_final(status)
+                        {
+                            final_status = Some(status.clone());
+                            break;
+                        }
+                    }
+                    match final_status {
+                        Some(status) => status,
+                        None => control.get_status(child_thread_id).await,
                     }
                 }
-                CompletionWatcherStart::AfterCurrentTurn(status_updates) => status_updates,
-            };
-            let mut final_status = None;
-            while let Some(Ok(snapshot)) = tokio::select! {
-                biased;
-                _ = control.runtime.shutdown.cancelled() => return,
-                update = status_updates.next() => update,
-            } {
-                if let Some(status) = snapshot.status()
-                    && is_final(status)
-                {
-                    final_status = Some(status.clone());
-                    break;
-                }
-            }
-            let status = match final_status {
-                Some(status) => status,
-                None => control.get_status(child_thread_id).await,
+                Err(_) => control.get_status(child_thread_id).await,
             };
             // Tree shutdown is a lifecycle handoff, not a child result for the parent.
             if !is_final(&status)
@@ -756,22 +595,7 @@ impl LocalAgentControl {
                     return;
                 };
                 // Fork: the parent receives at most the explorer profile's result limit.
-                let status = match (status, child_thread.as_ref()) {
-                    (AgentStatus::Completed(Some(message)), Some(child_thread)) => {
-                        let child_config = child_thread.config().await;
-                        let child_source = child_thread.config_snapshot().await.session_source;
-                        match crate::agent::explorer_profile::result_max_tokens(
-                            &child_config,
-                            &child_source,
-                        ) {
-                            Some(max_tokens) => AgentStatus::Completed(Some(
-                                crate::agent::explorer_profile::cap_result(&message, max_tokens),
-                            )),
-                            None => AgentStatus::Completed(Some(message)),
-                        }
-                    }
-                    (status, _) => status,
-                };
+                let status = fork_completion::capped_status(status, child_thread.as_deref()).await;
                 let Some(message) = format_inter_agent_completion_message(
                     parent_agent_path.clone(),
                     child_agent_path.clone(),
@@ -824,20 +648,13 @@ impl LocalAgentControl {
                 )
                 .await;
         };
-        let (abort, registration) = AbortHandle::new_pair();
+        // Fork: a follow-up watcher of the same child replaces this one.
+        let (abort, watcher) = fork_completion::abortable(watcher);
         let completion = tokio::spawn(async move {
-            let _ = Abortable::new(watcher, registration).await;
+            watcher.await;
             teardown.complete();
         });
-        if let Some(previous_watcher) = self
-            .runtime
-            .completion_watchers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(child_thread_id, (abort, completion))
-        {
-            previous_watcher.0.abort();
-        }
+        self.register_completion_watcher(child_thread_id, abort, completion);
     }
 
     fn prepare_agent_metadata(

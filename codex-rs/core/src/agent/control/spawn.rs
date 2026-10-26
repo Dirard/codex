@@ -32,6 +32,7 @@ use crate::thread_manager::StartThreadOptions;
 use crate::thread_manager::fork_history_from_snapshot;
 use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
+use codex_features::Feature;
 use codex_history::ResponseItemEnvelope;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::error::AgentErrorContext;
@@ -44,40 +45,6 @@ use futures::stream;
 use std::time::Instant;
 
 const AGENT_NAMES: &str = include_str!("../../../assets/agent/agent_names.txt");
-
-/// Fork: keeps an isolated child's worktree binding registered only if its spawn commits.
-struct WorktreeRegistration {
-    runtime: LocalAgentRuntime,
-    thread_id: ThreadId,
-    armed: bool,
-}
-
-impl WorktreeRegistration {
-    fn register(
-        runtime: &LocalAgentRuntime,
-        binding: Arc<crate::agent::worktree_isolation::AgentWorktreeBinding>,
-    ) -> Self {
-        let thread_id = binding.thread_id;
-        runtime.worktrees.insert(binding);
-        Self {
-            runtime: runtime.clone(),
-            thread_id,
-            armed: true,
-        }
-    }
-
-    fn commit(mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for WorktreeRegistration {
-    fn drop(&mut self) {
-        if self.armed {
-            self.runtime.worktrees.remove(self.thread_id);
-        }
-    }
-}
 
 /// Initial input delivered after a spawned agent acquires execution capacity.
 ///
@@ -283,6 +250,8 @@ impl LocalAgentControl {
             if registry.agent_metadata_for_thread(thread_id).is_some() {
                 continue;
             }
+            // Fork: the identity an isolated child's worktree binding is restored with (R5.4).
+            let mut restored_worktree = None;
             let restore_result = stored_thread.and_then(|stored_thread| {
                 let stored_agent_path = stored_thread
                     .agent_path
@@ -307,31 +276,15 @@ impl LocalAgentControl {
                         .or_else(|| stored_thread.source.get_nickname()),
                 )?;
                 metadata.agent_id = Some(thread_id);
-                let agent_path = metadata.agent_path.clone();
+                restored_worktree = Some((metadata.agent_path.clone(), stored_thread.cwd));
                 reservation.commit(metadata);
-                Ok((agent_path, stored_thread.cwd))
+                Ok(())
             });
-            match restore_result {
-                // Fork: restore an isolated child's worktree binding with its identity, without
-                // loading its runtime (R5.4). A rejected binding fails that child's reload.
-                Ok((Some(agent_path), cwd)) => {
-                    match crate::agent::worktree_isolation::discover_binding(
-                        config, thread_id, agent_path, &cwd,
-                    )
-                    .await
-                    {
-                        Ok(Some(binding)) => self.runtime.worktrees.insert(binding),
-                        Ok(None) => {}
-                        Err(err) => {
-                            warn!("failed to restore the worktree of V2 agent {thread_id}: {err}");
-                        }
-                    }
-                }
-                Ok((None, _)) => {}
-                Err(err) => {
-                    warn!("failed to restore V2 agent metadata for {thread_id}: {err}");
-                }
+            if let Err(err) = restore_result {
+                warn!("failed to restore V2 agent metadata for {thread_id}: {err}");
             }
+            self.restore_worktree_binding(config, thread_id, restored_worktree)
+                .await;
         }
     }
 
@@ -351,25 +304,6 @@ impl LocalAgentControl {
         ))
         .await?;
         Ok(spawned_agent.thread_id)
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn spawn_agent_with_communication(
-        &self,
-        config: Config,
-        communication: InterAgentCommunication,
-        context: AgentCommunicationContext,
-        session_source: Option<SessionSource>,
-        options: SpawnAgentOptions,
-    ) -> CodexResult<LiveAgent> {
-        let (spawned_agent, _) = Box::pin(self.spawn_agent_internal(
-            config,
-            SpawnInitialInput::InterAgentCommunication(communication, context),
-            session_source,
-            options,
-        ))
-        .await?;
-        Ok(spawned_agent)
     }
 
     fn validate_loaded_v2_child(
@@ -426,8 +360,7 @@ impl LocalAgentControl {
         if owner_thread_id.is_none()
             && let Ok(thread) = state.get_thread(thread_id).await
         {
-            let pin = self.runtime.pin_v2_residency(&state, &thread).await?;
-            return Ok(pin);
+            return self.runtime.pin_v2_residency(&state, &thread).await;
         }
         if self
             .runtime
@@ -484,8 +417,7 @@ impl LocalAgentControl {
             }
             if let Ok(thread) = state.get_thread(thread_id).await {
                 self.validate_loaded_v2_child(&thread, parent_thread_id)?;
-                let pin = self.runtime.pin_v2_residency(&state, &thread).await?;
-                return Ok(pin);
+                return self.runtime.pin_v2_residency(&state, &thread).await;
             }
         }
         let parent = if let Some(parent) = parent {
@@ -540,49 +472,16 @@ impl LocalAgentControl {
                     CodexErr::InvalidRequest(format!("permission_profile is invalid: {err}"))
                 })?;
         }
-        // Fork: an isolated child reloads into its worktree, never into the parent's checkout,
-        // bounded by the parent's current authority moved onto the worktree (spec UC5).
-        let worktree = self
-            .worktree_binding_for_reload(&config, thread_id, &stored_thread.cwd, &session_source)
+        // Fork: an isolated child reloads into its worktree (agent-worktree-isolation, UC5).
+        let (worktree, parent) = self
+            .prepare_worktree_reload(
+                &mut config,
+                thread_id,
+                &stored_thread.cwd,
+                &session_source,
+                parent,
+            )
             .await?;
-        let parent = match (worktree.as_ref(), parent) {
-            (Some(binding), Some((parent, environments))) => {
-                // Fork: a reloaded explorer's worktree note judges the parent checkout by its
-                // read-only access (explorer-and-questions spec, R9.2).
-                let environments = if crate::agent::explorer_profile::applies_to_source(
-                    &config,
-                    &session_source,
-                ) {
-                    crate::agent::explorer_profile::clamp_environment_snapshot(&environments)
-                } else {
-                    environments
-                };
-                let environments = crate::agent::worktree_isolation::prepare_reload(
-                    binding,
-                    &mut config,
-                    Some(environments),
-                )
-                .map_err(|err| {
-                    CodexErr::InvalidRequest(format!(
-                        "cannot resume multi-agent v2 child {thread_id}: {err}"
-                    ))
-                })?
-                .ok_or_else(|| {
-                    CodexErr::Fatal("rebased parent environments are missing".to_string())
-                })?;
-                Some((parent, environments))
-            }
-            (Some(binding), None) => {
-                crate::agent::worktree_isolation::prepare_reload(binding, &mut config, None)
-                    .map_err(|err| {
-                        CodexErr::InvalidRequest(format!(
-                            "cannot resume multi-agent v2 child {thread_id}: {err}"
-                        ))
-                    })?;
-                None
-            }
-            (None, parent) => parent,
-        };
         config.service_tier = self.root_service_tier();
         if let Some(model) = stored_model {
             config.model = Some(model);
@@ -717,33 +616,8 @@ impl LocalAgentControl {
                 match &evicted_environments {
                     Some(environments) => Some(environments.clone()),
                     None => {
-                        let environments = self
-                            .inherited_environments_for_source(&state, Some(&session_source))
-                            .await;
-                        // Fork: without saved bindings an isolated child inherits the
-                        // parent's environments moved onto its worktree.
-                        match (worktree.as_ref(), environments) {
-                            (Some(binding), Some(environments)) => Some(
-                                environments
-                                    .rebase_onto_worktree(
-                                        &binding.environment_id,
-                                        &binding.source_root,
-                                        &binding.root,
-                                        &binding.cwd,
-                                    )
-                                    .map_err(|err| {
-                                        CodexErr::InvalidRequest(format!(
-                                            "cannot resume multi-agent v2 child {thread_id}: {err}"
-                                        ))
-                                    })?,
-                            ),
-                            (Some(_), None) => {
-                                return Err(CodexErr::InvalidRequest(format!(
-                                    "cannot resume multi-agent v2 child {thread_id}: its parent environments are unavailable"
-                                )));
-                            }
-                            (None, environments) => environments,
-                        }
+                        self.inherited_environments_for_source(&state, Some(&session_source))
+                            .await
                     }
                 },
                 self.inherited_exec_policy_for_source(&state, Some(&session_source), &config)
@@ -751,6 +625,12 @@ impl LocalAgentControl {
                 None,
             )
         };
+        // Fork: inherited parent environments move onto an isolated child's worktree.
+        let inherited_environments = worktree.rebase_inherited(
+            inherited_environments,
+            parent.is_none() && evicted_environments.is_none(),
+            thread_id,
+        )?;
         let inherited_parent = if let Some((parent, _)) = parent.as_ref() {
             Some(Arc::clone(parent))
         } else if let Some(parent_thread_id) = parent_thread_id {
@@ -795,146 +675,139 @@ impl LocalAgentControl {
             .reserve_v2_residency_slot(&state, &config, &membership, Some(thread_id))
             .await?;
 
+        // Fork: the whole reload, not only its registration, runs in one task that keeps the
+        // tree membership until the worktree is running again, so a cancelled sender cannot
+        // strand a half-loaded child (agent-worktree-isolation spec, UC5).
         let control = self.clone();
         tokio::spawn(async move {
             let _membership = membership;
-            let result = async {
-                match state
-                    .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
-                        config,
-                        prompt_cache_key,
-                        initial_history,
-                        agent_control: control.clone(),
-                        session_source,
-                        parent_thread_id,
-                        environment_selections,
-                        inherited_environments,
-                        inherited_instructions,
-                        inherited_exec_policy,
-                        client_mcp_extensions,
-                        turn_spawn_budget: turn_spawn_budget.clone(),
-                    })
-                    .await
-                {
-                    Ok(ThreadSpawnOutcome::Spawned(reloaded_thread)) => {
-                        if let Some(parent_thread_id) = owner_thread_id {
-                            control.validate_loaded_v2_child(
-                                &reloaded_thread.thread,
-                                parent_thread_id,
-                            )?;
-                        }
-                        let residency_pin = control
-                            .runtime
-                            .pin_v2_residency(&state, &reloaded_thread.thread)
-                            .await?;
-                        control
-                            .runtime
-                            .registry
-                            .clear_evicted_environments(thread_id);
-                        if let Some(turn_spawn_budget) = turn_spawn_budget {
-                            reloaded_thread
-                                .thread
-                                .session
-                                .set_turn_spawn_budget(turn_spawn_budget)
-                                .await;
-                        }
-                        residency_slot.commit(reloaded_thread.thread_id);
-                        // Register before listeners can forward events from the resumed thread.
-                        if let Some((client_metadata, source)) = subagent_analytics {
-                            let thread_config = reloaded_thread.thread.config_snapshot().await;
-                            emit_subagent_session_started(
-                                &reloaded_thread
-                                    .thread
-                                    .session
-                                    .services
-                                    .analytics_events_client,
-                                client_metadata,
-                                reloaded_thread.thread.session.session_id(),
-                                reloaded_thread.thread_id,
-                                thread_config.parent_thread_id,
-                                thread_config,
-                                source,
-                                /*resumed_created_at*/ Some(stored_thread.created_at),
-                            );
-                        }
-                        state.notify_thread_created(reloaded_thread.thread_id);
-                        Ok(residency_pin)
-                    }
-                    Ok(ThreadSpawnOutcome::AlreadyRunning(reloaded_thread)) => {
-                        if let Some(parent_thread_id) = owner_thread_id {
-                            control.validate_loaded_v2_child(
-                                &reloaded_thread.thread,
-                                parent_thread_id,
-                            )?;
-                        }
-                        let pin = control
-                            .runtime
-                            .pin_v2_residency(&state, &reloaded_thread.thread)
-                            .await?;
-                        control
-                            .runtime
-                            .registry
-                            .clear_evicted_environments(thread_id);
-                        drop(residency_slot);
-                        Ok(pin)
-                    }
-                    Err(err) => {
-                        if let Ok(thread) = state.get_thread(thread_id).await {
-                            if let Some(parent_thread_id) = owner_thread_id {
-                                control.validate_loaded_v2_child(&thread, parent_thread_id)?;
-                            }
-                            let pin = control.runtime.pin_v2_residency(&state, &thread).await?;
-                            control
-                                .runtime
-                                .registry
-                                .clear_evicted_environments(thread_id);
-                            drop(residency_slot);
-                            return Ok(pin);
-                        }
-                        Err(err)
-                    }
-                }
-            }
-            .await;
-            // Fork: a loaded runtime owns the worktree again until it stops.
-            if result.is_ok()
-                && let Some(binding) = worktree
-            {
-                binding.mark_running().await;
-            }
-            result
+            let reloaded = control
+                .resume_reserved_v2_agent(
+                    state,
+                    config,
+                    prompt_cache_key,
+                    initial_history,
+                    session_source,
+                    parent_thread_id,
+                    environment_selections,
+                    inherited_environments,
+                    inherited_instructions,
+                    inherited_exec_policy,
+                    client_mcp_extensions,
+                    turn_spawn_budget,
+                    owner_thread_id,
+                    thread_id,
+                    residency_slot,
+                    subagent_analytics,
+                    stored_thread.created_at,
+                )
+                .await;
+            worktree.finish_reload(reloaded).await
         })
         .await?
     }
 
-    /// Fork: the worktree binding of a child being reloaded, recovered from its stored cwd
-    /// after a restart (spec UC5 step "find the worktree binding").
-    async fn worktree_binding_for_reload(
-        &self,
-        config: &Config,
+    /// Fork: the reload of `ensure_v2_agent_loaded` once its residency slot is reserved; it
+    /// runs inside the reload task.
+    #[allow(clippy::too_many_arguments)]
+    async fn resume_reserved_v2_agent(
+        self,
+        state: Arc<ThreadManagerState>,
+        config: Config,
+        prompt_cache_key: Option<crate::PromptCacheKey>,
+        initial_history: InitialHistory,
+        session_source: SessionSource,
+        parent_thread_id: Option<ThreadId>,
+        environment_selections: Option<Vec<codex_protocol::protocol::TurnEnvironmentSelection>>,
+        inherited_environments: Option<TurnEnvironmentSnapshot>,
+        inherited_instructions: Option<SessionInstructions>,
+        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        client_mcp_extensions: Option<codex_protocol::mcp::ClientMcpExtensions>,
+        turn_spawn_budget: Option<TurnSpawnBudget>,
+        owner_thread_id: Option<ThreadId>,
         thread_id: ThreadId,
-        stored_cwd: &std::path::Path,
-        session_source: &SessionSource,
-    ) -> CodexResult<Option<Arc<crate::agent::worktree_isolation::AgentWorktreeBinding>>> {
-        if let Some(binding) = self.runtime.worktrees.get(thread_id) {
-            return Ok(Some(binding));
-        }
-        let Some(agent_path) = session_source.get_agent_path() else {
-            return Ok(None);
-        };
-        match crate::agent::worktree_isolation::discover_binding(
-            config, thread_id, agent_path, stored_cwd,
-        )
-        .await
+        residency_slot: super::residency::V2ResidencySlot,
+        subagent_analytics: Option<(
+            crate::session::session::AppServerClientMetadata,
+            SubAgentSource,
+        )>,
+        stored_created_at: chrono::DateTime<chrono::Utc>,
+    ) -> CodexResult<Option<tokio::sync::OwnedRwLockReadGuard<()>>> {
+        match state
+            .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
+                config,
+                prompt_cache_key,
+                initial_history,
+                agent_control: self.clone(),
+                session_source,
+                parent_thread_id,
+                environment_selections,
+                inherited_environments,
+                inherited_instructions,
+                inherited_exec_policy,
+                client_mcp_extensions,
+                turn_spawn_budget: turn_spawn_budget.clone(),
+            })
+            .await
         {
-            Ok(Some(binding)) => {
-                self.runtime.worktrees.insert(Arc::clone(&binding));
-                Ok(Some(binding))
+            Ok(reloaded_thread) => {
+                // Fork: a resume that found the child running only pins it.
+                let (reloaded_thread, already_running) = reloaded_thread.into_parts();
+                if let Some(parent_thread_id) = owner_thread_id {
+                    self.validate_loaded_v2_child(&reloaded_thread.thread, parent_thread_id)?;
+                }
+                let runtime = self.runtime.clone();
+                // Finish registration even if the sender is cancelled while acquiring its pin.
+                tokio::spawn(async move {
+                    let residency_pin = runtime
+                        .pin_v2_residency(&state, &reloaded_thread.thread)
+                        .await?;
+                    runtime.registry.clear_evicted_environments(thread_id);
+                    if already_running {
+                        drop(residency_slot);
+                        return Ok(residency_pin);
+                    }
+                    if let Some(turn_spawn_budget) = turn_spawn_budget {
+                        let session = &reloaded_thread.thread.session;
+                        session.set_turn_spawn_budget(turn_spawn_budget).await;
+                    }
+                    residency_slot.commit(reloaded_thread.thread_id);
+                    // Register before listeners can forward events from the resumed thread.
+                    if let Some((client_metadata, source)) = subagent_analytics {
+                        let thread_config = reloaded_thread.thread.config_snapshot().await;
+                        emit_subagent_session_started(
+                            &reloaded_thread
+                                .thread
+                                .session
+                                .services
+                                .analytics_events_client,
+                            client_metadata,
+                            reloaded_thread.thread.session.session_id(),
+                            reloaded_thread.thread_id,
+                            thread_config.parent_thread_id,
+                            thread_config,
+                            source,
+                            /*resumed_created_at*/ Some(stored_created_at),
+                        );
+                    }
+                    state.notify_thread_created(reloaded_thread.thread_id);
+                    Ok(residency_pin)
+                })
+                .await?
             }
-            Ok(None) => Ok(None),
-            Err(err) => Err(CodexErr::InvalidRequest(format!(
-                "cannot resume multi-agent v2 child {thread_id}: {err}"
-            ))),
+            Err(err) => {
+                if let Ok(thread) = state.get_thread(thread_id).await {
+                    if let Some(parent_thread_id) = owner_thread_id {
+                        self.validate_loaded_v2_child(&thread, parent_thread_id)?;
+                    }
+                    // Fork: pin before releasing the slot, as the other outcomes do.
+                    let pin = self.runtime.pin_v2_residency(&state, &thread).await?;
+                    self.runtime.registry.clear_evicted_environments(thread_id);
+                    drop(residency_slot);
+                    return Ok(pin);
+                }
+                Err(err)
+            }
         }
     }
 
@@ -975,18 +848,13 @@ impl LocalAgentControl {
         let (residency_slot, residency_reservation) = if spawn_uses_v2_residency {
             let residency_reservation_started_at = Instant::now();
             // Fork: workflow children use their own residency pool (dynamic workflow, UC4).
-            let pool = if options.workflow_child.is_some() {
-                super::residency::ResidencyPool::Workflow
-            } else {
-                super::residency::ResidencyPool::Agents
-            };
             let residency_slot = self
                 .reserve_v2_residency_slot_in(
                     &state,
                     &config,
                     &membership,
                     /*protected_thread_id*/ None,
-                    pool,
+                    super::residency::ResidencyPool::for_spawn(&options),
                 )
                 .await?;
             (
@@ -1094,18 +962,25 @@ impl LocalAgentControl {
                         ThreadHistoryMode::Paginated
                     )
                     .then_some(ThreadHistoryMode::Paginated);
-                    start_options.dynamic_tools = parent_thread.session.dynamic_tools().await;
+                    // Fork: every child inherits the parent's dynamic tools, not only V2 children
+                    // with `MultiAgentV2DynamicTools` (fork-resume-dynamic-tools spec).
+                    if multi_agent_version == MultiAgentVersion::V2
+                        && config.features.enabled(Feature::MultiAgentV2DynamicTools)
+                        || ThreadManagerState::CHILDREN_INHERIT_DYNAMIC_TOOLS
+                    {
+                        start_options.dynamic_tools = parent_thread.session.dynamic_tools().await;
+                    }
                 }
                 None
             }
             (None, _) => None,
         };
-        // Fork: an isolated child starts under the thread ID its worktree is bound to, and its
-        // binding is visible before its first turn can finish (spec UC2, UC4).
-        let worktree_registration = options.worktree.as_ref().map(|worktree| {
-            start_options.reserved_thread_id = Some(worktree.binding.thread_id);
-            WorktreeRegistration::register(&self.runtime, Arc::clone(&worktree.binding))
-        });
+        // Fork: an isolated child starts bound to its worktree (agent-worktree-isolation, UC2).
+        let worktree_registration = super::fork_worktree::WorktreeRegistration::for_spawn(
+            &self.runtime,
+            &options,
+            &mut start_options,
+        );
         let child_create_started_at = Instant::now();
         let new_thread = state
             .spawn_child_thread(
@@ -1242,9 +1117,7 @@ impl LocalAgentControl {
             None => new_thread.thread.config_snapshot().await,
         };
         reservation.commit(agent_metadata.clone());
-        if let Some(registration) = worktree_registration {
-            registration.commit();
-        }
+        worktree_registration.commit();
         if let Some(residency_slot) = residency_slot {
             residency_slot.commit(new_thread.thread_id);
         }
@@ -1283,14 +1156,9 @@ impl LocalAgentControl {
             multi_agent_version,
             SpawnMeasurements {
                 history_mode: config.history_mode,
-                worktree_base: options
-                    .worktree
-                    .as_ref()
-                    .map(|worktree| worktree.base_duration),
-                worktree_create: options
-                    .worktree
-                    .as_ref()
-                    .map(|worktree| worktree.create_duration),
+                // Fork: worktree phases of an isolated spawn (agent-worktree-isolation spec).
+                worktree_base: options.worktree.as_ref().map(|w| w.base_duration),
+                worktree_create: options.worktree.as_ref().map(|w| w.create_duration),
                 residency_reservation,
                 fork_context,
                 child_create,
@@ -1624,20 +1492,9 @@ impl LocalAgentControl {
                 subagent_usage_hint_message.into(),
             ));
         }
-        // Fork: a reused parent context does not carry the child's developer instructions,
-        // so an isolated child would never learn about its worktree. Append the note once.
-        if preserve_context_baselines && let Some(worktree) = options.worktree.as_ref() {
-            let note =
-                crate::agent::worktree_isolation::isolation_developer_note(&worktree.binding);
-            let already_present = forked_rollout_items.iter().any(|item| {
-                matches!(item, RolloutItem::ResponseItem(envelope)
-                    if serde_json::to_string(&envelope.item)
-                        .is_ok_and(|text| text.contains(&note)))
-            });
-            if !already_present {
-                let note_message = ContextualUserFragment::into(DeveloperInstructions::new(note));
-                forked_rollout_items.push(RolloutItem::ResponseItem(note_message.into()));
-            }
+        // Fork: an isolated child learns about its worktree from a reused parent context too.
+        if preserve_context_baselines {
+            super::fork_worktree::append_isolation_note(options, &mut forked_rollout_items);
         }
         Ok((
             InitialHistory::Forked(forked_rollout_items),
@@ -1794,7 +1651,7 @@ impl LocalAgentControl {
             .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
             .await;
 
-        let resumed_thread = match state
+        let resumed_thread = state
             .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
                 config: config.clone(),
                 prompt_cache_key: None,
@@ -1809,14 +1666,13 @@ impl LocalAgentControl {
                 client_mcp_extensions: None,
                 turn_spawn_budget: None,
             })
-            .await?
-        {
-            ThreadSpawnOutcome::Spawned(resumed_thread) => resumed_thread,
-            ThreadSpawnOutcome::AlreadyRunning(resumed_thread) => {
-                drop(reservation);
-                return Ok((resumed_thread.thread_id, multi_agent_version));
-            }
-        };
+            .await?;
+        // Fork: a resume that found the child running leaves its registration as it is.
+        let (resumed_thread, already_running) = resumed_thread.into_parts();
+        if already_running {
+            drop(reservation);
+            return Ok((resumed_thread.thread_id, multi_agent_version));
+        }
         let mut agent_metadata = agent_metadata;
         agent_metadata.agent_id = Some(resumed_thread.thread_id);
         reservation.commit(agent_metadata.clone());

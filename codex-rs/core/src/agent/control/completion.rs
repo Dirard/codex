@@ -4,6 +4,7 @@
 //! Delivery remains best effort; metrics distinguish queue acceptance from delivery failure.
 
 use super::LocalAgentControl;
+use crate::TurnStartOptions;
 use crate::agent::api::AgentTurnOutcome;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
@@ -37,23 +38,13 @@ impl LocalAgentControl {
             return;
         };
         // Fork: a workflow child reports to its run, never to the parent (dynamic workflow, UC3).
-        if self
-            .runtime
-            .workflow_children
-            .deliver(child_agent_path, &outcome)
-        {
+        if self.deliver_to_workflow(child_agent_path, &outcome) {
             return;
         }
         let parent_thread_id = *parent_thread_id;
         // Fork: the parent receives at most the explorer profile's result limit.
-        let status = match (outcome.status, outcome.result_max_tokens) {
-            (AgentStatus::Completed(Some(message)), Some(max_tokens)) => {
-                AgentStatus::Completed(Some(crate::agent::explorer_profile::cap_result(
-                    &message, max_tokens,
-                )))
-            }
-            (status, _) => status,
-        };
+        let status =
+            crate::agent::explorer_profile::cap_status(outcome.status, outcome.result_max_tokens);
         let Some(parent_agent_path) = child_agent_path
             .as_str()
             .rsplit_once('/')
@@ -118,16 +109,13 @@ impl LocalAgentControl {
                 &status,
             ),
         };
-        let Some(mut message) = message else {
+        let Some(message) = message else {
             return;
         };
-        // Fork: record an isolated child's changes on its branch before the parent hears
-        // about the turn, and tell the parent how to apply them (spec UC4).
-        if let Some(binding) = self.runtime.worktrees.get(outcome.thread_id) {
-            let block = crate::agent::worktree_isolation::checkpoint_report(&binding).await;
-            message.push_str("\n\n");
-            message.push_str(&block);
-        }
+        // Fork: an isolated child's changes are on its branch before the parent hears (UC4).
+        let message = self
+            .with_worktree_checkpoint(outcome.thread_id, message)
+            .await;
         // `communication` owns the message. Keep a second copy only when the
         // recorder will actually need it after parent delivery succeeds.
         let trace_message = trace.is_enabled().then(|| message.clone());
@@ -141,7 +129,12 @@ impl LocalAgentControl {
         let context =
             AgentCommunicationContext::new(AgentCommunicationKind::Result, outcome.thread_id);
         let delivery = self
-            .enqueue_inter_agent_communication(parent_thread_id, communication, context)
+            .deliver_result_communication(
+                parent_thread_id,
+                communication,
+                context,
+                TurnStartOptions::default(),
+            )
             .await;
         if let Some(metrics) = codex_otel::global() {
             let _ = metrics.counter(

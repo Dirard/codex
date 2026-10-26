@@ -356,6 +356,19 @@ pub(crate) fn result_max_tokens_for_role(config: &Config, role: Option<&str>) ->
 /// Limits an explorer's final answer before it reaches the parent's context.
 ///
 /// The explorer's own history keeps the full answer; only the delivered copy is shortened.
+/// A completed result capped at the explorer profile's limit, when the child has one.
+pub(crate) fn cap_status(
+    status: codex_protocol::protocol::AgentStatus,
+    max_tokens: Option<usize>,
+) -> codex_protocol::protocol::AgentStatus {
+    match (status, max_tokens) {
+        (codex_protocol::protocol::AgentStatus::Completed(Some(message)), Some(max_tokens)) => {
+            codex_protocol::protocol::AgentStatus::Completed(Some(cap_result(&message, max_tokens)))
+        }
+        (status, _) => status,
+    }
+}
+
 pub(crate) fn cap_result(message: &str, max_tokens: usize) -> String {
     if approx_token_count(message) <= max_tokens {
         return message.to_string();

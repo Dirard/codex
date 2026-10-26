@@ -120,30 +120,14 @@ pub(super) struct V2Residency {
 struct V2ResidencyState {
     residents: VecDeque<ThreadId>,
     pending_slots: usize,
-    /// Fork: residents and pending slots of the workflow pool.
-    workflow_residents: VecDeque<ThreadId>,
-    workflow_pending_slots: usize,
+    /// Fork: the workflow pool (fork_residency.rs).
+    workflow: Option<Box<V2ResidencyState>>,
 }
 
-/// Fork: workflow children have their own residency pool (dynamic workflow, UC4), so a
-/// run neither consumes nor evicts the agents the model delegates to directly.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ResidencyPool {
-    Agents,
-    Workflow,
-}
-
-impl V2ResidencyState {
-    fn pool(&mut self, pool: ResidencyPool) -> (&mut VecDeque<ThreadId>, &mut usize) {
-        match pool {
-            ResidencyPool::Agents => (&mut self.residents, &mut self.pending_slots),
-            ResidencyPool::Workflow => (
-                &mut self.workflow_residents,
-                &mut self.workflow_pending_slots,
-            ),
-        }
-    }
-}
+// Fork: workflow children have their own residency pool (dynamic workflow, UC4).
+#[path = "fork_residency.rs"]
+mod fork;
+pub(crate) use fork::ResidencyPool;
 
 pub(super) struct V2ResidencySlot {
     residency: Arc<V2Residency>,
@@ -175,37 +159,11 @@ impl LocalAgentControl {
         protected_thread_id: Option<ThreadId>,
     ) -> CodexResult<V2ResidencySlot> {
         // Fork: a reloaded workflow child returns to the workflow pool.
-        let pool = if protected_thread_id
-            .is_some_and(|thread_id| self.runtime.workflow_children.is_workflow_thread(thread_id))
-        {
-            ResidencyPool::Workflow
-        } else {
-            ResidencyPool::Agents
-        };
-        self.reserve_v2_residency_slot_in(state, config, membership, protected_thread_id, pool)
-            .await
-    }
-
-    /// Fork: reserve a slot in `pool`. The workflow pool holds the agents that every
-    /// allowed run may have working at once (dynamic workflow, UC4).
-    pub(super) async fn reserve_v2_residency_slot_in(
-        &self,
-        state: &Arc<ThreadManagerState>,
-        config: &Config,
-        membership: &AgentTreeMembership,
-        protected_thread_id: Option<ThreadId>,
-        pool: ResidencyPool,
-    ) -> CodexResult<V2ResidencySlot> {
-        let capacity = match pool {
-            ResidencyPool::Agents => config
-                .effective_agent_max_threads(MultiAgentVersion::V2)
-                .unwrap_or(usize::MAX),
-            ResidencyPool::Workflow => config
-                .workflows
-                .max_concurrent_agents
-                .saturating_mul(config.workflows.max_active_runs)
-                .max(1),
-        };
+        let pool = self.reload_pool(protected_thread_id);
+        let capacity = config
+            .effective_agent_max_threads(MultiAgentVersion::V2)
+            .unwrap_or(usize::MAX);
+        let capacity = pool.capacity(config, capacity);
         Arc::clone(&self.runtime.residency)
             .reserve_slot(state, capacity, membership, protected_thread_id, pool)
             .await
@@ -270,11 +228,11 @@ impl V2Residency {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (residents, pending_slots) = state.pool(pool);
-        if residents.len().saturating_add(*pending_slots) >= capacity {
+        let state = state.pool(pool);
+        if state.residents.len().saturating_add(state.pending_slots) >= capacity {
             return false;
         }
-        *pending_slots += 1;
+        state.pending_slots += 1;
         true
     }
 
@@ -292,7 +250,7 @@ impl V2Residency {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pool(pool)
-            .0
+            .residents
             .clone();
         for candidate_thread_id in candidates {
             if Some(candidate_thread_id) == protected_thread_id {
@@ -335,25 +293,15 @@ impl V2Residency {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Fork: a workflow child stays in its own pool.
-        if state.workflow_residents.contains(&thread_id) {
-            touch_resident(&mut state.workflow_residents, thread_id);
-            return;
-        }
+        let state = state.pool_of(thread_id);
         touch_resident(&mut state.residents, thread_id);
     }
 
     fn remove(&self, thread_id: ThreadId) {
-        let mut state = self
-            .state
+        self.state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state
-            .residents
-            .retain(|resident_thread_id| *resident_thread_id != thread_id);
-        state
-            .workflow_residents
-            .retain(|resident_thread_id| *resident_thread_id != thread_id);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove_resident(thread_id);
     }
 
     fn commit_slot(&self, thread_id: ThreadId, pool: ResidencyPool) {
@@ -361,9 +309,9 @@ impl V2Residency {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (residents, pending_slots) = state.pool(pool);
-        *pending_slots = pending_slots.saturating_sub(1);
-        touch_resident(residents, thread_id);
+        let state = state.pool(pool);
+        state.pending_slots = state.pending_slots.saturating_sub(1);
+        touch_resident(&mut state.residents, thread_id);
     }
 
     fn release_pending_slot(&self, pool: ResidencyPool) {
@@ -371,8 +319,8 @@ impl V2Residency {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (_, pending_slots) = state.pool(pool);
-        *pending_slots = pending_slots.saturating_sub(1);
+        let state = state.pool(pool);
+        state.pending_slots = state.pending_slots.saturating_sub(1);
     }
 }
 
@@ -404,16 +352,8 @@ async fn is_unloadable(thread: &CodexThread) -> bool {
             .input_queue
             .has_trigger_turn_mailbox_items()
             .await
-        // Fork: unloading would kill an armed process or skip a turn a notification starts;
-        // other queued notifications are recorded by the shutdown (R3.6, R2.5).
-        && !thread.session.background_terminals_block_eviction().await
-        // Fork: a workflow run still waits for this child's answer.
-        && !thread
-            .session
-            .services
-            .local_agent_runtime
-            .workflow_children
-            .has_pending_call(thread.session.thread_id)
+        // Fork: background terminals and workflow runs keep a child loaded.
+        && !fork::blocks_eviction(thread).await
 }
 
 #[cfg(test)]
