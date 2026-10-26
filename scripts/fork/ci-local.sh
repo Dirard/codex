@@ -86,6 +86,7 @@ fork_clippy_packages=(
   codex-code-mode-runtime
   codex-config
   codex-core
+  codex-exec
   codex-exec-server
   codex-extension-items
   codex-features
@@ -110,6 +111,7 @@ default_test_packages=(
   codex-app-server-protocol
   codex-workflow
   codex-worktree
+  codex-exec
 )
 
 # Binaries that codex-core integration tests locate next to their test
