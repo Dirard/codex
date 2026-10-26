@@ -19,16 +19,12 @@ use crate::hook_runtime::run_post_compact_hooks;
 use crate::hook_runtime::run_pre_compact_hooks;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CompactionTurnMetadata;
-use crate::responses_retry::ResponsesStreamRequest;
-use crate::responses_retry::ResponsesStreamRetryState;
-use crate::responses_retry::handle_response_stream_error;
 use crate::session::RequestEffortUsage;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
 use crate::state::AutoCompactWindowIds;
-use crate::stream_events_utils::last_assistant_message_from_item;
 use codex_analytics::CodexCompactionEvent;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
@@ -52,7 +48,6 @@ use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
-use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -65,13 +60,12 @@ use tracing::error;
 pub use codex_prompts::SUMMARIZATION_PROMPT;
 pub use codex_prompts::SUMMARY_PREFIX;
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
-/// Fork: sent only on the single retry after a local compaction response called a tool.
-const LOCAL_COMPACTION_SUMMARY_REMINDER: &str =
-    "Reply with the handoff summary as plain text. Do not call tools.";
-/// Fork: a terminal, non-network failure once the corrective retry called a tool again.
-const LOCAL_COMPACTION_TOOL_CALL_ERROR: &str = "Context compaction failed: the model called a \
-     tool instead of writing a summary, even after a reminder. The conversation history was \
-     left unchanged.";
+
+// Fork: tools in local compaction requests and the compaction context of a prepared window
+// (docs/fork/02-compaction-context.md F1, F7).
+#[path = "compact_fork.rs"]
+mod fork;
+pub(crate) use fork::build_compaction_context_for_window;
 
 /// Thread-local policy that preserves inherited context without changing model or skill budgets.
 /// Insert into `StartThreadOptions::thread_extension_init` to disable automatic compaction.
@@ -98,32 +92,15 @@ pub(crate) async fn build_compaction_replacement_history(
     world_state: &WorldState,
     compacted_history: Vec<ResponseItemEnvelope>,
 ) -> (Vec<ResponseItemEnvelope>, WorldStateSnapshot) {
-    let (prefix, context, snapshot) =
-        build_compaction_context_for_window(sess, step_context, world_state, None).await;
+    let (updates, snapshot) = sess
+        .build_initial_context_with_world_state(step_context, world_state)
+        .await;
+    let (prefix, context) = split_prefix_updates(updates);
+    let context = merge_world_state_updates(context);
     (
         assemble_compaction_history(compacted_history, prefix, context),
         snapshot,
     )
-}
-
-pub(crate) async fn build_compaction_context_for_window(
-    sess: &Session,
-    step_context: &StepContext,
-    world_state: &WorldState,
-    window_ids: Option<AutoCompactWindowIds>,
-) -> (Vec<ResponseItem>, Vec<ResponseItem>, WorldStateSnapshot) {
-    let (updates, snapshot) = match window_ids {
-        Some(ids) => {
-            sess.build_initial_context_with_world_state_for_window(step_context, world_state, ids)
-                .await
-        }
-        None => {
-            sess.build_initial_context_with_world_state(step_context, world_state)
-                .await
-        }
-    };
-    let (prefix, context) = split_prefix_updates(updates);
-    (prefix, merge_world_state_updates(context), snapshot)
 }
 
 pub(crate) fn assemble_compaction_history(
@@ -144,7 +121,7 @@ pub(crate) fn assemble_compaction_history(
 
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
-    step_context: Arc<StepContext>,
+    step_context: Arc<StepContext>, // Fork: the request carries the step's tools.
     replacement_step_context: Arc<StepContext>,
     world_state: Arc<WorldState>,
     reason: CompactionReason,
@@ -205,7 +182,7 @@ pub(crate) async fn run_compact_task(
 
 async fn run_compact_task_inner(
     sess: Arc<Session>,
-    step_context: Arc<StepContext>,
+    step_context: Arc<StepContext>, // Fork: the request carries the step's tools.
     replacement_step_context: Arc<StepContext>,
     input: Vec<UserInput>,
     world_state: Arc<WorldState>,
@@ -292,7 +269,7 @@ async fn run_compact_task_inner(
 
 async fn run_compact_task_inner_impl(
     sess: Arc<Session>,
-    step_context: Arc<StepContext>,
+    step_context: Arc<StepContext>, // Fork: the request carries the step's tools.
     replacement_step_context: Arc<StepContext>,
     input: Vec<UserInput>,
     world_state: Arc<WorldState>,
@@ -321,9 +298,9 @@ async fn run_compact_task_inner_impl(
         fallback_instructions.text.clear();
     }
 
-    let visible_tools = step_context.tool_router.model_visible_specs();
     let max_retries = turn_context.provider.info().stream_max_retries();
-    let mut retry_state = ResponsesStreamRetryState::default();
+    // Fork: the shared retry handler applies the overload floor (docs/fork/02 F6).
+    let mut retry_state = crate::responses_retry::ResponsesStreamRetryState::default();
     let mut summary_reminder_sent = false;
     // Reuse one client session so turn-scoped state (sticky routing and websocket incremental
     // request tracking) survives retries within this compact turn.
@@ -348,18 +325,8 @@ async fn run_compact_task_inner_impl(
         } else {
             fallback_instructions.clone()
         };
-        // Fork: tools are sent for prompt-cache parity, but a Responses Lite request whose
-        // input already declares them sends none, exactly like the ordinary request in that
-        // window. Decided per attempt: trimming may drop the declaration from the input.
-        let tools = if step_context.settings.model_info.use_responses_lite
-            && turn_input
-                .iter()
-                .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
-        {
-            Arc::default()
-        } else {
-            Arc::clone(&visible_tools)
-        };
+        // Fork: tools for prompt-cache parity with ordinary requests.
+        let tools = fork::prompt_tools(&step_context, &turn_input);
         let prompt = Prompt {
             input: turn_input,
             tools,
@@ -383,23 +350,12 @@ async fn run_compact_task_inner_impl(
 
         match attempt_result {
             Ok(response) => {
-                if !response.tool_call_without_summary {
-                    break response;
+                // Fork: a response that called a tool instead of summarizing is asked once more.
+                if response.tool_call_without_summary {
+                    fork::remind_once(&mut summary_reminder_sent, &mut history, &step_context)?;
+                    continue;
                 }
-                if summary_reminder_sent {
-                    return Err(CodexErr::InvalidRequest(
-                        LOCAL_COMPACTION_TOOL_CALL_ERROR.to_string(),
-                    ));
-                }
-                // The tool call was never run; ask once more, explicitly, instead of installing
-                // an earlier assistant reply as the summary.
-                summary_reminder_sent = true;
-                let reminder = ResponseInputItem::from(vec![UserInput::Text {
-                    text: LOCAL_COMPACTION_SUMMARY_REMINDER.to_string(),
-                    text_elements: Vec::new(),
-                }]);
-                history.record_items(&[reminder.into()], step_context.output_truncation());
-                continue;
+                break response;
             }
             Err(err)
                 if matches!(
@@ -425,21 +381,21 @@ async fn run_compact_task_inner_impl(
                         "Context window exceeded while compacting; removing oldest history item. Error: {e}"
                     );
                     history.remove_first_item();
-                    retry_state = ResponsesStreamRetryState::default();
+                    retry_state = crate::responses_retry::ResponsesStreamRetryState::default();
                     continue;
                 }
                 sess.set_total_tokens_full(turn_context.as_ref()).await;
                 return Err(e);
             }
             Err(e) => {
-                handle_response_stream_error(
+                crate::responses_retry::handle_response_stream_error(
                     &mut retry_state,
                     max_retries,
                     e,
                     &mut client_session,
                     &sess,
                     step_context.as_ref(),
-                    ResponsesStreamRequest::LocalCompaction,
+                    crate::responses_retry::ResponsesStreamRequest::LocalCompaction,
                 )
                 .await?
             }
@@ -879,40 +835,6 @@ struct CompactionResponse {
     tool_call_without_summary: bool,
 }
 
-/// Client-executed tool calls that a compaction response must not leave unanswered.
-fn is_tool_call(item: &ResponseItem) -> bool {
-    matches!(
-        item,
-        ResponseItem::FunctionCall { .. }
-            | ResponseItem::CustomToolCall { .. }
-            | ResponseItem::LocalShellCall { .. }
-            | ResponseItem::ToolSearchCall { .. }
-    )
-}
-
-/// Fork: requests carry tools for prompt-cache parity, so a model may call one instead of
-/// summarizing. When a response calls a tool, only its last visible assistant message can be
-/// the summary, and only if it follows the last call and is not commentary: a preamble before
-/// a call would otherwise replace the whole history.
-fn tool_call_without_summary(output: &[ResponseItem]) -> bool {
-    let Some(last_tool_call) = output.iter().rposition(is_tool_call) else {
-        return false;
-    };
-    let summary = output.iter().enumerate().rev().find(|(_, item)| {
-        last_assistant_message_from_item(item, /*plan_mode*/ false).is_some()
-    });
-    !summary.is_some_and(|(index, item)| {
-        index > last_tool_call
-            && !matches!(
-                item,
-                ResponseItem::Message {
-                    phase: Some(MessagePhase::Commentary),
-                    ..
-                }
-            )
-    })
-}
-
 async fn drain_to_completed(
     sess: &Session,
     turn_context: &TurnContext,
@@ -964,9 +886,8 @@ async fn drain_to_completed(
                 usage_metadata,
                 ..
             }) => {
-                // Fork: a response that calls a tool without a summary after it is no
-                // summary, and its calls were never run, so it is not recorded.
-                let tool_call_without_summary = tool_call_without_summary(&output);
+                // Fork: a tool call without a summary after it was never run; not recorded.
+                let tool_call_without_summary = fork::tool_call_without_summary(&output);
                 if !tool_call_without_summary && !matches!(phase, CompactionPhase::PostTurn) {
                     for item in std::mem::take(&mut output) {
                         sess.record_annotated_conversation_items(
