@@ -934,10 +934,10 @@ async fn status_waits_for_the_run_and_the_notification_joins_the_active_turn() -
                 && !has_call_output(body, "status-call")
         },
         |body| {
+            // Without since_revision the wait lasts until the run ends.
             let arguments = json!({
                 "run_id": started_run_id(body),
                 "wait_ms": 20_000,
-                "since_revision": 1_000_000,
                 "include_result": true,
             });
             sse(vec![
