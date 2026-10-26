@@ -325,20 +325,18 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
-        let (mut pending_items, _, _) = self.input_queue.drain_mailbox_input_items().await;
-        // Fork: background terminal notifications describe events that happened before this
-        // turn, so a regular turn samples them with its own input instead of one step later.
-        // Other tasks leave them queued: they would record a waking notification without a
-        // model step, and an abort would drop it (R3.8).
+        // Fork: background notifications (terminal exits, finished workflow runs) describe
+        // events that happened before this turn, so a regular turn samples them with its own
+        // input instead of one step later. Other tasks leave them in the thread queue, with
+        // their wake: they would record a waking notification without a model step, and an
+        // abort would drop it (background-exec R3.8, dynamic workflow R7.7).
+        let take_background_notifications = task_kind == TaskKind::Regular;
+        let (mut pending_items, _, _) = self
+            .input_queue
+            .drain_mailbox_input_items_for_task(take_background_notifications)
+            .await;
         let mut input = input;
-        if task_kind != TaskKind::Regular {
-            let (notifications, rest) =
-                crate::session::take_background_notification_items(pending_items);
-            pending_items = rest;
-            self.input_queue
-                .requeue_background_notifications(notifications)
-                .await;
-        } else if !input.is_empty() {
+        if take_background_notifications && !input.is_empty() {
             let (notifications, rest): (Vec<_>, Vec<_>) =
                 pending_items.into_iter().partition(|item| {
                     matches!(item, TurnInput::ResponseItem(envelope)

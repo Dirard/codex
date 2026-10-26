@@ -1095,3 +1095,92 @@ async fn catalog_wait_agent_description_keeps_exit_notification_guidance() -> Re
     assert!(description.starts_with("Catalog wait. It also returns when a background terminal started with exec_command notify_on_exit exits"), "{description}");
     Ok(())
 }
+
+/// R3.8: a task other than a regular turn leaves a waking notification in the thread
+/// queue, so the notification still starts its own turn after that task. Here the exit
+/// arrives while the user's interrupt holds the thread idle, and a manual compaction runs
+/// before any new user turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compaction_leaves_a_waking_notification_to_start_its_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_target_windows!(Ok(()), "uses POSIX shell commands");
+
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            tool_call(
+                "resp-1",
+                "bg-call",
+                "exec_command",
+                &exec_args(
+                    "sleep 2; echo after-compaction-77",
+                    /*yield_time_ms*/ 250,
+                    /*notify_on_exit*/ true,
+                ),
+            ),
+            tool_call(
+                "resp-2",
+                "blocking-call",
+                "exec_command",
+                &exec_args(
+                    "sleep 60", /*yield_time_ms*/ 30_000, /*notify_on_exit*/ false,
+                ),
+            ),
+            message("resp-3", "summary"),
+            message("resp-4", "It printed after-compaction-77."),
+        ],
+    )
+    .await;
+    let test = build(&server, /*exit_notifications*/ true).await?;
+
+    test.codex
+        .start_or_steer_turn(codex_core::TurnInputRequest::user_input(vec![
+            codex_protocol::user_input::UserInput::Text {
+                text: "start and get interrupted".to_string(),
+                text_elements: Vec::new(),
+            },
+        ]))
+        .await?;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::ExecCommandBegin(begin) if begin.call_id == "blocking-call"),
+        EVENT_TIMEOUT,
+    )
+    .await;
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnAborted(_)),
+        EVENT_TIMEOUT,
+    )
+    .await;
+    // The background command exits about two seconds after it started; the interrupt
+    // keeps its waking notification queued.
+    assert_requests_settle(&mock, 2, Duration::from_secs(3)).await;
+
+    test.codex.submit(Op::Compact).await?;
+    tokio::time::timeout(EVENT_TIMEOUT, async {
+        while mock.requests().len() < 4 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the notification starts a turn after the compaction");
+    let requests = mock.requests();
+    assert!(
+        notifications(&requests[2]).is_empty(),
+        "the compaction took it"
+    );
+    let delivered = notifications(&requests[3]);
+    assert_eq!(delivered.len(), 1, "{delivered:?}");
+    assert!(
+        delivered[0].contains("after-compaction-77"),
+        "{}",
+        delivered[0]
+    );
+
+    test.codex.submit(Op::CleanBackgroundTerminals).await?;
+    Ok(())
+}

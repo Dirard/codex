@@ -3,6 +3,7 @@ use crate::agent::types::TurnSpawnBudget;
 use crate::agent_communication::PENDING_MAILBOX_MESSAGES;
 use crate::context::BackgroundTerminalNotification;
 use crate::context::ContextualUserFragment;
+use crate::context::WorkflowNotification;
 use crate::context::is_background_notification_item;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
@@ -116,9 +117,11 @@ pub(crate) enum InputQueueActivity {
     Workflow,
 }
 
-/// Fork: queued notifications beyond this count omit their output tail.
+/// Fork: queued terminal notifications beyond this count omit their output tail. Workflow
+/// notifications in the same queue do not count (dynamic workflow R7.8).
 pub(crate) const DETAILED_PENDING_BACKGROUND_NOTIFICATIONS: usize = 8;
-/// Fork: queued notifications beyond this count collapse into one summary line.
+/// Fork: queued terminal notifications beyond this count collapse into one summary line.
+/// Workflow notifications in the same queue do not count and are never dropped (R7.8).
 pub(crate) const MAX_PENDING_BACKGROUND_NOTIFICATIONS: usize = 32;
 /// Fork: the summary line names at most this many dropped session IDs.
 const MAX_LISTED_DROPPED_SESSIONS: usize = 16;
@@ -165,6 +168,8 @@ struct BackgroundNotificationQueue {
 struct BackgroundNotificationEntry {
     item: ResponseItem,
     wakes: bool,
+    /// A workflow run notification rather than a background terminal one.
+    workflow: bool,
     /// The `ExitNotifier` key, so a poll that shows the exit can withdraw it (R2.10).
     key: Option<u64>,
     on_sampled: Option<SampledCallback>,
@@ -173,6 +178,11 @@ struct BackgroundNotificationEntry {
 impl BackgroundNotificationQueue {
     fn is_empty(&self) -> bool {
         self.items.is_empty() && self.dropped == 0
+    }
+
+    /// Queued background terminal notifications, which the terminal limits count (R7.8).
+    fn terminal_count(&self) -> usize {
+        self.items.iter().filter(|entry| !entry.workflow).count()
     }
 
     fn wakes(&self) -> bool {
@@ -401,7 +411,8 @@ impl InputQueue {
     ) -> BackgroundNotificationEnqueue {
         let outcome = {
             let mut queue = self.background_notifications.lock().await;
-            if queue.items.len() >= MAX_PENDING_BACKGROUND_NOTIFICATIONS {
+            let terminals = queue.terminal_count();
+            if terminals >= MAX_PENDING_BACKGROUND_NOTIFICATIONS {
                 queue.dropped += 1;
                 if queue.dropped_session_ids.len() < MAX_LISTED_DROPPED_SESSIONS {
                     queue.dropped_session_ids.extend(session_id);
@@ -409,11 +420,12 @@ impl InputQueue {
                 queue.dropped_wakes |= wakes;
                 BackgroundNotificationEnqueue::Dropped
             } else {
-                let with_output = queue.items.len() < DETAILED_PENDING_BACKGROUND_NOTIFICATIONS;
+                let with_output = terminals < DETAILED_PENDING_BACKGROUND_NOTIFICATIONS;
                 let QueuedBackgroundNotification { item, on_sampled } = render(with_output).into();
                 queue.items.push_back(BackgroundNotificationEntry {
                     item,
                     wakes,
+                    workflow: false,
                     key,
                     on_sampled,
                 });
@@ -440,25 +452,34 @@ impl InputQueue {
         !withdrawn.is_empty()
     }
 
-    /// Fork: put notifications that an aborted or non-regular task took back in front of
-    /// the thread queue. They do not wake the thread (R3.7, R3.8).
+    /// Fork: put notifications that an aborted turn or task took back in front of the
+    /// thread queue (R3.7). A background terminal notification no longer wakes the thread;
+    /// a workflow notification still asks for a turn, which the user's interrupt or Plan
+    /// mode hold back like any wake (dynamic workflow R7.7).
     pub(crate) async fn requeue_background_notifications(&self, items: Vec<ResponseItem>) {
         if items.is_empty() {
             return;
         }
+        let mut workflow_requeued = false;
         {
             let mut queue = self.background_notifications.lock().await;
             for item in items.into_iter().rev() {
+                let workflow = WorkflowNotification::is_notification_item(&item);
+                workflow_requeued |= workflow;
                 queue.items.push_front(BackgroundNotificationEntry {
                     item,
-                    wakes: false,
+                    wakes: workflow,
+                    workflow,
                     key: None,
                     on_sampled: None,
                 });
             }
         }
-        self.activity_tx
-            .send_replace(InputQueueActivity::BackgroundTerminal);
+        self.activity_tx.send_replace(if workflow_requeued {
+            InputQueueActivity::Workflow
+        } else {
+            InputQueueActivity::BackgroundTerminal
+        });
     }
 
     /// Fork: take every queued notification, with the overflow summary, for a shutdown
@@ -485,6 +506,7 @@ impl InputQueue {
             .push_back(BackgroundNotificationEntry {
                 item,
                 wakes: true,
+                workflow: true,
                 key: None,
                 on_sampled: None,
             });
@@ -523,6 +545,20 @@ impl InputQueue {
     pub(crate) async fn drain_mailbox_input_items(
         &self,
     ) -> (Vec<TurnInput>, TurnStartOptions, Option<TurnSpawnBudget>) {
+        self.drain_mailbox_input_items_for_task(/*take_background_notifications*/ true)
+            .await
+    }
+
+    /// Drains mail and, when `take_background_notifications`, the queued background
+    /// notifications.
+    ///
+    /// Fork: a task other than a regular turn leaves background notifications queued with
+    /// their wake, withdrawal key and release callback, so a waking notification still
+    /// starts its own turn after that task (background-exec R3.8, dynamic workflow R7.7).
+    pub(crate) async fn drain_mailbox_input_items_for_task(
+        &self,
+        take_background_notifications: bool,
+    ) -> (Vec<TurnInput>, TurnStartOptions, Option<TurnSpawnBudget>) {
         let pending_mails = self.drain_mailbox().await;
         // A later follow-up supersedes the earlier choice, including an omitted choice.
         let turn_spawn_budget = pending_mails
@@ -558,10 +594,12 @@ impl InputQueue {
             .into_iter()
             .map(|mail| TurnInput::InterAgentCommunication(mail.communication))
             .collect();
-        let (notifications, sampled) = self.background_notifications.lock().await.drain();
-        items.extend(notifications);
-        for callback in sampled {
-            callback();
+        if take_background_notifications {
+            let (notifications, sampled) = self.background_notifications.lock().await.drain();
+            items.extend(notifications);
+            for callback in sampled {
+                callback();
+            }
         }
         (items, start_options, turn_spawn_budget)
     }
@@ -606,8 +644,9 @@ impl InputQueue {
 
     /// Clear any pending waiters and input buffered for the current turn.
     ///
-    /// Fork: background terminal notifications in that input go back to the thread queue,
-    /// so an abort before the turn sampled them does not lose them (R3.7).
+    /// Fork: background notifications in that input, terminal exits and finished workflow
+    /// runs alike, go back to the thread queue, so an abort before the turn sampled them
+    /// does not lose them (R3.7, dynamic workflow R7.7).
     pub(crate) async fn clear_pending(&self, active_turn: &ActiveTurn) {
         let pending_input = {
             let mut turn_state = active_turn.turn_state.lock().await;
@@ -765,8 +804,9 @@ impl InputQueue {
     }
 }
 
-/// Fork: split background terminal notifications from other turn input, keeping order.
-pub(crate) fn take_background_notification_items(
+/// Fork: split background notifications (terminal exits and finished workflow runs) from
+/// other turn input, keeping order (R3.7, dynamic workflow R7.7).
+fn take_background_notification_items(
     items: Vec<TurnInput>,
 ) -> (Vec<ResponseItem>, Vec<TurnInput>) {
     let mut notifications = Vec::new();
@@ -774,7 +814,7 @@ pub(crate) fn take_background_notification_items(
     for item in items {
         match item {
             TurnInput::ResponseItem(envelope)
-                if BackgroundTerminalNotification::is_notification_item(&envelope.item) =>
+                if is_background_notification_item(&envelope.item) =>
             {
                 notifications.push(envelope.item);
             }
@@ -1517,6 +1557,131 @@ mod tests {
                 background_notification("still queued"),
             ]
         );
+    }
+
+    fn workflow_notification(body: &str) -> ResponseItem {
+        ContextualUserFragment::into(crate::context::WorkflowNotification::new(body))
+    }
+
+    /// Fork (dynamic workflow R7.7, B14): an abort returns a workflow notification from the
+    /// turn's input too, as waking, and names the workflow activity; a background terminal
+    /// notification still returns without a wake.
+    #[tokio::test]
+    async fn clear_pending_returns_workflow_notifications_as_waking() {
+        let input_queue = InputQueue::new();
+        let (mut activity_rx, _) = input_queue.subscribe_activity(/*turn_state*/ None).await;
+        let active_turn = ActiveTurn::default();
+        input_queue
+            .extend_pending_input_for_turn_state(
+                active_turn.turn_state.as_ref(),
+                vec![
+                    TurnInput::ResponseItem(ResponseItemEnvelope::new(workflow_notification(
+                        "Workflow \"x\" (wf-1) completed in 1.0s.",
+                    ))),
+                    TurnInput::ResponseItem(ResponseItemEnvelope::new(background_notification(
+                        "exited",
+                    ))),
+                ],
+            )
+            .await;
+
+        input_queue.clear_pending(&active_turn).await;
+
+        activity_rx.changed().await.expect("activity");
+        assert_eq!(*activity_rx.borrow(), InputQueueActivity::Workflow);
+        assert!(input_queue.has_waking_background_notifications().await);
+        assert_eq!(
+            input_queue.take_background_notifications().await,
+            vec![
+                workflow_notification("Workflow \"x\" (wf-1) completed in 1.0s."),
+                background_notification("exited"),
+            ]
+        );
+    }
+
+    /// Fork (R3.8, dynamic workflow R7.7): a task other than a regular turn takes mail but
+    /// leaves background notifications queued with their wake, key and release callback.
+    #[tokio::test]
+    async fn non_regular_tasks_leave_background_notifications_queued() {
+        let input_queue = InputQueue::new();
+        let released = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let release_flag = Arc::clone(&released);
+        input_queue
+            .enqueue_background_notification(Some(7), Some(1000), /*wakes*/ true, move |_| {
+                QueuedBackgroundNotification {
+                    item: background_notification("exited"),
+                    on_sampled: Some(Box::new(move || {
+                        release_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                    })),
+                }
+            })
+            .await;
+        input_queue
+            .enqueue_workflow_notification(workflow_notification(
+                "Workflow \"x\" (wf-1) completed in 1.0s.",
+            ))
+            .await;
+        let mail = make_mail(
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            AgentPath::root(),
+            "mail",
+            /*trigger_turn*/ false,
+        );
+        input_queue
+            .enqueue_mailbox_communication(
+                mail.clone().into(),
+                Default::default(),
+                /*turn_spawn_budget*/ None,
+            )
+            .await;
+
+        let (items, _, _) = input_queue
+            .drain_mailbox_input_items_for_task(/*take_background_notifications*/ false)
+            .await;
+        assert_eq!(items, vec![TurnInput::InterAgentCommunication(mail.into())]);
+        assert!(input_queue.has_waking_background_notifications().await);
+        assert!(!released.load(std::sync::atomic::Ordering::SeqCst));
+        // The withdrawal key survived.
+        assert!(input_queue.withdraw_background_notification(7).await);
+
+        let (items, _, _) = input_queue.drain_mailbox_input_items().await;
+        assert_eq!(
+            items,
+            vec![TurnInput::ResponseItem(ResponseItemEnvelope::new(
+                workflow_notification("Workflow \"x\" (wf-1) completed in 1.0s.")
+            ))]
+        );
+    }
+
+    /// Fork (dynamic workflow R7.8): workflow notifications do not count toward the limits
+    /// of background terminal notifications.
+    #[tokio::test]
+    async fn workflow_notifications_do_not_count_toward_terminal_limits() {
+        let input_queue = InputQueue::new();
+        for index in 0..MAX_PENDING_BACKGROUND_NOTIFICATIONS {
+            input_queue
+                .enqueue_workflow_notification(workflow_notification(&format!(
+                    "Workflow \"w{index}\" (wf-{index}) completed in 1.0s."
+                )))
+                .await;
+        }
+        let mut with_output = None;
+        let outcome = input_queue
+            .enqueue_background_notification(
+                /*key*/ None,
+                Some(1000),
+                /*wakes*/ true,
+                |output| {
+                    with_output = Some(output);
+                    background_notification("exited")
+                },
+            )
+            .await;
+        assert_eq!(outcome, BackgroundNotificationEnqueue::Queued);
+        assert_eq!(with_output, Some(true));
+        let items = input_queue.take_background_notifications().await;
+        assert_eq!(items.len(), MAX_PENDING_BACKGROUND_NOTIFICATIONS + 1);
+        assert_eq!(items.last(), Some(&background_notification("exited")));
     }
 
     #[tokio::test]
