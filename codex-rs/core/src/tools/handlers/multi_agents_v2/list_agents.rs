@@ -54,7 +54,7 @@ impl Handler {
                 args.path_prefix.as_deref(),
             )
             .await
-            .map_err(collab_spawn_error)?;
+            .map_err(wait::fork::collab_list_error("list"))?;
 
         let workflow_children = session.services.local_agent_runtime.workflow_children();
         let agents = agents

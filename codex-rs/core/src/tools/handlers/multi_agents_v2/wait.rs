@@ -290,9 +290,9 @@ async fn wait_for_activity(
     }
 }
 
-// Fork: active-agent snapshots, background terminals and workflow runs of a wait.
+// Fork: active-agent snapshots, background terminals, workflow runs and listing errors.
 #[path = "wait_fork.rs"]
-mod fork;
+pub(super) mod fork;
 use fork::*;
 
 #[cfg(test)]

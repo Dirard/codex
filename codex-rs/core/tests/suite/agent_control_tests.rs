@@ -646,6 +646,43 @@ async fn wait_agent_reports_host_list_failure_as_wait_failure() -> anyhow::Resul
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }
+
+/// Fork: `list_agents` reports a failed agent listing as a list failure, not as a spawn
+/// failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_agents_reports_host_list_failure_as_list_failure() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    // No listed agents: the host rejects the listing.
+    let (test, _controller) = test_with_host_control(&server, &[]).await?;
+
+    let calls = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("list"),
+                responses::ev_function_call_with_namespace(
+                    "list",
+                    "collaboration",
+                    "list_agents",
+                    "{}",
+                ),
+                responses::ev_completed("list"),
+            ]),
+            responses::sse(vec![responses::ev_completed("done")]),
+        ],
+    )
+    .await;
+    test.submit_text_turn("List the agents.").await?;
+    let requests = calls.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].function_call_output_text("list").as_deref(),
+        Some("collab list failed: host list rejection")
+    );
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InternalSessionSource;
 

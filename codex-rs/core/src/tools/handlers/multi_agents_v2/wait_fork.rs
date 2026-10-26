@@ -3,7 +3,8 @@
 //! A wait without active descendants returns `No active agents`; a timeout shows an
 //! active-agent snapshot and the background terminals whose exit will still be reported
 //! (`specs/background-exec-notifications-2026-10-25.md`, R4.5); workflow agents report to
-//! their run (`specs/dynamic-workflow-2026-10-25.md`, R3.3).
+//! their run (`specs/dynamic-workflow-2026-10-25.md`, R3.3). `list_agents` names a failed
+//! agent listing through `collab_list_error` too.
 
 use super::*;
 use crate::agent::status::is_final;
@@ -115,7 +116,7 @@ pub(super) async fn active_agent_snapshot(
             Some(&prefix),
         )
         .await
-        .map_err(wait_list_error)?;
+        .map_err(collab_list_error("wait"))?;
     let mut snapshot = ActiveAgentSnapshot::default();
     let workflow_children = session.services.local_agent_runtime.workflow_children();
     for agent in agents {
@@ -149,17 +150,18 @@ pub(super) async fn active_agent_snapshot(
     Ok(snapshot)
 }
 
-/// A failed agent listing fails `wait_agent` as a wait, not as a spawn
-/// (B12 in `docs/fork/01-multi-agent-runtime.md`).
-fn wait_list_error(err: CodexErr) -> FunctionCallError {
-    match err.details() {
+/// A failed agent listing fails the tool that listed, `wait_agent` (B12 in
+/// `docs/fork/01-multi-agent-runtime.md`) or `list_agents`, not a spawn as
+/// `collab_spawn_error` would name it.
+pub(crate) fn collab_list_error(tool: &'static str) -> impl FnOnce(CodexErr) -> FunctionCallError {
+    move |err| match err.details() {
         CodexErrorDetails::UnsupportedOperation(message) if message == "thread manager dropped" => {
             FunctionCallError::RespondToModel("collab manager unavailable".to_string())
         }
         CodexErrorDetails::UnsupportedOperation(message) => {
             FunctionCallError::RespondToModel(message.clone())
         }
-        _ => FunctionCallError::RespondToModel(format!("collab wait failed: {err}")),
+        _ => FunctionCallError::RespondToModel(format!("collab {tool} failed: {err}")),
     }
 }
 
