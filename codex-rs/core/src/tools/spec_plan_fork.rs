@@ -106,7 +106,7 @@ pub(super) fn exec_exit_notifications_enabled(turn_context: &TurnContext) -> boo
 /// A catalog description replaces the bundled `wait_agent` one, so it gets the
 /// exit-notification sentence too (background-exec-notifications R4.6).
 pub(super) fn wait_agent_description(
-    model_messages: &ResolvedModelMessages,
+    model_messages: ResolvedModelMessages<'_>,
     exit_notifications: bool,
 ) -> Option<String> {
     model_messages

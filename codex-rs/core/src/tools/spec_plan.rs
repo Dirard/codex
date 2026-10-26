@@ -1568,8 +1568,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     multi_agent_v2_handler(
                         WaitAgentHandlerV2::new(context.wait_agent_timeouts, exit_notifications),
                         tool_namespace,
-                        fork::wait_agent_description(&model_messages, exit_notifications)
-                            .as_deref(),
+                        fork::wait_agent_description(model_messages, exit_notifications).as_deref(),
                         model_messages.multi_agent_tool_parameters_override("wait_agent"),
                         message_delivery,
                     ),
