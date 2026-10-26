@@ -38,6 +38,19 @@ pub(super) fn available_in_code_mode(exposure: ToolExposure) -> bool {
     exposure.is_available_in_code_mode() || exposure == ToolExposure::DirectModelOnly
 }
 
+/// Registry entries in the order `code_mode_tools` deduplicates their Code Mode names: tools
+/// that Code Mode calls come first, so the stub of a direct-only tool takes only a name no
+/// nested tool has (R3 in `docs/fork/03-tools-mcp-code-mode.md`).
+pub(super) fn code_mode_entries(
+    registry: &ToolRegistry,
+) -> impl Iterator<Item = &RegisteredTool> + '_ {
+    let direct_only = |tool: &&RegisteredTool| tool.exposure == ToolExposure::DirectModelOnly;
+    registry
+        .entries()
+        .filter(move |tool| !direct_only(tool))
+        .chain(registry.entries().filter(direct_only))
+}
+
 /// The fork's filter over the nested Code Mode tools.
 pub(super) struct CodeModeTools<'a> {
     turn_context: &'a TurnContext,

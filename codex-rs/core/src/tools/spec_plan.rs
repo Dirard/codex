@@ -980,8 +980,8 @@ fn code_mode_tools<'a>(
             .tool_policy
             .allows(&ToolName::plain(codex_code_mode::PUBLIC_TOOL_NAME));
     let mut seen = HashSet::new();
-    registry.entries().filter_map(move |tool| {
-        // Fork: direct-only tools get a Code Mode stub.
+    fork::code_mode_entries(registry).filter_map(move |tool| {
+        // Fork: direct-only tools come last and get a Code Mode stub under a free name (R3).
         if !enabled || !fork::available_in_code_mode(tool.exposure) {
             return None;
         }

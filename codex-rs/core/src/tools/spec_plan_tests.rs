@@ -3442,3 +3442,6 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
 
 #[path = "spec_plan_strict_third_party_tests.rs"]
 mod strict_third_party;
+
+#[path = "spec_plan_fork_tests.rs"]
+mod fork_tests;
