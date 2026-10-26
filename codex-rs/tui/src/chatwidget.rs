@@ -289,7 +289,9 @@ mod input_restore;
 mod input_submission;
 mod interrupts;
 mod questions;
+// Fork: workflow progress and history cells.
 mod startup_submission;
+mod workflow;
 use self::interrupts::InterruptManager;
 mod keymap_picker;
 mod mcp_startup;
@@ -791,6 +793,8 @@ pub(crate) struct ChatWidget {
     thread_usage: thread_usage::ThreadUsageState,
     // Current thread-goal status shown in the status line when plan mode is inactive.
     current_goal_status_indicator: Option<GoalStatusIndicator>,
+    /// Fork: active workflow runs of the shown thread by run id.
+    workflow_runs: std::collections::BTreeMap<String, codex_app_server_protocol::WorkflowRun>,
     current_goal_status: Option<GoalStatusState>,
     external_editor_state: ExternalEditorState,
     last_rendered_user_message_display: Option<UserMessageDisplay>,

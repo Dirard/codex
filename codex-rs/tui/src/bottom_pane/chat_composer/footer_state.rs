@@ -357,6 +357,8 @@ pub(super) struct FooterState {
     pub(super) context_window_pending: bool,
     pub(super) collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     pub(super) goal_status_indicator: Option<GoalStatusIndicator>,
+    /// Fork: progress of active workflow runs.
+    pub(super) workflow_status_indicator: Option<String>,
     pub(super) ide_context_active: bool,
     pub(super) status_line_value: Option<Line<'static>>,
     pub(super) status_line_hyperlink_url: Option<String>,

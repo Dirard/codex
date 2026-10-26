@@ -635,6 +635,17 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Fork: progress of active workflow runs.
+    pub fn set_workflow_status_indicator(&mut self, indicator: Option<String>) {
+        self.composer.set_workflow_status_indicator(indicator);
+        self.request_redraw();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn workflow_status_indicator(&self) -> Option<&str> {
+        self.composer.workflow_status_indicator()
+    }
+
     pub fn set_ide_context_active(&mut self, active: bool) {
         self.composer.set_ide_context_active(active);
         self.request_redraw();

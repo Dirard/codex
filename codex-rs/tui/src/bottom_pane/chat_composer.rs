@@ -762,6 +762,7 @@ impl ChatComposer {
                 context_window_pending: false,
                 collaboration_mode_indicator: None,
                 goal_status_indicator: None,
+                workflow_status_indicator: None,
                 ide_context_active: false,
                 status_line_value: None,
                 status_line_hyperlink_url: None,
@@ -1123,6 +1124,16 @@ impl ChatComposer {
         self.footer.goal_status_indicator = indicator;
     }
 
+    /// Fork: show the progress of active workflow runs in the status line.
+    pub fn set_workflow_status_indicator(&mut self, indicator: Option<String>) {
+        self.footer.workflow_status_indicator = indicator;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn workflow_status_indicator(&self) -> Option<&str> {
+        self.footer.workflow_status_indicator.as_deref()
+    }
+
     pub fn set_ide_context_active(&mut self, active: bool) {
         self.footer.ide_context_active = active;
     }
@@ -1451,6 +1462,12 @@ impl ChatComposer {
                 spans.push(" | ".dim());
             }
             spans.extend(indicators.spans);
+        }
+        if let Some(workflow) = &self.footer.workflow_status_indicator {
+            if !spans.is_empty() {
+                spans.push(" | ".dim());
+            }
+            spans.push(workflow.clone().cyan());
         }
         if spans.is_empty() {
             None
