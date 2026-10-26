@@ -454,10 +454,8 @@ pub(crate) async fn run_turn(
     }
     track_turn_resolved_config_analytics(&sess, &first_step_context, &input).await;
 
-    // Fork: start from the answer of an earlier pass of this task, so a pass that samples
-    // nothing does not erase it.
+    // Fork: a pass of this task that samples nothing keeps the answer of the pass before it.
     let mut last_agent_message: Option<String> = previous_agent_message;
-    let mut consecutive_compactions_without_progress = 0usize;
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
@@ -474,17 +472,14 @@ pub(crate) async fn run_turn(
 
     let mut next_step_context = Some(first_step_context);
     let mut guardian_budget_compacted = false;
-    // Fork: whether the model still owes this turn a step: a preempted response, tool output,
-    // or a Stop hook continuation. Blocked steered input must not end the turn before that.
-    let mut model_follow_up_pending = false;
-    // Fork: steered input that the hooks already accepted and recorded behind a finished
-    // answer. The next step samples it; the drain and hooks at the loop top skip it.
-    let mut accepted_pending_input = None;
+    // Fork: blocked-batch state and the compaction progress guard (fork_turn.rs).
+    let mut fork_loop = super::fork_turn::TurnLoop::default();
     loop {
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let accepted_input = accepted_pending_input.take();
+        // Fork: input the hooks already accepted behind a finished answer skips drain and hooks.
+        let accepted_input = fork_loop.accepted_pending_input.take();
         let pending_input = if can_drain_pending_input && accepted_input.is_none() {
             sess.input_queue
                 .get_pending_input(&sess.active_turn)
@@ -494,9 +489,8 @@ pub(crate) async fn run_turn(
             Vec::new()
         };
 
-        // Fork: a batch whose prompts are all blocked ends the turn only when nothing else
-        // needs sampling. With instant interrupts, a blocked prompt can preempt the answer to
-        // an earlier accepted prompt; ending here would leave that prompt unanswered.
+        // Fork: a fully blocked batch ends the turn only when the model owes no step; with
+        // instant interrupts, ending here could leave an earlier accepted prompt unanswered.
         if run_hooks_and_record_inputs(
             &sess,
             &turn_context,
@@ -505,7 +499,7 @@ pub(crate) async fn run_turn(
             PersistContext::SteeredUserInput,
         )
         .await
-            && !model_follow_up_pending
+            && !fork_loop.model_follow_up_pending
         {
             break;
         }
@@ -611,16 +605,11 @@ pub(crate) async fn run_turn(
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
-                    made_progress,
-                    answered,
+                    fork: sampling_outcome,
                 } = sampling_request_output;
-                // Fork: a user-input preemption after the terminal answer leaves the model
-                // nothing to redo; only the queued input decides whether the turn goes on.
-                let model_needs_follow_up = model_needs_follow_up && !answered;
-                model_follow_up_pending = model_needs_follow_up;
-                if made_progress {
-                    consecutive_compactions_without_progress = 0;
-                }
+                // Fork: an answered response owes no follow-up (fork_turn.rs).
+                let model_needs_follow_up =
+                    fork_loop.on_sampled(model_needs_follow_up, sampling_outcome);
                 if model_needs_follow_up {
                     sess.input_queue
                         .accept_mailbox_delivery_for_current_turn(
@@ -715,10 +704,9 @@ pub(crate) async fn run_turn(
                     .await;
                 }
 
+                // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if should_roll_over {
-                    if !made_progress && consecutive_compactions_without_progress >= 2 {
-                        return Err(CodexErr::ContextWindowExceeded);
-                    }
+                    fork_loop.check_compaction_progress()?; // Fork: no endless compaction
                     let compacted = run_auto_compact(
                         &sess,
                         Arc::clone(&step_context),
@@ -731,9 +719,7 @@ pub(crate) async fn run_turn(
                     .await;
                     match compacted {
                         Ok(true) => {
-                            if !made_progress {
-                                consecutive_compactions_without_progress += 1;
-                            }
+                            fork_loop.on_compacted();
                             if run_pending_session_start_hooks(&sess, &turn_context).await {
                                 return Ok(None);
                             }
@@ -766,42 +752,11 @@ pub(crate) async fn run_turn(
                     }
                 }
 
-                // Fork: only the hooks can tell whether input queued behind a finished answer
-                // continues the turn, so run them now. If they block all of it, nothing is left
-                // to sample and the answer completes the turn below like any other.
-                let needs_follow_up = if !model_needs_follow_up && has_pending_input {
-                    let pending_input = sess
-                        .input_queue
-                        .get_pending_input(&sess.active_turn)
-                        .await
-                        .0;
-                    // Fork: an empty drain, such as a stale mailbox signal, leaves nothing to sample.
-                    let blocked = pending_input.is_empty()
-                        || run_hooks_and_record_inputs(
-                            &sess,
-                            &turn_context,
-                            &turn_context.capture_current_model_info(),
-                            &pending_input,
-                            PersistContext::SteeredUserInput,
-                        )
-                        .await;
-                    if !blocked {
-                        accepted_pending_input = Some(pending_input);
-                    } else if answered {
-                        // Fork: the queued input kept mailbox delivery open past the terminal
-                        // answer. Close it as that answer would have, so queue-only mail that
-                        // arrives while the turn completes waits for the next turn.
-                        sess.input_queue
-                            .defer_mailbox_delivery_to_next_turn(
-                                &sess.active_turn,
-                                &turn_context.sub_id,
-                            )
-                            .await;
-                    }
-                    !blocked
-                } else {
-                    needs_follow_up
-                };
+                // Fork: the hooks decide whether input queued behind a finished answer continues
+                // the turn; if they block all of it, the answer completes the turn below.
+                let needs_follow_up = fork_loop
+                    .settle_queued_input(&sess, &turn_context, has_pending_input, needs_follow_up)
+                    .await;
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
                     let stop_outcome = run_turn_stop_hooks(
@@ -839,7 +794,7 @@ pub(crate) async fn run_turn(
                                 .await;
                             stop_hook_active = true;
                             // Fork: the model must answer the continuation prompt.
-                            model_follow_up_pending = true;
+                            fork_loop.model_follow_up_pending = true;
                             continue;
                         } else {
                             sess.send_event(
@@ -1037,7 +992,7 @@ pub(crate) async fn run_hooks_and_record_inputs(
         return false;
     }
     let mut blocked_input = false;
-    let mut accepted_turn_input = false;
+    let mut accepted_user_input = false;
     for input_item in input {
         let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
         if hook_outcome.should_stop {
@@ -1050,7 +1005,7 @@ pub(crate) async fn run_hooks_and_record_inputs(
             }
             // Fork: input that needs a model step keeps a batch with a blocked prompt going.
             if input_item.needs_model_step() {
-                accepted_turn_input = true;
+                accepted_user_input = true;
             }
             // Tool outputs retain their durability barrier, including in mixed input batches.
             let input_persist_context = if persist_context == PersistContext::SteeredUserInput
@@ -1071,7 +1026,7 @@ pub(crate) async fn run_hooks_and_record_inputs(
             .await;
         }
     }
-    blocked_input && !accepted_turn_input
+    blocked_input && !accepted_user_input
 }
 
 fn turn_user_input(input: &[TurnInput]) -> Vec<UserInput> {
@@ -1932,8 +1887,7 @@ async fn run_sampling_request(
                 SamplingRequestResult {
                     needs_follow_up: true,
                     last_agent_message: None,
-                    made_progress: false,
-                    answered: false,
+                    fork: Default::default(),
                 },
                 std::mem::take(original_input),
             ));
@@ -2081,11 +2035,8 @@ pub(crate) async fn built_tools(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
-    made_progress: bool,
-    /// Fork: the response ended with its terminal answer and owes no tool output,
-    /// continuation or mail delivery. A user-input preemption after that answer leaves the
-    /// model nothing to redo.
-    answered: bool,
+    /// Fork: progress and the terminal answer of the response (fork_turn.rs).
+    fork: super::fork_turn::SamplingOutcome,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -2680,6 +2631,7 @@ async fn handle_assistant_item_done_in_plan_mode(
     None
 }
 
+/// Fork: returns whether a tool call succeeded, which counts as progress of the response.
 #[instrument(level = "trace", skip_all)]
 async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<InFlightFuture<'static>>,
@@ -2860,10 +2812,7 @@ async fn try_run_sampling_request(
     }
     let mut in_flight: FuturesOrdered<InFlightFuture<'static>> = FuturesOrdered::new();
     let mut needs_follow_up = false;
-    // Fork: whether the latest output item is the terminal answer, and whether the model
-    // still owes a step of its own (tool output, continuation, mail delivery).
-    let mut final_answer = false;
-    let mut model_owes_step = false;
+    let mut progress = super::fork_turn::SamplingProgress::default(); // Fork: blocked batch
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
     let mut active_tool_argument_diff_consumer: Option<(
@@ -2940,12 +2889,10 @@ async fn try_run_sampling_request(
                 }
                 // TODO: Reconcile any response item already being presented to the client.
                 drop(stream);
-                let made_progress = last_agent_message.is_some();
                 break Ok(SamplingRequestResult {
                     needs_follow_up: true,
                     last_agent_message,
-                    made_progress,
-                    answered: final_answer && !model_owes_step,
+                    fork: progress.outcome(),
                 });
             }
             Err(_) => break Err(CodexErr::TurnAborted),
@@ -2980,9 +2927,8 @@ async fn try_run_sampling_request(
                     // receiving the interrupt. Do not retry without that pending input.
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
-                        made_progress: last_agent_message.is_some(),
                         last_agent_message,
-                        answered: false,
+                        fork: Default::default(),
                     });
                 }
                 break Err(err);
@@ -3059,7 +3005,7 @@ async fn try_run_sampling_request(
                     )
                     .await
                 {
-                    final_answer = terminal_answer;
+                    progress.final_answer = terminal_answer;
                     continue;
                 }
 
@@ -3119,8 +3065,8 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
-                final_answer = output_result.terminal_answer;
-                model_owes_step |= output_result.needs_follow_up;
+                progress
+                    .on_output_item(output_result.terminal_answer, output_result.needs_follow_up);
                 // Hosts can keep the current response intact and deliver mail before the next
                 // model request instead of cutting off its remaining tool calls.
                 if preempt_for_mailbox_mail
@@ -3149,19 +3095,18 @@ async fn try_run_sampling_request(
                         // Further item boundaries must not drop the stream while it drains.
                         *draining_for_mailbox = true;
                         needs_follow_up = true;
-                        model_owes_step = true;
+                        progress.model_owes_step = true;
                         continue;
                     }
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
-                        made_progress: last_agent_message.is_some(),
                         last_agent_message,
-                        answered: false,
+                        fork: Default::default(),
                     });
                 }
             }
             ResponseEvent::OutputItemAdded(mut item) => {
-                final_answer = false;
+                progress.final_answer = false;
                 assign_missing_streamed_response_item_id(&mut item, /*active_item*/ None);
                 sess.reserve_assistant_message_order(&turn_context, &item)
                     .await;
@@ -3347,13 +3292,12 @@ async fn try_run_sampling_request(
                 }
                 if let Some(false) = end_turn {
                     needs_follow_up = true;
-                    model_owes_step = true;
+                    progress.model_owes_step = true;
                 }
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
-                    made_progress: last_agent_message.is_some(),
                     last_agent_message,
-                    answered: final_answer && !model_owes_step,
+                    fork: progress.outcome(),
                 });
             }
             ResponseEvent::OutputTextDelta(delta) => {
@@ -3530,23 +3474,18 @@ async fn try_run_sampling_request(
     )
     .await;
 
-    let tool_blocking_timing_guard = if in_flight.is_empty() {
-        None
-    } else {
-        Some(turn_context.turn_timing_state.begin_tool_blocking())
-    };
-    let completed_tool_result = if in_flight.is_empty() {
-        false
-    } else {
+    let mut completed_tool_result = false; // Fork: progress of the response, see below
+    if !in_flight.is_empty() {
+        let _tool_blocking_timing_guard = turn_context.turn_timing_state.begin_tool_blocking();
         let _tool_blocking_span = trace_span!(
             "codex.tool_blocking",
             codex.turn.phase = "tool_blocking",
             conversation.id = %sess.thread_id,
             turn.id = %turn_context.sub_id,
         );
-        drain_in_flight(&mut in_flight, sess.clone(), &step_context).await?
-    };
-    drop(tool_blocking_timing_guard);
+        completed_tool_result =
+            drain_in_flight(&mut in_flight, sess.clone(), &step_context).await?;
+    }
 
     if should_emit_token_count {
         // A tool call such as request_user_input can intentionally pause the turn. Emit token
@@ -3571,8 +3510,9 @@ async fn try_run_sampling_request(
         }
     }
 
+    // Fork: a response made progress when it produced an answer or a successful tool result.
     outcome.map(|mut result| {
-        result.made_progress |= completed_tool_result;
+        result.fork.made_progress = result.last_agent_message.is_some() || completed_tool_result;
         result
     })
 }

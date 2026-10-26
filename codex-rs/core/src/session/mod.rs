@@ -319,6 +319,7 @@ mod fork_agent_delivery;
 mod fork_compaction;
 mod fork_output_truncation;
 mod fork_spawn_budget;
+mod fork_turn;
 // Fork end
 
 use crate::exec_policy::ExecPolicyUpdateError;
