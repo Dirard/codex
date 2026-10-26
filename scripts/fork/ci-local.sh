@@ -747,6 +747,13 @@ cmd_fork_coverage() {
 }
 
 cmd_scripts() {
+  # CI runs these scripts by path, and a checkout with core.fileMode=false
+  # commits new files without the executable bit.
+  local not_executable
+  not_executable="$(git -C "${repo_root}" ls-files -s -- 'scripts/fork/*.sh' | awk '$1 != "100755" { print $4 }')"
+  [[ -z "${not_executable}" ]] ||
+    die "scripts/fork scripts must be executable in git (git update-index --chmod=+x): ${not_executable//$'\n'/ }"
+
   if command -v shellcheck >/dev/null 2>&1; then
     log "shellcheck scripts/fork/*.sh"
     shellcheck "${repo_root}"/scripts/fork/*.sh
