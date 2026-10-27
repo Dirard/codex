@@ -821,10 +821,16 @@ pub fn unpopulated_submodule_files(root: &Path) -> Result<Vec<PathBuf>> {
 
 /// Repositories nested in the worktree (a gitlink of the index whose directory holds a
 /// `.git`, such as one the agent created with `git init` and a checkpoint recorded) that hold
-/// work the repository of the worktree does not: uncommitted files, or a commit of their HEAD
-/// or refs that is not in the repository's object store (F3). A checkpoint records only the
-/// gitlink, so removing the checkout would lose that work. Each entry names the path and
-/// what it holds.
+/// work the repository of the worktree does not: uncommitted changes, or a commit of their own
+/// that exists nowhere else (F3). A checkpoint records only the gitlink, so removing the
+/// checkout would lose that work. Each entry names the path and what it holds.
+///
+/// K2 (deferred-fixes-3 review): a submodule the agent only initialized (`git submodule update
+/// --init`) is not work. Its HEAD and every commit it has come from its remote-tracking refs,
+/// so work is a commit reachable from the nested repository's HEAD or its local branches and
+/// tags but not from its `refs/remotes/*`, and not already in the worktree repository's object
+/// store either (`all_commits_present`). An initialized, unchanged submodule has no such commit
+/// and does not keep the worktree.
 pub fn nested_repositories(root: &Path) -> Result<Vec<String>> {
     let mut found = Vec::new();
     for (path, populated) in index_gitlinks(root)? {
@@ -852,20 +858,7 @@ pub fn nested_repositories(root: &Path) -> Result<Vec<String>> {
         if !status.stdout.is_empty() {
             held.push("uncommitted files");
         }
-        let mut commits = optional_commit(&nested, "HEAD")?
-            .into_iter()
-            .collect::<Vec<_>>();
-        let refs = git_output(
-            &nested,
-            GitOperation::Metadata,
-            ["for-each-ref", "--format=%(objectname)"],
-        )?;
-        commits.extend(
-            String::from_utf8_lossy(&refs.stdout)
-                .lines()
-                .map(str::to_owned),
-        );
-        if !all_commits_present(root, &commits)? {
+        if !local_only_commits(&nested, root)?.is_empty() {
             held.push("commits that the repository does not have");
         }
         if !held.is_empty() {
@@ -873,6 +866,42 @@ pub fn nested_repositories(root: &Path) -> Result<Vec<String>> {
         }
     }
     Ok(found)
+}
+
+/// Commits of the nested repository at `nested` that exist nowhere but there (K2): reachable
+/// from its HEAD, local branches and tags, but not from its `refs/remotes/*`, and absent from
+/// the object store of the worktree repository at `root`. A submodule that was only initialized
+/// has none: its HEAD is a remote-tracking commit. At most one is returned, since the caller
+/// only asks whether any exists.
+fn local_only_commits(nested: &Path, root: &Path) -> Result<Vec<String>> {
+    if optional_commit(nested, "HEAD")?.is_none() {
+        return Ok(Vec::new());
+    }
+    // Commits reachable from HEAD and local refs but not from any remote-tracking ref.
+    let mut command = git_command(nested, GitOperation::Metadata)?;
+    command.args([
+        "rev-list",
+        "--max-count=50",
+        "HEAD",
+        "--branches",
+        "--tags",
+        "--not",
+        "--remotes",
+    ]);
+    let local = run_git_command(&mut command, &[])?;
+    let candidates = String::from_utf8_lossy(&local.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    // Those the worktree repository does not already have are the agent's own work.
+    let mut own = Vec::new();
+    for candidate in candidates {
+        if !all_commits_present(root, std::slice::from_ref(&candidate))? {
+            own.push(candidate);
+            break;
+        }
+    }
+    Ok(own)
 }
 
 /// Whether the object store of the repository at `cwd` holds every one of `objects`.

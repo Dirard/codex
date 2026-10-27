@@ -3016,3 +3016,107 @@ fn an_initialized_submodules_configured_programs_never_run_on_the_host() {
     codex_worktree::ignored_entries(&checkout.root, 100).expect("ignored entries");
     assert!(!ran(), "the ignored listing ran a submodule program");
 }
+
+/// K2: a submodule the agent only initialized (`git submodule update --init`) is not work.
+/// Its HEAD and refs come from its remote, so the worktree is clean, a checkpoint records
+/// nothing, and a close removes the checkout without `discard_changes`.
+#[test]
+fn an_initialized_submodule_does_not_keep_the_worktree() {
+    let fixture = Fixture::new();
+    add_submodule(&fixture);
+    let base = snapshot_working_tree(&fixture.repository).expect("snapshot");
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    git(
+        &checkout.root,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "--init",
+            "sub",
+        ],
+    );
+    assert!(checkout.root.join("sub").join(".git").exists());
+
+    assert_eq!(
+        codex_worktree::nested_repositories(&checkout.root).expect("nested repositories"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        agent_worktree_status(&checkout.root, &metadata)
+            .expect("state")
+            .state,
+        AgentWorktreeState::Clean
+    );
+    assert_eq!(
+        checkpoint_worktree(&checkout.root, &metadata),
+        CheckpointOutcome::Unchanged
+    );
+    assert_eq!(
+        codex_worktree::remove_agent_checkout(
+            &fixture.repository,
+            &checkout.root,
+            &metadata,
+            /*discard_unrecorded*/ false,
+        )
+        .expect("close"),
+        RemoveOutcome::Removed
+    );
+    assert!(!checkout.root.exists());
+}
+
+/// K2: once the agent commits inside an initialized submodule, that commit exists only there,
+/// so the worktree is kept until `discard_changes`.
+#[test]
+fn a_commit_in_an_initialized_submodule_keeps_the_worktree() {
+    let fixture = Fixture::new();
+    add_submodule(&fixture);
+    let base = snapshot_working_tree(&fixture.repository).expect("snapshot");
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    let sub = checkout.root.join("sub");
+    git(
+        &checkout.root,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "--init",
+            "sub",
+        ],
+    );
+    fs::write(sub.join("s.txt"), "agent edit\n").expect("edit submodule file");
+    commit_all(&sub, "agent commit in submodule");
+    // The agent records the moved gitlink on its branch; the submodule's new commit still lives
+    // only in the submodule, so the worktree is kept until that work is saved or discarded.
+    assert!(matches!(
+        checkpoint_worktree(&checkout.root, &metadata),
+        CheckpointOutcome::Committed { .. }
+    ));
+
+    assert_eq!(
+        codex_worktree::nested_repositories(&checkout.root).expect("nested repositories"),
+        vec!["sub (commits that the repository does not have)".to_string()]
+    );
+    assert_eq!(
+        codex_worktree::remove_agent_checkout(
+            &fixture.repository,
+            &checkout.root,
+            &metadata,
+            /*discard_unrecorded*/ false,
+        )
+        .expect("close"),
+        RemoveOutcome::Kept(KeptReason::NestedRepository)
+    );
+    assert_eq!(
+        codex_worktree::remove_agent_checkout(
+            &fixture.repository,
+            &checkout.root,
+            &metadata,
+            /*discard_unrecorded*/ true,
+        )
+        .expect("discard"),
+        RemoveOutcome::Removed
+    );
+}
