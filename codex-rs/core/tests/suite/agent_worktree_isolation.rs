@@ -4299,3 +4299,55 @@ async fn a_finished_isolated_child_does_not_block_the_close_of_its_parent() -> R
     assert!(grandchild_root.join("nested.txt").exists());
     Ok(())
 }
+
+/// P3-10 (question 4 of the worktree report): after a restart, an isolated agent whose
+/// worktree was removed has no binding until it runs again; `apply_agent_worktree` says how to
+/// reach its changes instead of claiming they are in the shared checkout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_after_a_restart_names_the_way_to_a_removed_worktree() -> Result<()> {
+    const TASK: &str = "work before the restart and the cleanup";
+    let server = start_mock_server().await;
+    let mut builder = isolation_builder(None, /*git_repository*/ true, |config| {
+        config.features.enable(Feature::Sqlite).expect("sqlite");
+    });
+    let initial = builder.build_with_auto_env(&server).await?;
+    let mut created = initial.thread_manager.subscribe_thread_created();
+    let (child, output) = spawn_isolated_worker(
+        &server,
+        &initial,
+        &mut created,
+        TASK,
+        &[("edit", "printf work > work.txt".to_string())],
+        PermissionProfile::Disabled,
+    )
+    .await?;
+    let root = PathBuf::from(worktree_field(&output, "path"));
+    child.thread.shutdown_and_wait().await?;
+    initial.codex.flush_rollout().await?;
+    remove_like_desktop(&initial.config.cwd, &root);
+    // Config mutators run once per build: the resumed root needs the feature again for the
+    // tool to be offered.
+    let builder = builder.with_config(enable_isolation);
+    let resumed = restart_in_repository(builder, &server, &initial).await?;
+
+    let apply = mount_root_call(
+        &server,
+        "apply the removed worker",
+        "apply-removed",
+        "apply_agent_worktree",
+        apply_arguments("worker"),
+    )
+    .await;
+    resumed.submit_turn("apply the removed worker").await?;
+    let output = apply
+        .function_call_output_text("apply-removed")
+        .context("apply output")?;
+    assert!(output.contains("followup_task"), "{output}");
+    assert!(output.contains("fallback command"), "{output}");
+    assert!(
+        !output.contains("already in the shared checkout"),
+        "{output}"
+    );
+    assert!(!resumed.config.cwd.join("work.txt").exists());
+    Ok(())
+}

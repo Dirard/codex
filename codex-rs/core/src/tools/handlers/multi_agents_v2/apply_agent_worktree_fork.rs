@@ -153,17 +153,24 @@ async fn handle_apply(invocation: ToolInvocation) -> Result<FunctionToolOutput, 
         ));
     }
     let agent_id = resolve_agent_target(&session, &turn, &args.target).await?;
-    let binding = session
-        .services
-        .local_agent_runtime
-        .worktrees
-        .get(agent_id)
-        .ok_or_else(|| {
-            FunctionCallError::RespondToModel(format!(
+    let Some(binding) = session.services.local_agent_runtime.worktrees.get(agent_id) else {
+        // After a restart the binding of an agent whose worktree was removed comes back only
+        // with the agent (R5.6), so a host record means "not loaded", not "not isolated".
+        let message = if crate::agent::worktree_isolation::has_agent_record(&turn.config, agent_id)
+            .await
+        {
+            format!(
+                "agent {} works in its own worktree, which was removed and is restored when the agent runs again. Nothing was applied. Wake it with followup_task first, or use the fallback command of its <agent_worktree> block.",
+                args.target
+            )
+        } else {
+            format!(
                 "agent {} does not work in its own worktree; its changes are already in the shared checkout",
                 args.target
-            ))
-        })?;
+            )
+        };
+        return Err(FunctionCallError::RespondToModel(message));
+    };
     let environment = step_context
         .environments
         .single_local_environment()

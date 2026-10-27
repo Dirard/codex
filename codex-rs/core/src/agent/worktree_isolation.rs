@@ -584,6 +584,18 @@ pub(crate) fn agent_branch_name(agent_path: &AgentPath, thread_id: ThreadId) -> 
     format!("codex/agents/{}-{suffix}", agent_path.name())
 }
 
+/// Whether the host recorded an agent worktree for `thread_id` (R5.6): an agent without a
+/// binding in this process may still be isolated, with its worktree removed (P3-10).
+pub(crate) async fn has_agent_record(config: &Config, thread_id: ThreadId) -> bool {
+    let records = agent_records_dir(config);
+    tokio::task::spawn_blocking(move || {
+        codex_worktree::read_agent_record(&records, &thread_id.to_string())
+            .is_ok_and(|record| record.is_some())
+    })
+    .await
+    .unwrap_or(false)
+}
+
 /// Host records of where each agent worktree came from (R5.6), outside the managed root so
 /// that removing worktrees by hand keeps them.
 fn agent_records_dir(config: &Config) -> std::path::PathBuf {
