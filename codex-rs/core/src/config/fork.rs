@@ -473,7 +473,7 @@ pub(super) fn resolve_tool_namespace(
 ) -> std::io::Result<(ManagedFeatures, MultiAgentV2Config)> {
     let isolation_enabled = features.enabled(Feature::AgentWorktreeIsolation);
     if isolation_enabled && !multi_agent_v2_tool_namespace_is_set(features_toml) {
-        tracing::info!(
+        tracing::debug!(
             "features.agent_worktree_isolation is enabled and features.multi_agent_v2.tool_namespace is unset; MultiAgentV2 tools use the namespace \"{AGENT_WORKTREE_ISOLATION_TOOL_NAMESPACE}\""
         );
         multi_agent_v2.tool_namespace = Some(AGENT_WORKTREE_ISOLATION_TOOL_NAMESPACE.to_string());
