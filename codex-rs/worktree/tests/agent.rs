@@ -2966,9 +2966,15 @@ fn a_nested_repositorys_configured_programs_never_run_on_the_host() {
     agent_worktree_status(&checkout.root, &metadata).expect("status");
     assert!(!ran(), "a status ran a nested repository program");
     codex_worktree::nested_repositories(&checkout.root).expect("nested repositories");
-    assert!(!ran(), "the nested-repository inspection ran one of its programs");
+    assert!(
+        !ran(),
+        "the nested-repository inspection ran one of its programs"
+    );
     codex_worktree::ignored_entries(&checkout.root, 100).expect("ignored entries");
-    assert!(!ran(), "the ignored listing ran a nested repository program");
+    assert!(
+        !ran(),
+        "the ignored listing ran a nested repository program"
+    );
     assert_eq!(
         codex_worktree::remove_agent_checkout(
             &fixture.repository,
@@ -3070,7 +3076,10 @@ fn an_initialized_submodules_configured_programs_never_run_on_the_host() {
     agent_worktree_status(&checkout.root, &metadata).expect("status");
     assert!(!ran(), "a status ran a submodule program");
     codex_worktree::nested_repositories(&checkout.root).expect("nested repositories");
-    assert!(!ran(), "the nested-repository inspection ran a submodule program");
+    assert!(
+        !ran(),
+        "the nested-repository inspection ran a submodule program"
+    );
     codex_worktree::ignored_entries(&checkout.root, 100).expect("ignored entries");
     assert!(!ran(), "the ignored listing ran a submodule program");
 }

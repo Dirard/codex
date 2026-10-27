@@ -1093,9 +1093,13 @@ async fn a_discarding_close_that_drops_nested_work_is_not_marked_lossless() {
     })
     .expect("checkpoint");
 
-    let closed = ops::close_worktree(&binding, /*discard_unrecorded*/ true, |_| async { None })
-        .await
-        .expect("discarding close");
+    let closed = ops::close_worktree(
+        &binding,
+        /*discard_unrecorded*/ true,
+        |_| async { None },
+    )
+    .await
+    .expect("discarding close");
     assert!(matches!(closed, CloseOutcome::Removed { .. }), "{closed:?}");
     let record = codex_worktree::read_agent_record(&records, &thread_id)
         .expect("read record")
@@ -1117,9 +1121,13 @@ async fn a_close_of_an_already_missing_checkout_does_not_mark_it_closed() {
     let thread_id = binding.thread_id.to_string();
     // The checkout vanished (another process, the user): the close finds it already missing.
     std::fs::remove_dir_all(&binding.root).expect("remove the checkout");
-    let closed = ops::close_worktree(&binding, /*discard_unrecorded*/ false, |_| async { None })
-        .await
-        .expect("close an already-missing checkout");
+    let closed = ops::close_worktree(
+        &binding,
+        /*discard_unrecorded*/ false,
+        |_| async { None },
+    )
+    .await
+    .expect("close an already-missing checkout");
     assert!(matches!(closed, CloseOutcome::Removed { .. }), "{closed:?}");
     let record = codex_worktree::read_agent_record(&records, &thread_id)
         .expect("read record")
@@ -1230,14 +1238,13 @@ fn holder_worktree_use_reads_the_turn_state() {
     use std::collections::HashMap;
 
     let caller = ThreadId::new();
-    let make = |id: ThreadId,
-                agent: &str,
-                status: tokio::sync::watch::Receiver<AgentStatus>| HolderTurn {
-        thread_id: id,
-        agent: agent.to_string(),
-        status,
-        started: Instant::now(),
-    };
+    let make =
+        |id: ThreadId, agent: &str, status: tokio::sync::watch::Receiver<AgentStatus>| HolderTurn {
+            thread_id: id,
+            agent: agent.to_string(),
+            status,
+            started: Instant::now(),
+        };
     let fresh = || tokio::sync::watch::channel(AgentStatus::Completed(None));
 
     // A holder in a turn: the agent still works.
@@ -1277,7 +1284,10 @@ fn holder_worktree_use_reads_the_turn_state() {
     // A holder that is not loaded keeps nothing, and neither does the caller's own holder.
     let (_keep, receiver) = fresh();
     let unloaded = make(ThreadId::new(), "/root/probe/gone", receiver);
-    assert_eq!(holder_worktree_use(&[unloaded], caller, &HashMap::new()), None);
+    assert_eq!(
+        holder_worktree_use(&[unloaded], caller, &HashMap::new()),
+        None
+    );
     let (_keep_caller, receiver) = fresh();
     let own = make(caller, "/root", receiver);
     assert_eq!(

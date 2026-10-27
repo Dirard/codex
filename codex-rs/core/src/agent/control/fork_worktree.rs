@@ -351,11 +351,9 @@ impl LocalAgentRuntime {
                 );
             }
         }
-        if let Some(used) = crate::agent::worktree_isolation::holder_worktree_use(
-            &holders,
-            caller,
-            &holder_in_turn,
-        ) {
+        if let Some(used) =
+            crate::agent::worktree_isolation::holder_worktree_use(&holders, caller, &holder_in_turn)
+        {
             return Some(used);
         }
         for (thread_id, path, thread) in &loaded {

@@ -60,7 +60,10 @@ fn the_proc_scan_excludes_own_git_children_by_pid_not_name() {
         let _tracked = crate::git::fork::GitChild::new(pid);
         assert!(!in_worktree(), "an own Git child is excluded by pid");
     }
-    assert!(in_worktree(), "the pid is seen again once the guard is dropped");
+    assert!(
+        in_worktree(),
+        "the pid is seen again once the guard is dropped"
+    );
 
     child.kill().expect("stop the process");
     child.wait().expect("reap the process");

@@ -249,7 +249,8 @@ fn configured_filters(cwd: &Path) -> Result<BTreeSet<String>> {
         "--get-regexp",
         "^filter\\.",
     ]);
-    let output = tracked_output(&mut command).context("failed to inspect Git filter configuration")?;
+    let output =
+        tracked_output(&mut command).context("failed to inspect Git filter configuration")?;
 
     if !output.status.success() {
         if output.status.code() == Some(1) {
