@@ -730,6 +730,11 @@ fn worktree_status(root: &Path) -> Result<WorktreeStatus> {
             "--porcelain=v2",
             "-z",
             "--untracked-files=normal",
+            // K1: never descend into a submodule's or nested repository's work tree, so its
+            // configured clean filter and fsmonitor cannot run through this status. `dirty`
+            // still reports a gitlink whose recorded commit moved and a removed gitlink
+            // directory (`160000`/`000000`), which R2.11 and F3 rely on.
+            "--ignore-submodules=dirty",
         ],
     )?;
     let mut changed = false;
@@ -837,6 +842,11 @@ pub fn nested_repositories(root: &Path) -> Result<Vec<String>> {
                 "--porcelain=v1",
                 "-z",
                 "--untracked-files=normal",
+                // K1: this status runs inside a repository the agent can write to. The command
+                // is isolated (its own clean filter and fsmonitor are cleared), and
+                // `--ignore-submodules=all` stops it from descending into a further nested
+                // repository and running that one's configured programs.
+                "--ignore-submodules=all",
             ],
         )?;
         if !status.stdout.is_empty() {
@@ -998,6 +1008,9 @@ pub fn ignored_entries(root: &Path, limit: usize) -> Result<(Vec<String>, usize)
             "-z",
             "--untracked-files=normal",
             "--ignored=traditional",
+            // K1: the ignored listing never needs a submodule's state, so it never descends
+            // into one and never runs its configured programs.
+            "--ignore-submodules=all",
         ],
     )?;
     let mut listed = Vec::new();

@@ -2820,3 +2820,199 @@ fn retired_commits_never_lose_their_record_and_orphans_go_once_committed() {
     assert_eq!(orphans(), 1);
     assert!(git_fails(repository, &["rev-parse", "--verify", &applied]));
 }
+
+// Amend 2026-10-27, deferred-fixes-3: K1 (nested repositories and submodules never run their
+// configured programs on the host), K2 (an initialized submodule is not work), K5 (the
+// `/proc` safety net excludes the host's own Git children by pid).
+
+/// Writes an executable `#!/bin/sh` script that appends to `marker` and passes stdin through,
+/// so it works as a clean/smudge filter, an fsmonitor, a hook or a textconv driver.
+#[cfg(unix)]
+fn write_marker_script(path: &Path, marker: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(
+        path,
+        format!(
+            "#!/bin/sh\nprintf ran >> '{}'\ncat\n",
+            marker.to_str().expect("UTF-8 marker path")
+        ),
+    )
+    .expect("write marker script");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("make the script runnable");
+}
+
+/// K1: every program a repository nested in the worktree configures — a clean/smudge filter,
+/// `core.fsmonitor`, hooks, a textconv driver — stays unrun on the host across checkpoint,
+/// status, the nested-repository inspection, ignored listing, close and finalize. A sandboxed
+/// agent can write such a repository, so running any of them would execute its code on the
+/// host without a sandbox.
+#[cfg(unix)]
+#[test]
+fn a_nested_repositorys_configured_programs_never_run_on_the_host() {
+    let fixture = Fixture::new();
+    let base = snapshot_working_tree(&fixture.repository).expect("snapshot");
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+
+    // Scripts and the marker live outside the worktree, so a removal cannot erase the evidence.
+    let outside = fixture
+        .repository
+        .parent()
+        .expect("repository parent")
+        .join("evil");
+    let hooks = outside.join("hooks");
+    fs::create_dir_all(&hooks).expect("create the evil directory");
+    let marker = outside.join("ran");
+    let filter = outside.join("filter.sh");
+    let fsmonitor = outside.join("fsmonitor.sh");
+    write_marker_script(&filter, &marker);
+    write_marker_script(&fsmonitor, &marker);
+    write_marker_script(&hooks.join("post-checkout"), &marker);
+    write_marker_script(&hooks.join("post-index-change"), &marker);
+    let script = |path: &Path| path.to_str().expect("UTF-8 script path").to_owned();
+
+    let tool = checkout.root.join("tool");
+    fs::create_dir_all(&tool).expect("create the nested repository");
+    git(&tool, &["init", "--quiet", "-b", "main"]);
+    for (key, value) in [
+        ("filter.evil.clean", script(&filter)),
+        ("filter.evil.smudge", script(&filter)),
+        ("filter.evil.required", "true".to_owned()),
+        ("core.fsmonitor", script(&fsmonitor)),
+        ("core.hooksPath", script(&hooks)),
+        ("diff.evil.textconv", script(&filter)),
+    ] {
+        git(&tool, &["config", key, &value]);
+    }
+    fs::write(tool.join(".gitattributes"), "* filter=evil diff=evil\n")
+        .expect("write nested attributes");
+    fs::write(tool.join("x.txt"), "x\n").expect("nested file");
+    git(&tool, &["add", "."]);
+    commit_all(&tool, "nested");
+    // The agent's own `git add` ran the clean filter; that is not the host. Reset the marker.
+    let _ = fs::remove_file(&marker);
+    // Make the tracked file look modified, so any host status that descended into the nested
+    // repository would re-hash it through the clean filter.
+    fs::write(tool.join("x.txt"), "x2\n").expect("dirty the nested file");
+
+    let ran = || {
+        let ran = marker.exists();
+        let _ = fs::remove_file(&marker);
+        ran
+    };
+
+    assert!(matches!(
+        checkpoint_worktree(&checkout.root, &metadata),
+        CheckpointOutcome::Committed { .. } | CheckpointOutcome::Unchanged
+    ));
+    assert!(!ran(), "a checkpoint ran a nested repository program");
+    agent_worktree_status(&checkout.root, &metadata).expect("status");
+    assert!(!ran(), "a status ran a nested repository program");
+    codex_worktree::nested_repositories(&checkout.root).expect("nested repositories");
+    assert!(!ran(), "the nested-repository inspection ran one of its programs");
+    codex_worktree::ignored_entries(&checkout.root, 100).expect("ignored entries");
+    assert!(!ran(), "the ignored listing ran a nested repository program");
+    assert_eq!(
+        codex_worktree::remove_agent_checkout(
+            &fixture.repository,
+            &checkout.root,
+            &metadata,
+            /*discard_unrecorded*/ false,
+        )
+        .expect("close"),
+        RemoveOutcome::Kept(KeptReason::NestedRepository)
+    );
+    assert!(!ran(), "a close ran a nested repository program");
+    // Finalize keeps it on its branch and never reaches the nested-repository inspection.
+    assert_eq!(
+        remove_if_unchanged(&fixture.repository, &checkout.root, &metadata).expect("finalize"),
+        RemoveOutcome::Kept(KeptReason::Branch)
+    );
+    assert!(!ran(), "a finalize ran a nested repository program");
+    // A parked sweep does reach the nested-repository inspection and keeps it.
+    age(&checkout.root, 48);
+    let report = sweep_agent_worktrees(
+        &fixture.manager(),
+        &fixture.repository,
+        &DAY_POLICY,
+        &|_| false,
+        &|_| true,
+        SystemTime::now(),
+    )
+    .expect("sweep");
+    assert_eq!(report.removed, Vec::<PathBuf>::new());
+    assert!(!ran(), "a sweep ran a nested repository program");
+    assert_eq!(
+        codex_worktree::remove_agent_checkout(
+            &fixture.repository,
+            &checkout.root,
+            &metadata,
+            /*discard_unrecorded*/ true,
+        )
+        .expect("discard"),
+        RemoveOutcome::Removed
+    );
+    assert!(!ran(), "a discarding close ran a nested repository program");
+}
+
+/// K1 for a populated submodule: the agent initializes a submodule and gives its checkout a
+/// clean filter and an fsmonitor; no host command runs them.
+#[cfg(unix)]
+#[test]
+fn an_initialized_submodules_configured_programs_never_run_on_the_host() {
+    let fixture = Fixture::new();
+    add_submodule(&fixture);
+    let base = snapshot_working_tree(&fixture.repository).expect("snapshot");
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+
+    let outside = fixture
+        .repository
+        .parent()
+        .expect("repository parent")
+        .join("evil-sub");
+    fs::create_dir_all(&outside).expect("create the evil directory");
+    let marker = outside.join("ran");
+    let filter = outside.join("filter.sh");
+    let fsmonitor = outside.join("fsmonitor.sh");
+    write_marker_script(&filter, &marker);
+    write_marker_script(&fsmonitor, &marker);
+    let script = |path: &Path| path.to_str().expect("UTF-8 script path").to_owned();
+
+    let sub = checkout.root.join("sub");
+    // The agent initializes the submodule (a normal pre-build step) and then arms its checkout.
+    git(
+        &checkout.root,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "--init",
+            "sub",
+        ],
+    );
+    for (key, value) in [
+        ("filter.evil.clean", script(&filter)),
+        ("filter.evil.smudge", script(&filter)),
+        ("filter.evil.required", "true".to_owned()),
+        ("core.fsmonitor", script(&fsmonitor)),
+    ] {
+        git(&sub, &["config", key, &value]);
+    }
+    fs::write(sub.join(".gitattributes"), "* filter=evil\n").expect("write submodule attributes");
+    fs::write(sub.join("s.txt"), "s2\n").expect("dirty the submodule file");
+
+    let ran = || {
+        let ran = marker.exists();
+        let _ = fs::remove_file(&marker);
+        ran
+    };
+
+    checkpoint_worktree(&checkout.root, &metadata);
+    assert!(!ran(), "a checkpoint ran a submodule program");
+    agent_worktree_status(&checkout.root, &metadata).expect("status");
+    assert!(!ran(), "a status ran a submodule program");
+    codex_worktree::nested_repositories(&checkout.root).expect("nested repositories");
+    assert!(!ran(), "the nested-repository inspection ran a submodule program");
+    codex_worktree::ignored_entries(&checkout.root, 100).expect("ignored entries");
+    assert!(!ran(), "the ignored listing ran a submodule program");
+}

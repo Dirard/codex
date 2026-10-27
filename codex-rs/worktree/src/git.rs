@@ -9,6 +9,17 @@
 //! repository-configured helpers without changing persistent Git settings.
 //!
 //! Working-tree operations also disable configured clean, smudge, and process filters.
+//!
+//! Fork (K1, deferred-fixes-3 2026-10-27): the host runs Git in checkouts, submodules and
+//! repositories nested in them that a sandboxed agent can write to. None of their configured
+//! programs may run on the host. [`base_git_command`] clears, as `-c` overrides that outrank
+//! any value the repository's own config — including one pulled in through `include`/
+//! `includeIf` — the keys that run a program: hooks, `core.fsmonitor`, the pager and an
+//! external diff driver; working-tree operations clear the clean/smudge/process filters too.
+//! Status never descends into a submodule's or nested repository's work tree
+//! (`--ignore-submodules`, see [`super::agent`]), so the clean filter and fsmonitor of a
+//! nested repository never run through a superproject status; the one status the host does run
+//! inside a nested repository runs through this isolated command and does not recurse further.
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -198,6 +209,14 @@ fn base_git_command(cwd: &Path) -> Command {
         .arg("attr.tree=")
         .arg("-c")
         .arg("core.attributesFile=")
+        // Fork (K1): a repository the agent can write to must not run a program through its
+        // config. `-c` outranks the repository's own config, includes and all, so a configured
+        // pager or external diff driver never runs on the host. Hooks, fsmonitor and
+        // working-tree filters are cleared above and below.
+        .arg("-c")
+        .arg("core.pager=cat")
+        .arg("-c")
+        .arg("diff.external=")
         // Fork: host-side commits of agent worktrees must not prompt for or require a signature.
         .arg("-c")
         .arg("commit.gpgSign=false")
