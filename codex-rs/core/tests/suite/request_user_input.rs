@@ -586,3 +586,56 @@ async fn request_user_input_plan_mode_empty_answers_stay_json() -> anyhow::Resul
     assert_eq!(output, json!({"answers": {}}));
     Ok(())
 }
+
+/// Fork, combined live run 2026-10-27 D2: with Default-mode questions the model also keeps
+/// the upstream `request_user_input_async` of its catalog (upstream offers both under this
+/// flag), and it asked through the async tool, whose answer never came. The description of
+/// `request_user_input` now tells the model to ask with it in Default mode.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn default_mode_questions_point_the_model_at_the_blocking_tool() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mock = responses::mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let test = test_codex()
+        .with_model_info_override("gpt-5.2", |model| {
+            model
+                .experimental_supported_tools
+                .push("request_user_input_async".to_string());
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::DefaultModeRequestUserInput)
+                .expect("test config should allow feature update");
+        })
+        .build(&server)
+        .await?;
+    test.submit_turn("Pick an approach.").await?;
+
+    let body = mock.single_request().body_json();
+    let tools = body["tools"].as_array().expect("request tools");
+    let description = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .and_then(|tool| tool["description"].as_str())
+            .map(str::to_string)
+    };
+    assert!(
+        description("request_user_input_async").is_some(),
+        "{tools:?}"
+    );
+    let blocking = description("request_user_input").expect("request_user_input");
+    assert!(
+        blocking.contains(
+            "To ask in Default mode, use this tool, not an asynchronous question tool such as request_user_input_async"
+        ),
+        "{blocking}"
+    );
+    Ok(())
+}

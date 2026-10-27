@@ -80,32 +80,34 @@ async fn run_exec_request_user_input(
     Ok((output, tool_output, description))
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exec_never_offers_default_mode_request_user_input() -> anyhow::Result<()> {
-    let (output, tool_output, description) =
-        run_exec_request_user_input(&["-c", "features.default_mode_request_user_input=true"])
-            .await?;
+/// exec offers no question tool (combined live run 2026-10-27, D2): it rejects
+/// `requestUserInput`, and the later user message that would answer
+/// `request_user_input_async` never comes. A call the model makes anyway is refused.
+async fn assert_exec_offers_no_question_tool(extra_args: &[&str]) -> anyhow::Result<()> {
+    let (output, tool_output, description) = run_exec_request_user_input(extra_args).await?;
 
     assert!(output.status.success(), "exec run failed: {output:?}");
-    assert_eq!(
-        tool_output,
-        "request_user_input is unavailable in Default mode"
-    );
-    assert!(
-        description.ends_with("only available in Plan mode."),
-        "tool description: {description}"
-    );
+    assert_eq!(description, "", "request_user_input is offered");
+    assert_eq!(tool_output, "unsupported call: request_user_input");
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exec_keeps_default_mode_rejection_without_feature() -> anyhow::Result<()> {
-    let (output, tool_output, _description) = run_exec_request_user_input(&[]).await?;
+async fn exec_never_offers_default_mode_request_user_input() -> anyhow::Result<()> {
+    assert_exec_offers_no_question_tool(&["-c", "features.default_mode_request_user_input=true"])
+        .await
+}
 
-    assert!(output.status.success(), "exec run failed: {output:?}");
-    assert_eq!(
-        tool_output,
-        "request_user_input is unavailable in Default mode"
-    );
-    Ok(())
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_offers_no_question_tool_without_feature() -> anyhow::Result<()> {
+    assert_exec_offers_no_question_tool(&[]).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_offers_no_question_tool_even_when_configured() -> anyhow::Result<()> {
+    assert_exec_offers_no_question_tool(&[
+        "-c",
+        "tools.experimental_request_user_input.enabled=true",
+    ])
+    .await
 }

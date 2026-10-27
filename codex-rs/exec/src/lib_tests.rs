@@ -961,3 +961,32 @@ async fn exec_overrides_keep_the_exit_notifications_flag() {
     );
     assert_eq!(table.exec_exit_notifications.exec_wait_timeout_ms, 1500);
 }
+
+/// Fork, combined live run 2026-10-27 D2: exec offers no question tool. It rejects
+/// `requestUserInput` and never sends the user message that would answer
+/// `request_user_input_async`, so both stay off whatever the user's `-c` flags say.
+#[tokio::test]
+async fn exec_overrides_offer_no_question_tool() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let overrides = exec_cli_kv_overrides(codex_utils_cli::CliConfigOverrides {
+        raw_overrides: vec![
+            "features.default_mode_request_user_input=true".to_string(),
+            "tools.experimental_request_user_input.enabled=true".to_string(),
+        ],
+    })
+    .expect("parse overrides");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(overrides)
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config with exec overrides");
+    assert!(!config.experimental_request_user_input_enabled);
+    assert!(
+        !config
+            .features
+            .enabled(codex_features::Feature::DefaultModeRequestUserInput)
+    );
+}

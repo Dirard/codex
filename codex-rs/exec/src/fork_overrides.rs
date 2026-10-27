@@ -19,5 +19,11 @@ pub(crate) fn exec_cli_kv_overrides(
         "features.default_mode_request_user_input".to_string(),
         codex_config::TomlValue::Boolean(false),
     ));
+    // Nor any other question tool: exec rejects `requestUserInput` and never sends the later
+    // user message that would answer `request_user_input_async` (combined live run D2).
+    cli_kv_overrides.push((
+        "tools.experimental_request_user_input.enabled".to_string(),
+        codex_config::TomlValue::Boolean(false),
+    ));
     Ok(cli_kv_overrides)
 }
