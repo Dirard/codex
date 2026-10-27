@@ -262,6 +262,44 @@ pub fn merge_agent_branch(
 /// The tree mode of a gitlink, the entry of a submodule.
 const GITLINK_MODE: &str = "160000";
 
+/// R11.12, P3-4: the command that puts the submodule change of an agent branch into the
+/// parent's checkout at `source_root`, so that the next `apply_agent_worktree` merges the
+/// rest. Paths are absolute, so it works from any directory of the checkout.
+///
+/// - A move of a submodule the parent checked out: `checkout` in the submodule.
+/// - A move of a submodule the parent did not check out: `update-index` stages the new
+///   commit; `git -C <path>` would run in the parent's own repository there.
+/// - A removal: `git rm`, which also drops the directory and the `.gitmodules` entry, so the
+///   snapshot of the parent's working tree does not add the submodule back. It refuses a
+///   submodule with local changes.
+pub fn submodule_command(source_root: &Path, path: &str, commit: Option<&str>) -> String {
+    let checkout = shell_quote(&source_root.to_string_lossy());
+    match commit {
+        Some(commit) if source_root.join(path).join(".git").exists() => format!(
+            "git -C {} checkout {commit}",
+            shell_quote(&source_root.join(path).to_string_lossy())
+        ),
+        Some(commit) => format!(
+            "git -C {checkout} update-index --cacheinfo {}",
+            shell_quote(&format!("{GITLINK_MODE},{commit},{path}"))
+        ),
+        None => format!("git -C {checkout} rm -- {}", shell_quote(path)),
+    }
+}
+
+/// A POSIX shell word for `value`: as is when it is plain, otherwise single-quoted.
+pub fn shell_quote(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "_-./,".contains(character))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
 fn unrepresentable(path: String, reason: &'static str) -> MergeOutcome {
     MergeOutcome::Unrepresentable { path, reason }
 }

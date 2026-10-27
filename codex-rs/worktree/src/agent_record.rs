@@ -57,6 +57,17 @@ impl AgentWorktreeRecord {
     pub fn base_kind(&self) -> Option<AgentWorktreeBaseKind> {
         AgentWorktreeBaseKind::parse(&self.base_kind)
     }
+
+    /// The agent metadata the record describes, with the recorded branch name.
+    pub fn metadata(&self) -> Option<AgentWorktreeMetadata> {
+        Some(AgentWorktreeMetadata {
+            thread_id: self.thread_id.clone(),
+            base_sha: self.base_sha.clone(),
+            base_kind: self.base_kind()?,
+            branch: self.branch.clone(),
+            source_root: self.source_root.to_str().map(str::to_owned),
+        })
+    }
 }
 
 /// Only thread IDs name record files, so no value can leave the records directory.
@@ -120,9 +131,18 @@ pub fn read_agent_record(directory: &Path, thread_id: &str) -> Result<Option<Age
     Ok(Some(record))
 }
 
-/// Deletes records that can no longer restore anything: older than `min_age`, their
-/// worktree gone, and their parent checkout gone or without any of the recorded branch
-/// names. Returns how many were deleted; unreadable records are left alone.
+/// Tidies the records older than `min_age` whose worktree is gone (P3-2), and returns how
+/// many it deleted; unreadable records are left alone.
+///
+/// - An applied branch (`applied_tip`) that is still the thread's own branch at that tip is
+///   retired when the parent's working tree holds its changes
+///   ([`super::retire_applied_branch`]): a worktree finalize kept on its branch and a later
+///   sweep removed, or a branch applied by an earlier process.
+/// - A record whose parent checkout still has one of the recorded branch names stays.
+/// - A record whose retired commit ([`super::applied_ref`]) is the only copy of the work
+///   stays; once the parent's HEAD contains that work, the ref and the record go.
+/// - Any other record can no longer restore anything and is deleted, as is a record whose
+///   parent checkout is gone.
 pub fn prune_agent_records(directory: &Path, now: SystemTime, min_age: Duration) -> Result<usize> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
@@ -151,7 +171,7 @@ pub fn prune_agent_records(directory: &Path, now: SystemTime, min_age: Duration)
         let Ok(Some(record)) = read_agent_record(directory, thread_id) else {
             continue;
         };
-        if record.root.exists() || has_recorded_branch(&record) {
+        if record.root.exists() || !useless_record(&record) {
             continue;
         }
         if fs::remove_file(&path).is_ok() {
@@ -159,6 +179,61 @@ pub fn prune_agent_records(directory: &Path, now: SystemTime, min_age: Duration)
         }
     }
     Ok(pruned)
+}
+
+/// Whether a record whose worktree is gone can restore nothing any more; retires its applied
+/// branch and drops its retired commit on the way when that is safe (P3-2). Errors keep it.
+fn useless_record(record: &AgentWorktreeRecord) -> bool {
+    if !record.source_root.is_dir() {
+        return true;
+    }
+    let Some(metadata) = record.metadata() else {
+        return false;
+    };
+    // A branch that cannot be retired now stays, and so does the record.
+    if let Some(tip) = record.applied_tip.as_deref() {
+        let _ = super::retire_applied_branch(&record.source_root, &record.root, &metadata, tip);
+    }
+    if has_recorded_branch(record) {
+        return false;
+    }
+    // A repository that cannot be read keeps the record.
+    drop_retired_commit(record).unwrap_or(false)
+}
+
+/// Deletes the retired commit ref of the record's thread once the parent's HEAD contains its
+/// changes; whether the record holds nothing else then (no retired commit, or dropped).
+fn drop_retired_commit(record: &AgentWorktreeRecord) -> Result<bool> {
+    let reference = super::applied_ref(&record.thread_id)?;
+    let mut command = super::git_command(&record.source_root, GitOperation::Metadata)?;
+    command.args([
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        "--end-of-options",
+        &format!("{reference}^{{commit}}"),
+    ]);
+    let output = super::run_git_command(&mut command, &[1])?;
+    if !output.status.success() {
+        return Ok(true);
+    }
+    let tip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !super::maintenance::head_contains(&record.source_root, &record.base_sha, &tip)? {
+        return Ok(false);
+    }
+    git_output(
+        &record.source_root,
+        GitOperation::Metadata,
+        [
+            "update-ref",
+            "-m",
+            "codex agent work committed",
+            "-d",
+            reference.as_str(),
+            tip.as_str(),
+        ],
+    )?;
+    Ok(true)
 }
 
 /// Whether the parent checkout still has the recorded branch or one of its free names.

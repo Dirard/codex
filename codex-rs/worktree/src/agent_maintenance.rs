@@ -18,6 +18,7 @@ use super::optional_commit;
 use super::own_branch_tip;
 use super::read_agent_metadata;
 use super::remove_if_unchanged;
+use super::unpopulated_submodule_files;
 use super::write_agent_metadata;
 use crate::WorktreeManager;
 use crate::git::GitOperation;
@@ -304,11 +305,27 @@ fn recorded_base(source_root: &Path, metadata: &AgentWorktreeMetadata) -> Result
     })
 }
 
-/// Deletes the agent branch that the parent applied at `tip`, once the worktree is gone
-/// (R12.7). The branch must still be the thread's own checkpoint branch at `tip`, checked out
-/// nowhere, and a merge of it into the parent's working tree must change nothing; the ref is
-/// deleted with a compare-and-swap on `tip`. Returns whether it was deleted.
-pub fn delete_applied_branch(
+/// Where Codex keeps the commit of an applied agent branch it retired (P3-2): outside
+/// `refs/heads`, so `git branch` does not list it, and reachable, so `git gc` keeps it.
+pub fn applied_ref(thread_id: &str) -> Result<String> {
+    if thread_id.is_empty()
+        || !thread_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+    {
+        bail!("`{thread_id}` is not a thread ID");
+    }
+    Ok(format!("refs/codex/agents/applied/{thread_id}"))
+}
+
+/// Retires the agent branch that the parent applied at `tip`, once the worktree is gone
+/// (R12.7, P3-2): the branch leaves `refs/heads` and [`applied_ref`] keeps its commit, in one
+/// transaction that compares and swaps `tip`. The branch must still be the thread's own
+/// checkpoint branch at `tip`, checked out nowhere, and a merge of it into the parent's
+/// working tree must change nothing. The parent may hold the work only as uncommitted
+/// edits, so the commit stays reachable until the parent's HEAD contains it
+/// ([`super::prune_agent_records`]). Returns whether the branch was retired.
+pub fn retire_applied_branch(
     source_root: &Path,
     root: &Path,
     metadata: &AgentWorktreeMetadata,
@@ -329,20 +346,46 @@ pub fn delete_applied_branch(
         super::MergeOutcome::AlreadyApplied { tip: merged } if merged == tip => {}
         _ => return Ok(false),
     }
-    git_output(
+    let transaction = format!(
+        "start\nupdate {applied} {tip}\ndelete {branch} {tip}\ncommit\n",
+        applied = applied_ref(&metadata.thread_id)?,
+        branch = branch_ref(&branch.branch)?,
+    );
+    let mut command = super::git_command(source_root, GitOperation::Metadata)?;
+    command.args(["update-ref", "-m", "codex agent branch applied", "--stdin"]);
+    super::run_git_with_input(&mut command, transaction.into_bytes())
+        .context("cannot retire the applied agent branch")?;
+    Ok(true)
+}
+
+/// Whether the parent's HEAD already contains the changes of `tip` over `base`: merging
+/// them into HEAD changes nothing (P3-2).
+pub(super) fn head_contains(source_root: &Path, base: &str, tip: &str) -> Result<bool> {
+    let Some(head) = optional_commit(source_root, "HEAD")? else {
+        return Ok(false);
+    };
+    let mut command = super::git_command(source_root, GitOperation::Metadata)?;
+    command.args([
+        "merge-tree".to_string(),
+        "--write-tree".to_string(),
+        "--no-messages".to_string(),
+        format!("--merge-base={base}"),
+        head.clone(),
+        tip.to_string(),
+    ]);
+    // Exit code 1: the merge conflicts, so HEAD does not contain the changes.
+    let output = super::run_git_command(&mut command, &[1])?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let merged = String::from_utf8_lossy(&output.stdout);
+    let head_tree = git_output(
         source_root,
         GitOperation::Metadata,
-        [
-            "update-ref",
-            "-m",
-            "codex agent branch applied",
-            "-d",
-            branch_ref(&branch.branch)?.as_str(),
-            tip,
-        ],
-    )
-    .context("cannot delete the applied agent branch")?;
-    Ok(true)
+        ["rev-parse", "--verify", &format!("{head}^{{tree}}")],
+    )?;
+    Ok(merged.lines().next().map(str::trim)
+        == Some(String::from_utf8_lossy(&head_tree.stdout).trim()))
 }
 
 fn populate_restored(
@@ -534,7 +577,7 @@ fn record_removal(report: &mut SweepReport, root: PathBuf, outcome: Result<Remov
 
 /// Removes a worktree whose HEAD is the tip of its own branch and that has no uncommitted
 /// changes: the branch holds all its work and restores it (R5.3). Ignored files are lost,
-/// as for an unchanged worktree.
+/// as for an unchanged worktree; files in submodule directories keep it (P3-3).
 fn remove_if_parked(
     source_root: &Path,
     root: &Path,
@@ -551,6 +594,9 @@ fn remove_if_parked(
     }
     if has_changes(root)? {
         return Ok(RemoveOutcome::Kept(KeptReason::Changes));
+    }
+    if !unpopulated_submodule_files(root)?.is_empty() {
+        return Ok(RemoveOutcome::Kept(KeptReason::SubmoduleFiles));
     }
     git_output(
         source_root,
@@ -569,13 +615,16 @@ fn remove_if_parked(
 
 /// Removes the checkout of an agent that is done (UC12, R12.5): one at the tip of its own
 /// branch, or at its base without a branch, and without uncommitted changes. The branch is
-/// never touched, so a reload restores the worktree from it (R5.3). Like
-/// [`remove_if_unchanged`], it waits for no live binding: one that holds the worktree keeps it
-/// (`InUse`), and the checks run under the exclusive lock that the removal keeps.
+/// never touched, so a reload restores the worktree from it (R5.3). Files the agent put into
+/// submodule directories, which Codex never records, keep the worktree unless
+/// `discard_submodule_files` confirms they may go (P3-3). Like [`remove_if_unchanged`], it
+/// waits for no live binding: one that holds the worktree keeps it (`InUse`), and the checks
+/// run under the exclusive lock that the removal keeps.
 pub fn remove_agent_checkout(
     source_root: &Path,
     root: &Path,
     metadata: &AgentWorktreeMetadata,
+    discard_submodule_files: bool,
 ) -> Result<RemoveOutcome> {
     if !root.join(".git").exists() {
         super::drop_missing_registration(source_root, root);
@@ -591,6 +640,9 @@ pub fn remove_agent_checkout(
     let recorded = own_branch_tip(root, &metadata.branch)?.unwrap_or(metadata.base_sha.clone());
     if optional_commit(root, "HEAD")?.as_deref() != Some(recorded.as_str()) {
         return Ok(RemoveOutcome::Kept(KeptReason::Commits));
+    }
+    if !discard_submodule_files && !unpopulated_submodule_files(root)?.is_empty() {
+        return Ok(RemoveOutcome::Kept(KeptReason::SubmoduleFiles));
     }
     let cwd = if source_root.is_dir() {
         source_root

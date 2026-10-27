@@ -112,8 +112,9 @@ impl AgentWorktreeBinding {
         );
     }
 
-    /// R12.7: the parent took the agent's branch at `tip` through `apply_agent_worktree`.
-    pub(crate) fn record_applied(&self, tip: &str) {
+    /// R12.7: the parent took the agent's branch at `tip` through `apply_agent_worktree`;
+    /// [`ops::record_applied`] also writes it to the host record.
+    fn remember_applied(&self, tip: &str) {
         *self
             .applied_tip
             .lock()
@@ -1418,28 +1419,15 @@ async fn finalize_tree_worktree(binding: Arc<AgentWorktreeBinding>) {
             metadata.branch = branch;
         }
         // The stopped child no longer uses its worktree; a live binding of another process
-        // still keeps it (R10.3).
+        // still keeps it (R10.3). A worktree on a branch the parent applied stays like any
+        // other one on its branch: its ignored files keep the sweep's delay, and the sweep
+        // that removes it retires the branch (R12.7, P3-3).
         blocking.live.release_hold();
-        let outcome = codex_worktree::remove_if_unchanged(
+        codex_worktree::remove_if_unchanged(
             blocking.source_root.as_path(),
             blocking.root.as_path(),
             &metadata,
-        )?;
-        // R12.7: a branch the parent applied goes with its worktree.
-        if outcome == RemoveOutcome::Kept(codex_worktree::KeptReason::Branch)
-            && ops::applied_branch_tip(&blocking, &metadata).is_some()
-        {
-            let closed = codex_worktree::remove_agent_checkout(
-                blocking.source_root.as_path(),
-                blocking.root.as_path(),
-                &metadata,
-            )?;
-            if closed == RemoveOutcome::Removed {
-                ops::delete_applied_branch(&blocking, &metadata);
-            }
-            return Ok(closed);
-        }
-        Ok::<_, anyhow::Error>(outcome)
+        )
     })
     .await;
     match result {
@@ -1495,6 +1483,7 @@ pub(crate) use ops::fork_add_unloaded;
 pub(crate) use ops::fork_guardian_action_json;
 pub(crate) use ops::listed_worktrees;
 pub(crate) use ops::merge_for_parent;
+pub(crate) use ops::record_applied;
 pub(crate) use ops::restore_missing_binding;
 pub(crate) use ops::sweep_on_session_start;
 

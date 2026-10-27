@@ -472,6 +472,9 @@ pub enum KeptReason {
     Commits,
     /// A live binding of some process holds the worktree ([`hold_agent_worktree`]).
     InUse,
+    /// The agent put files into the directory of a submodule the worktree does not check
+    /// out; Codex never records them ([`unpopulated_submodule_files`], P3-3).
+    SubmoduleFiles,
 }
 
 /// File in a worktree's administration directory that live bindings lock shared.
@@ -581,9 +584,10 @@ pub enum RemoveOutcome {
 /// Removes an agent worktree that never changed (spec step "remove the worktree").
 ///
 /// Keeps the worktree when a live binding of any process holds it, when its own branch
-/// exists, when it has tracked or untracked non-ignored changes, or when its HEAD left the
-/// base. A branch of the same name outside the worktree history is not its own. Ignored
-/// files such as build output do not prevent removal. A missing checkout loses only its own
+/// exists, when it has tracked or untracked non-ignored changes, when its HEAD left the
+/// base, or when the agent put files into a submodule directory it does not check out. A
+/// branch of the same name outside the worktree history is not its own. Ignored files such
+/// as build output do not prevent removal. A missing checkout loses only its own
 /// registration.
 pub fn remove_if_unchanged(
     source_root: &Path,
@@ -608,6 +612,9 @@ pub fn remove_if_unchanged(
     }
     if optional_commit(root, "HEAD")?.as_deref() != Some(metadata.base_sha.as_str()) {
         return Ok(RemoveOutcome::Kept(KeptReason::Commits));
+    }
+    if !unpopulated_submodule_files(root)?.is_empty() {
+        return Ok(RemoveOutcome::Kept(KeptReason::SubmoduleFiles));
     }
     // `--force` is needed for ignored files; the checks above exclude every other change.
     let cwd = if source_root.is_dir() {
@@ -689,35 +696,100 @@ fn has_changes(root: &Path) -> Result<bool> {
     // does not count as activity for the sweep (R10.4). Only whether anything changed
     // matters: `normal` reports an untracked directory once instead of walking all of it,
     // and still hides directories without untracked, non-ignored files.
-    let mut args = [
-        "--no-optional-locks",
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=normal",
-    ]
-    .map(OsString::from)
-    .to_vec();
-    // A submodule the worktree never checked out shows as deleted once its empty directory
-    // is gone; that is not the agent's change (R2.11).
-    let unpopulated = unpopulated_gitlinks(root)?;
-    if !unpopulated.is_empty() {
-        args.push(OsString::from("--"));
-        args.push(OsString::from("."));
-        args.extend(exclude_pathspecs(&unpopulated));
+    let status = git_output(
+        root,
+        GitOperation::WorkingTree,
+        [
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=normal",
+        ],
+    )?;
+    if status.stdout.is_empty() {
+        return Ok(false);
     }
-    let status = git_output(root, GitOperation::WorkingTree, args)?;
-    Ok(!status.stdout.is_empty())
+    // A submodule the worktree never checked out shows as deleted once its empty directory
+    // is gone; that is not the agent's change (R2.11). The submodules are looked up only
+    // when something changed, and filtered here rather than passed as pathspecs (P3-8).
+    let unpopulated = unpopulated_gitlinks(root)?
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
+    for path in status_paths(&status.stdout) {
+        if !unpopulated.contains(&crate::git::git_path_from_bytes(path)?) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
+
+/// The paths of `git status --porcelain=v1 -z` output: one per entry, the new path of a
+/// rename or copy (whose old path follows as a field of its own).
+fn status_paths(stdout: &[u8]) -> impl Iterator<Item = &[u8]> {
+    let mut fields = stdout.split(|byte| *byte == b'\0');
+    std::iter::from_fn(move || {
+        let entry = loop {
+            let field = fields.next()?;
+            if field.len() > 3 {
+                break field;
+            }
+        };
+        if entry[..2]
+            .iter()
+            .any(|status| matches!(status, b'R' | b'C'))
+        {
+            fields.next();
+        }
+        Some(&entry[3..])
+    })
+}
+
+/// Most directories whose index entries one lookup of submodules lists; with more, the
+/// lookup lists the whole index once instead of passing more pathspecs.
+const MAX_SUBMODULE_DIRECTORIES: usize = 64;
 
 /// Gitlinks (submodules) of the worktree index whose directory holds no checkout (R2.11).
 ///
 /// The host never initializes submodules in an agent worktree, so their directories stay
-/// empty; an empty or removed directory, and files placed into it, are not changes Codex
-/// records.
+/// empty; an empty or removed directory is not a change Codex records. Candidates are the
+/// paths `.gitmodules` registers, confirmed as gitlinks in the index: a worktree without
+/// `.gitmodules` costs one `stat`, and otherwise only the index entries of the directories
+/// that hold submodules are listed (P3-8). A gitlink that `.gitmodules` does not register (an
+/// embedded repository added by hand) is not treated as a submodule: removing it is
+/// recorded, and `apply_agent_worktree` refuses the change.
 pub fn unpopulated_gitlinks(root: &Path) -> Result<Vec<PathBuf>> {
-    let output = git_output(root, GitOperation::Metadata, ["ls-files", "--stage", "-z"])?;
+    let candidates = registered_submodule_paths(root)?;
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    // A top-level submodule is listed by its own path, any other by its directory.
+    let mut directories = std::collections::BTreeSet::new();
+    for path in &candidates {
+        directories.insert(match path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent,
+            _ => path.as_path(),
+        });
+        if directories.len() > MAX_SUBMODULE_DIRECTORIES {
+            break;
+        }
+    }
+    let mut command = git_command(root, GitOperation::Metadata)?;
+    command.args(["ls-files", "--stage", "-z"]);
+    if directories.len() <= MAX_SUBMODULE_DIRECTORIES {
+        command.arg("--");
+        for directory in directories {
+            let mut pathspec = OsString::from(":(literal)");
+            pathspec.push(directory.as_os_str());
+            command.arg(pathspec);
+        }
+    }
+    let candidates = candidates
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
+    let output = run_git_command(&mut command, &[])?;
     let mut paths = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for record in output.stdout.split(|byte| *byte == b'\0') {
         // `<mode> <object> <stage>\t<path>`
         let Some(rest) = record.strip_prefix(b"160000 ") else {
@@ -727,23 +799,136 @@ pub fn unpopulated_gitlinks(root: &Path) -> Result<Vec<PathBuf>> {
             continue;
         };
         let path = crate::git::git_path_from_bytes(&rest[tab + 1..])?;
-        if fs::symlink_metadata(root.join(&path).join(".git")).is_err() && !paths.contains(&path) {
+        if candidates.contains(&path)
+            && fs::symlink_metadata(root.join(&path).join(".git")).is_err()
+            && seen.insert(path.clone())
+        {
             paths.push(path);
         }
     }
     Ok(paths)
 }
 
-/// Pathspecs that leave exactly `paths` out of a command run at the worktree root.
-fn exclude_pathspecs(paths: &[PathBuf]) -> Vec<OsString> {
-    paths
-        .iter()
-        .map(|path| {
-            let mut pathspec = OsString::from(":(exclude,literal)");
-            pathspec.push(path.as_os_str());
-            pathspec
-        })
-        .collect()
+/// The submodule paths `.gitmodules` of the worktree registers, relative and inside it.
+fn registered_submodule_paths(root: &Path) -> Result<Vec<PathBuf>> {
+    let file = root.join(".gitmodules");
+    if !file.is_file() {
+        return Ok(Vec::new());
+    }
+    let mut command = git_command(root, GitOperation::Metadata)?;
+    command.args([
+        OsStr::new("config"),
+        OsStr::new("--file"),
+        file.as_os_str(),
+        OsStr::new("--null"),
+        OsStr::new("--get-regexp"),
+        OsStr::new(r"^submodule\..*\.path$"),
+    ]);
+    // Exit code 1: no submodule has a path.
+    let output = run_git_command(&mut command, &[1])?;
+    let mut paths = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for entry in output.stdout.split(|byte| *byte == b'\0') {
+        let Some(separator) = entry.iter().position(|byte| *byte == b'\n') else {
+            continue;
+        };
+        let value = &entry[separator + 1..];
+        if value.is_empty() {
+            continue;
+        }
+        let path = crate::git::git_path_from_bytes(value)?;
+        let inside = path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)));
+        if inside && seen.insert(path.clone()) {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
+/// Files the agent put into directories of submodules the worktree does not check out
+/// (R2.11, P3-3): Codex never records them, so a removal must not drop them silently.
+pub fn unpopulated_submodule_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
+    for path in unpopulated_gitlinks(root)? {
+        let Ok(entries) = fs::read_dir(root.join(&path)) else {
+            continue;
+        };
+        if entries.flatten().next().is_some() {
+            found.push(path);
+        }
+    }
+    Ok(found)
+}
+
+/// Ignored files and directories of the worktree, as `git status --ignored` lists them (a
+/// directory with only ignored content once), with the number of entries; at most `limit`
+/// are returned. They are not changes Codex records, so a removal drops them (P3-3).
+pub fn ignored_entries(root: &Path, limit: usize) -> Result<(Vec<String>, usize)> {
+    let status = git_output(
+        root,
+        GitOperation::WorkingTree,
+        [
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=normal",
+            "--ignored=traditional",
+        ],
+    )?;
+    let mut listed = Vec::new();
+    let mut total = 0;
+    for entry in status.stdout.split(|byte| *byte == b'\0') {
+        let Some(path) = entry.strip_prefix(b"!! ") else {
+            continue;
+        };
+        total += 1;
+        if listed.len() < limit {
+            listed.push(String::from_utf8_lossy(path).into_owned());
+        }
+    }
+    Ok((listed, total))
+}
+
+/// Pathspecs, NUL-terminated for `--pathspec-from-file=- --pathspec-file-nul`, of the whole
+/// worktree without exactly `paths`. Read from standard input, they never reach the command
+/// line, so thousands of submodules cannot exceed its limit (P3-8).
+fn pathspecs_without(paths: &[PathBuf]) -> Vec<u8> {
+    let mut input = b".\0".to_vec();
+    for path in paths {
+        input.extend_from_slice(b":(exclude,literal)");
+        input.extend_from_slice(path.as_os_str().as_encoded_bytes());
+        input.push(b'\0');
+    }
+    input
+}
+
+/// Runs a prepared Git command with `input` on its standard input.
+fn run_git_with_input(command: &mut Command, input: Vec<u8>) -> Result<std::process::Output> {
+    use std::io::Write as _;
+    let mut child = command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("failed to start git")?;
+    let mut stdin = child.stdin.take().context("git has no standard input")?;
+    // Written from another thread, so a full output pipe cannot block the input.
+    let writer = std::thread::spawn(move || stdin.write_all(&input));
+    let output = child.wait_with_output().context("failed to wait for git")?;
+    let written = writer
+        .join()
+        .map_err(|_| anyhow::anyhow!("the git input writer panicked"))?;
+    if !output.status.success() {
+        bail!(
+            "git command failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    written.context("cannot write the git input")?;
+    Ok(output)
 }
 
 fn optional_commit(cwd: &Path, revision: &str) -> Result<Option<String>> {
@@ -789,11 +974,14 @@ fn has_unmerged_entries(root: &Path, index: &Path) -> Result<bool> {
 
 fn stage_all(root: &Path, index: &Path, excluded: &[PathBuf]) -> Result<()> {
     let mut command = git_command(root, GitOperation::WorkingTree)?;
-    command
-        .env("GIT_INDEX_FILE", index)
-        .args(["add", "--all", "--", "."])
-        .args(exclude_pathspecs(excluded));
-    run_git_command(&mut command, &[])
+    command.env("GIT_INDEX_FILE", index).args(["add", "--all"]);
+    let staged = if excluded.is_empty() {
+        run_git_command(command.args(["--", "."]), &[])
+    } else {
+        command.args(["--pathspec-from-file=-", "--pathspec-file-nul"]);
+        run_git_with_input(&mut command, pathspecs_without(excluded))
+    };
+    staged
         .map(|_| ())
         .context("cannot stage the working tree into a temporary index")
 }
@@ -893,17 +1081,20 @@ pub use maintenance::SweepPolicy;
 pub use maintenance::SweepReport;
 pub use maintenance::agent_branch_for_thread;
 pub use maintenance::agent_worktree_status;
+pub use maintenance::applied_ref;
 pub use maintenance::checkout_root;
-pub use maintenance::delete_applied_branch;
 pub use maintenance::last_activity;
 pub use maintenance::remove_agent_checkout;
 pub use maintenance::restore_agent_worktree;
+pub use maintenance::retire_applied_branch;
 pub use maintenance::sweep_agent_worktrees;
 pub use maintenance::worktree_list_fingerprint;
 pub use merge::CleanMerge;
 pub use merge::MergeOutcome;
 pub use merge::MergedChange;
 pub use merge::merge_agent_branch;
+pub use merge::shell_quote;
+pub use merge::submodule_command;
 pub use record::AgentWorktreeRecord;
 pub use record::prune_agent_records;
 pub use record::read_agent_record;

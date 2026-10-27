@@ -13,6 +13,7 @@ use crate::agent::worktree_isolation::apply_refusal;
 use crate::agent::worktree_isolation::checkpoint_for_close;
 use crate::agent::worktree_isolation::close_worktree;
 use crate::agent::worktree_isolation::merge_for_parent;
+use crate::agent::worktree_isolation::record_applied;
 use crate::hook_runtime::PreToolUseHookResult;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::run_post_tool_use_hooks;
@@ -308,7 +309,7 @@ async fn apply_branch(call: ApplyCall) -> Result<String, FunctionCallError> {
             )));
         }
         MergeOutcome::AlreadyApplied { tip } => {
-            binding.record_applied(&tip);
+            record_applied(&binding, &tip).await;
             let metadata = binding.metadata();
             return Ok(format!(
                 "Your checkout already contains the changes of {} at {}; nothing was written.",
@@ -328,6 +329,7 @@ async fn apply_branch(call: ApplyCall) -> Result<String, FunctionCallError> {
         MergeOutcome::Submodule { path, commit } => {
             return Err(FunctionCallError::RespondToModel(submodule_refusal(
                 &target,
+                binding.source_root.as_path(),
                 &path,
                 commit.as_deref(),
             )));
@@ -445,7 +447,7 @@ async fn apply_branch(call: ApplyCall) -> Result<String, FunctionCallError> {
 
     if !rewritten {
         // R12.7: the parent now holds this tip; the branch may go with the worktree.
-        binding.record_applied(&merge.tip);
+        record_applied(&binding, &merge.tip).await;
     }
     let metadata = binding.metadata();
     let mut text = format!(
@@ -470,35 +472,21 @@ async fn apply_branch(call: ApplyCall) -> Result<String, FunctionCallError> {
     Ok(text)
 }
 
-/// R11.12: the parent updates a submodule itself; the block's `git apply` command would skip it.
-fn submodule_refusal(target: &str, path: &str, commit: Option<&str>) -> String {
-    let quoted = shell_quote(path);
-    let (change, command) = match commit {
-        Some(commit) => (
-            format!("moves submodule {path} to {commit}"),
-            format!("git -C {quoted} checkout {commit}"),
-        ),
+/// R11.12, P3-4: the parent updates a submodule itself; the block's `git apply` command would
+/// skip it. The command depends on whether the parent checked the submodule out, and once it
+/// ran, the next call merges the other files.
+fn submodule_refusal(target: &str, source_root: &Path, path: &str, commit: Option<&str>) -> String {
+    let command = codex_worktree::submodule_command(source_root, path, commit);
+    let (change, note) = match commit {
+        Some(commit) => (format!("moves submodule {path} to {commit}"), ""),
         None => (
             format!("removes submodule {path}"),
-            format!("git rm --cached {quoted}"),
+            " `git rm` refuses a submodule with local changes; commit or discard them in the submodule first.",
         ),
     };
     format!(
-        "cannot apply agent {target}: its branch {change}, and apply_agent_worktree does not change submodules. Nothing was written. Update it yourself, then call apply_agent_worktree again for the other files.\nsubmodule: {command}"
+        "cannot apply agent {target}: its branch {change}, and apply_agent_worktree does not change submodules. Nothing was written. Run this command, then call apply_agent_worktree again for the other files.{note}\nsubmodule: {command}"
     )
-}
-
-/// A POSIX shell word for `value`: as is when it is plain, otherwise single-quoted.
-fn shell_quote(value: &str) -> String {
-    if !value.is_empty()
-        && value
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "_-./".contains(character))
-    {
-        value.to_string()
-    } else {
-        format!("'{}'", value.replace('\'', "'\\''"))
-    }
 }
 
 /// R12.5, R12.6: closes the worktree and says what happened.
@@ -509,43 +497,85 @@ async fn close_message(
 ) -> String {
     let target = &args.target;
     let root = binding.root.display();
-    match close_worktree(worktrees, binding).await {
+    let (branch, applied, ignored) = match close_worktree(
+        worktrees,
+        binding,
+        /*discard_submodule_files*/ args.discard_changes,
+    )
+    .await
+    {
         Ok(CloseOutcome::Removed {
-            applied: Some(branch),
-            ..
-        }) => format!(
-            "Closed the worktree of agent {target}: removed {root}. Your checkout holds the changes of branch {branch}, so the branch was deleted; a later task for the agent restores the worktree from its last commit."
-        ),
-        Ok(CloseOutcome::Removed {
-            branch: Some(branch),
-            ..
+            branch,
+            applied,
+            ignored,
+        }) => (branch, applied, ignored),
+        Ok(CloseOutcome::Kept {
+            reason,
+            submodule_files,
         }) => {
-            let unapplied = if args.discard_changes {
-                " without applying its changes"
-            } else {
-                ""
-            };
-            format!(
-                "Closed the worktree of agent {target}{unapplied}: removed {root}. Branch {branch} keeps its changes; a later task for the agent restores the worktree."
-            )
+            return format!(
+                "The worktree {root} of agent {target} was kept: {}.",
+                kept_reason(reason, &submodule_files)
+            );
         }
-        Ok(CloseOutcome::Removed { branch: None, .. }) => format!(
-            "Closed the worktree of agent {target}: removed {root}. It recorded no changes; a later task for the agent restores the worktree."
+        Err(reason) => return format!("The worktree {root} of agent {target} was kept: {reason}."),
+    };
+    let unapplied = if args.discard_changes && applied.is_none() && branch.is_some() {
+        " without applying its changes"
+    } else {
+        ""
+    };
+    let mut text = format!("Closed the worktree of agent {target}{unapplied}: removed {root}.");
+    // R12.7, P3-2, P3-7: the answer says what happened to the branch.
+    match (applied, branch) {
+        (Some(applied), _) => text.push_str(&format!(
+            " Your checkout holds the changes of branch {}, so the branch was retired: `git branch` no longer lists it, and {} keeps its commit {} until your HEAD contains the changes. A later task for the agent restores the worktree from that commit.",
+            applied.branch,
+            applied.reference,
+            short(&applied.tip)
+        )),
+        (None, Some(branch)) => text.push_str(&format!(
+            " Branch {branch} keeps its changes; a later task for the agent restores the worktree from it."
+        )),
+        (None, None) => text.push_str(
+            " It recorded no changes; a later task for the agent restores the worktree.",
         ),
-        Ok(CloseOutcome::Kept(reason)) => format!(
-            "The worktree {root} of agent {target} was kept: {}.",
-            kept_reason(reason)
-        ),
-        Err(reason) => format!("The worktree {root} of agent {target} was kept: {reason}."),
     }
+    // P3-3: ignored files are not recorded, so the answer names what went with the checkout.
+    if ignored.total > 0 {
+        let more = ignored.total.saturating_sub(ignored.listed.len());
+        text.push_str(&format!(
+            " The removal also dropped {} ignored {} that Codex never records ({}{}).",
+            ignored.total,
+            if ignored.total == 1 {
+                "entry"
+            } else {
+                "entries"
+            },
+            ignored.listed.join(", "),
+            if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            }
+        ));
+    }
+    text
 }
 
-fn kept_reason(reason: codex_worktree::KeptReason) -> &'static str {
+fn kept_reason(reason: codex_worktree::KeptReason, submodule_files: &[String]) -> String {
     match reason {
-        codex_worktree::KeptReason::InUse => "another Codex process works in it",
-        codex_worktree::KeptReason::Changes => "it has changes that its branch does not record",
-        codex_worktree::KeptReason::Commits => "its HEAD has commits beyond its branch",
-        codex_worktree::KeptReason::Branch => "it has its own branch",
+        codex_worktree::KeptReason::InUse => "another Codex process works in it".to_string(),
+        codex_worktree::KeptReason::Changes => {
+            "it has changes that its branch does not record".to_string()
+        }
+        codex_worktree::KeptReason::Commits => "its HEAD has commits beyond its branch".to_string(),
+        codex_worktree::KeptReason::Branch => "it has its own branch".to_string(),
+        // P3-3: files Codex never records are not removed without the confirmation.
+        codex_worktree::KeptReason::SubmoduleFiles => format!(
+            "the agent put files into the directories of submodules this worktree does not check out ({}), and Codex does not record them; move them out first, or close with discard_changes to remove them",
+            submodule_files.join(", ")
+        ),
     }
 }
 

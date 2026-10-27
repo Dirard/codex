@@ -3465,7 +3465,11 @@ async fn apply_agent_worktree_close_applies_then_removes_the_checkout() -> Resul
         &mut created,
         (ROOT_PROMPT, "spawn-closed"),
         ("write a result to close", "worker", Some("worktree")),
-        &[("close-edit", "printf 'worker\\n' > worker.txt".to_string())],
+        &[(
+            "close-edit",
+            "printf 'worker\\n' > worker.txt && mkdir -p target && printf x > target/out.bin"
+                .to_string(),
+        )],
     )
     .await?;
     let root = PathBuf::from(worktree_field(&spawned, "path"));
@@ -3486,7 +3490,7 @@ async fn apply_agent_worktree_close_applies_then_removes_the_checkout() -> Resul
     )
     .await?;
 
-    // R12.2, R12.4–R12.7: applied, unloaded, checkout removed, the applied branch deleted.
+    // R12.2, R12.4–R12.7: applied, unloaded, checkout removed, the applied branch retired.
     let output = close
         .function_call_output_text("apply-close")
         .context("close output")?;
@@ -3498,13 +3502,33 @@ async fn apply_agent_worktree_close_applies_then_removes_the_checkout() -> Resul
         )),
         "{output}"
     );
-    assert!(output.contains("the branch was deleted"), "{output}");
+    assert!(output.contains("the branch was retired"), "{output}");
+    // P3-3: the ignored build output that went with the checkout is named.
+    assert!(
+        output.contains("dropped 1 ignored entry that Codex never records (target/)"),
+        "{output}"
+    );
     assert_eq!(
         std::fs::read_to_string(parent.join("worker.txt"))?,
         "worker\n"
     );
     assert!(!root.exists());
     assert_eq!(agent_branches(&parent), Vec::<String>::new());
+    // P3-2: the agent's commit stays reachable while the parent holds it uncommitted.
+    let holders = git(
+        &parent,
+        &[
+            "for-each-ref",
+            "--contains",
+            &tip,
+            "--format=%(refname)",
+            "refs/codex/agents/applied",
+        ],
+    );
+    assert!(
+        holders.starts_with("refs/codex/agents/applied/"),
+        "{holders}"
+    );
     let record: Value = serde_json::from_slice(&std::fs::read(
         test.codex_home_path()
             .join("agent-worktrees")
@@ -3787,7 +3811,7 @@ async fn list_agents_shows_unloaded_isolated_agents() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tree_shutdown_removes_branches_the_parent_applied() -> Result<()> {
+async fn tree_shutdown_keeps_applied_worktrees_for_the_sweep() -> Result<()> {
     let server = start_mock_server().await;
     let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
     let parent = test.config.cwd.to_path_buf();
@@ -3830,17 +3854,36 @@ async fn tree_shutdown_removes_branches_the_parent_applied() -> Result<()> {
             .contains("Applied codex/agents/applied-")
     );
 
+    let applied_root = PathBuf::from(worktree_field(&applied, "path"));
+    let applied_branch = worktree_field(&applied, "branch");
+    let applied_tip = git(&parent, &["rev-parse", &applied_branch]);
+    std::fs::create_dir_all(applied_root.join("target"))?;
+    std::fs::write(applied_root.join("target/build.log"), "build output\n")?;
+
     test.thread_manager
         .shutdown_all_threads_bounded(Duration::from_secs(10))
         .await;
 
-    // D10, R12.7: the applied worktree and its branch are gone; the other one stays.
-    assert!(!PathBuf::from(worktree_field(&applied, "path")).exists());
+    // P3-3: without a close, the applied worktree keeps its ignored build output until the
+    // sweep removes it as a parked worktree; R12.7: the host record keeps the applied tip,
+    // so that sweep retires the branch, also from another process.
+    assert!(applied_root.join("target/build.log").exists());
     assert!(PathBuf::from(worktree_field(&kept, "path")).exists());
-    assert_eq!(
-        agent_branches(&parent),
-        vec![worktree_field(&kept, "branch")]
-    );
+    let mut branches = agent_branches(&parent);
+    branches.sort();
+    let mut expected = vec![applied_branch, worktree_field(&kept, "branch")];
+    expected.sort();
+    assert_eq!(branches, expected);
+    let records = test.codex_home_path().join("agent-worktrees");
+    let applied_tips = std::fs::read_dir(&records)?
+        .map(|entry| -> Result<Value> {
+            Ok(serde_json::from_slice(&std::fs::read(entry?.path())?)?)
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .filter_map(|record| record["applied_tip"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    assert_eq!(applied_tips, vec![applied_tip]);
     assert_eq!(
         std::fs::read_to_string(parent.join("applied.txt"))?,
         "applied\n"

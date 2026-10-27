@@ -24,22 +24,42 @@ fn patch_text_replaces_every_line_of_each_file() {
     codex_apply_patch::parse_patch(&patch).expect("a valid apply_patch body");
 }
 
-/// R11.12: a submodule change is refused with the command that updates the submodule, not
-/// with the block's `git apply` command, which would skip it.
+/// R11.12, P3-4: a submodule change is refused with the command that puts it into the
+/// checkout, not with the block's `git apply` command, which would skip it. A submodule the
+/// parent did not check out is staged, since `git -C <path>` would run in the parent's own
+/// repository; a removal goes through `git rm`, so the snapshot does not add it back.
 #[test]
 fn submodule_refusal_names_the_submodule_command() {
-    let moved = submodule_refusal("worker", "vendor/lib", Some("4347489d2bed"));
+    let checkout = tempfile::TempDir::new().expect("checkout");
+    let root = checkout.path();
+    std::fs::create_dir_all(root.join("vendor/lib/.git")).expect("checked-out submodule");
+    let moved = submodule_refusal("worker", root, "vendor/lib", Some("4347489d2bed"));
     assert_eq!(
         moved,
-        "cannot apply agent worker: its branch moves submodule vendor/lib to 4347489d2bed, and apply_agent_worktree does not change submodules. Nothing was written. Update it yourself, then call apply_agent_worktree again for the other files.\nsubmodule: git -C vendor/lib checkout 4347489d2bed"
+        format!(
+            "cannot apply agent worker: its branch moves submodule vendor/lib to 4347489d2bed, and apply_agent_worktree does not change submodules. Nothing was written. Run this command, then call apply_agent_worktree again for the other files.\nsubmodule: git -C {}/vendor/lib checkout 4347489d2bed",
+            root.display()
+        )
     );
-    let removed = submodule_refusal("worker", "third party/lib's", None);
+    let unpopulated = submodule_refusal("worker", root, "vendor/other", Some("4347489d2bed"));
+    assert!(
+        unpopulated.ends_with(&format!(
+            "\nsubmodule: git -C {} update-index --cacheinfo 160000,4347489d2bed,vendor/other",
+            root.display()
+        )),
+        "{unpopulated}"
+    );
+    let removed = submodule_refusal("worker", root, "third party/lib's", None);
     assert!(
         removed.contains("removes submodule third party/lib's"),
         "{removed}"
     );
+    assert!(removed.contains("refuses a submodule with local changes"));
     assert!(
-        removed.ends_with("\nsubmodule: git rm --cached 'third party/lib'\\''s'"),
+        removed.ends_with(&format!(
+            "\nsubmodule: git -C {} rm -- 'third party/lib'\\''s'",
+            root.display()
+        )),
         "{removed}"
     );
     assert!(!removed.contains("\napply:"));

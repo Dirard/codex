@@ -683,14 +683,39 @@ pub(crate) fn apply_refusal(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CloseOutcome {
     /// The checkout is gone; `branch` keeps the agent's changes, `None` when it made none or
-    /// when the parent applied it and Codex deleted it (`applied` names it then).
+    /// when the parent applied it and Codex retired it (`applied` names it then).
     Removed {
         branch: Option<String>,
-        applied: Option<String>,
+        applied: Option<AppliedBranch>,
+        /// Ignored files that went with the checkout (P3-3).
+        ignored: IgnoredEntries,
     },
-    /// The checkout stays for this reason.
-    Kept(codex_worktree::KeptReason),
+    /// The checkout stays for this reason; `submodule_files` names the submodule
+    /// directories that hold files of the agent (P3-3).
+    Kept {
+        reason: codex_worktree::KeptReason,
+        submodule_files: Vec<String>,
+    },
 }
+
+/// An applied branch Codex retired with the worktree (R12.7, P3-2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AppliedBranch {
+    pub(crate) branch: String,
+    pub(crate) tip: String,
+    /// The ref that keeps its commit until the parent's HEAD contains it.
+    pub(crate) reference: String,
+}
+
+/// Ignored files and directories of a checkout: some names and how many there were.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct IgnoredEntries {
+    pub(crate) listed: Vec<String>,
+    pub(crate) total: usize,
+}
+
+/// Ignored entries a close names before they go with the checkout.
+const LISTED_IGNORED: usize = 3;
 
 /// The refusal when an agent was woken between its unload and the close (R12.2).
 const WOKEN_AGAIN: &str = "it was woken again; wait for it, then close its worktree";
@@ -739,6 +764,7 @@ pub(crate) async fn checkpoint_for_close(
 pub(crate) async fn close_worktree(
     worktrees: &AgentWorktrees,
     binding: &Arc<AgentWorktreeBinding>,
+    discard_submodule_files: bool,
 ) -> Result<CloseOutcome, String> {
     let state = binding.state.lock().await;
     if !state.stopped {
@@ -751,53 +777,72 @@ pub(crate) async fn close_worktree(
         ));
     }
     let blocking = Arc::clone(binding);
-    let removed = tokio::task::spawn_blocking(move || {
+    let closed = tokio::task::spawn_blocking(move || {
         let metadata = blocking.metadata();
+        let root = blocking.root.as_path();
+        // P3-3: what the removal would drop that Codex never records is named first.
+        let ignored = if root.join(".git").exists() {
+            codex_worktree::ignored_entries(root, LISTED_IGNORED)
+                .map(|(listed, total)| IgnoredEntries { listed, total })
+                .unwrap_or_default()
+        } else {
+            IgnoredEntries::default()
+        };
         // The binding's own hold would keep the exclusive lock away (R10.3).
         blocking.live.release_hold();
         let outcome = codex_worktree::remove_agent_checkout(
             blocking.source_root.as_path(),
-            blocking.root.as_path(),
+            root,
             &metadata,
-        );
+            discard_submodule_files,
+        )
+        .map_err(|err| format!("{err:#}"));
         let removed = matches!(
             outcome,
             Ok(RemoveOutcome::Removed | RemoveOutcome::AlreadyMissing)
         );
         if !removed {
-            blocking
-                .live
-                .replace_hold(hold_worktree(blocking.root.as_path()));
+            blocking.live.replace_hold(hold_worktree(root));
         }
-        // R12.7: a branch the parent applied goes with its checkout.
-        let applied = (removed && delete_applied_branch(&blocking, &metadata))
-            .then(|| metadata.branch.clone());
-        let branch = codex_worktree::agent_branch_for_thread(
-            blocking.source_root.as_path(),
-            &metadata.branch,
-            &metadata.thread_id,
-        )
-        .ok()
-        .flatten()
-        .map(|branch| branch.branch);
-        outcome
-            .map(|outcome| (outcome, branch, applied))
-            .map_err(|err| format!("{err:#}"))
+        Ok::<_, String>(match outcome? {
+            RemoveOutcome::Removed | RemoveOutcome::AlreadyMissing => {
+                // R12.7: a branch the parent applied goes with its checkout.
+                let applied = retire_applied_branch(&blocking, &metadata);
+                let branch = codex_worktree::agent_branch_for_thread(
+                    blocking.source_root.as_path(),
+                    &metadata.branch,
+                    &metadata.thread_id,
+                )
+                .ok()
+                .flatten()
+                .map(|branch| branch.branch);
+                CloseOutcome::Removed {
+                    branch,
+                    applied,
+                    ignored,
+                }
+            }
+            RemoveOutcome::Kept(reason) => CloseOutcome::Kept {
+                reason,
+                submodule_files: codex_worktree::unpopulated_submodule_files(root)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect(),
+            },
+        })
     })
     .await
     .map_err(|err| format!("close task failed: {err}"))??;
     drop(state);
-    Ok(match removed {
-        (RemoveOutcome::Removed | RemoveOutcome::AlreadyMissing, branch, applied) => {
-            record_worktree_outcome("closed");
-            CloseOutcome::Removed { branch, applied }
-        }
-        (RemoveOutcome::Kept(reason), _, _) => CloseOutcome::Kept(reason),
-    })
+    if matches!(closed, CloseOutcome::Removed { .. }) {
+        record_worktree_outcome("closed");
+    }
+    Ok(closed)
 }
 
 /// R12.7: where a worktree without a branch of its own is restored from: the tip of a branch
-/// the parent applied and Codex deleted, when the host record names one, otherwise the base.
+/// the parent applied, when the host record names one, otherwise the base.
 fn restore_without_branch(records: Option<&Path>, thread_id: &str) -> RestoreFrom {
     records
         .and_then(|records| codex_worktree::read_agent_record(records, thread_id).ok())
@@ -823,59 +868,86 @@ pub(super) fn applied_branch_tip(
     (branch.tip == applied).then_some(applied)
 }
 
-/// R12.7: deletes the agent branch the parent applied, after its checkout is gone (blocking).
-/// The tip is recorded in the host record first, so a later restore gets the work back.
-pub(super) fn delete_applied_branch(
+/// R12.7, P3-2: the parent took the agent's branch at `tip` through `apply_agent_worktree`.
+/// The host record keeps the tip, so a later restore gets the work back and a later sweep
+/// retires the branch once its worktree is gone, also after a restart.
+pub(crate) async fn record_applied(binding: &Arc<AgentWorktreeBinding>, tip: &str) {
+    binding.remember_applied(tip);
+    let blocking = Arc::clone(binding);
+    let tip = tip.to_string();
+    let recorded = tokio::task::spawn_blocking(move || {
+        write_applied_tip(&blocking, &blocking.metadata(), &tip)
+    })
+    .await;
+    if let Ok(Err(err)) | Err(err) = recorded.map_err(anyhow::Error::from) {
+        warn!(
+            "cannot record the applied tip of agent {}: {err:#}",
+            binding.agent_path.as_str()
+        );
+    }
+}
+
+/// Writes `tip` as the applied tip of the binding's host record (blocking).
+fn write_applied_tip(
     binding: &AgentWorktreeBinding,
     metadata: &AgentWorktreeMetadata,
-) -> bool {
-    let (Some(tip), Some(target)) = (
-        applied_branch_tip(binding, metadata),
-        binding.sweep.as_ref(),
-    ) else {
-        return false;
+    tip: &str,
+) -> anyhow::Result<()> {
+    let Some(target) = binding.sweep.as_ref() else {
+        return Ok(());
     };
-    let mut record = match codex_worktree::read_agent_record(&target.records, &metadata.thread_id) {
-        Ok(Some(record)) => record,
-        Ok(None) => codex_worktree::AgentWorktreeRecord::new(
-            binding.root.as_path(),
-            binding.source_root.as_path(),
-            metadata,
-        ),
-        Err(err) => {
-            warn!(
-                "cannot read the record of agent worktree {}: {err:#}",
-                binding.root.display()
-            );
-            return false;
-        }
-    };
-    record.applied_tip = Some(tip.clone());
-    if let Err(err) = codex_worktree::write_agent_record(&target.records, &record) {
+    let mut record = codex_worktree::read_agent_record(&target.records, &metadata.thread_id)?
+        .unwrap_or_else(|| {
+            codex_worktree::AgentWorktreeRecord::new(
+                binding.root.as_path(),
+                binding.source_root.as_path(),
+                metadata,
+            )
+        });
+    if record.applied_tip.as_deref() == Some(tip) {
+        return Ok(());
+    }
+    record.applied_tip = Some(tip.to_string());
+    codex_worktree::write_agent_record(&target.records, &record)
+}
+
+/// R12.7, P3-2: retires the agent branch the parent applied, after its checkout is gone
+/// (blocking): `git branch` stops listing it, and a hidden ref keeps its commit until the
+/// parent's HEAD contains the changes. The tip is in the host record first, so a later
+/// restore gets the work back.
+fn retire_applied_branch(
+    binding: &AgentWorktreeBinding,
+    metadata: &AgentWorktreeMetadata,
+) -> Option<AppliedBranch> {
+    let tip = applied_branch_tip(binding, metadata)?;
+    if let Err(err) = write_applied_tip(binding, metadata, &tip) {
         warn!(
             "cannot record the applied tip of {}: {err:#}",
             metadata.branch
         );
-        return false;
+        return None;
     }
-    match codex_worktree::delete_applied_branch(
+    match codex_worktree::retire_applied_branch(
         binding.source_root.as_path(),
         binding.root.as_path(),
         metadata,
         &tip,
     ) {
-        Ok(deleted) => {
-            if deleted {
-                record_worktree_outcome("branch_deleted");
-            }
-            deleted
+        Ok(true) => {
+            record_worktree_outcome("branch_retired");
+            Some(AppliedBranch {
+                branch: metadata.branch.clone(),
+                reference: codex_worktree::applied_ref(&metadata.thread_id).ok()?,
+                tip,
+            })
         }
+        Ok(false) => None,
         Err(err) => {
             warn!(
-                "cannot delete the applied agent branch {}: {err:#}",
+                "cannot retire the applied agent branch {}: {err:#}",
                 metadata.branch
             );
-            false
+            None
         }
     }
 }
