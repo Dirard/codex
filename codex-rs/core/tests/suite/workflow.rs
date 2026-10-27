@@ -10,6 +10,7 @@ use std::time::Duration;
 use anyhow::Result;
 use codex_core::CodexThread;
 use codex_features::Feature;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::EventMsg;
 use codex_workflow::RunSnapshot;
 use codex_workflow::RunStatus;
@@ -359,6 +360,19 @@ fn run_result(codex: &CodexThread, run_id: &str) -> Value {
 }
 
 /// Waits until `count` turns completed.
+/// Waits until an interrupted workflow agent reports `Interrupted`: the interrupt lands
+/// asynchronously, so a status read right after the run settles can still see `Running`.
+async fn wait_for_interrupted(thread: &CodexThread) -> AgentStatus {
+    let deadline = tokio::time::Instant::now() + RUN_TIMEOUT;
+    loop {
+        let status = thread.agent_status().await;
+        if matches!(status, AgentStatus::Interrupted) || tokio::time::Instant::now() >= deadline {
+            return status;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 async fn wait_for_turns(test: &TestCodex, count: usize) {
     let mut completed = 0;
     while completed < count {
@@ -841,11 +855,8 @@ return await parallel(['TASK-SLOW-1', 'TASK-SLOW-2', 'TASK-QUEUED'].map(task => 
             .thread_manager
             .get_thread(codex_protocol::ThreadId::from_string(&thread_id)?)
             .await?;
-        let status = thread.agent_status().await;
-        assert!(
-            matches!(status, codex_protocol::protocol::AgentStatus::Interrupted),
-            "{status:?}"
-        );
+        let status = wait_for_interrupted(&thread).await;
+        assert!(matches!(status, AgentStatus::Interrupted), "{status:?}");
     }
     wait_for_turns(&test, 1).await;
     let notified = responses.served("parent_notified");
@@ -1125,10 +1136,8 @@ return { slow, missing, typeError };
             timed_out.thread_id.as_deref().expect("thread"),
         )?)
         .await?;
-    assert!(matches!(
-        thread.agent_status().await,
-        codex_protocol::protocol::AgentStatus::Interrupted
-    ));
+    let status = wait_for_interrupted(&thread).await;
+    assert!(matches!(status, AgentStatus::Interrupted), "{status:?}");
     assert!(
         snapshot
             .logs_tail
@@ -2217,10 +2226,8 @@ async fn hard_budget_interrupts_running_agents() -> Result<()> {
         .thread_manager
         .get_thread(codex_protocol::ThreadId::from_string(&thread_id)?)
         .await?;
-    assert!(matches!(
-        thread.agent_status().await,
-        codex_protocol::protocol::AgentStatus::Interrupted
-    ));
+    let status = wait_for_interrupted(&thread).await;
+    assert!(matches!(status, AgentStatus::Interrupted), "{status:?}");
     Ok(())
 }
 
