@@ -7,13 +7,19 @@ use std::time::Duration;
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
+use app_test_support::create_fake_rollout;
+use app_test_support::create_mock_responses_server_repeating_assistant;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsPendingParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsPendingResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsTerminateParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsTerminateResponse;
+use codex_app_server_protocol::ThreadDeleteParams;
+use codex_app_server_protocol::ThreadDeleteResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
@@ -163,5 +169,93 @@ async fn pending_lists_armed_terminals_of_a_loaded_thread() -> Result<()> {
         error.error.message,
         format!("thread not loaded: {unknown_thread}")
     );
+    Ok(())
+}
+
+/// R2.14 (tails review 2026-10-27, P3-5): archiving or deleting a thread removes the background
+/// terminal journals that dead Codex processes left for it, since no resume will report them.
+/// A process that still runs the thread, holding its journal lock, keeps its journal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn archive_and_delete_remove_journals_of_dead_processes() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    let archived = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-01T00-00-00",
+        "2025-01-01T00:00:00Z",
+        "archived",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let deleted = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-01T00-01-00",
+        "2025-01-01T00:01:00Z",
+        "deleted",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let dir = codex_home.path().join("background_terminals");
+    std::fs::create_dir_all(&dir)?;
+    let journal = |thread: &str, owner: &str| -> Result<std::fs::File> {
+        std::fs::write(
+            dir.join(format!("{thread}.{owner}.json")),
+            r#"[{"process_id":1000,"command":"npm run dev","started_at_unix_ms":0}]"#,
+        )?;
+        Ok(std::fs::File::create(
+            dir.join(format!("{thread}.{owner}.lock")),
+        )?)
+    };
+    journal(&archived, "1-dead")?;
+    journal(&deleted, "2-dead")?;
+    let live = journal(&archived, "3-live")?;
+    live.lock()?;
+    let files = || -> Result<Vec<String>> {
+        let mut names: Vec<String> = std::fs::read_dir(&dir)?
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect();
+        names.sort();
+        Ok(names)
+    };
+
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let _: ThreadArchiveResponse = app
+        .request(|request_id| ClientRequest::ThreadArchive {
+            request_id,
+            params: ThreadArchiveParams {
+                thread_id: archived.clone(),
+            },
+        })
+        .await?;
+    let mut expected = vec![
+        format!("{archived}.3-live.json"),
+        format!("{archived}.3-live.lock"),
+        format!("{deleted}.2-dead.json"),
+        format!("{deleted}.2-dead.lock"),
+    ];
+    expected.sort();
+    assert_eq!(files()?, expected);
+
+    let _: ThreadDeleteResponse = app
+        .request(|request_id| ClientRequest::ThreadDelete {
+            request_id,
+            params: ThreadDeleteParams {
+                thread_id: deleted.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(
+        files()?,
+        vec![
+            format!("{archived}.3-live.json"),
+            format!("{archived}.3-live.lock"),
+        ]
+    );
+    drop(live);
     Ok(())
 }

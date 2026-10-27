@@ -221,6 +221,17 @@ impl Session {
     }
 }
 
+/// Fork hook of `thread/archive` and `thread/delete` in app-server: removes the background
+/// terminal journals that dead Codex processes left for `thread_ids`, since no resume will
+/// report them (tails review 2026-10-27, P3-5). A process that still runs one of the threads
+/// keeps its journal until its shutdown.
+pub async fn discard_background_terminal_journals(
+    codex_home: &std::path::Path,
+    thread_ids: &[codex_protocol::ThreadId],
+) {
+    crate::unified_exec::discard_terminal_journals(codex_home, thread_ids).await;
+}
+
 /// What a thread still owes the model from background terminals (UC7, R7.4).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PendingBackgroundTerminals {

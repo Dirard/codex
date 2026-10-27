@@ -1846,7 +1846,14 @@ impl ThreadRequestProcessor {
                 writer_lock_thread_ids: subtree_thread_ids,
             })
             .await
-            .map_err(|err| thread_store_mutation_error("archive", err))?
+            .map_err(|err| thread_store_mutation_error("archive", err))?;
+        // Fork: journals of terminals that dead processes lost go with the thread (R2.14).
+        codex_core::discard_background_terminal_journals(
+            self.config.codex_home.as_path(),
+            &archived_thread_ids,
+        )
+        .await;
+        let archived_thread_ids = archived_thread_ids
             .into_iter()
             .map(|thread_id| thread_id.to_string())
             .collect();

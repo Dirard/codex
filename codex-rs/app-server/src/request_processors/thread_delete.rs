@@ -63,6 +63,12 @@ impl ThreadRequestProcessor {
             })
             .await
             .map_err(thread_store_delete_error)?;
+        // Fork: journals of terminals that dead processes lost go with the thread (R2.14).
+        codex_core::discard_background_terminal_journals(
+            self.config.codex_home.as_path(),
+            &delete_order,
+        )
+        .await;
 
         deleted_thread_ids.extend(
             delete_order

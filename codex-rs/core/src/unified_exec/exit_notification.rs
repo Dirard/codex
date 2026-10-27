@@ -37,6 +37,7 @@ mod output_watch;
 pub(crate) use output_watch::*;
 #[path = "terminal_journal.rs"]
 mod terminal_journal;
+pub(crate) use terminal_journal::discard_journals as discard_terminal_journals;
 
 /// A key for a queued notification (an exit notifier or an output watch); unlike a process
 /// ID it is never reused.

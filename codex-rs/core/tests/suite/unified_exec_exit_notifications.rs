@@ -539,13 +539,34 @@ async fn a_resumed_thread_learns_the_terminals_a_dead_process_lost() -> Result<(
     .await;
     let mut builder = builder(/*exit_notifications*/ true);
     let test = builder.build(&server).await?;
-    let journal = test
-        .home
-        .path()
-        .join("background_terminals")
-        .join(format!("{}.json", test.session_configured.thread_id));
+    let journal_dir = test.home.path().join("background_terminals");
+    let thread_prefix = format!("{}.", test.session_configured.thread_id);
+    // The session's journal and the lock file it holds while it runs (P3-2).
+    let journal_files = || -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(&journal_dir)
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .filter_map(|entry| entry.file_name().into_string().ok())
+                    .filter(|name| name.starts_with(&thread_prefix))
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    };
 
     test.submit_turn("start the build").await?;
+    let names = journal_files();
+    let [journal_name, lock_name] = names.as_slice() else {
+        panic!("one journal and its lock: {names:?}");
+    };
+    assert!(
+        journal_name.ends_with(".json") && lock_name.ends_with(".lock"),
+        "{names:?}"
+    );
+    let journal = journal_dir.join(journal_name);
+    let lock = journal_dir.join(lock_name);
     let crashed = std::fs::read_to_string(&journal)?;
     let listed: Value = serde_json::from_str(&crashed)?;
     assert_eq!(listed[0]["process_id"], json!(1000), "{crashed}");
@@ -557,12 +578,22 @@ async fn a_resumed_thread_learns_the_terminals_a_dead_process_lost() -> Result<(
         .clone()
         .expect("rollout path");
     test.codex.shutdown_and_wait().await?;
-    assert!(!journal.exists(), "a shutdown records its notices instead");
+    assert_eq!(
+        journal_files(),
+        Vec::<String>::new(),
+        "a shutdown records its notices instead"
+    );
+    // A crash leaves the journal and the lock file that nobody holds any more.
     std::fs::write(&journal, crashed)?;
+    std::fs::write(&lock, b"")?;
     let resumed = builder
         .resume(&server, std::sync::Arc::clone(&test.home), rollout_path)
         .await?;
-    assert!(!journal.exists(), "the resume took the journal");
+    assert_eq!(
+        journal_files(),
+        Vec::<String>::new(),
+        "the resume took the journal"
+    );
 
     resumed.submit_turn("is the build done?").await?;
     let requests = mock.requests();
