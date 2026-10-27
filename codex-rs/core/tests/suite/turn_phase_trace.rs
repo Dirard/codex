@@ -57,6 +57,46 @@ async fn wait_for_span(
     .await?
 }
 
+type TurnProfile = (Option<String>, Option<String>, Option<String>);
+
+/// Collects the exported `codex.turn_profile` events of `turn_id`, waiting until `count` of
+/// them are exported or the wait times out.
+///
+/// The completion profile is an event on the task's turn span, which ends only after the
+/// turn's final rollout flush. That flush can still be pending when `ShutdownComplete` arrives
+/// and after the `run_turn` and dispatch spans are exported. A timeout returns what was
+/// exported, so the caller's assertion still shows a missing or extra profile.
+async fn wait_for_turn_profiles(
+    exported: &InMemorySpanExporter,
+    turn_id: &str,
+    count: usize,
+) -> anyhow::Result<Vec<TurnProfile>> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut profiles: Vec<TurnProfile> = exported
+            .get_finished_spans()?
+            .iter()
+            .flat_map(|span| span.events.events.iter())
+            .filter(|event| {
+                event.name == "codex.turn_profile"
+                    && attribute(&event.attributes, "turn_id").as_deref() == Some(turn_id)
+            })
+            .map(|event| {
+                (
+                    attribute(&event.attributes, "conversation.id"),
+                    attribute(&event.attributes, "sampling_request_count"),
+                    attribute(&event.attributes, "sampling_retry_count"),
+                )
+            })
+            .collect();
+        if profiles.len() >= count || tokio::time::Instant::now() >= deadline {
+            profiles.sort();
+            return Ok(profiles);
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Finish {
     Reply,
@@ -336,26 +376,11 @@ async fn steer_joins_existing_turn_without_extending_sampling(
     assert!(dispatch_to_ready_ms.is_finite() && dispatch_to_ready_ms >= 0.0);
     assert!(accepted.end_time <= ready.timestamp);
     assert!(ready.timestamp <= blocking.end_time);
-    let mut profiles: Vec<_> = spans
-        .iter()
-        .flat_map(|span| span.events.events.iter())
-        .filter(|event| {
-            event.name == "codex.turn_profile"
-                && attribute(&event.attributes, "turn_id").as_deref() == Some(call.turn_id.as_str())
-        })
-        .map(|event| {
-            (
-                attribute(&event.attributes, "conversation.id"),
-                attribute(&event.attributes, "sampling_request_count"),
-                attribute(&event.attributes, "sampling_retry_count"),
-            )
-        })
-        .collect();
-    profiles.sort();
     let expected_counts = match finish {
         Finish::Reply => vec!["2"],
         Finish::Interrupt => vec!["1", "1"],
     };
+    let profiles = wait_for_turn_profiles(&exported, &call.turn_id, expected_counts.len()).await?;
     assert_eq!(
         profiles,
         expected_counts
