@@ -245,6 +245,9 @@ pub(crate) struct NotificationChange {
     pub(crate) output_watch: Option<OutputWatchChange>,
     /// `notify_on_exit`: wait for the exit again, or no longer (R6.15, live recheck N1).
     pub(crate) notify_on_exit: Option<bool>,
+    /// `notify_on_output` was empty, which changes nothing; the response says so, since an
+    /// empty pattern used to stop the watch (review of the fixes 2, N-1).
+    pub(crate) empty_output_pattern: bool,
 }
 
 impl NotificationChange {
@@ -266,6 +269,7 @@ impl NotificationChange {
         Ok(Self {
             output_watch: OutputWatchChange::parse(notify_on_output, stop_output_watch)?,
             notify_on_exit,
+            empty_output_pattern: notify_on_output == Some("") && !stop_output_watch,
         })
     }
 }
@@ -316,12 +320,28 @@ pub enum OutputWatchState {
     /// The call did not touch the watch.
     #[default]
     Unchanged,
+    /// An empty `notify_on_output` left the watch as it was (review of the fixes 2, N-1).
+    UnchangedByEmptyPattern,
     /// The call started a watch with this pattern.
     On(String),
+    /// The call started a watch with this pattern on a process whose watch already matched:
+    /// it is awaited only while matching lines keep coming (live recheck 2 R3, review of the
+    /// fixes 2, N-2).
+    OnAfterMatch(String),
     /// The call stopped the watch.
     Off,
     /// The call asked for a watch that did not start.
     NotStarted(OutputWatchRefusal),
+}
+
+impl OutputWatchState {
+    /// The pattern of the watch the call started.
+    pub(crate) fn started(&self) -> Option<&str> {
+        match self {
+            Self::On(pattern) | Self::OnAfterMatch(pattern) => Some(pattern),
+            _ => None,
+        }
+    }
 }
 
 /// What Codex will report about the process of a tool response (R1.2, R6.3).

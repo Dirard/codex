@@ -1092,7 +1092,7 @@ impl super::UnifiedExecContext {
             }
             None => OutputWatchState::Unchanged,
         };
-        let watching = matches!(output_watch, OutputWatchState::On(_));
+        let watching = output_watch.started().is_some();
         if notify.exit || watching {
             self.arm(exit_notifier, process).await;
             self.session.fork_sync_terminal_journal().await;
@@ -1143,8 +1143,16 @@ impl super::UnifiedExecContext {
             return ArmedNotifications::default();
         }
         self.mark_polled(process, budget).await;
+        let unchanged = if change.empty_output_pattern {
+            OutputWatchState::UnchangedByEmptyPattern
+        } else {
+            OutputWatchState::Unchanged
+        };
         if change.output_watch.is_none() && change.notify_on_exit.is_none() {
-            return ArmedNotifications::default();
+            return ArmedNotifications {
+                output_watch: unchanged,
+                ..ArmedNotifications::default()
+            };
         }
         let ascii = matches!(
             &change.output_watch,
@@ -1155,7 +1163,7 @@ impl super::UnifiedExecContext {
                 self.change_output_watch(process, exit_notifier, output_watch)
                     .await
             }
-            None => OutputWatchState::Unchanged,
+            None => unchanged,
         };
         match (change.notify_on_exit, exit_notifier) {
             (Some(true), Some(exit_notifier)) => {
@@ -1178,7 +1186,7 @@ impl super::UnifiedExecContext {
         ArmedNotifications {
             exit,
             exit_off,
-            output_watch_ascii: ascii && matches!(output_watch, OutputWatchState::On(_)),
+            output_watch_ascii: ascii && output_watch.started().is_some(),
             output_watch,
         }
     }
@@ -1217,7 +1225,7 @@ impl super::UnifiedExecContext {
                 let output_watch = self
                     .start_output_watch(exit_notifier, process, &pattern)
                     .await;
-                if matches!(output_watch, OutputWatchState::On(_)) {
+                if output_watch.started().is_some() {
                     self.arm(exit_notifier, process).await;
                     self.session.fork_sync_terminal_journal().await;
                 }
@@ -1270,8 +1278,9 @@ impl super::UnifiedExecContext {
             exit_notifier.exit_preference(),
         );
         // A watch that replaces one that matched, such as an error watch after "ready", is
-        // waited for as after a match (live recheck 2 R3).
-        if exit_notifier.watch_matched() {
+        // waited for as after a match (live recheck 2 R3), and the response says so (N-2).
+        let after_match = exit_notifier.watch_matched();
+        if after_match {
             watch.continue_after_match(Instant::now());
         }
         {
@@ -1286,7 +1295,12 @@ impl super::UnifiedExecContext {
         }
         exit_notifier.set_output_watch(Some(Arc::clone(&watch)));
         spawn_delivery(watch, &self.session, process.cancellation_token());
-        OutputWatchState::On(pattern.source().to_string())
+        let source = pattern.source().to_string();
+        if after_match {
+            OutputWatchState::OnAfterMatch(source)
+        } else {
+            OutputWatchState::On(source)
+        }
     }
 
     /// A `write_stdin` response shows the exit or failure of this process, so its exit

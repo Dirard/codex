@@ -25,6 +25,11 @@ use crate::unified_exec::OutputWatchState;
 
 /// Header line telling the model that the exit will be reported without polling.
 pub(super) const EXIT_NOTIFICATION_ARMED_LINE: &str = "Exit notification: on (Codex will report when this process exits while this Codex session is running; do not poll for completion)";
+/// Added to the output watch line when the watch replaced one that matched, so it is awaited
+/// as after a match (live recheck 2 R3, review of the fixes 2, N-2).
+pub(super) const OUTPUT_WATCH_AFTER_MATCH_NOTE: &str = ". This process already matched an output watch, so codex exec and wait_agent wait for this one only while matching lines keep coming, not for a first match; set notify_on_exit to wait for the process to exit.";
+/// An empty `notify_on_output` of `write_stdin` changes nothing (review of the fixes 2, N-1).
+pub(super) const OUTPUT_WATCH_UNCHANGED_LINE: &str = "Output watch: unchanged (an empty notify_on_output changes nothing; pass stop_output_watch: true to stop the watch)";
 /// Added to the output watch line when the pattern was too large with Unicode classes and is
 /// matched with ASCII classes (review of the fixes, P3-4).
 pub(super) const OUTPUT_WATCH_ASCII_NOTE: &str = ". The pattern was too large with Unicode classes, so it is matched with ASCII classes: \\w, \\d, \\s, \\b and (?i) see ASCII letters and digits only, and . matches one byte.";
@@ -94,11 +99,22 @@ impl ExecCommandToolOutput {
         }
         match &self.armed_notifications.output_watch {
             OutputWatchState::Unchanged => {}
-            OutputWatchState::On(pattern) => lines.push(format!(
-                "Output watch: on for lines matching \"{pattern}\" (Codex reports new matching lines while this Codex session is running; do not poll for them){}",
+            OutputWatchState::UnchangedByEmptyPattern => {
+                lines.push(OUTPUT_WATCH_UNCHANGED_LINE.to_string());
+            }
+            OutputWatchState::On(pattern) | OutputWatchState::OnAfterMatch(pattern) => lines.push(format!(
+                "Output watch: on for lines matching \"{pattern}\" (Codex reports new matching lines while this Codex session is running; do not poll for them){}{}",
                 if self.armed_notifications.output_watch_ascii {
                     // Review of the fixes P3-4: the model learns that its pattern changed.
                     OUTPUT_WATCH_ASCII_NOTE
+                } else {
+                    ""
+                },
+                if matches!(
+                    self.armed_notifications.output_watch,
+                    OutputWatchState::OnAfterMatch(_)
+                ) {
+                    OUTPUT_WATCH_AFTER_MATCH_NOTE
                 } else {
                     ""
                 }
@@ -120,7 +136,7 @@ impl ExecCommandToolOutput {
     /// The pattern of a running session's output watch for the Code Mode result.
     pub(super) fn fork_code_mode_output_watch(&self) -> Option<String> {
         match &self.armed_notifications.output_watch {
-            OutputWatchState::On(pattern) if self.process_id.is_some() => Some(pattern.clone()),
+            state if self.process_id.is_some() => state.started().map(str::to_string),
             _ => None,
         }
     }

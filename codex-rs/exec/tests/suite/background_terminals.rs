@@ -741,7 +741,7 @@ async fn exec_waits_for_a_rearmed_watch_only_while_it_would_keep_matching() -> a
         &[
             "features.exec_exit_notifications.enabled=true",
             "features.exec_exit_notifications.exec_wait_timeout_ms=60000",
-            "features.exec_exit_notifications.output_watch_quiet_ms=1000",
+            "features.exec_exit_notifications.output_watch_quiet_ms=3000",
             "features.exec_exit_notifications.output_watch_first_match_ms=45000",
         ],
     )
@@ -763,9 +763,14 @@ async fn exec_waits_for_a_rearmed_watch_only_while_it_would_keep_matching() -> a
         run.elapsed,
         run.stderr
     );
+    // Review of the fixes 2, N-4: the rearmed watch reaches exec as one that matched
+    // (`outputWatchMatched`), so its line names the quiet window, not a first match.
     assert!(
         run.stderr
             .contains("output watch \"ready\" (first match awaited up to ")
+            && run.stderr.contains(
+                "output watch \"(?i)error|fail\" (awaited while matching lines keep coming, up to "
+            )
             && !run.stderr.contains("; up to "),
         "stderr: {}",
         run.stderr

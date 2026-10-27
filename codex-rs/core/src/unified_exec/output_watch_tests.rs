@@ -532,9 +532,34 @@ fn the_descriptions_say_how_to_stop_a_process_and_its_exit_wait() {
             "{expected}: {WRITE_STDIN_NOTIFY_ON_EXIT_DESCRIPTION}"
         );
     }
+    // Review of the fixes 2, N-2; live recheck 3 R11: a watch after a match is awaited only
+    // while lines keep matching, and a watch is stopped only when its matches are no longer
+    // needed, not to stop waiting for the exit.
+    use crate::tools::handlers::shell_spec::WRITE_STDIN_NOTIFY_ON_OUTPUT_DESCRIPTION;
+    use crate::tools::handlers::shell_spec::WRITE_STDIN_STOP_OUTPUT_WATCH_DESCRIPTION;
+    for expected in [
+        "If a watch of this process already matched, the new one is awaited only while matching lines keep coming, not for a first match",
+        "An empty string changes nothing; set stop_output_watch to stop the watch, only once its matches are no longer needed",
+    ] {
+        assert!(
+            WRITE_STDIN_NOTIFY_ON_OUTPUT_DESCRIPTION.contains(expected),
+            "{expected}: {WRITE_STDIN_NOTIFY_ON_OUTPUT_DESCRIPTION}"
+        );
+    }
     assert!(
-        crate::tools::handlers::shell_spec::WRITE_STDIN_NOTIFY_ON_OUTPUT_DESCRIPTION
-            .contains("An empty string changes nothing; to stop the watch, set stop_output_watch")
+        WRITE_STDIN_STOP_OUTPUT_WATCH_DESCRIPTION.contains(
+            "Stop it only when what it reports is no longer needed; to stop waiting for the exit, set notify_on_exit false and keep the watch"
+        ),
+        "{WRITE_STDIN_STOP_OUTPUT_WATCH_DESCRIPTION}"
+    );
+    // Review of the fixes 2, N-1: only an all-ASCII pattern falls back to ASCII classes.
+    assert!(
+        NOTIFY_ON_OUTPUT_DESCRIPTION
+            .contains("a pattern written only in ASCII that is too large with Unicode classes")
+            && NOTIFY_ON_OUTPUT_DESCRIPTION.contains(
+                "\\b, . and (?i) cover ASCII only, and one with non-ASCII text is refused"
+            ),
+        "{NOTIFY_ON_OUTPUT_DESCRIPTION}"
     );
 }
 

@@ -2302,6 +2302,149 @@ async fn turning_the_exit_wait_off_keeps_the_watch() -> Result<()> {
     Ok(())
 }
 
+/// Review of the fixes 2, N-1 and N-4 (N18): an empty `notify_on_output` leaves the watch as
+/// it was and the response says so. Turning the exit off and stopping the watch answer the
+/// same in either order: once both are done, the exit is no longer reported.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn write_stdin_says_what_its_notification_changes_left() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_target_windows!(Ok(()), "uses POSIX shell commands");
+
+    let server = start_mock_server().await;
+    let start = json!({
+        "cmd": "sleep 120",
+        "yield_time_ms": 250,
+        "login": false,
+        "tty": true,
+        "notify_on_output": "ready",
+        "notify_on_exit": true,
+    })
+    .to_string();
+    let write = |changes: Value| {
+        // Input keeps each call short; an empty poll waits for output.
+        let mut arguments = json!({
+            "session_id": 1000,
+            "chars": " ",
+            "yield_time_ms": 250,
+        });
+        for (key, value) in changes.as_object().into_iter().flatten() {
+            arguments[key] = value.clone();
+        }
+        arguments.to_string()
+    };
+    let calls = [
+        ("empty-call", write(json!({ "notify_on_output": "" }))),
+        ("off-call", write(json!({ "notify_on_exit": false }))),
+        ("stop-call", write(json!({ "stop_output_watch": true }))),
+        (
+            "rearm-call",
+            write(json!({ "notify_on_exit": true, "notify_on_output": "ready" })),
+        ),
+        (
+            "stop-first-call",
+            write(json!({ "stop_output_watch": true })),
+        ),
+        ("off-last-call", write(json!({ "notify_on_exit": false }))),
+    ];
+    let mut responses = vec![tool_call(
+        "resp-start",
+        "start-call",
+        "exec_command",
+        &start,
+    )];
+    for (index, (call_id, arguments)) in calls.iter().enumerate() {
+        responses.push(tool_call(
+            &format!("resp-{index}"),
+            call_id,
+            "write_stdin",
+            arguments,
+        ));
+    }
+    responses.push(message("resp-done", "Done."));
+    let mock = mount_sse_sequence(&server, responses).await;
+    let test = build(&server, /*exit_notifications*/ true).await?;
+
+    test.submit_turn("start the server, then change its notifications")
+        .await?;
+    let requests = mock.requests();
+    let output = |call_id: &str| {
+        requests
+            .iter()
+            .find_map(|request| request.function_call_output_text(call_id))
+            .unwrap_or_else(|| panic!("{call_id} output"))
+    };
+    let empty = output("empty-call");
+    assert!(
+        empty.contains(
+            "Output watch: unchanged (an empty notify_on_output changes nothing; pass stop_output_watch: true to stop the watch)"
+        ),
+        "{empty}"
+    );
+    assert!(!empty.contains("Output watch: off"), "{empty}");
+    let not_reported = "Exit notification: off (the exit of this process is no longer reported, and nothing waits for it)";
+    for call_id in ["stop-call", "off-last-call"] {
+        let text = output(call_id);
+        assert!(text.contains(not_reported), "{call_id}: {text}");
+    }
+    assert!(
+        output("stop-first-call").contains(ARMED_LINE),
+        "the exit is still on before it is turned off"
+    );
+    test.codex.submit(Op::CleanBackgroundTerminals).await?;
+    Ok(())
+}
+
+/// Live recheck 2 R3, review of the fixes 2, N-2: a watch that replaces one that matched is
+/// awaited only while matching lines keep coming, and the response says so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_watch_after_a_match_says_how_long_it_is_awaited() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_target_windows!(Ok(()), "uses POSIX shell commands");
+
+    let server = start_mock_server().await;
+    let start = json!({
+        "cmd": "sleep 1; echo 'server ready'; sleep 30",
+        "yield_time_ms": 250,
+        "login": false,
+        "notify_on_output": "ready",
+    })
+    .to_string();
+    let rearm = json!({
+        "session_id": 1000,
+        "chars": "",
+        "yield_time_ms": 250,
+        "notify_on_output": "(?i)error",
+    })
+    .to_string();
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            tool_call("resp-1", "start-call", "exec_command", &start),
+            message("resp-2", "Started; waiting for ready."),
+            tool_call("resp-3", "rearm-call", "write_stdin", &rearm),
+            message("resp-4", "Ready; watching errors."),
+        ],
+    )
+    .await;
+    let test = build(&server, /*exit_notifications*/ true).await?;
+
+    test.submit_turn("start the server and watch it").await?;
+    wait_for_requests(&mock, 4).await;
+    let rearmed = mock.requests()[3]
+        .function_call_output_text("rearm-call")
+        .expect("write_stdin output");
+    assert!(
+        rearmed.contains(
+            "This process already matched an output watch, so codex exec and wait_agent wait for this one only while matching lines keep coming, not for a first match"
+        ),
+        "{rearmed}"
+    );
+    test.codex.submit(Op::CleanBackgroundTerminals).await?;
+    Ok(())
+}
+
 /// A Code Mode test thread with exit notifications.
 fn code_mode_builder() -> TestCodexBuilder {
     test_codex()
