@@ -1400,3 +1400,100 @@ async fn shutdown_reports_armed_terminals_it_stops() {
     assert!(terminated.deliveries_in_flight.is_empty());
     assert!(manager.process_store.lock().await.processes.is_empty());
 }
+
+/// Process IDs in the terminal journals under `codex_home`.
+fn journaled_process_ids(codex_home: &std::path::Path) -> Vec<i64> {
+    let mut ids = Vec::new();
+    let dir = codex_home.join("background_terminals");
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|extension| extension != "json") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let terminals: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap_or_default();
+        ids.extend(
+            terminals
+                .iter()
+                .filter_map(|terminal| terminal["process_id"].as_i64()),
+        );
+    }
+    ids
+}
+
+/// Review of the fixes 2, N-5: with `notify_on_exit` off, only the output watch reports the
+/// exit. Once the watch stops after its last notification nothing does, and the journal drops
+/// the terminal, so a crash now does not make a resume report it lost.
+#[tokio::test]
+async fn a_watch_that_stops_itself_takes_its_terminal_out_of_the_journal() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let (session, turn, _events) =
+        crate::session::tests::make_session_and_context_with_auth_config_home_and_rx(
+            codex_login::CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            codex_home.path(),
+            |config| {
+                config
+                    .features
+                    .enable(codex_features::Feature::ExecExitNotifications)
+                    .expect("enable exit notifications");
+            },
+        )
+        .await;
+    let notifier = ExitNotifier::new(1000, "npm run dev".to_string(), Instant::now());
+    let watch = OutputWatch::with_windows(
+        1000,
+        "npm run dev".to_string(),
+        OutputPattern::parse("tick").expect("valid pattern"),
+        "turn".to_string(),
+        OutputWatchWindows::default(),
+        notifier.exit_preference(),
+    );
+    notifier.set_output_watch(Some(Arc::clone(&watch)));
+    insert_notifying_terminal(
+        &session,
+        &turn,
+        1000,
+        live_remote_process(/*terminate_error*/ None).await,
+        Some(Arc::clone(&notifier)),
+        /*initial_exec_command_active*/ false,
+    )
+    .await;
+    assert!(notifier.arm().is_none());
+    notifier.disarm_exit();
+    session.fork_sync_terminal_journal().await;
+    assert_eq!(journaled_process_ids(codex_home.path()), vec![1000]);
+
+    // Nine notifications in the past, then the last one through the session.
+    let mut now = Instant::now()
+        .checked_sub(Duration::from_secs(120))
+        .expect("a monotonic clock that runs for two minutes");
+    for _ in 1..OUTPUT_WATCH_MAX_NOTIFICATIONS {
+        watch.observe_chunk(b"tick\n");
+        watch.match_now(/*final_batch*/ false, now);
+        watch
+            .take_for_queue(
+                /*queued*/ false,
+                now + OUTPUT_WATCH_BATCH_WINDOW,
+                /*exited*/ false,
+                &codex_utils_string::untrusted::UntrustedBoundary::random(),
+            )
+            .expect("a due notification");
+        now += OUTPUT_WATCH_MIN_INTERVAL + OUTPUT_WATCH_BATCH_WINDOW;
+    }
+    session.fork_sync_terminal_journal().await;
+    assert_eq!(
+        journaled_process_ids(codex_home.path()),
+        vec![1000],
+        "the watch still reports the exit"
+    );
+    watch.observe_chunk(b"tick\n");
+    watch.match_now(/*final_batch*/ false, now);
+    assert!(
+        session
+            .deliver_output_watch_notification(&watch, /*exited*/ false)
+            .await
+    );
+    assert!(watch.is_stopped());
+    assert_eq!(journaled_process_ids(codex_home.path()), Vec::<i64>::new());
+}

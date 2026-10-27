@@ -696,6 +696,12 @@ impl OutputWatch {
         self.lock().stopped
     }
 
+    /// The model turned `notify_on_exit` of the process off: only this watch, while it is
+    /// on, reports the exit (review of the fixes P3-5).
+    pub(crate) fn exit_turned_off(&self) -> bool {
+        self.exit.turned_off()
+    }
+
     /// Whether the watch still expects news (P2-3): it is on and holds undelivered events, or
     /// its process printed a matching line less than `quiet` ago, or, before any matching
     /// line, the turn that started the watch ended (or is still running and started it) less

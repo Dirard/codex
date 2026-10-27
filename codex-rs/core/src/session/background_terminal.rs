@@ -113,6 +113,12 @@ impl Session {
             .await;
         if changed {
             self.wake_for_background_notification().await;
+            // The last notification stopped the watch, and with `notify_on_exit` off nothing
+            // reports the exit any more: the journal drops the terminal, so a crash now does
+            // not make a resume report it lost (review of the fixes 2, N-5).
+            if !exited && watch.is_stopped() && watch.exit_turned_off() {
+                self.fork_sync_terminal_journal().await;
+            }
         }
         changed
     }
