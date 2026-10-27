@@ -23,6 +23,7 @@ use codex_protocol::ThreadId;
 use uuid::Uuid;
 
 use super::App;
+use super::agent_picker::AGENT_PICKER_VIEW_ID;
 use super::thread_events::ThreadBufferedEvent;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
@@ -225,6 +226,30 @@ impl App {
             Some(layout) => layout.display_index(visible),
             None => Some(visible),
         }
+    }
+
+    /// Hook before a picker refresh changes the threads: the run whose row has the cursor.
+    /// `selected_agent_picker_thread_id` keeps only thread rows (review 2026-10-27, item 8).
+    pub(super) fn fork_selected_picker_run(&self) -> Option<String> {
+        let display = self
+            .chat_widget
+            .selected_index_for_present_view(AGENT_PICKER_VIEW_ID)?;
+        self.fork_workflow_picker_layout()?
+            .run_at(display)
+            .map(str::to_string)
+    }
+
+    /// Hook after `replace_agent_picker_view`: put the cursor back on the run row it was on,
+    /// while the picker still holds an agent of that run.
+    pub(super) fn fork_reselect_picker_run(&mut self, run_id: Option<String>) {
+        let Some(display) =
+            run_id.and_then(|run_id| self.fork_workflow_picker_layout()?.run_row(&run_id))
+        else {
+            return;
+        };
+        let params = self.agent_picker_selection_view_params(Some(display));
+        self.chat_widget
+            .replace_selection_view_if_present(AGENT_PICKER_VIEW_ID, params);
     }
 
     /// Q38: run names and statuses from the primary thread's stored events, then from the

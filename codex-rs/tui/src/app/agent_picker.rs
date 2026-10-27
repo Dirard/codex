@@ -130,6 +130,7 @@ impl App {
             }
         };
         let selected_thread_id = self.selected_agent_picker_thread_id();
+        let selected_run = self.fork_selected_picker_run(); // Fork: R8.6.7
         for thread in refresh.threads {
             let Ok(thread_id) = ThreadId::from_string(&thread.id) else {
                 continue;
@@ -179,6 +180,7 @@ impl App {
         self.agent_navigation.prune_untracked_picker_exclusions();
 
         self.replace_agent_picker_view(selected_thread_id);
+        self.fork_reselect_picker_run(selected_run); // Fork: R8.6.7
         if completion.follow_up_requested {
             self.refresh_agent_picker_threads(app_server, root);
         }
@@ -190,8 +192,10 @@ impl App {
         visibility: AgentPickerThreadVisibility,
     ) {
         let selected_thread_id = self.selected_agent_picker_thread_id();
+        let selected_run = self.fork_selected_picker_run(); // Fork: R8.6.7
         self.update_agent_picker_thread_visibility(thread_id, visibility);
         self.replace_agent_picker_view(selected_thread_id);
+        self.fork_reselect_picker_run(selected_run); // Fork: R8.6.7
     }
 
     fn update_agent_picker_thread_visibility(

@@ -140,6 +140,21 @@ impl PickerLayout {
             .position(|row| *row == PickerRow::Thread(visible))
     }
 
+    /// The run shown at row `display`; `None` for a thread row.
+    pub(crate) fn run_at(&self, display: usize) -> Option<&str> {
+        match self.rows.get(display)? {
+            PickerRow::Run { run_id, .. } => Some(run_id),
+            PickerRow::Thread(_) => None,
+        }
+    }
+
+    /// The row of run `run_id`, if the picker still holds one of its agents.
+    pub(crate) fn run_row(&self, run_id: &str) -> Option<usize> {
+        self.rows
+            .iter()
+            .position(|row| matches!(row, PickerRow::Run { run_id: id, .. } if id == run_id))
+    }
+
     /// Reorders `items` (one per visible thread, in `visible_threads()` order) into display
     /// order: run rows come from `run_row`, workflow agents are indented and named
     /// `#<seq> <label>`.

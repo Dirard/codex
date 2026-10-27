@@ -153,3 +153,40 @@ async fn subagents_rows_are_unchanged_without_the_feature() {
     assert_eq!(app.fork_picker_visible_index(1), Some(1));
     assert_eq!(app.fork_picker_display_index(2), Some(2));
 }
+
+/// Review 2026-10-27, item 8: a picker refresh keeps the cursor on a run row instead of
+/// moving it to the current thread.
+#[tokio::test]
+async fn picker_refresh_keeps_the_cursor_on_a_run_row() {
+    let (mut app, mut app_event_rx, mut app_server) = app_with_workflow_agents(true).await;
+    Box::pin(app.open_agent_picker(&mut app_server)).await;
+    drain(&mut app_event_rx);
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let before = app
+        .chat_widget
+        .selected_index_for_present_view(AGENT_PICKER_VIEW_ID);
+    assert_eq!(before, Some(1), "the run row");
+    app.set_agent_picker_thread_visibility(
+        thread("00000000-0000-0000-0000-000000000101"),
+        super::super::agent_navigation::AgentPickerThreadVisibility::Visible,
+    );
+    assert_eq!(
+        app.chat_widget
+            .selected_index_for_present_view(AGENT_PICKER_VIEW_ID),
+        before,
+        "cursor left the run row"
+    );
+
+    // A thread row keeps working as before.
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.set_agent_picker_thread_visibility(
+        thread("00000000-0000-0000-0000-000000000101"),
+        super::super::agent_navigation::AgentPickerThreadVisibility::Visible,
+    );
+    assert_eq!(
+        selected_thread(&app),
+        Some(thread("00000000-0000-0000-0000-000000000102"))
+    );
+}

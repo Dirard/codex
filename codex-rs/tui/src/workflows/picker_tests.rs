@@ -99,6 +99,13 @@ fn workflow_agents_follow_their_run_row_at_the_first_agent() {
             .expect("every thread has a row");
         assert_eq!(layout.visible_index(display), Some(visible));
     }
+    // A run row is a key of its own, so a refresh can keep the cursor on it.
+    assert_eq!(layout.run_at(2), Some("wf-0000aaaa"));
+    assert_eq!(layout.run_at(6), Some("wf-0000bbbb"));
+    assert_eq!(layout.run_at(3), None);
+    assert_eq!(layout.run_at(8), None);
+    assert_eq!(layout.run_row("wf-0000bbbb"), Some(6));
+    assert_eq!(layout.run_row("wf-0000cccc"), None);
 
     let items = vec![
         item("Main [default]"),
