@@ -508,6 +508,75 @@ async fn shutdown_terminates_without_turn_and_resume_reports_the_stop() -> Resul
     Ok(())
 }
 
+/// Combined live run 2026-10-27, D6 (R2.11): a Codex process that dies without shutting down
+/// records no stop notice, and the resumed thread used to learn about the lost terminal only
+/// from `Unknown process id`, if it polled at all. The thread journals its armed terminals:
+/// the journal lists the terminal while it runs, a shutdown removes it, and a resume that
+/// finds one (here put back as a crash would have left it) tells the model which terminal
+/// was lost.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_resumed_thread_learns_the_terminals_a_dead_process_lost() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_target_windows!(Ok(()), "uses POSIX shell commands");
+
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            tool_call(
+                "resp-1",
+                "bg-call",
+                "exec_command",
+                &exec_args(
+                    "sleep 60", /*yield_time_ms*/ 250, /*notify_on_exit*/ true,
+                ),
+            ),
+            message("resp-2", "Started."),
+            message("resp-3", "The build was lost with the old process."),
+        ],
+    )
+    .await;
+    let mut builder = builder(/*exit_notifications*/ true);
+    let test = builder.build(&server).await?;
+    let journal = test
+        .home
+        .path()
+        .join("background_terminals")
+        .join(format!("{}.json", test.session_configured.thread_id));
+
+    test.submit_turn("start the build").await?;
+    let crashed = std::fs::read_to_string(&journal)?;
+    let listed: Value = serde_json::from_str(&crashed)?;
+    assert_eq!(listed[0]["process_id"], json!(1000), "{crashed}");
+    assert_eq!(listed[0]["command"], json!("sleep 60"), "{crashed}");
+
+    let rollout_path = test
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+    test.codex.shutdown_and_wait().await?;
+    assert!(!journal.exists(), "a shutdown records its notices instead");
+    std::fs::write(&journal, crashed)?;
+    let resumed = builder
+        .resume(&server, std::sync::Arc::clone(&test.home), rollout_path)
+        .await?;
+    assert!(!journal.exists(), "the resume took the journal");
+
+    resumed.submit_turn("is the build done?").await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 3);
+    let delivered = notifications(&requests[2]);
+    assert!(
+        delivered.iter().any(|text| text.contains(
+            "Background terminal session 1000 was lost: the Codex process that ran it stopped without shutting down"
+        )),
+        "{delivered:?}"
+    );
+    Ok(())
+}
+
 /// R1.1, R1.4: without the feature nothing is advertised and nothing is delivered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn disabled_feature_keeps_tools_and_ignores_notify_on_exit() -> Result<()> {

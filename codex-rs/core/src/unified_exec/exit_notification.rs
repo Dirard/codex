@@ -35,6 +35,8 @@ static NEXT_NOTIFIER_KEY: AtomicU64 = AtomicU64::new(1);
 #[path = "output_watch.rs"]
 mod output_watch;
 pub(crate) use output_watch::*;
+#[path = "terminal_journal.rs"]
+mod terminal_journal;
 
 /// A key for a queued notification (an exit notifier or an output watch); unlike a process
 /// ID it is never reused.
@@ -338,8 +340,8 @@ impl ExitNotifier {
     }
 
     /// Whether the thread still expects a notification from this process, including one
-    /// that is on its way into the thread queue (P3-3).
-    #[cfg(test)]
+    /// that is on its way into the thread queue (P3-3); such a process is in the terminal
+    /// journal (D6).
     pub(crate) fn is_pending(&self) -> bool {
         let state = self.lock();
         state.armed && (!state.settled || state.delivering)
@@ -905,6 +907,7 @@ impl super::UnifiedExecContext {
         let watching = matches!(output_watch, OutputWatchState::On(_));
         if notify.exit || watching {
             self.arm(exit_notifier, process).await;
+            self.session.fork_sync_terminal_journal().await;
         }
         ArmedNotifications {
             exit: notify.exit || watching,
@@ -978,6 +981,7 @@ impl super::UnifiedExecContext {
                     .await;
                 if matches!(output_watch, OutputWatchState::On(_)) {
                     self.arm(exit_notifier, process).await;
+                    self.session.fork_sync_terminal_journal().await;
                 }
                 output_watch
             }
@@ -1048,12 +1052,16 @@ impl super::UnifiedExecContext {
     /// notification is settled and, when it was already queued, withdrawn with the final
     /// batch of its output watch (R2.2, R2.10, R6.9).
     pub(crate) async fn observe_exit(&self, exit_notifier: Option<&ExitNotifier>) {
-        for key in exit_notifier.map(ExitNotifier::observe).unwrap_or_default() {
+        let Some(exit_notifier) = exit_notifier else {
+            return;
+        };
+        for key in exit_notifier.observe() {
             self.session
                 .input_queue
                 .withdraw_background_notification(key)
                 .await;
         }
+        self.session.fork_sync_terminal_journal().await;
     }
 }
 

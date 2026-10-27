@@ -1723,6 +1723,7 @@ impl Session {
                 let previous_turn_settings = self
                     .apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
+                self.fork_record_lost_terminals().await; // Fork: D6, lost background terminals
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr: &str = turn_context.model_info().slug.as_str();

@@ -61,6 +61,7 @@ impl Session {
             )
             .await;
         exit_notifier.finish_delivery();
+        self.fork_sync_terminal_journal().await;
         if wakes {
             self.wake_for_background_notification().await;
         }
@@ -208,12 +209,13 @@ impl Session {
         items.extend(terminated.shutdown_notices.iter().map(|notice| {
             ContextualUserFragment::into(BackgroundTerminalNotification::new(notice.render()))
         }));
-        if items.is_empty() {
-            return;
+        if !items.is_empty() {
+            let turn_context = self.new_inject_items_context().await;
+            self.record_conversation_items(&turn_context, turn_context.model_info(), &items)
+                .await;
         }
-        let turn_context = self.new_inject_items_context().await;
-        self.record_conversation_items(&turn_context, turn_context.model_info(), &items)
-            .await;
+        // The notices are recorded; a resume has nothing to learn from the journal (D6).
+        self.fork_clear_terminal_journal().await;
     }
 }
 
