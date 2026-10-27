@@ -323,10 +323,9 @@ fn patterns_are_validated() {
         assert!(OutputPattern::parse(accepted).is_ok(), "{accepted}");
     }
     for costly in [
-        ".{0,255}Z",
-        r"\w{0,100}Z",
-        "(?:.{0,30}){30}Z",
         "(?:(?:(?:.?){20}){20}){20}Z",
+        "(?:[ -~]?){1000}q#",
+        r"\p{Cyrillic}{0,255}Z",
     ] {
         assert_eq!(
             OutputPattern::parse(costly).map(|_| ()),
@@ -334,7 +333,7 @@ fn patterns_are_validated() {
             "{costly}"
         );
     }
-    assert!(OUTPUT_PATTERN_TOO_COSTLY.contains("(?:.{0,30}){30}"));
+    assert!(OUTPUT_PATTERN_TOO_COSTLY.contains("(?:[ -~]?){1000}"));
     assert!(matches!(
         OutputWatchChange::parse(Some("")),
         Ok(Some(OutputWatchChange::Stop))
@@ -359,6 +358,52 @@ fn unicode_patterns_match_output_lines() {
     assert_eq!(
         quoted_lines(&text),
         vec!["ОШИБКА: диск заполнен".to_string(), "σφάλμα".to_string()]
+    );
+}
+
+/// Tails review 2026-10-27, P3-9: a pattern that is too large with Unicode classes, as
+/// `regex-lite` patterns that `regex` refused, is matched with ASCII classes instead of being
+/// refused: `\w`, `\d`, `\s`, `.` and `(?i)` then cover ASCII, and other text still matches
+/// literally.
+#[test]
+fn patterns_too_large_for_unicode_classes_match_with_ascii_classes() {
+    for (pattern, line) in [
+        (r"\w+@\w+\.\w+", "mail admin@example.org now"),
+        (r"(?:\w{0,10}){4}Z", "abcZ"),
+        (r"\w{0,100}Z", "build_42Z"),
+        (".{0,255}Z", "anything at all, then Z"),
+        ("(?i)(?:[a-z]{0,40}){25}q#", "AB q#"),
+        (r"(?i)ошибка.{0,255}Z", "ошибка: диск Z"),
+    ] {
+        let watch = watch(pattern);
+        watch.observe_chunk(format!("no match here\n{line}\n").as_bytes());
+        watch.match_now(/*final_batch*/ false, Instant::now());
+        let text = watch
+            .take_for_queue(false, due(), false, &boundary())
+            .unwrap_or_else(|| panic!("{pattern} matches {line}"));
+        assert_eq!(quoted_lines(&text), vec![line.to_string()], "{pattern}");
+    }
+    // ASCII classes only: Cyrillic letters are no `\w` there.
+    let watch = watch(r"\w{3}Z");
+    watch.observe_chunk("диаZ\nabcZ\n".as_bytes());
+    watch.match_now(/*final_batch*/ false, Instant::now());
+    let text = watch
+        .take_for_queue(false, due(), false, &boundary())
+        .expect("the ASCII line matches");
+    assert_eq!(quoted_lines(&text), vec!["abcZ".to_string()]);
+}
+
+/// Tails review 2026-10-27, P3-9 and P3-12: the description says how a large pattern is
+/// matched and gives no wait times, which `[features.exec_exit_notifications]` may change.
+#[test]
+fn the_notify_on_output_description_names_no_configurable_wait() {
+    let description = crate::tools::handlers::shell_spec::NOTIFY_ON_OUTPUT_DESCRIPTION;
+    for configurable in ["5 minutes", "a minute apart"] {
+        assert!(!description.contains(configurable), "{description}");
+    }
+    assert!(
+        description.contains("is matched with ASCII classes instead"),
+        "{description}"
     );
 }
 

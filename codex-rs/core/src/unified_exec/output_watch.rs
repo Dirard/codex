@@ -83,13 +83,14 @@ impl Default for OutputWatchWindows {
 /// per byte in proportion to this size, so it bounds the cost of one line: about 40 ms for a
 /// 4 KiB line at the limit in a release build (P2-1; Decision log of
 /// `specs/background-exec-notifications-2026-10-25.md`, 2026-10-27 tails). Two Unicode classes
-/// such as `\w+@\w+` fit; large counted repetitions of `.` or `\w`, such as `.{0,255}`, do not.
+/// such as `\w+@\w+` fit; large counted repetitions of `.` or `\w`, such as `.{0,255}`, fit only
+/// with ASCII classes (`OutputPattern::parse`).
 pub(crate) const OUTPUT_WATCH_REGEX_SIZE_LIMIT: usize = 128 * 1024;
 /// Cache of the lazy DFA of one pattern; past it, the DFA falls back as above.
 const OUTPUT_WATCH_REGEX_DFA_SIZE_LIMIT: usize = 512 * 1024;
 const OUTPUT_WATCH_REGEX_NEST_LIMIT: u32 = 64;
-/// The error for a pattern over `OUTPUT_WATCH_REGEX_SIZE_LIMIT`.
-const OUTPUT_PATTERN_TOO_COSTLY: &str = r"notify_on_output is too costly to match on every output line; use a simpler pattern: + or * instead of large counted repetitions such as .{0,255} or (?:.{0,30}){30}, and ASCII classes such as [A-Za-z0-9_] or (?-u:\w) instead of many Unicode classes such as \w";
+/// The error for a pattern over `OUTPUT_WATCH_REGEX_SIZE_LIMIT` even with ASCII classes.
+const OUTPUT_PATTERN_TOO_COSTLY: &str = r"notify_on_output is too costly to match on every output line, even with ASCII classes; use a simpler pattern: + or * instead of large or nested counted repetitions such as (?:[ -~]?){1000} or (?:(?:.?){20}){20}";
 /// Label of the boundary lines around matching lines.
 const MATCHES_LABEL: &str = "matches";
 const LINE_TRUNCATION_MARKER: &str = "…";
@@ -97,11 +98,27 @@ const COMMAND_TRUNCATION_MARKER: &str = "…[truncated]…";
 /// First line of an output watch notification, after the session ID.
 const OUTPUT_WATCH_HEADLINE_MARK: &str = " matching the output watch \"";
 
-/// A validated `notify_on_output` pattern (R6.2) in `regex` syntax: Unicode-aware and matched
-/// in time linear in the line.
+/// A validated `notify_on_output` pattern (R6.2) in `regex` syntax: Unicode-aware unless that
+/// makes it too large, and matched in time linear in the line.
 pub(crate) struct OutputPattern {
     source: String,
-    regex: regex::Regex,
+    regex: PatternRegex,
+}
+
+/// How a pattern matches: with Unicode classes, or with ASCII classes when Unicode classes
+/// make it too large (tails review 2026-10-27, P3-9).
+enum PatternRegex {
+    Unicode(regex::Regex),
+    Ascii(regex::bytes::Regex),
+}
+
+impl PatternRegex {
+    fn is_match(&self, line: &str) -> bool {
+        match self {
+            Self::Unicode(regex) => regex.is_match(line),
+            Self::Ascii(regex) => regex.is_match(line.as_bytes()),
+        }
+    }
 }
 
 impl std::fmt::Debug for OutputPattern {
@@ -112,6 +129,12 @@ impl std::fmt::Debug for OutputPattern {
 
 impl OutputPattern {
     /// Compiles `source`; the error is meant for the model.
+    ///
+    /// Unicode classes make a pattern large: `\w` alone is about 49 KiB compiled. A pattern
+    /// over `OUTPUT_WATCH_REGEX_SIZE_LIMIT` with them, such as `\w+@\w+\.\w+` or `.{0,255}Z`
+    /// that `regex-lite` used to accept, is compiled again with ASCII classes (`unicode(false)`
+    /// over the line's bytes, the semantics of `regex-lite`), under the same limits, so its
+    /// cost per line stays bounded the same way. Only a pattern too large even then is refused.
     pub(crate) fn parse(source: &str) -> Result<Arc<Self>, String> {
         if source.len() > OUTPUT_WATCH_PATTERN_MAX_BYTES {
             return Err(format!(
@@ -119,15 +142,27 @@ impl OutputPattern {
                 source.len()
             ));
         }
-        let regex = regex::RegexBuilder::new(source)
+        let regex = match regex::RegexBuilder::new(source)
             .size_limit(OUTPUT_WATCH_REGEX_SIZE_LIMIT)
             .dfa_size_limit(OUTPUT_WATCH_REGEX_DFA_SIZE_LIMIT)
             .nest_limit(OUTPUT_WATCH_REGEX_NEST_LIMIT)
             .build()
-            .map_err(|err| match err {
-                regex::Error::CompiledTooBig(_) => OUTPUT_PATTERN_TOO_COSTLY.to_string(),
-                err => format!("notify_on_output is not a valid regular expression: {err}"),
-            })?;
+        {
+            Ok(regex) => PatternRegex::Unicode(regex),
+            Err(regex::Error::CompiledTooBig(_)) => regex::bytes::RegexBuilder::new(source)
+                .unicode(false)
+                .size_limit(OUTPUT_WATCH_REGEX_SIZE_LIMIT)
+                .dfa_size_limit(OUTPUT_WATCH_REGEX_DFA_SIZE_LIMIT)
+                .nest_limit(OUTPUT_WATCH_REGEX_NEST_LIMIT)
+                .build()
+                .map(PatternRegex::Ascii)
+                .map_err(|_| OUTPUT_PATTERN_TOO_COSTLY.to_string())?,
+            Err(err) => {
+                return Err(format!(
+                    "notify_on_output is not a valid regular expression: {err}"
+                ));
+            }
+        };
         Ok(Arc::new(Self {
             source: source.to_string(),
             regex,

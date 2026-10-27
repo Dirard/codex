@@ -348,10 +348,12 @@ impl ExitNotifier {
     }
 
     /// Whether the thread waits for this process (`codex exec`, `wait_agent`, residency): a
-    /// notification on its way into the queue, an armed `notify_on_exit`, or an output watch
-    /// that saw a matching line, or started, less than its quiet period ago. A
-    /// quiet watch still reports its lines and the exit while the session runs, but nothing
-    /// waits for it any longer (review 2026-10-27, P2-3).
+    /// notification on its way into the queue, an armed `notify_on_exit`, or a fresh output
+    /// watch (`OutputWatch::is_fresh`): one that holds undelivered events, saw a matching line
+    /// less than its quiet window ago, or, before its first matching line, whose turn ended
+    /// less than its first-match window ago (R6.14). A watch that is no longer fresh still
+    /// reports its lines and the exit while the session runs, but nothing waits for it any
+    /// longer (review 2026-10-27, P2-3).
     pub(crate) fn is_awaited(&self, now: Instant) -> bool {
         let state = self.lock();
         if !state.armed {
