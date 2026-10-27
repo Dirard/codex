@@ -96,6 +96,7 @@ fork_clippy_packages=(
   codex-features
   codex-history
   codex-linux-sandbox
+  codex-mcp
   codex-models-manager
   codex-protocol
   codex-rollout
@@ -137,6 +138,7 @@ default_test_packages=(
   codex-extension-items
   codex-features
   codex-history
+  codex-mcp
   codex-models-manager
   codex-protocol
   codex-rollout

@@ -73,6 +73,8 @@ struct ToolCatalogSnapshot {
     meta: Option<Arc<serde_json::Value>>,
     published_at: Instant,
     tool_list_revision: Option<ToolListRevision>,
+    // Fork: `readOnlyHint` of the live list, a visibility hint for read-only explorers.
+    read_only_tools: Arc<std::collections::HashSet<String>>,
 }
 
 #[derive(Clone)]
@@ -247,6 +249,7 @@ impl McpToolCatalogCacheContext {
         }
 
         let mut tools = tools.to_vec();
+        let read_only_tools = fork::read_only_tool_names(&tools); // Fork: explorer visibility hint
         for tool in &mut tools {
             // Tool annotations affect approval and parallelism decisions, so only the live
             // connection may supply them.
@@ -259,9 +262,14 @@ impl McpToolCatalogCacheContext {
             meta,
             published_at: Instant::now(),
             tool_list_revision: ticket.tool_list_revision,
+            read_only_tools,
         });
     }
 }
+
+// Fork: cached `readOnlyHint`s for read-only explorers (explorer-and-questions spec, R2.9).
+#[path = "tool_catalog_cache_fork.rs"]
+pub(crate) mod fork;
 
 fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex

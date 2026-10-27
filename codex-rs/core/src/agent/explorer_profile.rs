@@ -325,19 +325,35 @@ const SPAWN_TOOL_NAME: &str = "spawn_agent";
 /// names one anyway still reaches its handler and gets the refusal of R2.6, R2.8 or R2.10.
 ///
 /// `mcp_tools` carries the annotations of the session's MCP tools; an MCP tool missing from
-/// it counts as writing.
+/// it counts as writing. A tool the step took from a catalog cache has no `readOnlyHint`, so
+/// `cached_read_only_tools` names the `(server, raw tool name)` pairs that the server's last
+/// live `tools/list` annotated read-only (`McpBinding::fork_cached_read_only_tools`, review
+/// 2026-10-27 P2). The hint only decides visibility; a call checks the live annotations (R2.8).
 pub(crate) fn hide_unavailable_tools<'a>(
     config: &Config,
     source: &SessionSource,
     mcp_tools: impl IntoIterator<Item = &'a codex_mcp::ToolInfo>,
+    cached_read_only_tools: impl FnOnce() -> std::collections::HashSet<(String, String)>,
     registry: &mut crate::tools::registry::ToolRegistry,
 ) {
     if !applies_to_source(config, source) {
         return;
     }
+    let cached_read_only_tools = cached_read_only_tools();
     let read_only_mcp_tools = mcp_tools
         .into_iter()
-        .filter(|tool| is_read_only(tool.tool.annotations.as_ref()))
+        .filter(|tool| {
+            match tool
+                .tool
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.read_only_hint)
+            {
+                Some(read_only) => read_only,
+                None => cached_read_only_tools
+                    .contains(&(tool.server_name.clone(), tool.tool.name.to_string())),
+            }
+        })
         .map(codex_mcp::ToolInfo::canonical_tool_name)
         .collect::<std::collections::HashSet<_>>();
     for tool in registry.entries_mut() {
@@ -357,20 +373,6 @@ pub(crate) fn hide_unavailable_tools<'a>(
 
 fn is_read_only(annotations: Option<&rmcp::model::ToolAnnotations>) -> bool {
     annotations.and_then(|annotations| annotations.read_only_hint) == Some(true)
-}
-
-/// MCP servers that offer a tool without annotations, sorted and deduplicated (R2.9).
-///
-/// A cached catalog carries no annotations, so these are the servers an explorer must reach
-/// live before it can tell their read-only tools apart.
-pub(crate) fn servers_without_annotations(tools: &[codex_mcp::ToolInfo]) -> Vec<String> {
-    tools
-        .iter()
-        .filter(|tool| tool.tool.annotations.is_none())
-        .map(|tool| tool.server_name.clone())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect()
 }
 
 /// Worktree note of an explorer in an isolated worktree (spec UC9, R9.3).

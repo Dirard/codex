@@ -21,6 +21,9 @@ mod startup;
 mod status;
 #[path = "connection_manager/tool_catalog.rs"]
 mod tool_catalog;
+// Fork: cached `readOnlyHint`s for read-only explorers (explorer-and-questions spec, R2.9).
+#[path = "connection_manager/fork_read_only_hints.rs"]
+mod fork_read_only_hints;
 
 use startup::chatgpt_auth_provider_for_server;
 use startup::emit_update;

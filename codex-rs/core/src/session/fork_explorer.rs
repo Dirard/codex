@@ -2,17 +2,11 @@
 //! (specs/explorer-and-questions-2026-10-25.md); the session start hook also starts the
 //! agent worktree sweep (specs/agent-worktree-isolation-2026-10-25.md, R10.1).
 
-use std::collections::HashSet;
-use std::sync::Arc;
-
-use codex_mcp::McpBinding;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 
-use super::Session;
 use super::session::SessionConfiguration;
-use super::turn_context::TurnContext;
 use crate::agent::explorer_profile;
 use crate::config::Config;
 
@@ -32,49 +26,6 @@ pub(super) fn on_session_start(
             .for_each(explorer_profile::clamp_environment_selection);
     }
     Ok(config)
-}
-
-impl Session {
-    /// The step's MCP binding with the required servers started (`mcp_runtime_for_step`).
-    ///
-    /// Fork: an explorer judges MCP tools by live annotations (R2.9). A sub-agent starts MCP
-    /// servers lazily from the process-wide tool catalog cache, and the cache drops tool
-    /// annotations because only a live connection may supply them; the explorer's plan would
-    /// then hide every MCP tool, read-only ones included. So an explorer's step also waits for
-    /// the servers whose tools arrived without annotations and takes their live catalog.
-    pub(super) async fn fork_binding_with_requirements(
-        &self,
-        turn_context: &TurnContext,
-        required_servers: &[String],
-        required_plugins: &HashSet<String>,
-    ) -> Option<Arc<McpBinding>> {
-        let runtime = &self.services.mcp_runtime;
-        let binding = runtime
-            .current_binding_with_requirements(required_servers, required_plugins)
-            .await?;
-        if !explorer_profile::applies_to_source(&turn_context.config, &turn_context.session_source)
-        {
-            return Some(binding);
-        }
-        let unannotated = explorer_profile::servers_without_annotations(binding.tools());
-        if unannotated
-            .iter()
-            .all(|server| required_servers.contains(server))
-        {
-            return Some(binding);
-        }
-        let required_servers = required_servers
-            .iter()
-            .cloned()
-            .chain(unannotated)
-            .collect::<Vec<_>>();
-        Some(
-            runtime
-                .current_binding_with_requirements(&required_servers, required_plugins)
-                .await
-                .unwrap_or(binding),
-        )
-    }
 }
 
 /// Fork: an owner's ready environment config cannot widen an explorer (R2.5).

@@ -87,6 +87,25 @@ fn explorer_source(role: &str) -> SessionSource {
 /// read-only, `poke` annotated writing, `plain` without annotations), a client tool and the
 /// `multi_env_copy_file` extension, after the explorer hook ran.
 async fn explorer_plan(explorer_profile: bool, role: &str, code_mode: bool) -> ToolPlanProbe {
+    explorer_plan_with(
+        explorer_profile,
+        role,
+        code_mode,
+        &[],
+        std::collections::HashSet::new(),
+    )
+    .await
+}
+
+/// [`explorer_plan`] with `extra_mcp_tools` and the `(server, tool)` pairs that the catalog
+/// cache marks read-only.
+async fn explorer_plan_with(
+    explorer_profile: bool,
+    role: &str,
+    code_mode: bool,
+    extra_mcp_tools: &[ToolInfo],
+    cached_read_only_tools: std::collections::HashSet<(String, String)>,
+) -> ToolPlanProbe {
     let (_session, mut turn) = make_session_and_context().await;
     set_feature(&mut turn, Feature::ExplorerProfile, explorer_profile);
     if code_mode {
@@ -97,11 +116,12 @@ async fn explorer_plan(explorer_profile: bool, role: &str, code_mode: bool) -> T
             Some(ApplyPatchToolType::Freeform);
     });
     turn.session_source = explorer_source(role);
-    let mcp_tools = [
+    let mut mcp_tools = vec![
         annotated_mcp_tool("peek", Some(true)),
         annotated_mcp_tool("poke", Some(false)),
         annotated_mcp_tool("plain", /*read_only_hint*/ None),
     ];
+    mcp_tools.extend_from_slice(extra_mcp_tools);
     let mcp = codex_mcp::McpBinding::empty(mcp_config_for_test(&turn.config));
     let model_info = turn.model_info();
     let mut registry = build_core_tool_registry(
@@ -140,6 +160,7 @@ async fn explorer_plan(explorer_profile: bool, role: &str, code_mode: bool) -> T
         &turn.config,
         &turn.session_source,
         mcp_tools.iter(),
+        || cached_read_only_tools,
         &mut registry,
     );
     ToolPlanProbe::from_router(ToolRouter::from_registry(
@@ -205,6 +226,38 @@ async fn explorer_hides_tools_it_cannot_call() {
         let mut mcp_functions = plan.namespace_function_names("mcp__probe").to_vec();
         mcp_functions.sort();
         assert_eq!(mcp_functions, expected_mcp, "{case}");
+    }
+}
+
+/// R2.9, review 2026-10-27 P2: a tool from the catalog cache has no annotations; the explorer
+/// shows it when the cache keeps the server's `readOnlyHint: true` for it, and live
+/// annotations win over the cached hint.
+#[tokio::test]
+async fn explorer_shows_cached_read_only_tools() {
+    let cached = std::collections::HashSet::from([
+        ("probe".to_string(), "cached_peek".to_string()),
+        ("probe".to_string(), "poke".to_string()),
+    ]);
+    let plan = explorer_plan_with(
+        /*explorer_profile*/ true,
+        "explorer",
+        /*code_mode*/ false,
+        &[
+            annotated_mcp_tool("cached_peek", /*read_only_hint*/ None),
+            annotated_mcp_tool("cached_poke", /*read_only_hint*/ None),
+        ],
+        cached,
+    )
+    .await;
+    let mut mcp_functions = plan.namespace_function_names("mcp__probe").to_vec();
+    mcp_functions.sort();
+    assert_eq!(mcp_functions, ["cached_peek", "peek"]);
+    for hidden in ["cached_poke", "poke", "plain"] {
+        assert_eq!(
+            plan.exposure(&ToolName::namespaced("mcp__probe", hidden).to_string()),
+            ToolExposure::Hidden,
+            "{hidden}"
+        );
     }
 }
 

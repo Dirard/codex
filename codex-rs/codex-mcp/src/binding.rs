@@ -472,6 +472,10 @@ pub(crate) fn call_tool_result_from_rmcp(result: rmcp::model::CallToolResult) ->
     }
 }
 
+// Fork: cached `readOnlyHint`s for read-only explorers (explorer-and-questions spec, R2.9).
+#[path = "binding_fork.rs"]
+mod fork;
+
 #[cfg(test)]
 #[path = "binding_tests.rs"]
 mod tests;

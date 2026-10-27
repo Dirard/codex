@@ -149,6 +149,7 @@ pub(super) fn hide_explorer_tools(
         &turn_context.config,
         &turn_context.session_source,
         mcp.tools(),
+        || mcp.fork_cached_read_only_tools(),
         registry,
     );
 }

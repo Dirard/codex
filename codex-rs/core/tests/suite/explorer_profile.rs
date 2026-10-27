@@ -1663,6 +1663,185 @@ async fn spawned_explorer_finds_only_read_only_mcp_tools(explorer_profile: bool)
     Ok(())
 }
 
+/// MCP fixture whose first start (the parent's, which fills the catalog cache) is quick and
+/// whose later starts take `argv[2]` seconds: a spawned explorer that started it would wait.
+const SLOW_PROBE_SERVER: &str = r#"
+import json
+import os
+import sys
+import time
+
+marker = sys.argv[1]
+if os.path.exists(marker):
+    time.sleep(float(sys.argv[2]))
+else:
+    open(marker, "w").close()
+
+def send(message):
+    print(json.dumps({"jsonrpc": "2.0", **message}), flush=True)
+
+schema = {"type": "object", "properties": {"path": {"type": "string"}}}
+tools = [
+    {"name": "peek", "inputSchema": schema, "annotations": {"readOnlyHint": True}},
+    {"name": "plain", "inputSchema": schema},
+]
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get("method")
+    if method == "initialize":
+        result = {"protocolVersion": request["params"]["protocolVersion"],
+                  "capabilities": {"tools": {}},
+                  "serverInfo": {"name": "probe", "version": "1"}}
+    elif method == "tools/list":
+        result = {"tools": tools}
+    elif method == "tools/call":
+        result = {"content": [{"type": "text", "text": "probe-ran"}]}
+    elif method == "resources/list":
+        result = {"resources": []}
+    elif method == "resources/templates/list":
+        result = {"resourceTemplates": []}
+    elif "id" not in request:
+        continue
+    else:
+        result = {}
+    send({"id": request["id"], "result": result})
+"#;
+
+const SLOW_SEARCH_CALL_ID: &str = "slow-explorer-probe-search";
+
+// Review 2026-10-27 P2 (R2.9): a spawned explorer took its MCP catalog from the cache without
+// annotations and therefore started and waited for every MCP server on its first step (8 s for
+// a slow server, `startup_timeout_sec` for a hanging one). The cache now keeps the server's
+// `readOnlyHint` as a visibility hint, so the explorer starts at once and still finds only the
+// read-only tool.
+#[test_case(8, None; "slow_server")]
+#[test_case(1000, Some(4); "hanging_server")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawned_explorer_does_not_wait_for_mcp_startup(
+    later_start_secs: u64,
+    startup_timeout_sec: Option<u64>,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    core_test_support::skip_if_wine_exec!(
+        Ok(()),
+        "the MCP fixture requires a host Python interpreter"
+    );
+
+    let server = start_mock_server().await;
+    mount_sse_once_match(
+        &server,
+        move |req: &wiremock::Request| {
+            let body = decoded_body(req);
+            !is_child_request(req)
+                && body.contains(PARENT_SEED_PROMPT)
+                && !body.contains("seed-peek-call")
+        },
+        sse(vec![
+            ev_response_created("resp-seed-1"),
+            ev_function_call_with_namespace("seed-peek-call", "mcp__probe", "peek", "{}"),
+            ev_completed("resp-seed-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        move |req: &wiremock::Request| {
+            let body = decoded_body(req);
+            !is_child_request(req)
+                && body.contains("seed-peek-call")
+                && !body.contains(PARENT_PROMPT)
+        },
+        sse(vec![
+            ev_response_created("resp-seed-2"),
+            ev_assistant_message("msg-seed-2", "seeded"),
+            ev_completed("resp-seed-2"),
+        ]),
+    )
+    .await;
+    mount_parent_spawn(
+        &server,
+        json!({
+            "message": CHILD_PROMPT,
+            "task_name": "scout",
+            "agent_type": "explorer",
+            "fork_turns": "none",
+        }),
+    )
+    .await?;
+    let first = mount_sse_once_match(
+        &server,
+        child_request_without(CHILD_PROMPT, &[SLOW_SEARCH_CALL_ID]),
+        sse(vec![
+            ev_response_created("resp-child-1"),
+            core_test_support::responses::ev_tool_search_call(
+                SLOW_SEARCH_CALL_ID,
+                &json!({ "query": "probe peek plain", "limit": 8 }),
+            ),
+            ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+    let after_search = mount_sse_once_match(
+        &server,
+        child_request_containing(SLOW_SEARCH_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-child-2"),
+            ev_assistant_message("msg-child-2", "explorer done"),
+            ev_completed("resp-child-2"),
+        ]),
+    )
+    .await;
+
+    let marker_dir = tempfile::tempdir()?;
+    let marker = marker_dir.path().join("started").display().to_string();
+    let test = build_test(/*explorer_profile*/ true, move |config| {
+        let mut probe = json!({
+            "command": if cfg!(windows) { "python" } else { "python3" },
+            "args": ["-u", "-c", SLOW_PROBE_SERVER, marker, later_start_secs.to_string()],
+            "default_tools_approval_mode": "approve"
+        });
+        if let Some(timeout) = startup_timeout_sec {
+            probe["startup_timeout_sec"] = json!(timeout);
+        }
+        config
+            .mcp_servers
+            .set(
+                serde_json::from_value(json!({ "probe": probe })).expect("probe MCP server config"),
+            )
+            .expect("test config should accept the probe MCP server");
+    })
+    .build(&server)
+    .await?;
+    test.submit_turn_with_approval_and_permission_profile(
+        PARENT_SEED_PROMPT,
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+    let started = Instant::now();
+    test.submit_turn_with_approval_and_permission_profile(
+        PARENT_PROMPT,
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while first.requests().is_empty() {
+        anyhow::ensure!(Instant::now() < deadline, "no explorer request");
+        sleep(Duration::from_millis(20)).await;
+    }
+    let first_request_after = started.elapsed();
+    let request = wait_for_request(&after_search).await?;
+    let searched = searched_tool_names(&request, SLOW_SEARCH_CALL_ID);
+    assert!(searched.iter().any(|name| name == "peek"), "{searched:?}");
+    assert!(!searched.iter().any(|name| name == "plain"), "{searched:?}");
+    assert!(
+        first_request_after < Duration::from_secs(3),
+        "the explorer waited {first_request_after:?} for MCP startup"
+    );
+    Ok(())
+}
+
 const GRANDCHILD_PROMPT: &str = "grandchild: touch the review file";
 const GRAND_SPAWN_CALL_ID: &str = "explorer-grand-spawn";
 const GRANDCHILD_RULE_CALL_ID: &str = "grandchild-rule-call";

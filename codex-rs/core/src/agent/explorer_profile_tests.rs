@@ -137,44 +137,6 @@ async fn profile_table_survives_boolean_toggles() {
     );
 }
 
-/// R2.9: servers whose tools came from the annotation-less catalog cache must be reached live.
-#[test]
-fn servers_without_annotations_lists_each_server_once() {
-    let tool = |server: &str, name: &str, read_only: Option<bool>| {
-        let mut tool = rmcp::model::Tool::new(
-            name.to_string(),
-            String::new(),
-            std::sync::Arc::new(rmcp::model::object(serde_json::json!({"type": "object"}))),
-        );
-        tool.annotations =
-            read_only.map(|read_only| rmcp::model::ToolAnnotations::new().read_only(read_only));
-        codex_mcp::ToolInfo {
-            server_name: server.to_string(),
-            supports_parallel_tool_calls: false,
-            server_origin: None,
-            callable_name: name.to_string(),
-            callable_namespace: format!("mcp__{server}"),
-            namespace_description: None,
-            tool,
-            openai_file_input_optional_fields: Default::default(),
-            connector_id: None,
-            connector_name: None,
-            plugin_display_names: Vec::new(),
-        }
-    };
-    let tools = [
-        tool("zeta", "write", None),
-        tool("alpha", "read", Some(true)),
-        tool("alpha", "plain", None),
-        tool("zeta", "other", None),
-        tool("beta", "write", Some(false)),
-    ];
-    assert_eq!(
-        servers_without_annotations(&tools),
-        vec!["alpha".to_string(), "zeta".to_string()]
-    );
-}
-
 #[tokio::test]
 async fn profile_applies_only_to_explorer_role_when_enabled() {
     let (_home, disabled) = config_with(&[]).await;
