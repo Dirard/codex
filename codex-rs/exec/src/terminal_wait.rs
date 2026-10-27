@@ -153,10 +153,8 @@ impl TerminalWait {
             }
             return false;
         }
-        let owed = match self.pending(client, request_ids).await {
-            Some(pending) => self.owes(&pending),
-            None => false,
-        };
+        let pending = self.pending(client, request_ids).await;
+        let owed = pending.as_ref().is_some_and(|pending| self.owes(pending));
         if !owed {
             self.waiting = None;
             self.name_running_terminals(client, request_ids, event_processor)
@@ -172,6 +170,14 @@ impl TerminalWait {
             expired_until: None,
         });
         waiting.next_check = now + EXEC_TERMINAL_RECHECK;
+        // A silent wait of up to half an hour looked like a hang (live recheck 2026-10-27,
+        // N1): after every turn that leaves exec waiting, stderr says for what and how long.
+        // The JSON output has no event for this; it stays on stderr there too.
+        if let Some(message) = pending.as_ref().and_then(|pending| {
+            waiting_message(pending, waiting.deadline.saturating_duration_since(now))
+        }) {
+            eprintln!("{message}");
+        }
         true
     }
 
@@ -350,6 +356,59 @@ fn pending_terminals(pending: Option<&ThreadBackgroundTerminalsPendingResponse>)
         .unwrap_or_default()
 }
 
+/// What exec waits for after a turn, and for how long at most (live recheck 2026-10-27, N1):
+/// each terminal with its exit notification or output watch. `None` while only a notification
+/// or a turn is on its way, which takes moments.
+pub(crate) fn waiting_message(
+    pending: &ThreadBackgroundTerminalsPendingResponse,
+    remaining: Duration,
+) -> Option<String> {
+    if pending.terminals.is_empty() {
+        return None;
+    }
+    let terminals = pending
+        .terminals
+        .iter()
+        .map(|terminal| {
+            let mut reasons = Vec::new();
+            if terminal.notify_on_exit {
+                reasons.push("exit notification armed".to_string());
+            }
+            if let Some(pattern) = &terminal.output_watch {
+                reasons.push(format!("output watch \"{}\"", shorten(pattern)));
+            }
+            format!(
+                "session {} ({}): {}",
+                terminal.process_id,
+                shorten(&terminal.command),
+                reasons.join(", ")
+            )
+        })
+        .collect::<Vec<_>>();
+    Some(format!(
+        "codex exec is waiting for {}; up to {}; Ctrl-C to stop",
+        terminals.join("; "),
+        short_duration(remaining)
+    ))
+}
+
+/// "30m", "29m 40s", "45s", "1.5s".
+fn short_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds >= 60 {
+        let rest = seconds % 60;
+        if rest == 0 {
+            format!("{}m", seconds / 60)
+        } else {
+            format!("{}m {rest}s", seconds / 60)
+        }
+    } else if duration.subsec_millis() == 0 {
+        format!("{seconds}s")
+    } else {
+        format!("{:.1}s", duration.as_secs_f64())
+    }
+}
+
 /// An interrupt ended the wait: what exec did not wait for (P3-5).
 pub(crate) fn interrupt_warning(
     pending: Option<&ThreadBackgroundTerminalsPendingResponse>,
@@ -454,6 +513,7 @@ mod tests {
                 command: "make   all\n".to_string(),
                 running_for_ms: 1_805_200,
                 output_watch: None,
+                notify_on_exit: true,
             }])),
         );
         assert_eq!(
@@ -469,6 +529,49 @@ mod tests {
         assert!(long.ends_with('…'));
     }
 
+    /// Live recheck 2026-10-27, N1: after a turn exec says what it waits for, why, and how
+    /// long at most, instead of waiting in silence.
+    #[test]
+    fn waiting_message_names_each_terminal_and_the_longest_wait() {
+        let server = PendingBackgroundTerminal {
+            process_id: "7572".to_string(),
+            command: "./dev.sh".to_string(),
+            running_for_ms: 90_000,
+            output_watch: Some("(?i)ready|error".to_string()),
+            notify_on_exit: true,
+        };
+        let watch = PendingBackgroundTerminal {
+            process_id: "7573".to_string(),
+            command: "npm run   watch".to_string(),
+            running_for_ms: 5_000,
+            output_watch: Some("compiled".to_string()),
+            notify_on_exit: false,
+        };
+        assert_eq!(
+            waiting_message(&pending(vec![server.clone()]), Duration::from_secs(1800)),
+            Some(
+                "codex exec is waiting for session 7572 (./dev.sh): exit notification armed, output watch \"(?i)ready|error\"; up to 30m; Ctrl-C to stop"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            waiting_message(
+                &pending(vec![server, watch]),
+                Duration::from_millis(1_777_400)
+            ),
+            Some(
+                "codex exec is waiting for session 7572 (./dev.sh): exit notification armed, output watch \"(?i)ready|error\"; session 7573 (npm run watch): output watch \"compiled\"; up to 29m 37s; Ctrl-C to stop"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            waiting_message(&pending(Vec::new()), Duration::from_secs(4)),
+            None
+        );
+        assert_eq!(short_duration(Duration::from_millis(4_000)), "4s");
+        assert_eq!(short_duration(Duration::from_millis(1_500)), "1.5s");
+    }
+
     /// Review 2026-10-27 P3-5 and P2-3: an interrupt and an exit that leaves running
     /// terminals say what happens to them.
     #[test]
@@ -478,6 +581,7 @@ mod tests {
             command: "make all".to_string(),
             running_for_ms: 12_000,
             output_watch: None,
+            notify_on_exit: true,
         };
         assert_eq!(
             interrupt_warning(Some(&pending(vec![terminal]))),
@@ -492,6 +596,7 @@ mod tests {
             command: "./build.sh".to_string(),
             running_for_ms: 30_700,
             output_watch: None,
+            notify_on_exit: true,
         };
         assert_eq!(
             interrupted_turn_warning(&pending(vec![terminal])),

@@ -253,6 +253,9 @@ pub struct PendingBackgroundTerminal {
     pub running_for: Duration,
     /// The pattern of its output watch, if one is on.
     pub output_watch: Option<String>,
+    /// `notify_on_exit` is on: what waits for the terminal waits for its exit (live recheck
+    /// 2026-10-27, N1).
+    pub notify_on_exit: bool,
 }
 
 impl From<PendingTerminal> for PendingBackgroundTerminal {
@@ -262,6 +265,7 @@ impl From<PendingTerminal> for PendingBackgroundTerminal {
             command: terminal.command,
             running_for: tokio::time::Instant::now().saturating_duration_since(terminal.started_at),
             output_watch: terminal.output_watch,
+            notify_on_exit: terminal.notify_on_exit,
         }
     }
 }

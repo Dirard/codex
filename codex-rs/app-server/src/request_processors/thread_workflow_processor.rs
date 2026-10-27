@@ -124,6 +124,7 @@ impl ThreadWorkflowRequestProcessor {
                     running_for_ms: u64::try_from(terminal.running_for.as_millis())
                         .unwrap_or(u64::MAX),
                     output_watch: terminal.output_watch,
+                    notify_on_exit: terminal.notify_on_exit,
                 })
                 .collect(),
             notification_queued: pending.notification_queued,

@@ -41,4 +41,8 @@ pub struct PendingBackgroundTerminal {
     pub running_for_ms: u64,
     /// The pattern of the terminal's output watch, if one is on.
     pub output_watch: Option<String>,
+    /// `notify_on_exit` is on: the terminal is awaited until it exits, not only while its
+    /// output watch expects news.
+    #[serde(default)]
+    pub notify_on_exit: bool,
 }

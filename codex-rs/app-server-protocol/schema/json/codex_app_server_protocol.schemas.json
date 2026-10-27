@@ -16554,6 +16554,11 @@
           "command": {
             "type": "string"
           },
+          "notifyOnExit": {
+            "default": false,
+            "description": "`notify_on_exit` is on: the terminal is awaited until it exits, not only while its output watch expects news.",
+            "type": "boolean"
+          },
           "outputWatch": {
             "description": "The pattern of the terminal's output watch, if one is on.",
             "type": [

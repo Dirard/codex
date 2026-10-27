@@ -13,4 +13,9 @@ processId: string, command: string, runningForMs: number,
 /**
  * The pattern of the terminal's output watch, if one is on.
  */
-outputWatch: string | null, };
+outputWatch: string | null,
+/**
+ * `notify_on_exit` is on: the terminal is awaited until it exits, not only while its
+ * output watch expects news.
+ */
+notifyOnExit: boolean, };

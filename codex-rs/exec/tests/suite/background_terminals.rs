@@ -439,3 +439,256 @@ async fn exec_interrupted_during_a_turn_names_the_terminal_and_fails() -> anyhow
     assert!(!stderr.contains("while it waited"), "stderr: {stderr}");
     Ok(())
 }
+
+/// Live recheck 2026-10-27, N1: a dev server started with an output watch and `notify_on_exit`.
+/// After "ready" the model answers the notification and, with `disarm`, turns the exit
+/// notification off with `write_stdin` before it says it left the server running.
+#[derive(Clone)]
+struct DevServer {
+    served: Arc<Mutex<Vec<&'static str>>>,
+    bodies: Arc<Mutex<Vec<Value>>>,
+    disarm: bool,
+}
+
+const DEV_SERVER: &str = "echo starting; sleep 1; echo 'server ready'; sleep 60";
+
+impl DevServer {
+    fn new(disarm: bool) -> Self {
+        Self {
+            served: Arc::default(),
+            bodies: Arc::default(),
+            disarm,
+        }
+    }
+}
+
+/// The session ID that a background terminal notification in `text` names.
+fn notified_session_id(text: &str) -> i64 {
+    let after = text
+        .split("Background terminal session ")
+        .nth(1)
+        .expect("a background terminal notification");
+    after
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .expect("session ID")
+}
+
+fn has_output_of(body: &Value, call_id: &str) -> bool {
+    body["input"].as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item["type"] == "function_call_output" && item["call_id"] == call_id)
+    })
+}
+
+impl Respond for DevServer {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let text = String::from_utf8_lossy(&request.body).to_string();
+        let body: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        let (name, sse) = if has_output_of(&body, "disarm-1") {
+            (
+                "after_disarm",
+                message("resp-disarmed", "FINAL: left it running"),
+            )
+        } else if text.contains(NOTIFICATION_MARKER) {
+            if self.disarm {
+                let arguments = json!({
+                    "session_id": notified_session_id(&text),
+                    "chars": "",
+                    "yield_time_ms": 250,
+                    "notify_on_exit": false,
+                })
+                .to_string();
+                (
+                    "notified",
+                    responses::sse(vec![
+                        responses::ev_response_created("resp-notified"),
+                        responses::ev_function_call("disarm-1", "write_stdin", &arguments),
+                        responses::ev_completed("resp-notified"),
+                    ]),
+                )
+            } else {
+                (
+                    "notified",
+                    message("resp-notified", "FINAL: ready, left it running"),
+                )
+            }
+        } else if has_output_of(&body, "bg-1") {
+            (
+                "after_tool",
+                message("resp-after-tool", "Started the server."),
+            )
+        } else {
+            let arguments = json!({
+                "cmd": DEV_SERVER,
+                "yield_time_ms": 250,
+                "login": false,
+                "notify_on_output": "ready",
+                "notify_on_exit": true,
+            })
+            .to_string();
+            (
+                "start",
+                responses::sse(vec![
+                    responses::ev_response_created("resp-start"),
+                    responses::ev_function_call("bg-1", "exec_command", &arguments),
+                    responses::ev_completed("resp-start"),
+                ]),
+            )
+        };
+        self.served.lock().expect("served").push(name);
+        self.bodies.lock().expect("bodies").push(body);
+        responses::sse_response(sse)
+    }
+}
+
+async fn run_dev_server(disarm: bool, overrides: &[&str]) -> anyhow::Result<ExecRun> {
+    let test = test_codex_exec();
+    let server = responses::start_mock_server().await;
+    let responder = DevServer::new(disarm);
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(responder.clone())
+        .mount(&server)
+        .await;
+    let mut cmd = test.cmd_with_server(&server);
+    cmd.arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(test.cwd_path());
+    for override_arg in overrides {
+        cmd.arg("-c").arg(override_arg);
+    }
+    let started = Instant::now();
+    let output = cmd
+        .arg("start the dev server and tell me when it is ready")
+        .timeout(Duration::from_secs(60))
+        .output()?;
+    let served = responder.served.lock().expect("served").clone();
+    let bodies = responder.bodies.lock().expect("bodies").clone();
+    Ok(ExecRun {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        success: output.status.success(),
+        code: output.status.code(),
+        elapsed: started.elapsed(),
+        served,
+        bodies,
+    })
+}
+
+/// Live recheck 2026-10-27, N1 (b), N3: exec says after each turn what it waits for and how
+/// long, and the "ready" notification of a server whose exit notification is on says that
+/// codex exec waits for the exit, how to turn that off, and how to stop the server.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exec_says_what_it_waits_for_and_the_match_says_how_to_stop_waiting() -> anyhow::Result<()>
+{
+    let run = run_dev_server(
+        /*disarm*/ false,
+        &[
+            "features.exec_exit_notifications.enabled=true",
+            "features.exec_exit_notifications.exec_wait_timeout_ms=4000",
+            "features.exec_exit_notifications.output_watch_quiet_ms=1000",
+        ],
+    )
+    .await?;
+    // Nothing turns the exit notification off, so the wait runs out.
+    assert_eq!(
+        run.code,
+        Some(1),
+        "stdout: {}\nstderr: {}",
+        run.stdout,
+        run.stderr
+    );
+    assert_eq!(run.served, vec!["start", "after_tool", "notified"]);
+    let waiting =
+        format!(" ({DEV_SERVER}): exit notification armed, output watch \"ready\"; up to ");
+    assert!(
+        run.stderr.contains("codex exec is waiting for session ")
+            && run.stderr.contains(&format!("{waiting}4s; Ctrl-C to stop"))
+            && run.stderr.matches(&waiting).count() == 2,
+        "stderr: {}",
+        run.stderr
+    );
+    let notified = input_texts(run.bodies.last().expect("notified body"));
+    for expected in [
+        "codex exec for up to 4 seconds",
+        r#"write_stdin {"session_id": "#,
+        r#""notify_on_exit": false}"#,
+        r#"write_stdin with chars "\u0003" (Ctrl-C)"#,
+        "do not kill it by name",
+    ] {
+        assert!(notified.contains(expected), "{expected}: {notified}");
+    }
+    Ok(())
+}
+
+/// The texts of the request's input items, one per line.
+fn input_texts(body: &Value) -> String {
+    body["input"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|item| {
+            let mut texts = Vec::new();
+            if let Some(output) = item["output"].as_str() {
+                texts.push(output.to_string());
+            }
+            for content in item["content"].as_array().into_iter().flatten() {
+                if let Some(text) = content["text"].as_str() {
+                    texts.push(text.to_string());
+                }
+            }
+            texts
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Live recheck 2026-10-27, N1 (a): once the model turns the exit notification of a server it
+/// leaves running off with `write_stdin` `notify_on_exit: false`, exec no longer waits for the
+/// exit: it stops waiting when the output watch goes quiet and exits with code 0.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exec_stops_waiting_once_the_model_turns_the_exit_notification_off() -> anyhow::Result<()> {
+    let run = run_dev_server(
+        /*disarm*/ true,
+        &[
+            "features.exec_exit_notifications.enabled=true",
+            "features.exec_exit_notifications.exec_wait_timeout_ms=40000",
+            "features.exec_exit_notifications.output_watch_quiet_ms=1000",
+        ],
+    )
+    .await?;
+    assert_eq!(
+        run.code,
+        Some(0),
+        "stdout: {}\nstderr: {}",
+        run.stdout,
+        run.stderr
+    );
+    assert_eq!(
+        run.served,
+        vec!["start", "after_tool", "notified", "after_disarm"]
+    );
+    assert!(
+        run.stdout.contains("FINAL: left it running"),
+        "{}",
+        run.stdout
+    );
+    assert!(run.elapsed < Duration::from_secs(30), "{:?}", run.elapsed);
+    let disarmed = input_texts(run.bodies.last().expect("body after the disarm"));
+    assert!(
+        disarmed.contains("Exit notification: off (codex exec and wait_agent no longer wait for this process to exit"),
+        "{disarmed}"
+    );
+    assert!(
+        run.stderr.contains(
+            "codex exec is exiting while background terminals still run; they are terminated now: session "
+        ),
+        "stderr: {}",
+        run.stderr
+    );
+    Ok(())
+}

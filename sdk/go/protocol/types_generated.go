@@ -16718,15 +16718,17 @@ func (v *PatchChangeKind) UnmarshalJSON(data []byte) error {
 type PathUri string
 
 type PendingBackgroundTerminal struct {
-	Command      string           `json:"command"`
-	OutputWatch  Optional[string] `json:"outputWatch,omitzero"`
-	ProcessID    string           `json:"processId"`
-	RunningForMs uint64           `json:"runningForMs"`
+	Command      string                `json:"command"`
+	NotifyOnExit OptionalNonNull[bool] `json:"notifyOnExit,omitzero"`
+	OutputWatch  Optional[string]      `json:"outputWatch,omitzero"`
+	ProcessID    string                `json:"processId"`
+	RunningForMs uint64                `json:"runningForMs"`
 }
 
 var pendingBackgroundTerminalSpec = objectSpec{
 	fields: []objectField{
 		{name: "command", flags: fieldRequired | fieldRejectNull},
+		{name: "notifyOnExit", flags: fieldNonNullOptional},
 		{name: "outputWatch"},
 		{name: "processId", flags: fieldRequired | fieldRejectNull},
 		{name: "runningForMs", flags: fieldRequired | fieldRejectNull},

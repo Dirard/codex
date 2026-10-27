@@ -3019,6 +3019,13 @@ class PendingBackgroundTerminal(BaseModel):
         populate_by_name=True,
     )
     command: str
+    notify_on_exit: Annotated[
+        bool | None,
+        Field(
+            alias="notifyOnExit",
+            description="`notify_on_exit` is on: the terminal is awaited until it exits, not only while its output watch expects news.",
+        ),
+    ] = False
     output_watch: Annotated[
         str | None,
         Field(
