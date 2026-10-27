@@ -263,3 +263,26 @@ pub(super) fn append_isolation_note(
         forked_rollout_items.push(RolloutItem::ResponseItem(note_message.into()));
     }
 }
+
+impl LocalAgentRuntime {
+    /// Unloads an isolated agent at rest before its worktree is closed (UC12, R12.2), as
+    /// residency eviction does: its mail and environments stay for a later reload. An agent
+    /// that is not loaded is already at rest; a running one is refused.
+    pub(crate) async fn fork_unload_for_close(&self, thread_id: ThreadId) -> Result<(), String> {
+        let state = self.upgrade().map_err(|err| err.to_string())?;
+        let Ok(thread) = state.get_thread(thread_id).await else {
+            return Ok(());
+        };
+        let membership = self.admit_start().map_err(|err| err.to_string())?;
+        match state.try_evict_v2_thread(thread, &membership).await {
+            Ok(super::ThreadEvictionOutcome::Evicted | super::ThreadEvictionOutcome::NotCurrent) => {
+                Ok(())
+            }
+            Ok(super::ThreadEvictionOutcome::Busy) => Err(
+                "it is still running a turn or has background work; wait for it or interrupt it, then close its worktree"
+                    .to_string(),
+            ),
+            Err(err) => Err(format!("it could not be unloaded: {err}")),
+        }
+    }
+}

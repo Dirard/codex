@@ -4,6 +4,8 @@
 //! The state comes from the thread's working directory on disk, so unloaded threads and
 //! threads of an earlier process are described too. It is reported only through the
 //! experimental `Thread.extra` and only while the feature is enabled in the server config.
+//! A direct `thread/resume` of such a thread that cannot restore its removed worktree reports
+//! why (R5.9).
 
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
@@ -65,4 +67,17 @@ async fn annotate(config: &Config, thread: &mut Thread) {
             AgentWorktreeState::Removed => ThreadAgentWorktreeStatus::Removed,
         },
     });
+}
+
+/// The upstream answer to a sub-agent that cannot be resumed through its parent.
+const CHILD_RESUME_ERROR: &str = "cannot resume an unloaded multi-agent v2 sub-agent through its parent; resume the parent first, or use thread/read to inspect it";
+
+/// R5.9: the error of a direct `thread/resume` of a sub-agent. A worktree that cannot be
+/// restored is named with the reason; other failures keep the upstream text, whose details
+/// stay in the log.
+pub(super) fn child_resume_message(err: &codex_protocol::error::CodexErr) -> String {
+    match codex_core::agent_worktree_reload_error(err) {
+        Some(reason) => format!("{CHILD_RESUME_ERROR}: {reason}"),
+        None => CHILD_RESUME_ERROR.to_string(),
+    }
 }

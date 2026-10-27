@@ -883,14 +883,16 @@ async fn isolation_requires_a_single_local_environment() -> Result<()> {
     test.submit_turn_with_environments(ROOT_PROMPT, Some(Vec::new()))
         .await?;
 
-    // R2.5: without exactly one ready local environment there is nothing to isolate.
+    // R2.5: without exactly one ready local environment there is nothing to isolate, and the
+    // refusal says so and how to spawn instead.
     let output = spawn
         .function_call_output_text("spawn-no-environment")
         .context("spawn output")?;
     assert!(
-        output.contains("requires the child to run in a single local environment"),
+        output.contains("requires a single local environment, and this turn has none"),
         "{output}"
     );
+    assert!(output.contains("isolation `none`"), "{output}");
     assert_eq!(managed_buckets(&test), Vec::<PathBuf>::new());
     Ok(())
 }
@@ -1656,50 +1658,112 @@ async fn a_removed_worktree_is_restored_on_reload() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_removed_worktree_fails_the_reload_without_falling_back() -> Result<()> {
-    const TASK: &str = "look without changing anything";
-    let server = start_mock_server().await;
+/// Spawns an unchanged isolated worker, stops it, and restarts the process in the repository;
+/// the previous process's tree shutdown removed the unchanged worktree (R6.1). The first
+/// process is returned too: it owns the repository's temporary directory.
+async fn restart_after_an_unchanged_worker(
+    server: &MockServer,
+    task: &'static str,
+    keep_record: bool,
+) -> Result<(TestCodex, TestCodex, PathBuf, String)> {
     let mut builder = isolation_builder(None, /*git_repository*/ true, |config| {
         config.features.enable(Feature::Sqlite).expect("sqlite");
     });
-    let initial = builder.build_with_auto_env(&server).await?;
+    let initial = builder.build_with_auto_env(server).await?;
     let mut created = initial.thread_manager.subscribe_thread_created();
     let (child, output) = spawn_isolated_worker(
-        &server,
+        server,
         &initial,
         &mut created,
-        TASK,
+        task,
         &[("look", "cat a.txt".to_string())],
         PermissionProfile::Disabled,
     )
     .await?;
     let root = PathBuf::from(worktree_field(&output, "path"));
     let branch = worktree_field(&output, "branch");
+    let record = initial
+        .codex_home_path()
+        .join("agent-worktrees")
+        .join(format!("{}.json", child.id));
     child.thread.shutdown_and_wait().await?;
     initial.codex.flush_rollout().await?;
-
-    // The previous process's tree shutdown removed the unchanged worktree (R6.1).
-    let resumed = restart_in_repository(builder, &server, &initial).await?;
+    assert!(record.exists(), "host record {}", record.display());
+    if !keep_record {
+        std::fs::remove_file(&record)?;
+    }
+    let resumed = restart_in_repository(builder, server, &initial).await?;
     assert!(!root.exists());
+    Ok((initial, resumed, root, branch))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restarted_unchanged_child_is_restored_from_the_base() -> Result<()> {
+    const TASK: &str = "look without changing anything before the restart";
+    const FOLLOWUP: &str = "continue in the worktree restored from the base";
+    let server = start_mock_server().await;
+    let (_initial, resumed, root, _branch) =
+        restart_after_an_unchanged_worker(&server, TASK, /*keep_record*/ true).await?;
     let followup = mount_root_call(
         &server,
         "follow up after removal",
-        "followup-removed",
+        "followup-base",
+        "followup_task",
+        followup_arguments(FOLLOWUP),
+    )
+    .await;
+    let reloaded = mount_child(
+        &server,
+        FOLLOWUP,
+        &[(
+            "where",
+            "pwd; cat a.txt; cat untracked.txt; git symbolic-ref -q HEAD || echo detached"
+                .to_string(),
+        )],
+    )
+    .await;
+    let mut created = resumed.thread_manager.subscribe_thread_created();
+    resumed.submit_turn("follow up after removal").await?;
+    let child = next_child(&mut created, &resumed)
+        .await
+        .with_context(|| format!("{:?}", followup.function_call_output_text("followup-base")))?;
+    wait_turn_complete(&child).await;
+
+    // Q22, R5.6: the host record's base restores the unchanged child at its old path, with the
+    // parent's snapshot and a detached HEAD, as without a restart.
+    let check = output_of(&reloaded, "where");
+    assert!(check.contains(&root.display().to_string()), "{check}");
+    assert!(check.contains("parent edit"), "{check}");
+    assert!(check.contains(UNTRACKED_FILE.trim()), "{check}");
+    assert!(check.contains("detached"), "{check}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_removed_worktree_without_a_record_fails_the_reload() -> Result<()> {
+    const TASK: &str = "look without changing anything before losing the record";
+    let server = start_mock_server().await;
+    let (_initial, resumed, root, branch) =
+        restart_after_an_unchanged_worker(&server, TASK, /*keep_record*/ false).await?;
+    let followup = mount_root_call(
+        &server,
+        "follow up without a record",
+        "followup-no-record",
         "followup_task",
         followup_arguments("this must not run"),
     )
     .await;
-    resumed.submit_turn("follow up after removal").await?;
+    resumed.submit_turn("follow up without a record").await?;
 
-    // R5.3, R5.6: without an agent branch nothing restores the worktree after a restart, and
-    // the error names the missing worktree and the branch.
+    // R5.3, R5.6: without the host record nothing names the parent checkout or the base, so
+    // the reload fails with the missing worktree and the branch, and nothing is created.
     let error = followup
-        .function_call_output_text("followup-removed")
+        .function_call_output_text("followup-no-record")
         .context("followup output")?;
     assert!(error.contains(&root.display().to_string()), "{error}");
     assert!(error.contains(&branch), "{error}");
-    assert!(error.contains("no agent branch"), "{error}");
+    assert!(error.contains("no record"), "{error}");
+    assert!(!root.exists());
     assert_eq!(resumed.thread_manager.list_thread_ids().await.len(), 1);
     Ok(())
 }
@@ -3170,5 +3234,522 @@ async fn apply_agent_worktree_runs_the_post_tool_use_hook_of_file_edits() -> Res
     assert_eq!(post["tool_name"], "apply_patch");
     let command = post["tool_input"]["command"].as_str().unwrap_or_default();
     assert!(command.contains("*** Add File: top.txt"), "{command}");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Amend 2026-10-27, deferred items: restore before a turn (R5.8), Guardian (R3.8), close
+// (UC12), unloaded agents in `list_agents` (D7), applied branches (D10)
+// ---------------------------------------------------------------------------------------------
+
+/// Removes a worktree the way Codex Desktop's cleanup and `git worktree remove` do.
+fn remove_like_desktop(repository: &Path, root: &Path) {
+    git(
+        repository,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            root.to_str().expect("UTF-8 worktree path"),
+        ],
+    );
+    assert!(!root.exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_loaded_child_gets_its_removed_worktree_back_before_its_turn() -> Result<()> {
+    const TASK: &str = "work before the cleanup";
+    const FOLLOWUP: &str = "continue after the cleanup";
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    let (child, output) = spawn_isolated_worker(
+        &server,
+        &test,
+        &mut created,
+        TASK,
+        &[("edit", "printf kept > kept.txt".to_string())],
+        PermissionProfile::Disabled,
+    )
+    .await?;
+    let root = PathBuf::from(worktree_field(&output, "path"));
+    let branch = worktree_field(&output, "branch");
+    // The child stays loaded; something outside Codex removes its worktree.
+    remove_like_desktop(&test.config.cwd, &root);
+    assert!(test.thread_manager.get_thread(child.id).await.is_ok());
+
+    mount_root_call(
+        &server,
+        "follow up after the cleanup",
+        "followup-loaded",
+        "followup_task",
+        followup_arguments(FOLLOWUP),
+    )
+    .await;
+    let resumed = mount_child(
+        &server,
+        FOLLOWUP,
+        &[(
+            "where",
+            "pwd; cat kept.txt; echo; git symbolic-ref HEAD".to_string(),
+        )],
+    )
+    .await;
+    test.submit_turn("follow up after the cleanup").await?;
+    wait_for_event(&child.thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    // R5.8: the loaded child's next turn found its worktree restored from its branch.
+    let check = output_of(&resumed, "where");
+    assert!(check.contains(&root.display().to_string()), "{check}");
+    assert!(check.contains("kept"), "{check}");
+    assert!(check.contains(&format!("refs/heads/{branch}")), "{check}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_reviews_an_isolated_childs_escalation_with_its_worktree() -> Result<()> {
+    use codex_core::config::Constrained;
+    use codex_protocol::config_types::ApprovalsReviewer;
+    use codex_protocol::protocol::AskForApproval;
+    const TASK: &str = "escalate to write outside the worktree";
+    let server = start_mock_server().await;
+    // Guardian answers every review first; it denies the escalation.
+    let reviews = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let recorded = Arc::clone(&reviews);
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path_regex(".*/responses$"))
+        .and(move |request: &wiremock::Request| {
+            let body = body(request);
+            let guardian = body["client_metadata"]["x-openai-subagent"] == "guardian";
+            if guardian {
+                recorded
+                    .lock()
+                    .expect("reviews lock")
+                    .push(body.to_string());
+            }
+            guardian
+        })
+        .respond_with(core_test_support::responses::sse_response(sse(vec![
+            ev_response_created("review"),
+            ev_assistant_message(
+                "review",
+                r#"{"outcome":"deny","rationale":"Writing the parent checkout is not authorized."}"#,
+            ),
+            ev_completed("review"),
+        ])))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |config| {
+        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config
+            .features
+            .disable(Feature::GuardianV2)
+            .expect("synchronous Guardian reviews");
+    })
+    .await?;
+    let parent = test.config.cwd.to_path_buf();
+    let spawn = mount_root_call(
+        &server,
+        ROOT_PROMPT,
+        "spawn-escalating",
+        "spawn_agent",
+        spawn_arguments(TASK, "escalating", Some("worktree")),
+    )
+    .await;
+    let escalation = json!({
+        "cmd": format!("printf escaped > '{}'", parent.join("escaped.txt").display()),
+        "shell": "bash",
+        "login": false,
+        "sandbox_permissions": "require_escalated",
+        "justification": "write the parent checkout",
+    });
+    mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            let text = body_text(request);
+            text.contains(TASK) && !text.contains(ROOT_PROMPT) && !has_output(request, "escalate")
+        },
+        sse(vec![
+            ev_response_created("resp-escalate"),
+            ev_exec_command_call_with_args("escalate", &escalation),
+            ev_completed("resp-escalate"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            let text = body_text(request);
+            text.contains(TASK) && !text.contains(ROOT_PROMPT) && has_output(request, "escalate")
+        },
+        sse(vec![
+            ev_response_created("resp-escalated"),
+            final_answer("resp-escalated", "worker done"),
+            ev_completed("resp-escalated"),
+        ]),
+    )
+    .await;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    test.submit_turn_with_approval_and_permission_profile(
+        ROOT_PROMPT,
+        AskForApproval::OnRequest,
+        workspace_only_profile(),
+    )
+    .await?;
+    wait_turn_complete(&next_child(&mut created, &test).await?).await;
+    let output = spawn_output(&spawn, "spawn-escalating");
+
+    // R3.8: Guardian saw the agent's worktree and the parent checkout as host context.
+    let reviews = reviews.lock().expect("reviews lock").clone();
+    let review = reviews
+        .iter()
+        .find(|review| review.contains("escaped.txt"))
+        .unwrap_or_else(|| panic!("no Guardian review of the escalation in {reviews:?}"));
+    assert!(review.contains("agent_worktree"), "{review}");
+    assert!(
+        review.contains(&worktree_field(&output, "path")),
+        "{review}"
+    );
+    assert!(review.contains("parent_checkout"), "{review}");
+    assert!(review.contains(&parent.display().to_string()), "{review}");
+    assert!(!parent.join("escaped.txt").exists());
+    Ok(())
+}
+
+fn close_arguments(target: &str, discard_changes: bool) -> Value {
+    let mut arguments = json!({ "target": target, "close": true });
+    if discard_changes {
+        arguments["discard_changes"] = json!(true);
+    }
+    arguments
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_close_applies_then_removes_the_checkout() -> Result<()> {
+    const FOLLOWUP: &str = "continue after the close";
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let parent = test.config.cwd.to_path_buf();
+    let mut created = test.thread_manager.subscribe_thread_created();
+    let spawned = spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        (ROOT_PROMPT, "spawn-closed"),
+        ("write a result to close", "worker", Some("worktree")),
+        &[("close-edit", "printf 'worker\\n' > worker.txt".to_string())],
+    )
+    .await?;
+    let root = PathBuf::from(worktree_field(&spawned, "path"));
+    let branch = worktree_field(&spawned, "branch");
+    let tip = git(&parent, &["rev-parse", &branch]);
+
+    let close = mount_root_call(
+        &server,
+        "apply and close the worker",
+        "apply-close",
+        "apply_agent_worktree",
+        close_arguments("worker", /*discard_changes*/ false),
+    )
+    .await;
+    test.submit_turn_with_permission_profile(
+        "apply and close the worker",
+        workspace_only_profile(),
+    )
+    .await?;
+
+    // R12.2, R12.4–R12.7: applied, unloaded, checkout removed, the applied branch deleted.
+    let output = close
+        .function_call_output_text("apply-close")
+        .context("close output")?;
+    assert!(output.contains(&format!("Applied {branch}")), "{output}");
+    assert!(
+        output.contains(&format!(
+            "Closed the worktree of agent worker: removed {}",
+            root.display()
+        )),
+        "{output}"
+    );
+    assert!(output.contains("the branch was deleted"), "{output}");
+    assert_eq!(
+        std::fs::read_to_string(parent.join("worker.txt"))?,
+        "worker\n"
+    );
+    assert!(!root.exists());
+    assert_eq!(agent_branches(&parent), Vec::<String>::new());
+    let record: Value = serde_json::from_slice(&std::fs::read(
+        test.codex_home_path()
+            .join("agent-worktrees")
+            .read_dir()?
+            .next()
+            .context("host record")??
+            .path(),
+    )?)?;
+    assert_eq!(record["applied_tip"], tip);
+
+    // A later task gets the worktree back at the applied tip, with the agent's work.
+    mount_root_call(
+        &server,
+        "follow up after the close",
+        "followup-closed",
+        "followup_task",
+        followup_arguments(FOLLOWUP),
+    )
+    .await;
+    let reloaded = mount_child(
+        &server,
+        FOLLOWUP,
+        &[(
+            "where",
+            "pwd; cat worker.txt; git rev-parse HEAD".to_string(),
+        )],
+    )
+    .await;
+    test.submit_turn("follow up after the close").await?;
+    wait_turn_complete(&next_child(&mut created, &test).await?).await;
+    let check = output_of(&reloaded, "where");
+    assert!(check.contains(&root.display().to_string()), "{check}");
+    assert!(check.contains("worker"), "{check}");
+    assert!(check.contains(&tip), "{check}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_close_needs_discard_for_unapplied_changes() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let parent = test.config.cwd.to_path_buf();
+    std::fs::write(parent.join("geometry.txt"), GEOMETRY)?;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    let spawned = spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        (ROOT_PROMPT, "spawn-unapplied"),
+        ("rewrite the first line to close", "top", Some("worktree")),
+        &[(
+            "unapplied-edit",
+            "sed -i 's/^l1$/top/' geometry.txt".to_string(),
+        )],
+    )
+    .await?;
+    let root = PathBuf::from(worktree_field(&spawned, "path"));
+    let branch = worktree_field(&spawned, "branch");
+    let edited = GEOMETRY.replace("l1", "parent");
+    std::fs::write(parent.join("geometry.txt"), &edited)?;
+
+    let refused = mount_root_call(
+        &server,
+        "close the conflicting worker",
+        "close-conflict",
+        "apply_agent_worktree",
+        close_arguments("top", /*discard_changes*/ false),
+    )
+    .await;
+    test.submit_turn("close the conflicting worker").await?;
+    let output = refused
+        .function_call_output_text("close-conflict")
+        .context("refused close output")?;
+    // R12.4: the apply is refused, so the worktree stays.
+    assert!(output.contains("conflicts with your checkout"), "{output}");
+    assert!(output.contains("was kept"), "{output}");
+    assert!(root.exists());
+
+    let alone = mount_root_call(
+        &server,
+        "discard without closing",
+        "discard-alone",
+        "apply_agent_worktree",
+        json!({ "target": "top", "discard_changes": true }),
+    )
+    .await;
+    test.submit_turn("discard without closing").await?;
+    let output = alone
+        .function_call_output_text("discard-alone")
+        .context("discard output")?;
+    // R12.1: discard_changes needs close.
+    assert!(output.contains("set close as well"), "{output}");
+    assert!(root.exists());
+
+    let discarded = mount_root_call(
+        &server,
+        "close and discard the worker",
+        "close-discard",
+        "apply_agent_worktree",
+        close_arguments("top", /*discard_changes*/ true),
+    )
+    .await;
+    test.submit_turn("close and discard the worker").await?;
+    let output = discarded
+        .function_call_output_text("close-discard")
+        .context("discard close output")?;
+    // R12.4, R12.7: closed without applying; the branch keeps the unapplied change.
+    assert!(
+        output.contains("Closed the worktree of agent top without applying its changes"),
+        "{output}"
+    );
+    assert!(!root.exists());
+    assert_eq!(
+        std::fs::read_to_string(parent.join("geometry.txt"))?,
+        edited
+    );
+    assert_eq!(agent_branches(&parent), vec![branch]);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_close_refuses_a_running_agent() -> Result<()> {
+    const TASK: &str = "write and then keep working";
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let parent = test.config.cwd.to_path_buf();
+    let spawn = mount_root_call(
+        &server,
+        ROOT_PROMPT,
+        "spawn-running",
+        "spawn_agent",
+        spawn_arguments(TASK, "runner", Some("worktree")),
+    )
+    .await;
+    mount_child(
+        &server,
+        TASK,
+        &[(
+            "long-step",
+            "printf 'pending\\n' > pending.txt && sleep 30".to_string(),
+        )],
+    )
+    .await;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    test.submit_turn(ROOT_PROMPT).await?;
+    let child = next_child(&mut created, &test).await?;
+    wait_for_event(&child.thread, |event| {
+        matches!(event, EventMsg::ExecCommandBegin(_))
+    })
+    .await;
+    let root = PathBuf::from(worktree_field(
+        &spawn_output(&spawn, "spawn-running"),
+        "path",
+    ));
+
+    let refused = mount_root_call(
+        &server,
+        "close the running worker",
+        "close-running",
+        "apply_agent_worktree",
+        close_arguments("runner", /*discard_changes*/ false),
+    )
+    .await;
+    test.submit_turn("close the running worker").await?;
+    let output = refused
+        .function_call_output_text("close-running")
+        .context("running close output")?;
+    // R12.2: nothing is applied or removed while the agent works.
+    assert!(output.contains("still running"), "{output}");
+    assert!(
+        output.contains("Nothing was applied or removed"),
+        "{output}"
+    );
+    assert!(root.exists());
+    assert!(!parent.join("pending.txt").exists());
+
+    // An interrupted turn records nothing when it ends; the close records it (R12.3).
+    child
+        .thread
+        .submit(codex_protocol::protocol::Op::Interrupt)
+        .await?;
+    wait_for_event(&child.thread, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    let closed = mount_root_call(
+        &server,
+        "close the interrupted worker",
+        "close-interrupted",
+        "apply_agent_worktree",
+        close_arguments("runner", /*discard_changes*/ false),
+    )
+    .await;
+    test.submit_turn_with_permission_profile(
+        "close the interrupted worker",
+        workspace_only_profile(),
+    )
+    .await?;
+    let output = closed
+        .function_call_output_text("close-interrupted")
+        .context("interrupted close output")?;
+    assert!(output.contains("Applied codex/agents/runner-"), "{output}");
+    assert_eq!(
+        std::fs::read_to_string(parent.join("pending.txt"))?,
+        "pending\n"
+    );
+    assert!(!root.exists());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tree_shutdown_removes_branches_the_parent_applied() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let parent = test.config.cwd.to_path_buf();
+    let mut created = test.thread_manager.subscribe_thread_created();
+    let applied = spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        (ROOT_PROMPT, "spawn-applied"),
+        ("write a file to apply", "applied", Some("worktree")),
+        &[(
+            "applied-edit",
+            "printf 'applied\\n' > applied.txt".to_string(),
+        )],
+    )
+    .await?;
+    let kept = spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        ("spawn the kept worker", "spawn-kept"),
+        ("write a file to keep", "kept", Some("worktree")),
+        &[("kept-edit", "printf 'kept\\n' > kept.txt".to_string())],
+    )
+    .await?;
+    let apply = mount_root_call(
+        &server,
+        "apply one worker",
+        "apply-one",
+        "apply_agent_worktree",
+        apply_arguments("applied"),
+    )
+    .await;
+    test.submit_turn_with_permission_profile("apply one worker", workspace_only_profile())
+        .await?;
+    assert!(
+        apply
+            .function_call_output_text("apply-one")
+            .context("apply output")?
+            .contains("Applied codex/agents/applied-")
+    );
+
+    test.thread_manager
+        .shutdown_all_threads_bounded(Duration::from_secs(10))
+        .await;
+
+    // D10, R12.7: the applied worktree and its branch are gone; the other one stays.
+    assert!(!PathBuf::from(worktree_field(&applied, "path")).exists());
+    assert!(PathBuf::from(worktree_field(&kept, "path")).exists());
+    assert_eq!(
+        agent_branches(&parent),
+        vec![worktree_field(&kept, "branch")]
+    );
+    assert_eq!(
+        std::fs::read_to_string(parent.join("applied.txt"))?,
+        "applied\n"
+    );
     Ok(())
 }

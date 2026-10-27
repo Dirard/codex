@@ -160,6 +160,7 @@ mod workflow;
 pub use agent::control::ThreadEvictionOutcome;
 // Fork: agent worktrees for app-server threads (specs/agent-worktree-isolation-2026-10-25.md).
 pub use agent::worktree_isolation::AgentWorktreeView;
+pub use agent::worktree_isolation::agent_worktree_reload_error;
 pub use agent::worktree_isolation::describe_agent_worktree;
 pub use codex_worktree::AgentWorktreeState;
 pub use thread_manager::AgentTreeShutdown;

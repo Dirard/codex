@@ -66,6 +66,13 @@ pub enum MergeOutcome {
         path: String,
         reason: &'static str,
     },
+    /// The merge moves, adds or removes a submodule (a gitlink), which only the parent can
+    /// update in its own submodule checkout (R11.12).
+    Submodule {
+        path: String,
+        /// The commit the branch puts the submodule at; `None` when it removes it.
+        commit: Option<String>,
+    },
     /// The parent's working tree already contains the branch.
     AlreadyApplied {
         tip: String,
@@ -80,8 +87,8 @@ pub enum MergeOutcome {
 /// outside the snapshot (an ignored file) or whose directory is an ignored file or symlink
 /// in the parent's checkout; paths Codex never writes (`..`, `.git`, `.codex`, `.agents` or
 /// `.aws` components); changes a text patch cannot express (binary or non-UTF-8 content,
-/// symlinks, submodules, executable modes); and a recorded base that is not an ancestor of
-/// the branch tip.
+/// symlinks, executable modes); submodule changes, which the parent makes itself (R11.12);
+/// and a recorded base that is not an ancestor of the branch tip.
 pub fn merge_agent_branch(
     source_root: &Path,
     root: &Path,
@@ -176,6 +183,14 @@ pub fn merge_agent_branch(
         if let Some(reason) = forbidden_path_reason(&path) {
             return Ok(unrepresentable(path, reason));
         }
+        // A submodule's directory is not a file the write could trip over: the change is to
+        // the submodule itself, which the parent updates (R11.12).
+        if *old_mode == GITLINK_MODE || *new_mode == GITLINK_MODE {
+            return Ok(MergeOutcome::Submodule {
+                path,
+                commit: (*new_mode == GITLINK_MODE).then(|| (*new_oid).to_string()),
+            });
+        }
         // What the parent's checkout has on the path, ignored files and symlinks included:
         // the snapshot does not show them, the write would trip over them.
         if blocked_in_checkout(source_root, &path, *status == "A") {
@@ -243,6 +258,9 @@ pub fn merge_agent_branch(
         pending_worktree_changes,
     }))
 }
+
+/// The tree mode of a gitlink, the entry of a submodule.
+const GITLINK_MODE: &str = "160000";
 
 fn unrepresentable(path: String, reason: &'static str) -> MergeOutcome {
     MergeOutcome::Unrepresentable { path, reason }

@@ -16,6 +16,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -113,7 +114,7 @@ pub fn snapshot_working_tree(source_cwd: &Path) -> Result<String> {
     if has_unmerged_entries(&root, &index)? {
         bail!("the parent index has unmerged paths; resolve them or use the `head` base");
     }
-    stage_all(&root, &index)?;
+    stage_all(&root, &index, &[])?;
     let tree = write_tree(&root, &index)?;
     commit_tree(&root, &tree, head.as_deref(), SNAPSHOT_MESSAGE)
 }
@@ -265,7 +266,8 @@ pub fn checkpoint(request: CheckpointRequest<'_>) -> Result<CheckpointOutcome> {
         let temporary = tempfile::tempdir().context("cannot create a temporary index directory")?;
         let index = temporary.path().join("index");
         copy_index(root, &index)?;
-        stage_all(root, &index)?;
+        // An emptied or removed submodule directory is not the agent's change (R2.11).
+        stage_all(root, &index, &unpopulated_gitlinks(root)?)?;
         let tree = write_tree(root, &index)?;
         // The base trailers let a removed worktree be restored from its branch (R4.9).
         let message = format!(
@@ -687,18 +689,61 @@ fn has_changes(root: &Path) -> Result<bool> {
     // does not count as activity for the sweep (R10.4). Only whether anything changed
     // matters: `normal` reports an untracked directory once instead of walking all of it,
     // and still hides directories without untracked, non-ignored files.
-    let status = git_output(
-        root,
-        GitOperation::WorkingTree,
-        [
-            "--no-optional-locks",
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=normal",
-        ],
-    )?;
+    let mut args = [
+        "--no-optional-locks",
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=normal",
+    ]
+    .map(OsString::from)
+    .to_vec();
+    // A submodule the worktree never checked out shows as deleted once its empty directory
+    // is gone; that is not the agent's change (R2.11).
+    let unpopulated = unpopulated_gitlinks(root)?;
+    if !unpopulated.is_empty() {
+        args.push(OsString::from("--"));
+        args.push(OsString::from("."));
+        args.extend(exclude_pathspecs(&unpopulated));
+    }
+    let status = git_output(root, GitOperation::WorkingTree, args)?;
     Ok(!status.stdout.is_empty())
+}
+
+/// Gitlinks (submodules) of the worktree index whose directory holds no checkout (R2.11).
+///
+/// The host never initializes submodules in an agent worktree, so their directories stay
+/// empty; an empty or removed directory, and files placed into it, are not changes Codex
+/// records.
+pub fn unpopulated_gitlinks(root: &Path) -> Result<Vec<PathBuf>> {
+    let output = git_output(root, GitOperation::Metadata, ["ls-files", "--stage", "-z"])?;
+    let mut paths = Vec::new();
+    for record in output.stdout.split(|byte| *byte == b'\0') {
+        // `<mode> <object> <stage>\t<path>`
+        let Some(rest) = record.strip_prefix(b"160000 ") else {
+            continue;
+        };
+        let Some(tab) = rest.iter().position(|byte| *byte == b'\t') else {
+            continue;
+        };
+        let path = crate::git::git_path_from_bytes(&rest[tab + 1..])?;
+        if fs::symlink_metadata(root.join(&path).join(".git")).is_err() && !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
+/// Pathspecs that leave exactly `paths` out of a command run at the worktree root.
+fn exclude_pathspecs(paths: &[PathBuf]) -> Vec<OsString> {
+    paths
+        .iter()
+        .map(|path| {
+            let mut pathspec = OsString::from(":(exclude,literal)");
+            pathspec.push(path.as_os_str());
+            pathspec
+        })
+        .collect()
 }
 
 fn optional_commit(cwd: &Path, revision: &str) -> Result<Option<String>> {
@@ -742,11 +787,12 @@ fn has_unmerged_entries(root: &Path, index: &Path) -> Result<bool> {
     Ok(!run_git_command(&mut command, &[])?.stdout.is_empty())
 }
 
-fn stage_all(root: &Path, index: &Path) -> Result<()> {
+fn stage_all(root: &Path, index: &Path, excluded: &[PathBuf]) -> Result<()> {
     let mut command = git_command(root, GitOperation::WorkingTree)?;
     command
         .env("GIT_INDEX_FILE", index)
-        .args(["add", "--all", "--", "."]);
+        .args(["add", "--all", "--", "."])
+        .args(exclude_pathspecs(excluded));
     run_git_command(&mut command, &[])
         .map(|_| ())
         .context("cannot stage the working tree into a temporary index")
@@ -848,7 +894,9 @@ pub use maintenance::SweepReport;
 pub use maintenance::agent_branch_for_thread;
 pub use maintenance::agent_worktree_status;
 pub use maintenance::checkout_root;
+pub use maintenance::delete_applied_branch;
 pub use maintenance::last_activity;
+pub use maintenance::remove_agent_checkout;
 pub use maintenance::restore_agent_worktree;
 pub use maintenance::sweep_agent_worktrees;
 pub use maintenance::worktree_list_fingerprint;

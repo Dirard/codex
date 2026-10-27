@@ -4113,9 +4113,10 @@ impl ThreadRequestProcessor {
                         error = %err,
                         "failed to resume a multi-agent v2 child through its parent"
                     );
-                    invalid_request(
-                        "cannot resume an unloaded multi-agent v2 sub-agent through its parent; resume the parent first, or use thread/read to inspect it",
-                    )
+                    // Fork: a worktree that cannot be restored is named (R5.9).
+                    invalid_request(super::thread_agent_worktree_fork::child_resume_message(
+                        &err,
+                    ))
                 })?;
 
             let cold_resume_history = paginated_resume.then(|| thread_history.get_rollout_items());

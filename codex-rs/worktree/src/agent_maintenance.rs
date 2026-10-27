@@ -213,6 +213,9 @@ pub fn worktree_list_fingerprint(cwd: &Path) -> Result<u64> {
 pub enum RestoreFrom {
     /// The tip of the agent's own branch; the worktree HEAD is attached to it.
     Branch { name: String, tip: String },
+    /// The tip of a branch the parent applied and Codex then deleted (R12.7), detached; the
+    /// recorded base when that commit is gone or does not contain the base.
+    Applied { tip: String },
     /// The recorded base, detached.
     Base,
 }
@@ -251,14 +254,11 @@ pub fn restore_agent_worktree(
             }
             tip.clone()
         }
-        RestoreFrom::Base => {
-            optional_commit(source_root, &metadata.base_sha)?.with_context(|| {
-                format!(
-                    "its base {} is no longer in the repository",
-                    metadata.base_sha
-                )
-            })?
-        }
+        RestoreFrom::Applied { tip } => match optional_commit(source_root, tip)? {
+            Some(commit) if is_ancestor(source_root, &metadata.base_sha, &commit)? => commit,
+            _ => recorded_base(source_root, metadata)?,
+        },
+        RestoreFrom::Base => recorded_base(source_root, metadata)?,
     };
     let bucket = root
         .parent()
@@ -293,6 +293,56 @@ pub fn restore_agent_worktree(
         });
     }
     Ok(())
+}
+
+fn recorded_base(source_root: &Path, metadata: &AgentWorktreeMetadata) -> Result<String> {
+    optional_commit(source_root, &metadata.base_sha)?.with_context(|| {
+        format!(
+            "its base {} is no longer in the repository",
+            metadata.base_sha
+        )
+    })
+}
+
+/// Deletes the agent branch that the parent applied at `tip`, once the worktree is gone
+/// (R12.7). The branch must still be the thread's own checkpoint branch at `tip`, checked out
+/// nowhere, and a merge of it into the parent's working tree must change nothing; the ref is
+/// deleted with a compare-and-swap on `tip`. Returns whether it was deleted.
+pub fn delete_applied_branch(
+    source_root: &Path,
+    root: &Path,
+    metadata: &AgentWorktreeMetadata,
+    tip: &str,
+) -> Result<bool> {
+    // While the worktree lives, its HEAD is attached to the branch.
+    if root.join(".git").exists() {
+        return Ok(false);
+    }
+    let Some(branch) = agent_branch_for_thread(source_root, &metadata.branch, &metadata.thread_id)?
+    else {
+        return Ok(false);
+    };
+    if branch.tip != tip || branch_checkout(source_root, &branch.branch, Path::new(""))?.is_some() {
+        return Ok(false);
+    }
+    match super::merge_agent_branch(source_root, root, metadata)? {
+        super::MergeOutcome::AlreadyApplied { tip: merged } if merged == tip => {}
+        _ => return Ok(false),
+    }
+    git_output(
+        source_root,
+        GitOperation::Metadata,
+        [
+            "update-ref",
+            "-m",
+            "codex agent branch applied",
+            "-d",
+            branch_ref(&branch.branch)?.as_str(),
+            tip,
+        ],
+    )
+    .context("cannot delete the applied agent branch")?;
+    Ok(true)
 }
 
 fn populate_restored(
@@ -513,6 +563,51 @@ fn remove_if_parked(
         ],
     )
     .context("cannot remove the agent worktree kept on its branch")?;
+    remove_empty_bucket(root);
+    Ok(RemoveOutcome::Removed)
+}
+
+/// Removes the checkout of an agent that is done (UC12, R12.5): one at the tip of its own
+/// branch, or at its base without a branch, and without uncommitted changes. The branch is
+/// never touched, so a reload restores the worktree from it (R5.3). Like
+/// [`remove_if_unchanged`], it waits for no live binding: one that holds the worktree keeps it
+/// (`InUse`), and the checks run under the exclusive lock that the removal keeps.
+pub fn remove_agent_checkout(
+    source_root: &Path,
+    root: &Path,
+    metadata: &AgentWorktreeMetadata,
+) -> Result<RemoveOutcome> {
+    if !root.join(".git").exists() {
+        super::drop_missing_registration(source_root, root);
+        remove_empty_bucket(root);
+        return Ok(RemoveOutcome::AlreadyMissing);
+    }
+    let Some(_exclusive) = exclusive_hold(root)? else {
+        return Ok(RemoveOutcome::Kept(KeptReason::InUse));
+    };
+    if has_changes(root)? {
+        return Ok(RemoveOutcome::Kept(KeptReason::Changes));
+    }
+    let recorded = own_branch_tip(root, &metadata.branch)?.unwrap_or(metadata.base_sha.clone());
+    if optional_commit(root, "HEAD")?.as_deref() != Some(recorded.as_str()) {
+        return Ok(RemoveOutcome::Kept(KeptReason::Commits));
+    }
+    let cwd = if source_root.is_dir() {
+        source_root
+    } else {
+        root
+    };
+    git_output(
+        cwd,
+        GitOperation::WorkingTree,
+        [
+            OsStr::new("worktree"),
+            OsStr::new("remove"),
+            OsStr::new("--force"),
+            root.as_os_str(),
+        ],
+    )
+    .context("cannot remove the closed agent worktree")?;
     remove_empty_bucket(root);
     Ok(RemoveOutcome::Removed)
 }

@@ -266,3 +266,229 @@ async fn thread_read_reports_the_isolated_child_worktree() -> Result<()> {
     }
     Ok(())
 }
+
+/// Amend 2026-10-27 (deferred items), R5.9: a direct `thread/resume` of an isolated child whose
+/// worktree was removed reloads it through its parent and restores the worktree from the host
+/// record; without the record the error names the worktree and the reason.
+#[cfg(unix)]
+#[tokio::test]
+async fn thread_resume_restores_a_removed_child_worktree() -> Result<()> {
+    use codex_app_server_protocol::RequestId;
+    use codex_app_server_protocol::ThreadResumeParams;
+    use codex_app_server_protocol::ThreadResumeResponse;
+    const RESUME_PROMPT: &str = "spawn an isolated worker to resume later";
+    const RESUME_TASK: &str = "look at the checkout and stop";
+    const RESUME_SPAWN_CALL_ID: &str = "spawn-resumable-worker";
+
+    let server = responses::start_mock_server().await;
+    let spawn_args = json!({
+        "message": RESUME_TASK,
+        "task_name": "worker",
+        "fork_turns": "none",
+        "isolation": "worktree",
+    });
+    responses::mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            let body = String::from_utf8_lossy(&request.body);
+            body.contains(RESUME_PROMPT) && !body.contains(RESUME_SPAWN_CALL_ID)
+        },
+        responses::sse(vec![
+            responses::ev_response_created("resume-parent-spawn"),
+            responses::ev_function_call_with_namespace(
+                RESUME_SPAWN_CALL_ID,
+                NAMESPACE,
+                "spawn_agent",
+                &serde_json::to_string(&spawn_args)?,
+            ),
+            responses::ev_completed("resume-parent-spawn"),
+        ]),
+    )
+    .await;
+    let child_request = responses::mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            let body = String::from_utf8_lossy(&request.body);
+            body.contains(RESUME_TASK) && body.contains(r#"\"agent_name\":\"/root/worker\""#)
+        },
+        responses::sse(vec![
+            responses::ev_response_created("resume-child-work"),
+            responses::ev_assistant_message("resume-child-message", "child complete"),
+            responses::ev_completed("resume-child-work"),
+        ]),
+    )
+    .await;
+    responses::mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            let body = String::from_utf8_lossy(&request.body);
+            body.contains(RESUME_SPAWN_CALL_ID) && body.contains(r#"\"agent_name\":\"/root\""#)
+        },
+        responses::sse(vec![
+            responses::ev_response_created("resume-parent-complete"),
+            responses::ev_assistant_message("resume-parent-message", "parent complete"),
+            responses::ev_completed("resume-parent-complete"),
+        ]),
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .with_model("gpt-5.4")
+        .with_extra_config(
+            "[features.multi_agent_v2]\nenabled = true\ntool_namespace = \"agents\"\n\n[features.agent_worktree_isolation]\nenabled = true",
+        )
+        .write(codex_home.path())?;
+    write_models_cache(codex_home.path()).await?;
+    let repository = TempDir::new()?;
+    let repository_path = std::fs::canonicalize(repository.path())?;
+    git(&repository_path, &["init", "--quiet", "-b", "main"]);
+    std::fs::write(repository_path.join("a.txt"), "base\n")?;
+    git(&repository_path, &["add", "."]);
+    git(
+        &repository_path,
+        &[
+            "-c",
+            "user.name=Codex Test",
+            "-c",
+            "user.email=codex@example.invalid",
+            "commit",
+            "--quiet",
+            "--no-gpg-sign",
+            "-m",
+            "initial",
+        ],
+    );
+
+    // The first server spawns the child; its graceful stop removes the unchanged worktree.
+    let (parent_id, child_id, worktree) = {
+        let mut app_server = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .build_initialized()
+            .await?;
+        let mut environment = app_server.auto_env_params()?;
+        environment.cwd = AbsolutePathBuf::from_absolute_path(&repository_path)?.into();
+        let start = app_server
+            .send_thread_start_request(ThreadStartParams {
+                model: Some("gpt-5.4".to_string()),
+                cwd: Some(repository_path.display().to_string()),
+                environments: Some(vec![environment]),
+                ..Default::default()
+            })
+            .await?;
+        let ThreadStartResponse { thread, .. } =
+            timeout(Duration::from_secs(20), app_server.read_response(start)).await??;
+        let _: TurnStartResponse = app_server
+            .request(|request_id| ClientRequest::TurnStart {
+                request_id,
+                params: TurnStartParams {
+                    thread_id: thread.id.clone(),
+                    input: vec![UserInput::Text {
+                        text: RESUME_PROMPT.to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    ..Default::default()
+                },
+            })
+            .await?;
+        timeout(Duration::from_secs(20), async {
+            while child_request.requests().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        let loaded: ThreadLoadedListResponse = app_server
+            .request(|request_id| ClientRequest::ThreadLoadedList {
+                request_id,
+                params: ThreadLoadedListParams::default(),
+            })
+            .await?;
+        let child_id = loaded
+            .data
+            .iter()
+            .find(|id| **id != thread.id)
+            .cloned()
+            .expect("loaded child thread");
+        let ThreadReadResponse { thread: child, .. } = app_server
+            .request(|request_id| ClientRequest::ThreadRead {
+                request_id,
+                params: ThreadReadParams {
+                    thread_id: child_id.clone(),
+                    include_turns: false,
+                },
+            })
+            .await?;
+        let worktree = child
+            .extra
+            .and_then(|extra| extra.agent_worktree)
+            .expect("agent worktree")
+            .path;
+        timeout(Duration::from_secs(30), app_server.shutdown_gracefully()).await??;
+        (thread.id, child_id, worktree)
+    };
+    assert!(!worktree.as_path().exists(), "{}", worktree.display());
+    let record = codex_home
+        .path()
+        .join("agent-worktrees")
+        .join(format!("{child_id}.json"));
+    let hidden = codex_home.path().join("hidden-record.json");
+    std::fs::rename(&record, &hidden)?;
+
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let _: ThreadResumeResponse = app_server
+        .request(|request_id| ClientRequest::ThreadResume {
+            request_id,
+            params: ThreadResumeParams {
+                thread_id: parent_id.clone(),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    // Without the host record nothing names the parent checkout: an explicit error.
+    let request_id = app_server
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: child_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let error = timeout(
+        Duration::from_secs(20),
+        app_server.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let message = error.error.message;
+    assert!(
+        message.contains(&worktree.display().to_string()),
+        "{message}"
+    );
+    assert!(message.contains("no record"), "{message}");
+    assert!(!worktree.as_path().exists());
+
+    // With the record the reload through the parent restores the worktree.
+    std::fs::rename(&hidden, &record)?;
+    let resumed: ThreadResumeResponse = app_server
+        .request(|request_id| ClientRequest::ThreadResume {
+            request_id,
+            params: ThreadResumeParams {
+                thread_id: child_id.clone(),
+                ..Default::default()
+            },
+        })
+        .await?;
+    assert_eq!(resumed.thread.id, child_id);
+    assert!(
+        resumed.thread.cwd.as_path().starts_with(worktree.as_path()),
+        "{}",
+        resumed.thread.cwd.display()
+    );
+    assert!(worktree.as_path().join(".git").exists());
+    assert_eq!(
+        std::fs::read_to_string(worktree.as_path().join("a.txt"))?,
+        "base\n"
+    );
+    Ok(())
+}

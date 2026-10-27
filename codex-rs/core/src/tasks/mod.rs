@@ -305,6 +305,7 @@ impl Session {
             self.request_mcp_runtime_reprojection();
         }
         self.activate_plugin_selection(&turn_context).await;
+        self.fork_restore_agent_worktree().await; // Fork: agent-worktree-isolation R5.8
         // Inherited or recovered roots are applied before task start. Otherwise this
         // task owns its turn, including background work. Later mail cannot change it.
         turn_context

@@ -8,7 +8,10 @@
 
 use super::*;
 use crate::agent::worktree_isolation::AgentWorktreeBinding;
+use crate::agent::worktree_isolation::CloseOutcome;
 use crate::agent::worktree_isolation::apply_refusal;
+use crate::agent::worktree_isolation::checkpoint_for_close;
+use crate::agent::worktree_isolation::close_worktree;
 use crate::agent::worktree_isolation::merge_for_parent;
 use crate::hook_runtime::PreToolUseHookResult;
 use crate::hook_runtime::record_additional_contexts;
@@ -40,7 +43,7 @@ use std::sync::PoisonError;
 
 pub(crate) const TOOL_NAME: &str = "apply_agent_worktree";
 
-const DESCRIPTION: &str = "Apply an isolated agent's recorded changes (its codex/agents/* branch from the <agent_worktree> block) to your checkout as uncommitted edits, with a three-way merge over your current files. The write is approved, sandboxed and hooked like apply_patch, and it is all or nothing: if the merge conflicts with your edits or a file changes before the write, nothing is written and the result lists the files and the git command from the block.";
+const DESCRIPTION: &str = "Apply an isolated agent's recorded changes (its codex/agents/* branch from the <agent_worktree> block) to your checkout as uncommitted edits, with a three-way merge over your current files. The write is approved, sandboxed and hooked like apply_patch, and it is all or nothing: if the merge conflicts with your edits or a file changes before the write, nothing is written and the result lists the files and the git command from the block. With `close`, once the agent is done and its changes are applied, its worktree checkout is removed to free the disk; its branch stays, and a later task for the agent restores the worktree.";
 
 pub(crate) struct Handler;
 
@@ -50,13 +53,29 @@ impl ToolExecutor<ToolInvocation> for Handler {
     }
 
     fn spec(&self) -> ToolSpec {
-        let properties = BTreeMap::from([(
-            "target".to_string(),
-            JsonSchema::string(Some(
-                "Agent id or canonical task name of an agent spawned with isolation `worktree`."
-                    .to_string(),
-            )),
-        )]);
+        let properties = BTreeMap::from([
+            (
+                "target".to_string(),
+                JsonSchema::string(Some(
+                    "Agent id or canonical task name of an agent spawned with isolation `worktree`."
+                        .to_string(),
+                )),
+            ),
+            (
+                "close".to_string(),
+                JsonSchema::boolean(Some(
+                    "After applying, unload the finished agent and remove its worktree checkout; its branch keeps the changes. Refused while the agent is still running or when the apply fails."
+                        .to_string(),
+                )),
+            ),
+            (
+                "discard_changes".to_string(),
+                JsonSchema::boolean(Some(
+                    "With `close`: do not apply, and close even though your checkout lacks the agent's changes (they stay only on its branch)."
+                        .to_string(),
+                )),
+            ),
+        ]);
         ToolSpec::Function(ResponsesApiTool {
             name: TOOL_NAME.to_string(),
             description: DESCRIPTION.to_string(),
@@ -93,6 +112,12 @@ impl CoreToolRuntime for Handler {
 #[serde(deny_unknown_fields)]
 struct ApplyAgentWorktreeArgs {
     target: String,
+    /// UC12: remove the checkout of the finished agent after the apply.
+    #[serde(default)]
+    close: bool,
+    /// UC12: with `close`, skip the apply; confirms that unapplied changes stay on the branch.
+    #[serde(default)]
+    discard_changes: bool,
 }
 
 /// Spec UC11: resolve the child and its branch, merge, then write through `apply_patch`.
@@ -119,6 +144,12 @@ async fn handle_apply(invocation: ToolInvocation) -> Result<FunctionToolOutput, 
     }
     let arguments = function_arguments(payload)?;
     let args: ApplyAgentWorktreeArgs = parse_arguments(&arguments)?;
+    if args.discard_changes && !args.close {
+        return Err(FunctionCallError::RespondToModel(
+            "discard_changes only closes a worktree without applying it; set close as well. Nothing was changed."
+                .to_string(),
+        ));
+    }
     let agent_id = resolve_agent_target(&session, &turn, &args.target).await?;
     let binding = session
         .services
@@ -136,9 +167,14 @@ async fn handle_apply(invocation: ToolInvocation) -> Result<FunctionToolOutput, 
         .single_local_environment()
         .cloned()
         .ok_or_else(|| {
-            FunctionCallError::RespondToModel(
-                "apply_agent_worktree requires a single local environment".to_string(),
-            )
+            // R2.5: the same reason as a refused spawn, a remote executor named as such.
+            FunctionCallError::RespondToModel(format!(
+                "cannot apply agent {} here: {}",
+                args.target,
+                crate::agent::worktree_isolation::isolation_environment_reason(
+                    &step_context.environments
+                )
+            ))
         })?;
     let caller_cwd = environment.cwd().to_abs_path().map_err(|_| {
         FunctionCallError::RespondToModel(
@@ -152,14 +188,113 @@ async fn handle_apply(invocation: ToolInvocation) -> Result<FunctionToolOutput, 
             binding.source_root.display()
         )));
     }
+
+    // UC12: the agent rests before anything is applied, and its pending work is recorded.
+    if args.close {
+        let not_closed = |reason: String| {
+            FunctionCallError::RespondToModel(format!(
+                "cannot close the worktree of agent {}: {reason}. Nothing was applied or removed.",
+                args.target
+            ))
+        };
+        session
+            .services
+            .local_agent_runtime
+            .fork_unload_for_close(agent_id)
+            .await
+            .map_err(not_closed)?;
+        checkpoint_for_close(&binding).await.map_err(not_closed)?;
+    }
+
+    let mut text = if args.discard_changes {
+        String::new()
+    } else {
+        let call = ApplyCall {
+            session: Arc::clone(&session),
+            turn: Arc::clone(&turn),
+            step_context: Arc::clone(&step_context),
+            cancellation_token,
+            tracker,
+            call_id,
+            tool_name,
+            binding: Arc::clone(&binding),
+            environment,
+            target: args.target.clone(),
+            closing: args.close,
+        };
+        match apply_branch(call).await {
+            Ok(text) => text,
+            // R12.4: a refused apply keeps the worktree.
+            Err(FunctionCallError::RespondToModel(message)) if args.close => {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "{message}\nThe worktree {} was kept; close it after you take the changes, or with discard_changes if you do not want them.",
+                    binding.root.display()
+                )));
+            }
+            Err(err) => return Err(err),
+        }
+    };
+    if args.close {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(
+            &close_message(
+                &session.services.local_agent_runtime.worktrees,
+                &binding,
+                &args,
+            )
+            .await,
+        );
+    }
+    Ok(FunctionToolOutput::from_text(text, Some(true)))
+}
+
+/// Everything the apply of one call needs.
+struct ApplyCall {
+    session: Arc<crate::session::session::Session>,
+    turn: Arc<crate::session::turn_context::TurnContext>,
+    step_context: Arc<crate::session::step_context::StepContext>,
+    cancellation_token: tokio_util::sync::CancellationToken,
+    tracker: crate::tools::context::SharedTurnDiffTracker,
+    call_id: String,
+    tool_name: ToolName,
+    binding: Arc<AgentWorktreeBinding>,
+    environment: crate::session::turn_context::TurnEnvironment,
+    target: String,
+    /// The worktree closes after the apply, so an agent without changes is not an error.
+    closing: bool,
+}
+
+/// UC11: merges the agent's branch and writes the result through `apply_patch`; the answer
+/// text on success.
+async fn apply_branch(call: ApplyCall) -> Result<String, FunctionCallError> {
+    let ApplyCall {
+        session,
+        turn,
+        step_context,
+        cancellation_token,
+        tracker,
+        call_id,
+        tool_name,
+        binding,
+        environment,
+        target,
+        closing,
+    } = call;
     let refuse = |reason: &str, paths: &[String]| {
-        FunctionCallError::RespondToModel(apply_refusal(&binding, &args.target, reason, paths))
+        FunctionCallError::RespondToModel(apply_refusal(&binding, &target, reason, paths))
     };
 
     let merge = match merge_for_parent(&binding).await.map_err(|err| {
-        FunctionCallError::RespondToModel(format!("cannot apply agent {}: {err}", args.target))
+        FunctionCallError::RespondToModel(format!("cannot apply agent {target}: {err}"))
     })? {
         MergeOutcome::Clean(merge) => merge,
+        MergeOutcome::NoBranch { .. } if closing => {
+            return Ok(format!(
+                "Agent {target} recorded no changes; there is nothing to apply."
+            ));
+        }
         MergeOutcome::NoBranch {
             pending_worktree_changes,
         } => {
@@ -169,19 +304,16 @@ async fn handle_apply(invocation: ToolInvocation) -> Result<FunctionToolOutput, 
                 ""
             };
             return Err(FunctionCallError::RespondToModel(format!(
-                "agent {} has no recorded changes (branch: none){pending}",
-                args.target
+                "agent {target} has no recorded changes (branch: none){pending}"
             )));
         }
         MergeOutcome::AlreadyApplied { tip } => {
+            binding.record_applied(&tip);
             let metadata = binding.metadata();
-            return Ok(FunctionToolOutput::from_text(
-                format!(
-                    "Your checkout already contains the changes of {} at {}; nothing was written.",
-                    metadata.branch,
-                    short(&tip)
-                ),
-                Some(true),
+            return Ok(format!(
+                "Your checkout already contains the changes of {} at {}; nothing was written.",
+                metadata.branch,
+                short(&tip)
             ));
         }
         MergeOutcome::Conflicts(paths) => {
@@ -192,6 +324,13 @@ async fn handle_apply(invocation: ToolInvocation) -> Result<FunctionToolOutput, 
                 &format!("apply_patch cannot write {reason} in"),
                 std::slice::from_ref(&path),
             ));
+        }
+        MergeOutcome::Submodule { path, commit } => {
+            return Err(FunctionCallError::RespondToModel(submodule_refusal(
+                &target,
+                &path,
+                commit.as_deref(),
+            )));
         }
         MergeOutcome::BaseNotAncestor { tip } => {
             return Err(refuse(
@@ -230,8 +369,7 @@ async fn handle_apply(invocation: ToolInvocation) -> Result<FunctionToolOutput, 
         // The hook's policy covers this write, so no way around it is offered.
         PreToolUseHookResult::Blocked(message) => {
             return Err(FunctionCallError::RespondToModel(format!(
-                "cannot apply agent {}: a PreToolUse hook denied the write. Nothing was written.\n{message}",
-                args.target
+                "cannot apply agent {target}: a PreToolUse hook denied the write. Nothing was written.\n{message}"
             )));
         }
         PreToolUseHookResult::Continue {
@@ -243,7 +381,7 @@ async fn handle_apply(invocation: ToolInvocation) -> Result<FunctionToolOutput, 
     };
     let rewritten = patch != merged_patch;
     let merged = (!rewritten).then_some(&merge);
-    let action = verified_action(&binding, &environment, &args.target, &patch, merged).await?;
+    let action = verified_action(&binding, &environment, &target, &patch, merged).await?;
     let files = Arc::new(
         expected_files(&action, binding.source_root.as_path())
             .map_err(|(path, reason)| refuse(&reason, std::slice::from_ref(&path)))?,
@@ -280,10 +418,7 @@ async fn handle_apply(invocation: ToolInvocation) -> Result<FunctionToolOutput, 
                 tracker.lock().await.invalidate();
             }
             return Err(FunctionCallError::RespondToModel(failed_write_message(
-                &binding,
-                &args.target,
-                &err,
-                &rollback,
+                &binding, &target, &err, &rollback,
             )));
         }
     };
@@ -308,6 +443,10 @@ async fn handle_apply(invocation: ToolInvocation) -> Result<FunctionToolOutput, 
         ));
     }
 
+    if !rewritten {
+        // R12.7: the parent now holds this tip; the branch may go with the worktree.
+        binding.record_applied(&merge.tip);
+    }
     let metadata = binding.metadata();
     let mut text = format!(
         "Applied {} at {} ({}) to {} as uncommitted edits.\n{content}",
@@ -328,7 +467,86 @@ async fn handle_apply(invocation: ToolInvocation) -> Result<FunctionToolOutput, 
         text.push('\n');
         text.push_str(&feedback);
     }
-    Ok(FunctionToolOutput::from_text(text, Some(true)))
+    Ok(text)
+}
+
+/// R11.12: the parent updates a submodule itself; the block's `git apply` command would skip it.
+fn submodule_refusal(target: &str, path: &str, commit: Option<&str>) -> String {
+    let quoted = shell_quote(path);
+    let (change, command) = match commit {
+        Some(commit) => (
+            format!("moves submodule {path} to {commit}"),
+            format!("git -C {quoted} checkout {commit}"),
+        ),
+        None => (
+            format!("removes submodule {path}"),
+            format!("git rm --cached {quoted}"),
+        ),
+    };
+    format!(
+        "cannot apply agent {target}: its branch {change}, and apply_agent_worktree does not change submodules. Nothing was written. Update it yourself, then call apply_agent_worktree again for the other files.\nsubmodule: {command}"
+    )
+}
+
+/// A POSIX shell word for `value`: as is when it is plain, otherwise single-quoted.
+fn shell_quote(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "_-./".contains(character))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
+/// R12.5, R12.6: closes the worktree and says what happened.
+async fn close_message(
+    worktrees: &crate::agent::worktree_isolation::AgentWorktrees,
+    binding: &Arc<AgentWorktreeBinding>,
+    args: &ApplyAgentWorktreeArgs,
+) -> String {
+    let target = &args.target;
+    let root = binding.root.display();
+    match close_worktree(worktrees, binding).await {
+        Ok(CloseOutcome::Removed {
+            applied: Some(branch),
+            ..
+        }) => format!(
+            "Closed the worktree of agent {target}: removed {root}. Your checkout holds the changes of branch {branch}, so the branch was deleted; a later task for the agent restores the worktree from its last commit."
+        ),
+        Ok(CloseOutcome::Removed {
+            branch: Some(branch),
+            ..
+        }) => {
+            let unapplied = if args.discard_changes {
+                " without applying its changes"
+            } else {
+                ""
+            };
+            format!(
+                "Closed the worktree of agent {target}{unapplied}: removed {root}. Branch {branch} keeps its changes; a later task for the agent restores the worktree."
+            )
+        }
+        Ok(CloseOutcome::Removed { branch: None, .. }) => format!(
+            "Closed the worktree of agent {target}: removed {root}. It recorded no changes; a later task for the agent restores the worktree."
+        ),
+        Ok(CloseOutcome::Kept(reason)) => format!(
+            "The worktree {root} of agent {target} was kept: {}.",
+            kept_reason(reason)
+        ),
+        Err(reason) => format!("The worktree {root} of agent {target} was kept: {reason}."),
+    }
+}
+
+fn kept_reason(reason: codex_worktree::KeptReason) -> &'static str {
+    match reason {
+        codex_worktree::KeptReason::InUse => "another Codex process works in it",
+        codex_worktree::KeptReason::Changes => "it has changes that its branch does not record",
+        codex_worktree::KeptReason::Commits => "its HEAD has commits beyond its branch",
+        codex_worktree::KeptReason::Branch => "it has its own branch",
+    }
 }
 
 /// Builds the action of `patch` and, for the merge's own patch, checks that `apply_patch`

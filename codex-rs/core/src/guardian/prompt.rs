@@ -122,6 +122,9 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
         .user_input_snapshot(history)
         .fragments;
     let planned_action_json = format_guardian_action_pretty(&request)?;
+    // Fork: the isolated worktree of the reviewed agent (agent-worktree-isolation R3.8).
+    let planned_action_json =
+        crate::agent::worktree_isolation::fork_guardian_action_json(session, planned_action_json);
     let planned_action = PlannedAction {
         json: planned_action_json,
         tool_descriptions: if let GuardianApprovalRequest::McpToolCall {

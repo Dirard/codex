@@ -35,6 +35,10 @@ pub struct AgentWorktreeRecord {
     pub base_kind: String,
     /// The branch name recorded at creation; checkpoints may use its free names.
     pub branch: String,
+    /// The tip of the agent branch the parent applied before Codex deleted the branch (R12.7);
+    /// a restore starts from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_tip: Option<String>,
 }
 
 impl AgentWorktreeRecord {
@@ -46,6 +50,7 @@ impl AgentWorktreeRecord {
             base_sha: metadata.base_sha.clone(),
             base_kind: metadata.base_kind.as_str().to_owned(),
             branch: metadata.branch.clone(),
+            applied_tip: None,
         }
     }
 
@@ -95,10 +100,18 @@ pub fn read_agent_record(directory: &Path, thread_id: &str) -> Result<Option<Age
     if record.thread_id != thread_id {
         bail!("{} names thread {}", path.display(), record.thread_id);
     }
-    if !matches!(record.base_sha.len(), 40 | 64)
-        || !record.base_sha.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
+    let object_id = |value: &str| {
+        matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    };
+    if !object_id(&record.base_sha) {
         bail!("{} has an invalid base", path.display());
+    }
+    if record
+        .applied_tip
+        .as_deref()
+        .is_some_and(|tip| !object_id(tip))
+    {
+        bail!("{} has an invalid applied tip", path.display());
     }
     if record.base_kind().is_none() {
         bail!("{} has an unknown base kind", path.display());

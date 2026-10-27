@@ -71,6 +71,10 @@ pub struct AgentWorktreeBinding {
     /// The child is a read-only explorer, so its note gives no edit instructions
     /// (explorer-and-questions spec, R9.3).
     read_only_explorer: AtomicBool,
+    /// Submodules the worktree does not check out, named by the note (R2.11).
+    submodules: Vec<String>,
+    /// The branch tip that `apply_agent_worktree` applied in this process (R12.7).
+    applied_tip: StdMutex<Option<String>>,
     /// Managed worktree settings the worktree was created or found with.
     settings: WorktreeSettings,
     /// Repository and limits of the sweep after the tree stops (UC10); `None` keeps it out.
@@ -106,6 +110,21 @@ impl AgentWorktreeBinding {
                 .unwrap_or_else(PoisonError::into_inner)
                 .branch,
         );
+    }
+
+    /// R12.7: the parent took the agent's branch at `tip` through `apply_agent_worktree`.
+    pub(crate) fn record_applied(&self, tip: &str) {
+        *self
+            .applied_tip
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(tip.to_owned());
+    }
+
+    fn applied_tip(&self) -> Option<String> {
+        self.applied_tip
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     pub(crate) fn parent_checkout_protected(&self) -> bool {
@@ -287,13 +306,11 @@ pub(crate) async fn prepare_agent_worktree(
     read_only_explorer: bool,
 ) -> Result<PreparedAgentWorktree, String> {
     if cfg!(windows) {
-        return Err("worktree isolation is not supported on Windows yet".to_string());
+        return Err(WINDOWS_UNSUPPORTED.to_string());
     }
     let environment = inherited_environments
         .single_local_environment()
-        .ok_or_else(|| {
-            "worktree isolation requires the child to run in a single local environment".to_string()
-        })?;
+        .ok_or_else(|| isolation_environment_unavailable(inherited_environments))?;
     let environment_id = environment.selection.environment_id.clone();
     let source_cwd = environment.cwd().to_abs_path().map_err(|_| {
         "worktree isolation requires a local absolute working directory".to_string()
@@ -327,6 +344,7 @@ pub(crate) async fn prepare_agent_worktree(
         source_root,
         metadata,
         hold,
+        submodules,
         base_duration,
         create_duration,
     } = created;
@@ -347,6 +365,8 @@ pub(crate) async fn prepare_agent_worktree(
         metadata: StdMutex::new(metadata),
         parent_checkout_protected: AtomicBool::new(false),
         read_only_explorer: AtomicBool::new(read_only_explorer),
+        submodules,
+        applied_tip: StdMutex::default(),
         settings,
         sweep,
         state: Mutex::default(),
@@ -390,6 +410,7 @@ struct CreatedWorktree {
     source_root: AbsolutePathBuf,
     metadata: AgentWorktreeMetadata,
     hold: Option<codex_worktree::AgentWorktreeHold>,
+    submodules: Vec<String>,
     base_duration: Duration,
     create_duration: Duration,
 }
@@ -451,6 +472,7 @@ fn create_worktree_blocking(
     match recorded {
         Ok((root, cwd, source_root)) => Ok(CreatedWorktree {
             hold: ops::hold_worktree(root.as_path()),
+            submodules: unpopulated_submodules(root.as_path()),
             root,
             cwd,
             source_root,
@@ -830,7 +852,87 @@ pub(crate) fn isolation_developer_note(binding: &AgentWorktreeBinding) -> String
         base_short = short_sha(&metadata.base_sha),
         source_root = binding.source_root.display(),
         branch = metadata.branch,
+    ) + &submodule_note(&binding.submodules)
+}
+
+/// Submodules listed by name in the isolation note before the rest are only counted.
+const LISTED_SUBMODULES: usize = 5;
+
+/// R2.11: the sentence of the isolation note about submodules the worktree does not check
+/// out; empty without such submodules.
+fn submodule_note(submodules: &[String]) -> String {
+    if submodules.is_empty() {
+        return String::new();
+    }
+    let mut names = submodules
+        .iter()
+        .take(LISTED_SUBMODULES)
+        .map(|path| quote_block_path(path).into_owned())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if submodules.len() > LISTED_SUBMODULES {
+        names.push_str(&format!(
+            " and {} more",
+            submodules.len() - LISTED_SUBMODULES
+        ));
+    }
+    format!(
+        " Git submodules are not checked out in this worktree ({names}): their directories stay empty, and Codex does not record changes inside them."
     )
+}
+
+/// Submodules of a fresh, discovered or restored worktree that it does not check out
+/// (blocking); a failure only loses the note's sentence.
+pub(crate) fn unpopulated_submodules(root: &Path) -> Vec<String> {
+    match codex_worktree::unpopulated_gitlinks(root) {
+        Ok(paths) => paths
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect(),
+        Err(err) => {
+            warn!(
+                "cannot list the submodules of agent worktree {}: {err:#}",
+                root.display()
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// R2.6: worktree isolation is refused on Windows until it is verified there.
+pub(crate) const WINDOWS_UNSUPPORTED: &str =
+    "worktree isolation is not supported on Windows yet; spawn the agent with isolation `none`";
+
+/// R2.5: the spawn refusal for environments that cannot host an agent worktree.
+pub(crate) fn isolation_environment_unavailable(environments: &TurnEnvironmentSnapshot) -> String {
+    format!(
+        "{}; spawn the agent with isolation `none`",
+        isolation_environment_reason(environments)
+    )
+}
+
+/// R2.5: why the environments of a step cannot host an agent worktree. Every Git operation of
+/// the isolation runs on this host, so a remote executor (exec-server) is named as such.
+pub(crate) fn isolation_environment_reason(environments: &TurnEnvironmentSnapshot) -> String {
+    let remote = environments
+        .turn_environments()
+        .filter(|environment| environment.environment.is_remote())
+        .map(|environment| format!("`{}`", environment.selection.environment_id))
+        .collect::<Vec<_>>();
+    let ready = environments.turn_environments().count();
+    if !remote.is_empty() {
+        format!(
+            "worktree isolation runs Git on this host and does not support the remote executor {} yet",
+            remote.join(", ")
+        )
+    } else if environments.starting().next().is_some() {
+        "worktree isolation needs a ready local environment, and an environment is still starting"
+            .to_string()
+    } else if ready > 1 {
+        format!("worktree isolation supports one local environment, and this turn has {ready}")
+    } else {
+        "worktree isolation requires a single local environment, and this turn has none".to_string()
+    }
 }
 
 pub(crate) fn apply_isolation_note(config: &mut Config, binding: &AgentWorktreeBinding) {
@@ -917,6 +1019,7 @@ pub(crate) async fn discover_binding_or_missing(
             source_root,
             metadata,
             hold,
+            submodules,
         }) => {
             let sweep = Some(SweepTarget {
                 settings: settings.clone(),
@@ -935,6 +1038,8 @@ pub(crate) async fn discover_binding_or_missing(
                 metadata: StdMutex::new(metadata),
                 parent_checkout_protected: AtomicBool::new(false),
                 read_only_explorer: AtomicBool::new(false),
+                submodules,
+                applied_tip: StdMutex::default(),
                 settings,
                 sweep,
                 state: Mutex::new(BindingState {
@@ -953,6 +1058,7 @@ struct DiscoveredBinding {
     source_root: AbsolutePathBuf,
     metadata: AgentWorktreeMetadata,
     hold: Option<codex_worktree::AgentWorktreeHold>,
+    submodules: Vec<String>,
 }
 
 enum DiscoveryResult {
@@ -1032,6 +1138,7 @@ fn discover_binding_blocking(
     }
     Ok(DiscoveryResult::Bound(DiscoveredBinding {
         hold: ops::hold_worktree(&root),
+        submodules: unpopulated_submodules(&root),
         root: absolute(&root)?,
         cwd: absolute(&root.join(relative))?,
         source_root: absolute(&source_root)?,
@@ -1299,11 +1406,26 @@ async fn finalize_tree_worktree(binding: Arc<AgentWorktreeBinding>) {
         // The stopped child no longer uses its worktree; a live binding of another process
         // still keeps it (R10.3).
         blocking.live.release_hold();
-        codex_worktree::remove_if_unchanged(
+        let outcome = codex_worktree::remove_if_unchanged(
             blocking.source_root.as_path(),
             blocking.root.as_path(),
             &metadata,
-        )
+        )?;
+        // R12.7: a branch the parent applied goes with its worktree.
+        if outcome == RemoveOutcome::Kept(codex_worktree::KeptReason::Branch)
+            && ops::applied_branch_tip(&blocking, &metadata).is_some()
+        {
+            let closed = codex_worktree::remove_agent_checkout(
+                blocking.source_root.as_path(),
+                blocking.root.as_path(),
+                &metadata,
+            )?;
+            if closed == RemoveOutcome::Removed {
+                ops::delete_applied_branch(&blocking, &metadata);
+            }
+            return Ok(closed);
+        }
+        Ok::<_, anyhow::Error>(outcome)
     })
     .await;
     match result {
@@ -1344,13 +1466,18 @@ fn short_sha(sha: &str) -> &str {
 mod ops;
 
 pub use ops::AgentWorktreeView;
+pub(crate) use ops::CloseOutcome;
 pub(crate) use ops::ListedWorktree;
 pub(crate) use ops::LiveRoot;
 pub(crate) use ops::MissingWorktree;
 pub(crate) use ops::SweepTarget;
+pub use ops::agent_worktree_reload_error;
 pub(crate) use ops::apply_refusal;
+pub(crate) use ops::checkpoint_for_close;
+pub(crate) use ops::close_worktree;
 pub use ops::describe_agent_worktree;
 pub(crate) use ops::ensure_worktree_present;
+pub(crate) use ops::fork_guardian_action_json;
 pub(crate) use ops::listed_worktrees;
 pub(crate) use ops::merge_for_parent;
 pub(crate) use ops::restore_missing_binding;

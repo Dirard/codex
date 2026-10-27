@@ -23,6 +23,8 @@ fn binding(protected: bool) -> AgentWorktreeBinding {
         }),
         parent_checkout_protected: AtomicBool::new(protected),
         read_only_explorer: AtomicBool::new(false),
+        submodules: Vec::new(),
+        applied_tip: StdMutex::default(),
         settings: WorktreeSettings::for_cli(Path::new("/home/u/.codex"), /*desktop*/ None)
             .expect("worktree settings"),
         sweep: None,
@@ -776,6 +778,8 @@ async fn concurrent_reloads_restore_a_worktree_once() {
         metadata: StdMutex::new(created.metadata.clone()),
         parent_checkout_protected: AtomicBool::new(false),
         read_only_explorer: AtomicBool::new(false),
+        submodules: Vec::new(),
+        applied_tip: StdMutex::default(),
         settings,
         sweep: None,
         state: Mutex::default(),
@@ -789,4 +793,147 @@ async fn concurrent_reloads_restore_a_worktree_once() {
 
     assert_eq!((first, second), (Ok(()), Ok(())));
     assert!(created.root.join(".git").exists());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Amend 2026-10-27, deferred items
+// ---------------------------------------------------------------------------------------------
+
+/// A ready environment with `id`, local or behind a remote executor.
+fn ready_environment(id: &str, remote: bool) -> crate::environment_selection::TurnEnvironmentState {
+    use codex_protocol::models::PermissionProfile;
+    use codex_protocol::protocol::EnvironmentConfig;
+    use codex_protocol::protocol::TurnEnvironmentSelection;
+    let url = remote.then(|| "ws://127.0.0.1:8765".to_string());
+    let environment =
+        Arc::new(codex_exec_server::Environment::create_for_tests(url).expect("test environment"));
+    let config = EnvironmentConfig {
+        environment_hooks: Default::default(),
+        allow_login_shell: true,
+        workspace_roots: Vec::new(),
+        windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+        windows_sandbox_type: codex_protocol::sandbox::SandboxType::None,
+        use_legacy_landlock: false,
+        permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
+        shell_environment_policy: Default::default(),
+        exec_policy: None,
+        mcp_policy: None,
+        network_policy: None,
+        selected_capability_roots: Vec::new(),
+    };
+    crate::environment_selection::TurnEnvironmentState::Ready(TurnEnvironment::new(
+        TurnEnvironmentSelection {
+            selected_capability_roots: Default::default(),
+            environment_id: id.to_string(),
+            cwd: PathUri::from_abs_path(&abs("/work/demo")),
+            workspace_roots: Vec::new(),
+            config: EnvironmentConfigState::Ready(config),
+        },
+        crate::environment_selection::EnvironmentConfigOrigin::Thread,
+        environment,
+        /*shell*/ None,
+    ))
+}
+
+/// R2.5, R2.6: each unsupported environment is named, a remote executor as such, and every
+/// refusal says how to spawn instead.
+#[tokio::test]
+async fn unavailable_environments_name_the_remote_executor() {
+    let snapshot = |environments| TurnEnvironmentSnapshot { environments };
+    let remote = isolation_environment_unavailable(&snapshot(vec![ready_environment(
+        "devbox", /*remote*/ true,
+    )]));
+    assert_eq!(
+        remote,
+        "worktree isolation runs Git on this host and does not support the remote executor `devbox` yet; spawn the agent with isolation `none`"
+    );
+    let none = isolation_environment_unavailable(&snapshot(Vec::new()));
+    assert!(none.contains("this turn has none"), "{none}");
+    let several = isolation_environment_unavailable(&snapshot(vec![
+        ready_environment("local", /*remote*/ false),
+        ready_environment("second", /*remote*/ false),
+    ]));
+    assert!(several.contains("this turn has 2"), "{several}");
+    for refusal in [&none, &several] {
+        assert!(refusal.ends_with("isolation `none`"), "{refusal}");
+    }
+    assert!(WINDOWS_UNSUPPORTED.contains("Windows"));
+    assert!(WINDOWS_UNSUPPORTED.ends_with("isolation `none`"));
+}
+
+/// R2.11: the note names submodules the worktree does not check out; without them, and for
+/// an explorer, it stays as before.
+#[test]
+fn isolation_note_names_unpopulated_submodules() {
+    let plain = isolation_developer_note(&binding(true));
+    let mut with_submodules = binding(true);
+    with_submodules.submodules = (1..=7).map(|index| format!("vendor/lib{index}")).collect();
+    let note = isolation_developer_note(&with_submodules);
+    assert_eq!(
+        note,
+        format!(
+            "{plain} Git submodules are not checked out in this worktree (vendor/lib1, vendor/lib2, vendor/lib3, vendor/lib4, vendor/lib5 and 2 more): their directories stay empty, and Codex does not record changes inside them."
+        )
+    );
+    with_submodules.set_read_only_explorer(true);
+    assert!(!isolation_developer_note(&with_submodules).contains("submodules"));
+}
+
+/// R3.8: Guardian's planned action JSON of an isolated child names its worktree and the
+/// parent checkout; the action's own fields stay as they were.
+#[test]
+fn guardian_action_json_describes_the_worktree() {
+    let action = serde_json::json!({
+        "tool": "exec_command",
+        "command": ["touch", "/work/demo/escape.txt"],
+        "cwd": "/home/u/.codex/worktrees/6d88/demo/sub",
+        "sandbox_permissions": "require_escalated",
+    });
+    let json = ops::guardian_action_json(
+        &binding(true),
+        serde_json::to_string_pretty(&action).expect("action JSON"),
+    );
+    let mut parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    let context = parsed
+        .as_object_mut()
+        .and_then(|fields| fields.remove("agent_worktree"))
+        .expect("agent_worktree");
+    assert_eq!(parsed, action);
+    assert_eq!(context["worktree"], "/home/u/.codex/worktrees/6d88/demo");
+    assert_eq!(context["parent_checkout"], "/work/demo");
+    assert_eq!(context["parent_checkout_protected"], true);
+    assert!(
+        context["note"]
+            .as_str()
+            .is_some_and(|note| note.contains("isolated git worktree")),
+        "{context}"
+    );
+    // Keys stay sorted, as in the upstream rendering.
+    assert!(json.find("\"agent_worktree\"") < json.find("\"command\""));
+    // Not JSON or not an object: unchanged.
+    assert_eq!(
+        ops::guardian_action_json(&binding(true), "[1]".to_string()),
+        "[1]"
+    );
+}
+
+/// R5.9: only reload errors about a worktree that cannot be restored are reported to clients.
+#[test]
+fn reload_errors_of_missing_worktrees_are_recognized() {
+    let missing = ops::missing_worktree_error(
+        Path::new("/home/u/.codex/worktrees/6d88/demo"),
+        "codex/agents/probe-01a1748c",
+        "Codex has no record of the checkout it was created from",
+    );
+    let error = codex_protocol::error::CodexErr::InvalidRequest(format!(
+        "cannot resume multi-agent v2 child 0190: {missing}"
+    ));
+    assert_eq!(
+        agent_worktree_reload_error(&error).as_deref(),
+        Some(format!("cannot resume multi-agent v2 child 0190: {missing}").as_str())
+    );
+    let other = codex_protocol::error::CodexErr::InvalidRequest(
+        "cannot resume multi-agent v2 child 0190: parent ownership is unavailable".to_string(),
+    );
+    assert_eq!(agent_worktree_reload_error(&other), None);
 }
