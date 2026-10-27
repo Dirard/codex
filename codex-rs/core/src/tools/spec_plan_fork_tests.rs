@@ -240,6 +240,8 @@ async fn explorer_tool_router_hides_write_and_client_tools() {
                 Some(ApplyPatchToolType::Freeform);
         });
         turn.session_source = explorer_source("explorer");
+        // R2.10: with multi-agent V2 the plan registers `spawn_agent`.
+        turn.multi_agent_version = MultiAgentVersion::V2;
         turn.dynamic_tools = vec![dynamic_tool(
             /*namespace*/ None,
             "client_echo",
@@ -270,6 +272,17 @@ async fn explorer_tool_router_hides_write_and_client_tools() {
                 plan.visible_names
             );
         }
+        // R2.10: an explorer does not see `spawn_agent`; a call still reaches the refusal.
+        let spawn_agent = plan
+            .registered_names
+            .iter()
+            .find(|name| name.ends_with("spawn_agent"))
+            .unwrap_or_else(|| panic!("V2 registers spawn_agent: {:?}", plan.registered_names));
+        assert_eq!(
+            plan.exposure(spawn_agent) == ToolExposure::Hidden,
+            hidden,
+            "profile={explorer_profile}: {spawn_agent}"
+        );
     }
 }
 

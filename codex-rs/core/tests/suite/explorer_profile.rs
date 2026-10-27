@@ -1662,3 +1662,163 @@ async fn spawned_explorer_finds_only_read_only_mcp_tools(explorer_profile: bool)
     }
     Ok(())
 }
+
+const GRANDCHILD_PROMPT: &str = "grandchild: touch the review file";
+const GRAND_SPAWN_CALL_ID: &str = "explorer-grand-spawn";
+const GRANDCHILD_RULE_CALL_ID: &str = "grandchild-rule-call";
+
+/// The thread that sent a request: its `x-codex-parent-thread-id`, `None` for the root.
+fn parent_thread_header(req: &wiremock::Request) -> Option<String> {
+    req.headers
+        .get("x-codex-parent-thread-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+}
+
+/// Whether a request declares the `spawn_agent` tool. Responses Lite models (all V2 models)
+/// carry their tool declarations in the input, so this looks for a declaration (an object
+/// with that `name` and `parameters`) anywhere in the body.
+fn offers_spawn_agent(request: &ResponsesRequest) -> bool {
+    find_tool(&request.body_json(), "spawn_agent").is_some()
+}
+
+// Review 2026-10-27 P1 (R2.10): an explorer on a V2 model (`gpt-6-*`) could spawn an ordinary
+// child. The child inherited the read-only sandbox and approval `never`, but not the explorer's
+// rules, so an exec-policy allow rule ran its command outside the sandbox. An explorer spawns
+// no agents at all, whatever the spawn asks for; the control (profile off) shows that the
+// grandchild's allow-rule command really writes.
+#[test_case(true, json!({"task_name": "writer", "fork_turns": "none"}); "fresh_default_child")]
+#[test_case(true, json!({"task_name": "writer", "agent_type": "worker", "fork_turns": "none"}); "worker_child")]
+#[test_case(true, json!({"task_name": "writer", "fork_turns": "all"}); "full_history_fork")]
+#[test_case(true, json!({"task_name": "writer", "agent_type": "explorer"}); "explorer_child")]
+#[test_case(false, json!({"task_name": "writer", "fork_turns": "none"}); "control_child_writes")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explorer_cannot_spawn_agents(explorer_profile: bool, spawn: Value) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = build_test(explorer_profile, |config| {
+        write_allow_rule(config, &["touch"]);
+        // A V2 model gives every child `spawn_agent` (models.json `multi_agent_version`).
+        config.model = Some("gpt-6-astra".to_string());
+        config.explorer_profile.model = Some("gpt-6-astra".to_string());
+    })
+    .build(&server)
+    .await?;
+    let root = test.session_configured.thread_id.to_string();
+    mount_parent_spawn(
+        &server,
+        json!({
+            "message": CHILD_PROMPT,
+            "task_name": "scout",
+            "agent_type": "explorer",
+        }),
+    )
+    .await?;
+    let mut spawn = spawn;
+    spawn["message"] = json!(GRANDCHILD_PROMPT);
+    let spawn = serde_json::to_string(&spawn)?;
+    let explorer_root = root.clone();
+    let explorer_first = mount_sse_once_match(
+        &server,
+        move |req: &wiremock::Request| {
+            parent_thread_header(req).as_deref() == Some(explorer_root.as_str())
+                && !decoded_body(req).contains(GRAND_SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-explorer-1"),
+            ev_function_call_with_namespace(
+                GRAND_SPAWN_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &spawn,
+            ),
+            ev_completed("resp-explorer-1"),
+        ]),
+    )
+    .await;
+    let explorer_root = root.clone();
+    let explorer_last = mount_sse_once_match(
+        &server,
+        move |req: &wiremock::Request| {
+            parent_thread_header(req).as_deref() == Some(explorer_root.as_str())
+                && decoded_body(req).contains(GRAND_SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-explorer-2"),
+            ev_assistant_message("msg-explorer-2", "explorer done"),
+            ev_completed("resp-explorer-2"),
+        ]),
+    )
+    .await;
+    let grandchild_root = root.clone();
+    let grandchild_first = mount_sse_once_match(
+        &server,
+        move |req: &wiremock::Request| {
+            parent_thread_header(req).is_some_and(|parent| parent != grandchild_root)
+                && !decoded_body(req).contains(GRANDCHILD_RULE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-grandchild-1"),
+            ev_exec_command_call(GRANDCHILD_RULE_CALL_ID, "touch grandchild-rule.txt"),
+            ev_completed("resp-grandchild-1"),
+        ]),
+    )
+    .await;
+    let grandchild_root = root;
+    let grandchild_last = mount_sse_once_match(
+        &server,
+        move |req: &wiremock::Request| {
+            parent_thread_header(req).is_some_and(|parent| parent != grandchild_root)
+                && decoded_body(req).contains(GRANDCHILD_RULE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-grandchild-2"),
+            ev_assistant_message("msg-grandchild-2", "grandchild done"),
+            ev_completed("resp-grandchild-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn_with_approval_and_permission_profile(
+        PARENT_PROMPT,
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+    let explorer_request = wait_for_request(&explorer_first).await?;
+    let spawn_output = wait_for_request(&explorer_last)
+        .await?
+        .function_call_output_text(GRAND_SPAWN_CALL_ID)
+        .unwrap_or_default();
+    let refused = spawn_output.contains("explorer_profile: a read-only explorer cannot spawn");
+    if !refused {
+        // The grandchild started: wait until its allow-rule command ran.
+        let grandchild = wait_for_request(&grandchild_last).await?;
+        eprintln!(
+            "grandchild command output: {}",
+            grandchild
+                .function_call_output_text(GRANDCHILD_RULE_CALL_ID)
+                .unwrap_or_default()
+        );
+    }
+    let written = test.cwd.path().join("grandchild-rule.txt").exists();
+    assert_eq!(
+        written, !explorer_profile,
+        "file written through a child of the explorer; spawn output: {spawn_output}"
+    );
+    assert_eq!(refused, explorer_profile, "spawn output: {spawn_output}");
+    assert_eq!(
+        offers_spawn_agent(&explorer_request),
+        !explorer_profile,
+        "{}",
+        explorer_request.body_json()
+    );
+    if explorer_profile {
+        assert!(
+            grandchild_first.requests().is_empty(),
+            "a child of the explorer reached the model"
+        );
+    }
+    Ok(())
+}

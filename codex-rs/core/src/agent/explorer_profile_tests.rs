@@ -416,6 +416,7 @@ fn role_texts_describe_the_enforced_limits() {
         "cannot edit workspace files",
         "command allow rules do not lift it",
         "MCP tools that are not annotated read-only",
+        "or spawn agents",
         "their messages to other agents share the same cap",
     ] {
         assert!(description.contains(promised), "{promised}: {description}");
@@ -425,12 +426,14 @@ fn role_texts_describe_the_enforced_limits() {
         summary.contains("only MCP tools annotated read-only"),
         "{summary}"
     );
+    assert!(summary.contains("no spawned agents"), "{summary}");
     assert!(
         summary.contains("messages to other agents capped"),
         "{summary}"
     );
     let instructions = developer_instructions(&profile);
     assert!(instructions.contains("Only MCP tools annotated read-only are available to you"));
+    assert!(instructions.contains("You cannot spawn agents"));
     assert!(instructions.contains("including any worktree you run in"));
     assert!(instructions.contains("Messages you send to other agents share one budget"));
 }
@@ -479,6 +482,48 @@ async fn sandbox_bypass_and_tool_denials_apply_only_to_explorers() {
     assert!(skips_default_isolation(&enabled_config, Some("explorer")));
     assert!(!skips_default_isolation(&enabled_config, Some("worker")));
     assert!(!skips_default_isolation(&disabled, Some("explorer")));
+}
+
+// Review 2026-10-27 P1 (R2.10): every spawn path (V1 and V2 `spawn_agent`, full-history forks,
+// workflow children) builds the child config with `build_agent_spawn_config`, which refuses a
+// spawn from an explorer before anything else; other children and a disabled profile spawn.
+#[tokio::test]
+async fn explorer_spawn_config_is_refused() {
+    for (explorer_profile, role, refused) in [
+        (true, "explorer", true),
+        (true, "worker", false),
+        (false, "explorer", false),
+    ] {
+        let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
+        let mut config = (*turn.config).clone();
+        config
+            .features
+            .set_enabled(Feature::ExplorerProfile, explorer_profile)
+            .expect("test config should allow feature update");
+        turn.config = std::sync::Arc::new(config);
+        turn.session_source = explorer_source(Some(role));
+        let step_context =
+            crate::session::step_context::StepContext::for_test(std::sync::Arc::new(turn));
+        let base_instructions = codex_protocol::models::BaseInstructions {
+            text: "base".to_string(),
+            provenance: None,
+        };
+        let result = crate::agent::child_config::build_agent_spawn_config(
+            &base_instructions,
+            step_context.as_ref(),
+        );
+        let case = format!("profile={explorer_profile} role={role}");
+        match result {
+            Err(err) => {
+                assert!(refused, "{case}: {err}");
+                assert!(
+                    err.contains("explorer_profile: a read-only explorer cannot spawn agents"),
+                    "{case}: {err}"
+                );
+            }
+            Ok(_) => assert!(!refused, "{case}: an explorer built a spawn config"),
+        }
+    }
 }
 
 #[test]

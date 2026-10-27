@@ -119,6 +119,7 @@ pub(crate) fn build_agent_spawn_config(
     base_instructions: &BaseInstructions,
     step_context: &StepContext,
 ) -> Result<Config, String> {
+    explorer_profile::refuse_spawn(step_context.turn.as_ref())?; // Fork: R2.10, an explorer spawns no agents.
     let mut config = build_agent_shared_config(step_context.turn.as_ref())?;
     let settings = &step_context.settings;
     config.model = Some(settings.model_info.slug.clone());

@@ -156,6 +156,23 @@ pub(crate) fn forbids_sandbox_bypass(config: &Config, source: &SessionSource) ->
     applies_to_source(config, source)
 }
 
+/// Explorer sessions spawn no agents (R2.10, review 2026-10-27 P1).
+///
+/// A child of an explorer is not an explorer: it would inherit the read-only sandbox and
+/// approval `never`, but not the explorer's own rules, so an exec-policy `allow` rule or an MCP
+/// tool without `readOnlyHint` would write through it. Every spawn (V1, V2, full-history fork,
+/// workflow child) builds its config in `child_config::build_agent_spawn_config`, which calls
+/// this first.
+pub(crate) fn refuse_spawn(turn: &crate::session::turn_context::TurnContext) -> Result<(), String> {
+    if applies_to_source(&turn.config, &turn.session_source) {
+        return Err(
+            "explorer_profile: a read-only explorer cannot spawn agents. Answer from what you can read yourself and tell your parent what needs another agent."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// Config for reloading another agent from an explorer's message (review P9).
 ///
 /// The reload keeps the explorer's runtime authority (read-only, approval `never`), as the
@@ -297,13 +314,18 @@ pub(crate) fn dynamic_tool_denial(
 /// Built-in and extension tools whose only purpose is writing files (R2.9).
 const WRITE_TOOL_NAMES: [&str; 2] = ["apply_patch", "multi_env_copy_file"];
 
-/// Explorer sessions: hides the tools an explorer may not call (spec UC2, R2.9).
+/// The spawn tool of every multi-agent version and namespace (R2.10).
+const SPAWN_TOOL_NAME: &str = "spawn_agent";
+
+/// Explorer sessions: hides the tools an explorer may not call (spec UC2, R2.9, R2.10).
 ///
-/// `apply_patch`, `multi_env_copy_file`, MCP tools not annotated `readOnlyHint: true` and
-/// client-defined tools leave the tool list, `tool_search` and the Code Mode nested tools.
-/// They stay registered as [`ToolExposure::Hidden`], so a call that names one anyway still
-/// reaches its handler and gets the refusal of R2.6 or R2.8. `mcp_tools` carries the
-/// annotations of the session's MCP tools; an MCP tool missing from it counts as writing.
+/// `apply_patch`, `multi_env_copy_file`, `spawn_agent`, MCP tools not annotated
+/// `readOnlyHint: true` and client-defined tools leave the tool list, `tool_search` and the
+/// Code Mode nested tools. They stay registered as [`ToolExposure::Hidden`], so a call that
+/// names one anyway still reaches its handler and gets the refusal of R2.6, R2.8 or R2.10.
+///
+/// `mcp_tools` carries the annotations of the session's MCP tools; an MCP tool missing from
+/// it counts as writing.
 pub(crate) fn hide_unavailable_tools<'a>(
     config: &Config,
     source: &SessionSource,
@@ -324,6 +346,7 @@ pub(crate) fn hide_unavailable_tools<'a>(
             !read_only_mcp_tools.contains(&name)
         } else {
             tool.runtime.is_third_party_tool()
+                || name.name == SPAWN_TOOL_NAME
                 || (name.is_default_namespace() && WRITE_TOOL_NAMES.contains(&name.name.as_str()))
         };
         if hidden {
@@ -489,7 +512,7 @@ pub(crate) fn cap_result(message: &str, max_tokens: usize) -> String {
 pub(crate) fn developer_instructions(profile: &ExplorerProfileConfig) -> String {
     let max_result_tokens = profile.max_result_tokens;
     format!(
-        "{INSTRUCTIONS_HEADING}\nYou are a read-only explorer working for a parent agent. Your sandbox cannot write files anywhere, including any worktree you run in, and you cannot request escalated or additional permissions, so do not try to create, edit, move or delete files. Only MCP tools annotated read-only are available to you; client-defined tools are not.\nAnswer the parent's question with conclusions, not raw material:\n- Lead with the direct answer, then the evidence that supports it.\n- Cite evidence as `path:line` or `path:start-end` references instead of pasting file contents; quote at most a few lines when a quote is essential.\n- Do not dump whole files, long command output, search results or directory listings.\n- Read excerpts (search, then targeted line ranges) instead of whole files.\n- Keep your final answer under about {max_result_tokens} tokens. The parent receives at most that much; a longer answer is truncated.\n- Messages you send to other agents share one budget of about {max_result_tokens} tokens per turn and are truncated past it; put your conclusions in your final answer.\n- If the codebase cannot answer the question, say what is missing instead of guessing."
+        "{INSTRUCTIONS_HEADING}\nYou are a read-only explorer working for a parent agent. Your sandbox cannot write files anywhere, including any worktree you run in, and you cannot request escalated or additional permissions, so do not try to create, edit, move or delete files. Only MCP tools annotated read-only are available to you; client-defined tools are not. You cannot spawn agents; tell your parent what needs another agent.\nAnswer the parent's question with conclusions, not raw material:\n- Lead with the direct answer, then the evidence that supports it.\n- Cite evidence as `path:line` or `path:start-end` references instead of pasting file contents; quote at most a few lines when a quote is essential.\n- Do not dump whole files, long command output, search results or directory listings.\n- Read excerpts (search, then targeted line ranges) instead of whole files.\n- Keep your final answer under about {max_result_tokens} tokens. The parent receives at most that much; a longer answer is truncated.\n- Messages you send to other agents share one budget of about {max_result_tokens} tokens per turn and are truncated past it; put your conclusions in your final answer.\n- If the codebase cannot answer the question, say what is missing instead of guessing."
     )
 }
 
@@ -515,7 +538,7 @@ pub(crate) fn role_description(
     let max_result_tokens = profile.max_result_tokens;
     format!(
         r#"Use `explorer` for specific, well-scoped questions about the codebase when you need the conclusion, not the file contents.
-Explorers are read-only: they cannot edit workspace files, run commands outside their read-only sandbox (command allow rules do not lift it), request escalated permissions, or call MCP tools that are not annotated read-only. Unless you pass `model` or `reasoning_effort`, they run on {model} at {effort}. They start without your conversation history unless you pass `fork_turns="all"` (put every needed detail in the message), and return a conclusion with `path:line` references capped at about {max_result_tokens} tokens; their messages to other agents share the same cap per turn.
+Explorers are read-only: they cannot edit workspace files, run commands outside their read-only sandbox (command allow rules do not lift it), request escalated permissions, call MCP tools that are not annotated read-only, or spawn agents. Unless you pass `model` or `reasoning_effort`, they run on {model} at {effort}. They start without your conversation history unless you pass `fork_turns="all"` (put every needed detail in the message), and return a conclusion with `path:line` references capped at about {max_result_tokens} tokens; their messages to other agents share the same cap per turn.
 Rules:
 - Ask one specific question per explorer. Spawn several explorers in parallel for independent questions and keep working on other things while they run.
 - Trust explorer results; read the cited lines yourself only for details the answer does not cover.
@@ -527,7 +550,7 @@ Rules:
 /// Summary appended to a user-defined `explorer` role while the profile is enabled.
 pub(crate) fn role_profile_summary(profile: &ExplorerProfileConfig) -> String {
     format!(
-        "Explorer profile: read-only without escalation (command allow rules keep the sandbox; only MCP tools annotated read-only), a cheaper reasoning effort by default, starts without your history unless `fork_turns=\"all\"`, result and messages to other agents capped at about {} tokens.",
+        "Explorer profile: read-only without escalation (command allow rules keep the sandbox; only MCP tools annotated read-only; no spawned agents), a cheaper reasoning effort by default, starts without your history unless `fork_turns=\"all\"`, result and messages to other agents capped at about {} tokens.",
         profile.max_result_tokens
     )
 }
