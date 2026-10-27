@@ -22,6 +22,13 @@ use crate::context::world_state::WorldState;
 /// starts until the model makes progress (review R9-1).
 const OPTIONAL_COMPACTIONS_WITHOUT_PROGRESS: usize = 2;
 
+/// Compactions one turn installs, forced and optional together, after which the turn stops
+/// with an error instead of compacting again (docs/fork/02-compaction-context.md §4 item 11).
+/// The progress guards above stop loops without progress; this backstop stops a turn whose
+/// every step refills the context. A typical turn compacts at most a few times; 32 windows of
+/// a 272k context are about 6M tokens of new context in one turn.
+pub(super) const MAX_COMPACTIONS_PER_TURN: usize = 32;
+
 /// Fork: what one sampled response did for the turn loop.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct SamplingOutcome {
@@ -69,6 +76,8 @@ pub(super) struct TurnLoop {
     made_progress: bool,
     consecutive_compactions_without_progress: usize,
     consecutive_optional_compactions_without_progress: usize,
+    /// Compactions this turn installed, forced and optional (`MAX_COMPACTIONS_PER_TURN`).
+    compactions: usize,
 }
 
 impl TurnLoop {
@@ -96,7 +105,13 @@ impl TurnLoop {
     /// the token limit forces (docs/fork/02-compaction-context.md R9): an optional one, such as
     /// a ready background candidate, runs while the context still fits, so it neither fails
     /// the turn nor counts.
+    ///
+    /// Whatever the progress, a turn that already installed `MAX_COMPACTIONS_PER_TURN`
+    /// compactions stops with an error that says so, before it pays for another one.
     pub(super) fn check_compaction_progress(&self, token_limit_reached: bool) -> CodexResult<()> {
+        if self.compactions >= MAX_COMPACTIONS_PER_TURN {
+            return Err(CodexErr::InvalidRequest(compaction_limit_message()));
+        }
         if token_limit_reached
             && !self.made_progress
             && self.consecutive_compactions_without_progress >= 2
@@ -107,6 +122,7 @@ impl TurnLoop {
     }
 
     pub(super) fn on_compacted(&mut self, token_limit_reached: bool) {
+        self.compactions += 1;
         if self.made_progress {
             return;
         }
@@ -122,9 +138,12 @@ impl TurnLoop {
     /// async threshold, so without progress they would repeat for the rest of the turn, one
     /// compaction request every few samples (review R9-1). They stop after two in a row until
     /// the model makes progress. Forced compactions do not go through this.
+    /// No optional compaction starts either once the turn reached `MAX_COMPACTIONS_PER_TURN`:
+    /// it could not install.
     pub(super) fn allows_optional_compaction(&self) -> bool {
         self.consecutive_optional_compactions_without_progress
             < OPTIONAL_COMPACTIONS_WITHOUT_PROGRESS
+            && self.compactions < MAX_COMPACTIONS_PER_TURN
     }
 
     /// Only the hooks can tell whether input queued behind a finished answer continues the
@@ -167,6 +186,13 @@ impl TurnLoop {
         }
         !blocked
     }
+}
+
+/// The turn error when a turn reached `MAX_COMPACTIONS_PER_TURN`.
+fn compaction_limit_message() -> String {
+    format!(
+        "Codex stopped this turn after compacting its context {MAX_COMPACTIONS_PER_TURN} times in it: every step refilled the context. Send a new message to continue in a new turn, or start a new thread."
+    )
 }
 
 /// Fork: the mid-turn start of a background compaction (`async_compaction::maybe_start`, same
