@@ -1326,7 +1326,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     interrupt_channel_open = false;
                     continue;
                 }
-                if workflow_wait.fork_stops_on_interrupt() {
+                if workflow_wait.fork_stops_on_interrupt(&client, &mut request_ids, event_processor.as_mut(), &mut error_seen).await {
                     break;
                 }
                 if let Err(err) = send_request_with_response::<TurnInterruptResponse>(
@@ -1398,7 +1398,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         CodexStatus::Running => {}
                         CodexStatus::InitiateShutdown => {
                             if workflow_wait
-                                .fork_keep_waiting(&client, &mut request_ids)
+                                .fork_keep_waiting(
+                                    &client,
+                                    &mut request_ids,
+                                    event_processor.as_mut(),
+                                )
                                 .await
                             {
                                 continue;

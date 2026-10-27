@@ -166,16 +166,30 @@ impl ExecWorkflowWait {
     }
 
     /// Between workflow or terminal turns there is nothing to interrupt, so exec stops
-    /// waiting.
-    pub(crate) fn fork_stops_on_interrupt(&self) -> bool {
+    /// waiting. Leaving terminals that still owe a notification is reported like the timeout:
+    /// a warning that names them and an error exit (background exec notifications, review
+    /// 2026-10-27 P3-5).
+    pub(crate) async fn fork_stops_on_interrupt(
+        &mut self,
+        client: &InProcessAppServerClient,
+        request_ids: &mut RequestIdSequencer,
+        event_processor: &mut dyn EventProcessor,
+        error_seen: &mut bool,
+    ) -> bool {
         let workflow_idle = self
             .wait
             .as_ref()
             .is_some_and(|wait| !wait.turn_in_progress);
         let terminals_idle = self.terminals.is_waiting() && !self.terminals.turn_in_progress();
-        (self.wait.is_none() || workflow_idle)
+        let stops = (self.wait.is_none() || workflow_idle)
             && (!self.terminals.is_waiting() || terminals_idle)
-            && (self.wait.is_some() || self.terminals.is_waiting())
+            && (self.wait.is_some() || self.terminals.is_waiting());
+        if stops {
+            self.terminals
+                .on_interrupt(client, request_ids, event_processor, error_seen)
+                .await;
+        }
+        stops
     }
 
     /// Whether exec drops `notification`. While exec waits, a turn started on its thread
@@ -211,8 +225,12 @@ impl ExecWorkflowWait {
         &mut self,
         client: &InProcessAppServerClient,
         request_ids: &mut RequestIdSequencer,
+        event_processor: &mut dyn EventProcessor,
     ) -> bool {
-        let terminals = self.terminals.keep_waiting(client, request_ids).await;
+        let terminals = self
+            .terminals
+            .keep_waiting(client, request_ids, event_processor)
+            .await;
         let workflows = self.keep_waiting_for_workflows(client, request_ids).await;
         terminals || workflows
     }

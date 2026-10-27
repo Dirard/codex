@@ -26,7 +26,18 @@ const NOTIFICATION_MARKER: &str = "<background_terminal_notification>";
 struct Routed {
     served: Arc<Mutex<Vec<&'static str>>>,
     bodies: Arc<Mutex<Vec<Value>>>,
-    command: String,
+    /// Arguments of the first turn's `exec_command`.
+    arguments: Value,
+}
+
+/// `exec_command` arguments that start `command` with an exit notification.
+fn notify_on_exit(command: &str) -> Value {
+    json!({
+        "cmd": command,
+        "yield_time_ms": 250,
+        "login": false,
+        "notify_on_exit": true,
+    })
 }
 
 fn message(id: &str, text: &str) -> String {
@@ -60,13 +71,7 @@ impl Respond for Routed {
                 message("resp-after-tool", "Started; I will report when it exits."),
             )
         } else {
-            let arguments = json!({
-                "cmd": self.command,
-                "yield_time_ms": 250,
-                "login": false,
-                "notify_on_exit": true,
-            })
-            .to_string();
+            let arguments = self.arguments.to_string();
             (
                 "start",
                 responses::sse(vec![
@@ -93,12 +98,16 @@ struct ExecRun {
 }
 
 async fn run_exec(command: &str, overrides: &[&str]) -> anyhow::Result<ExecRun> {
+    run_exec_with(notify_on_exit(command), overrides).await
+}
+
+async fn run_exec_with(arguments: Value, overrides: &[&str]) -> anyhow::Result<ExecRun> {
     let test = test_codex_exec();
     let server = responses::start_mock_server().await;
     let routed = Routed {
         served: Arc::default(),
         bodies: Arc::default(),
-        command: command.to_string(),
+        arguments,
     };
     Mock::given(method("POST"))
         .and(path_regex(".*/responses$"))
@@ -221,5 +230,118 @@ async fn exec_without_the_feature_ends_after_the_first_turn() -> anyhow::Result<
     assert!(!first.contains("notify_on_exit"), "{first}");
     assert!(!first.contains("notify_on_output"), "{first}");
     assert!(!run.stderr.contains("stopped waiting"), "{}", run.stderr);
+    Ok(())
+}
+
+/// Review 2026-10-27 P2-3: a dev server under an output watch does not hold exec until the
+/// timeout. Once the watch printed no matching line for `output_watch_quiet_ms`, nothing
+/// waits for it: exec names the running terminal, stops it and exits with code 0.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exec_does_not_wait_for_a_quiet_output_watch() -> anyhow::Result<()> {
+    let command = "echo starting; sleep 1; echo 'server ready'; sleep 60";
+    let run = run_exec_with(
+        json!({
+            "cmd": command,
+            "yield_time_ms": 250,
+            "login": false,
+            "notify_on_output": "ready",
+        }),
+        &[
+            "features.exec_exit_notifications.enabled=true",
+            "features.exec_exit_notifications.exec_wait_timeout_ms=20000",
+            "features.exec_exit_notifications.output_watch_quiet_ms=1500",
+        ],
+    )
+    .await?;
+    assert_eq!(
+        run.code,
+        Some(0),
+        "stdout: {}\nstderr: {}",
+        run.stdout,
+        run.stderr
+    );
+    assert!(run.elapsed < Duration::from_secs(15), "{:?}", run.elapsed);
+    // The "ready" notification still starts its turn while the watch is fresh.
+    assert_eq!(run.served, vec!["start", "after_tool", "notified"]);
+    assert!(
+        run.stderr.contains(
+            "codex exec is exiting while background terminals still run; they are terminated now: session "
+        ) && run.stderr.contains(&format!("({command})")),
+        "stderr: {}",
+        run.stderr
+    );
+    assert!(!run.stderr.contains("stopped waiting"), "{}", run.stderr);
+    Ok(())
+}
+
+/// Review 2026-10-27 P3-5: Ctrl-C while exec waits for a background terminal names the
+/// terminal it leaves and exits with an error, as the timeout does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exec_interrupted_while_waiting_names_the_terminal_and_fails() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+    let server = responses::start_mock_server().await;
+    let routed = Routed {
+        served: Arc::default(),
+        bodies: Arc::default(),
+        arguments: notify_on_exit("sleep 60; echo never"),
+    };
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(routed.clone())
+        .mount(&server)
+        .await;
+    let mut child = std::process::Command::new(codex_utils_cargo_bin::cargo_bin("codex-exec")?)
+        .current_dir(test.cwd_path())
+        .env("CODEX_HOME", test.home_path())
+        .env("CODEX_SQLITE_HOME", test.home_path())
+        .env("CODEX_API_KEY", "dummy")
+        .arg("-c")
+        .arg(format!(
+            "openai_base_url={}",
+            serde_json::to_string(&format!("{}/v1", server.uri()))?
+        ))
+        .args([
+            "-c",
+            "features.exec_exit_notifications=true",
+            "--skip-git-repo-check",
+            "build in the background",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    // The first turn ended; exec now waits for the terminal.
+    let waited = tokio::time::timeout(Duration::from_secs(30), async {
+        while !routed
+            .served
+            .lock()
+            .expect("served")
+            .contains(&"after_tool")
+        {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    if waited.is_err() {
+        let _ = child.kill();
+        anyhow::bail!("the first turn did not end");
+    }
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let pid = libc::pid_t::try_from(child.id())?;
+    // SAFETY: `pid` is our own child process.
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGINT) }, 0);
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::task::spawn_blocking(move || child.wait_with_output()),
+    )
+    .await???;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "stderr: {stderr}");
+    assert!(
+        stderr.contains(
+            "codex exec was interrupted while it waited for background terminals; still pending: session "
+        ) && stderr.contains(" (sleep 60; echo never, running for "),
+        "stderr: {stderr}"
+    );
     Ok(())
 }

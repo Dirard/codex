@@ -5,13 +5,19 @@
 //! have armed exit notifications (`notify_on_exit`, `notify_on_output`), a queued notification
 //! will start a turn, or another turn runs, exec keeps processing the turns those
 //! notifications start. After `features.exec_exit_notifications.exec_wait_timeout_ms` it
-//! warns, names the terminals it did not wait for and exits with code 1.
+//! warns, names the terminals it did not wait for and exits with code 1. An interrupt (Ctrl-C)
+//! that ends the wait does the same, and terminals that nothing waits for any longer, such as
+//! a server whose output watch went quiet, are named when exec exits (review 2026-10-27,
+//! P2-3, P3-5).
 
 use std::time::Duration;
 
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadBackgroundTerminal;
+use codex_app_server_protocol::ThreadBackgroundTerminalsListParams;
+use codex_app_server_protocol::ThreadBackgroundTerminalsListResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsPendingParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsPendingResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -118,15 +124,27 @@ impl TerminalWait {
     }
 
     /// After a turn completed: keep waiting while the thread still owes the model a
-    /// background terminal notification (R7.1). Returns whether exec waits.
+    /// background terminal notification (R7.1). Returns whether exec waits. When exec stops,
+    /// it names the terminals it leaves: after an interrupted turn those still owed (P3-5),
+    /// otherwise those still running that nothing waits for (P2-3).
     pub(crate) async fn keep_waiting(
         &mut self,
         client: &InProcessAppServerClient,
         request_ids: &mut RequestIdSequencer,
+        event_processor: &mut dyn EventProcessor,
     ) -> bool {
         self.turn_in_progress = false;
-        if !self.enabled || self.expired || self.last_turn_interrupted {
+        if !self.enabled || self.expired {
             self.waiting = None;
+            return false;
+        }
+        if self.last_turn_interrupted {
+            self.waiting = None;
+            if let Some(pending) = self.pending(client, request_ids).await
+                && !pending.terminals.is_empty()
+            {
+                event_processor.process_warning(interrupt_warning(Some(&pending)));
+            }
             return false;
         }
         let owed = match self.pending(client, request_ids).await {
@@ -135,6 +153,8 @@ impl TerminalWait {
         };
         if !owed {
             self.waiting = None;
+            self.name_running_terminals(client, request_ids, event_processor)
+                .await;
             return false;
         }
         let now = Instant::now();
@@ -194,6 +214,8 @@ impl TerminalWait {
         if !owed {
             info!("background terminals settled; codex exec stops waiting");
             self.waiting = None;
+            self.name_running_terminals(client, request_ids, event_processor)
+                .await;
             return TerminalTick::Done;
         }
         if let Some(waiting) = self.waiting.as_mut() {
@@ -228,6 +250,54 @@ impl TerminalWait {
         owed
     }
 
+    /// An interrupt (Ctrl-C) ends the wait between turns: the terminals it leaves are named,
+    /// and exec exits with an error, as after the timeout (P3-5).
+    pub(crate) async fn on_interrupt(
+        &mut self,
+        client: &InProcessAppServerClient,
+        request_ids: &mut RequestIdSequencer,
+        event_processor: &mut dyn EventProcessor,
+        error_seen: &mut bool,
+    ) {
+        if self.waiting.take().is_none() {
+            return;
+        }
+        let pending = self.pending(client, request_ids).await;
+        event_processor.process_warning(interrupt_warning(pending.as_ref()));
+        *error_seen = true;
+    }
+
+    /// Exec ends without waiting for terminals that still run, for example a server whose
+    /// output watch went quiet; the shutdown terminates them (P2-3).
+    async fn name_running_terminals(
+        &self,
+        client: &InProcessAppServerClient,
+        request_ids: &mut RequestIdSequencer,
+        event_processor: &mut dyn EventProcessor,
+    ) {
+        match send_request_with_response::<ThreadBackgroundTerminalsListResponse>(
+            client,
+            ClientRequest::ThreadBackgroundTerminalsList {
+                request_id: request_ids.next(),
+                params: ThreadBackgroundTerminalsListParams {
+                    thread_id: self.thread_id.clone(),
+                    cursor: None,
+                    limit: None,
+                },
+            },
+            "thread/backgroundTerminals/list",
+        )
+        .await
+        {
+            Ok(list) => {
+                if let Some(warning) = running_terminals_warning(&list.data) {
+                    event_processor.process_warning(warning);
+                }
+            }
+            Err(err) => warn!("thread/backgroundTerminals/list failed: {err}"),
+        }
+    }
+
     async fn pending(
         &self,
         client: &InProcessAppServerClient,
@@ -254,13 +324,9 @@ impl TerminalWait {
     }
 }
 
-/// The warning of an expired wait names what exec did not wait for (R7.3).
-pub(crate) fn timeout_warning(
-    waited: Duration,
-    pending: Option<&ThreadBackgroundTerminalsPendingResponse>,
-) -> String {
-    let waited = format!("{:.1}s", waited.as_secs_f64());
-    let terminals = pending
+/// The pending terminals as warnings name them.
+fn pending_terminals(pending: Option<&ThreadBackgroundTerminalsPendingResponse>) -> Vec<String> {
+    pending
         .map(|pending| {
             pending
                 .terminals
@@ -275,7 +341,52 @@ pub(crate) fn timeout_warning(
                 })
                 .collect::<Vec<_>>()
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+/// An interrupt ended the wait: what exec did not wait for (P3-5).
+pub(crate) fn interrupt_warning(
+    pending: Option<&ThreadBackgroundTerminalsPendingResponse>,
+) -> String {
+    let terminals = pending_terminals(pending);
+    if terminals.is_empty() {
+        "codex exec was interrupted while it waited for background terminal notifications; they are not reported.".to_string()
+    } else {
+        format!(
+            "codex exec was interrupted while it waited for background terminals; still pending: {}. They are terminated now and their exits are not reported.",
+            terminals.join(", ")
+        )
+    }
+}
+
+/// Exec exits while terminals still run that nothing waits for (P2-3).
+pub(crate) fn running_terminals_warning(terminals: &[ThreadBackgroundTerminal]) -> Option<String> {
+    if terminals.is_empty() {
+        return None;
+    }
+    let names = terminals
+        .iter()
+        .map(|terminal| {
+            format!(
+                "session {} ({})",
+                terminal.process_id,
+                shorten(&terminal.command)
+            )
+        })
+        .collect::<Vec<_>>();
+    Some(format!(
+        "codex exec is exiting while background terminals still run; they are terminated now: {}.",
+        names.join(", ")
+    ))
+}
+
+/// The warning of an expired wait names what exec did not wait for (R7.3).
+pub(crate) fn timeout_warning(
+    waited: Duration,
+    pending: Option<&ThreadBackgroundTerminalsPendingResponse>,
+) -> String {
+    let waited = format!("{:.1}s", waited.as_secs_f64());
+    let terminals = pending_terminals(pending);
     if terminals.is_empty() {
         format!(
             "codex exec stopped waiting for background terminal notifications after {waited}; the remaining ones are not reported."
@@ -340,5 +451,42 @@ mod tests {
         let long = shorten(&"x".repeat(500));
         assert_eq!(long.chars().count(), WARNING_COMMAND_MAX_CHARS);
         assert!(long.ends_with('…'));
+    }
+
+    /// Review 2026-10-27 P3-5 and P2-3: an interrupt and an exit that leaves running
+    /// terminals say what happens to them.
+    #[test]
+    fn interrupt_and_exit_warnings_name_the_terminals() {
+        let terminal = PendingBackgroundTerminal {
+            process_id: "1000".to_string(),
+            command: "make all".to_string(),
+            running_for_ms: 12_000,
+            output_watch: None,
+        };
+        assert_eq!(
+            interrupt_warning(Some(&pending(vec![terminal]))),
+            "codex exec was interrupted while it waited for background terminals; still pending: session 1000 (make all, running for 12.0s). They are terminated now and their exits are not reported."
+        );
+        assert_eq!(
+            interrupt_warning(None),
+            "codex exec was interrupted while it waited for background terminal notifications; they are not reported."
+        );
+        assert_eq!(running_terminals_warning(&[]), None);
+        let running = ThreadBackgroundTerminal {
+            item_id: "item".to_string(),
+            process_id: "1001".to_string(),
+            command: "./dev.sh".to_string(),
+            cwd: serde_json::from_value(serde_json::json!("/tmp")).expect("cwd"),
+            os_pid: None,
+            cpu_percent: None,
+            rss_kb: None,
+        };
+        assert_eq!(
+            running_terminals_warning(&[running]),
+            Some(
+                "codex exec is exiting while background terminals still run; they are terminated now: session 1001 (./dev.sh)."
+                    .to_string()
+            )
+        );
     }
 }
