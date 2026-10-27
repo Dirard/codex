@@ -607,7 +607,7 @@ struct StatusArgs {
 /// The log tail keeps its newest lines within `log_tokens` (D4 of the combined live run):
 /// scripts log agent answers, and 20 lines of up to 2000 characters would otherwise reach the
 /// model with every status; `logs_omitted` counts the lines left out.
-fn snapshot_json(snapshot: &RunSnapshot, log_tokens: usize) -> JsonValue {
+fn snapshot_json(snapshot: &RunSnapshot, log_tokens: usize, preview_tokens: usize) -> JsonValue {
     let mut value = serde_json::to_value(snapshot).unwrap_or(JsonValue::Null);
     if let JsonValue::Object(object) = &mut value {
         object.insert(
@@ -621,9 +621,19 @@ fn snapshot_json(snapshot: &RunSnapshot, log_tokens: usize) -> JsonValue {
         if omitted > 0 {
             object.insert("logs_omitted".to_string(), json!(omitted));
         }
+        // N2 (live recheck): the result preview counts against the output's budget too.
+        let preview = snapshot
+            .result_preview
+            .as_deref()
+            .filter(|_| preview_tokens > 0)
+            .map(|preview| truncate_text(preview, TruncationPolicy::Tokens(preview_tokens)));
+        object.insert("result_preview".to_string(), json!(preview));
     }
     value
 }
+
+/// N2: the result preview of a run in a list of runs and in the answer of `workflow_cancel`.
+const SUMMARY_PREVIEW_TOKENS: usize = 500;
 
 /// D4: the newest log lines whose tokens fit `max_tokens`, and how many older lines were
 /// left out. A newest line that alone exceeds the limit is kept truncated.
@@ -647,17 +657,17 @@ fn newest_logs(logs: &[String], max_tokens: usize) -> (Vec<String>, usize) {
     (kept, omitted)
 }
 
-/// R7.4, D4: the `workflow_status` output for one run: its log tail within the smaller of
-/// [`STATUS_LOG_MAX_TOKENS`] and half of `max_tokens`, and on request the full result within
-/// the rest of `max_tokens`.
+/// R7.4, D4, N2: the `workflow_status` output for one run: its log tail within the smaller of
+/// [`STATUS_LOG_MAX_TOKENS`] and half of `max_tokens`, and within the rest of `max_tokens`
+/// the full result when asked, which replaces the result preview, or else the preview.
 fn status_output(snapshot: &RunSnapshot, result: Option<String>, max_tokens: usize) -> JsonValue {
     let log_tokens = STATUS_LOG_MAX_TOKENS.min(max_tokens / 2);
-    let mut output = json!({ "run": snapshot_json(snapshot, log_tokens) });
+    let rest = max_tokens.saturating_sub(log_tokens);
+    let preview_tokens = if result.is_some() { 0 } else { rest };
+    let mut output = json!({ "run": snapshot_json(snapshot, log_tokens, preview_tokens) });
     if let Some(result) = result {
-        output["result"] = JsonValue::String(truncate_text(
-            &result,
-            TruncationPolicy::Tokens(max_tokens.saturating_sub(log_tokens)),
-        ));
+        output["result"] =
+            JsonValue::String(truncate_text(&result, TruncationPolicy::Tokens(rest)));
     }
     output
 }
@@ -735,7 +745,7 @@ impl ToolExecutor<ToolInvocation> for WorkflowStatusHandler {
                 // D4: summaries without log tails; `run_id` shows one run's logs.
                 let runs: Vec<JsonValue> = runs
                     .iter()
-                    .map(|run| snapshot_json(run, /*log_tokens*/ 0))
+                    .map(|run| snapshot_json(run, /*log_tokens*/ 0, SUMMARY_PREVIEW_TOKENS))
                     .collect();
                 let mut output = json!({ "runs": runs });
                 if omitted > 0 {
@@ -832,7 +842,7 @@ impl ToolExecutor<ToolInvocation> for WorkflowCancelHandler {
             // D4: a compact snapshot; `workflow_status` shows the logs.
             let snapshot = cancel_run(&run).await;
             Ok(json_output(
-                &json!({ "run": snapshot_json(&snapshot, /*log_tokens*/ 0) }),
+                &json!({ "run": snapshot_json(&snapshot, /*log_tokens*/ 0, SUMMARY_PREVIEW_TOKENS) }),
             ))
         })
     }
@@ -935,8 +945,9 @@ mod tests {
         );
     }
 
-    /// D4 (combined live run): the status of a run keeps its newest log lines and its result
-    /// within `max_tokens`; summaries and cancellation carry no log tail.
+    /// D4 (combined live run), N2 (live recheck): the status of a run keeps its newest log
+    /// lines and its result or its result preview within `max_tokens`; with the result the
+    /// preview is left out. Summaries and cancellation carry no log tail and a short preview.
     #[test]
     fn status_output_stays_within_max_tokens() {
         let mut tracker = codex_workflow::RunTracker::new(
@@ -950,27 +961,46 @@ mod tests {
         for index in 0..20 {
             tracker.log(&format!("{index:02} {}", "a".repeat(1_990)));
         }
-        tracker.finish(codex_workflow::RunStatus::Completed, 1, None, None);
+        // A preview as long as the notification's, 2000 tokens.
+        let preview = format!("\"{}\"", "p".repeat(8_000));
+        tracker.finish(codex_workflow::RunStatus::Completed, 1, Some(preview), None);
         let snapshot = tracker.snapshot(/*include_agents*/ false);
         assert_eq!(snapshot.logs_tail.len(), 20);
         let result = format!("\"{}\"", "r".repeat(100_000));
-        for max_tokens in [1_000, 1_500, 10_000] {
-            let output = status_output(&snapshot, Some(result.clone()), max_tokens);
-            let logs: Vec<String> =
-                serde_json::from_value(output["run"]["logs_tail"].clone()).expect("logs");
-            let log_tokens: usize = logs.iter().map(|line| approx_token_count(line)).sum();
-            assert!(log_tokens <= STATUS_LOG_MAX_TOKENS.min(max_tokens / 2));
-            assert!(
-                logs.last().is_some_and(|line| line.starts_with("19 ")),
-                "the newest line stays: {logs:?}"
-            );
-            assert_eq!(output["run"]["logs_omitted"], json!(20 - logs.len()));
-            let total = approx_token_count(&output.to_string());
-            assert!(total <= max_tokens + 300, "{total} tokens for {max_tokens}");
+        for max_tokens in [1_000, 1_500, 2_500, 10_000] {
+            for include_result in [true, false] {
+                let output = status_output(
+                    &snapshot,
+                    include_result.then(|| result.clone()),
+                    max_tokens,
+                );
+                let logs: Vec<String> =
+                    serde_json::from_value(output["run"]["logs_tail"].clone()).expect("logs");
+                let log_tokens: usize = logs.iter().map(|line| approx_token_count(line)).sum();
+                assert!(log_tokens <= STATUS_LOG_MAX_TOKENS.min(max_tokens / 2));
+                assert!(
+                    logs.last().is_some_and(|line| line.starts_with("19 ")),
+                    "the newest line stays: {logs:?}"
+                );
+                assert_eq!(output["run"]["logs_omitted"], json!(20 - logs.len()));
+                let total = approx_token_count(&output.to_string());
+                assert!(
+                    total <= max_tokens + 300,
+                    "{total} tokens for {max_tokens}, result {include_result}"
+                );
+                if include_result {
+                    assert_eq!(output["run"]["result_preview"], JsonValue::Null);
+                } else {
+                    assert!(output["run"]["result_preview"].is_string(), "{output}");
+                }
+            }
         }
-        let compact = snapshot_json(&snapshot, /*log_tokens*/ 0);
+        let compact = snapshot_json(&snapshot, /*log_tokens*/ 0, SUMMARY_PREVIEW_TOKENS);
         assert_eq!(compact["logs_tail"], json!([]));
         assert_eq!(compact["logs_omitted"], json!(20));
+        let summary_preview = compact["result_preview"].as_str().expect("preview");
+        assert!(approx_token_count(summary_preview) <= SUMMARY_PREVIEW_TOKENS + 20);
+        assert!(approx_token_count(&compact.to_string()) <= SUMMARY_PREVIEW_TOKENS + 300);
     }
 
     /// R10.4: the approval names the budget mode and, for a resumed run, its source run and
