@@ -3890,3 +3890,255 @@ async fn tree_shutdown_keeps_applied_worktrees_for_the_sweep() -> Result<()> {
     );
     Ok(())
 }
+
+// ---------------------------------------------------------------------------------------------
+// Review 2026-10-27 of the deferred items (docs/fork/reviews/2026-10-27-deferred-review.md)
+// ---------------------------------------------------------------------------------------------
+
+/// Mounts a scripted child that runs `steps` and answers; its requests are recognized by
+/// `task` without any of `others` (the tasks of agents whose history mentions this one).
+async fn mount_agent(
+    server: &MockServer,
+    task: &'static str,
+    others: &'static [&'static str],
+    steps: Vec<(&'static str, Value)>,
+) {
+    for index in 0..=steps.len() {
+        let previous = index.checked_sub(1).map(|previous| steps[previous].0);
+        let current = steps.get(index).map(|(call_id, _)| *call_id);
+        let matcher = move |request: &wiremock::Request| {
+            let text = body_text(request);
+            text.contains(task)
+                && !text.contains(ROOT_PROMPT)
+                && others.iter().all(|other| !text.contains(other))
+                && previous.is_none_or(|call_id| has_output(request, call_id))
+                && current.is_none_or(|call_id| !has_output(request, call_id))
+        };
+        let response_id = format!("resp-{task}-{index}");
+        let events = match steps.get(index) {
+            Some((call_id, Value::String(command))) => vec![
+                ev_response_created(&response_id),
+                ev_exec_command_call_with_args(call_id, &shell_args(command)),
+                ev_completed(&response_id),
+            ],
+            Some((call_id, spawn)) => vec![
+                ev_response_created(&response_id),
+                ev_function_call_with_namespace(
+                    call_id,
+                    NAMESPACE,
+                    "spawn_agent",
+                    &spawn.to_string(),
+                ),
+                ev_completed(&response_id),
+            ],
+            None => vec![
+                ev_response_created(&response_id),
+                final_answer(&response_id, "agent done"),
+                ev_completed(&response_id),
+            ],
+        };
+        mount_sse_once_match(server, matcher, sse(events)).await;
+    }
+}
+
+/// P2-1: a close waits for a helper the agent spawned with isolation `none`: the helper works
+/// in the agent's worktree although the agent itself rests. Once the helper is done, the close
+/// records its work too, applies it and removes the checkout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_close_waits_for_a_helper_in_the_worktree() -> Result<()> {
+    const CHILD_TASK: &str = "delegate the slow write to a helper";
+    const HELPER_TASK: &str = "write slowly in the shared worktree";
+    let server = start_mock_server().await;
+    let test = isolation_codex_with_model(
+        &server,
+        Some(NESTING_MODEL),
+        /*git_repository*/ true,
+        |config| {
+            config.agent_max_depth = 2;
+        },
+    )
+    .await?;
+    let parent = test.config.cwd.to_path_buf();
+    let spawn = mount_root_call(
+        &server,
+        ROOT_PROMPT,
+        "spawn-child",
+        "spawn_agent",
+        spawn_arguments(CHILD_TASK, "child", Some("worktree")),
+    )
+    .await;
+    mount_agent(
+        &server,
+        CHILD_TASK,
+        &[],
+        vec![(
+            "spawn-helper",
+            spawn_arguments(HELPER_TASK, "helper", Some("none")),
+        )],
+    )
+    .await;
+    mount_agent(
+        &server,
+        HELPER_TASK,
+        &[CHILD_TASK],
+        vec![(
+            "helper-write",
+            json!("pwd; sleep 6; printf 'helper\\n' > helper.txt"),
+        )],
+    )
+    .await;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    test.submit_turn(ROOT_PROMPT).await?;
+    let child = next_child(&mut created, &test).await?;
+    let helper = next_child(&mut created, &test).await?;
+    wait_turn_complete(&child).await;
+    wait_for_event(&helper.thread, |event| {
+        matches!(event, EventMsg::ExecCommandBegin(_))
+    })
+    .await;
+    let root = PathBuf::from(worktree_field(&spawn_output(&spawn, "spawn-child"), "path"));
+
+    let refused = mount_root_call(
+        &server,
+        "close while the helper writes",
+        "close-busy",
+        "apply_agent_worktree",
+        close_arguments("child", /*discard_changes*/ false),
+    )
+    .await;
+    test.submit_turn("close while the helper writes").await?;
+    let output = refused
+        .function_call_output_text("close-busy")
+        .context("refused close output")?;
+    assert!(
+        output.contains("agent /root/child/helper still works in its worktree"),
+        "{output}"
+    );
+    assert!(
+        output.contains("Nothing was applied or removed"),
+        "{output}"
+    );
+    assert!(root.join(".git").exists());
+    assert!(test.thread_manager.get_thread(child.id).await.is_ok());
+
+    wait_turn_complete(&helper).await;
+    assert_eq!(
+        std::fs::read_to_string(root.join("helper.txt"))?,
+        "helper\n"
+    );
+    let closed = mount_root_call(
+        &server,
+        "close after the helper",
+        "close-done",
+        "apply_agent_worktree",
+        close_arguments("child", /*discard_changes*/ false),
+    )
+    .await;
+    test.submit_turn_with_permission_profile("close after the helper", workspace_only_profile())
+        .await?;
+    let output = closed
+        .function_call_output_text("close-done")
+        .context("close output")?;
+    assert!(
+        output.contains("Closed the worktree of agent child"),
+        "{output}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(parent.join("helper.txt"))?,
+        "helper\n"
+    );
+    assert!(!root.exists());
+    Ok(())
+}
+
+/// P3-1: an isolated child of the agent that finished keeps no hold on the agent's worktree:
+/// its own worktree is a separate checkout of the repository, so the agent's close goes
+/// through and leaves the child's worktree and branch alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_finished_isolated_child_does_not_block_the_close_of_its_parent() -> Result<()> {
+    const CHILD_TASK: &str = "prepare and delegate to an isolated child";
+    const GRANDCHILD_TASK: &str = "write in the nested worktree";
+    let server = start_mock_server().await;
+    let test = isolation_codex_with_model(
+        &server,
+        Some(NESTING_MODEL),
+        /*git_repository*/ true,
+        |config| {
+            config.agent_max_depth = 2;
+        },
+    )
+    .await?;
+    let parent = test.config.cwd.to_path_buf();
+    let spawn = mount_root_call(
+        &server,
+        ROOT_PROMPT,
+        "spawn-child",
+        "spawn_agent",
+        spawn_arguments(CHILD_TASK, "child", Some("worktree")),
+    )
+    .await;
+    mount_agent(
+        &server,
+        CHILD_TASK,
+        &[],
+        vec![
+            ("child-edit", json!("printf 'from child\\n' > child.txt")),
+            (
+                "spawn-grandchild",
+                spawn_arguments(GRANDCHILD_TASK, "grandchild", Some("worktree")),
+            ),
+        ],
+    )
+    .await;
+    mount_agent(
+        &server,
+        GRANDCHILD_TASK,
+        &[CHILD_TASK],
+        vec![("grandchild-edit", json!("printf 'nested\\n' > nested.txt"))],
+    )
+    .await;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    test.submit_turn(ROOT_PROMPT).await?;
+    let child = next_child(&mut created, &test).await?;
+    let grandchild = next_child(&mut created, &test).await?;
+    wait_turn_complete(&child).await;
+    wait_turn_complete(&grandchild).await;
+    let child_root = PathBuf::from(worktree_field(&spawn_output(&spawn, "spawn-child"), "path"));
+    let grandchild_root = test
+        .thread_manager
+        .get_thread(grandchild.id)
+        .await?
+        .config_snapshot()
+        .await
+        .cwd()
+        .to_path_buf();
+    assert!(grandchild_root.join("nested.txt").exists());
+
+    let closed = mount_root_call(
+        &server,
+        "close the delegating child",
+        "close-child",
+        "apply_agent_worktree",
+        close_arguments("child", /*discard_changes*/ false),
+    )
+    .await;
+    test.submit_turn_with_permission_profile(
+        "close the delegating child",
+        workspace_only_profile(),
+    )
+    .await?;
+    let output = closed
+        .function_call_output_text("close-child")
+        .context("close output")?;
+    assert!(
+        output.contains("Closed the worktree of agent child"),
+        "{output}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(parent.join("child.txt"))?,
+        "from child\n"
+    );
+    assert!(!child_root.exists());
+    assert!(grandchild_root.join("nested.txt").exists());
+    Ok(())
+}

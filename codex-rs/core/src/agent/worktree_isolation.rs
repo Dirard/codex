@@ -1486,6 +1486,7 @@ pub(crate) use ops::merge_for_parent;
 pub(crate) use ops::record_applied;
 pub(crate) use ops::restore_missing_binding;
 pub(crate) use ops::sweep_on_session_start;
+pub(crate) use ops::working_in_worktree;
 
 #[cfg(test)]
 #[path = "worktree_isolation_tests.rs"]

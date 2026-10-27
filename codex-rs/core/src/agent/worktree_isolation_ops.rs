@@ -377,6 +377,11 @@ pub(crate) async fn ensure_worktree_present(
         return Ok(());
     }
     let _state = binding.state.lock().await;
+    restore_if_missing(binding).await
+}
+
+/// R5.3: the restore of [`ensure_worktree_present`]; the caller holds the binding lock.
+async fn restore_if_missing(binding: &Arc<AgentWorktreeBinding>) -> Result<(), String> {
     if binding.root.join(".git").exists() {
         return Ok(());
     }
@@ -755,26 +760,27 @@ pub(crate) async fn checkpoint_for_close(
 }
 
 /// R12.5: removes the checkout of an agent at rest, keeping its branch and its binding, so a
-/// later task restores the worktree (R5.3). A worktree that a registered isolated grandchild
-/// was created from stays.
+/// later task restores the worktree (R5.3). Under the binding lock, which a turn of the agent
+/// takes when it starts (P3-9), the agent must still be stopped, and `busy_agent` must find
+/// no other agent working in the worktree (P2-1); the worktree stays otherwise.
 #[expect(
     clippy::await_holding_invalid_type,
-    reason = "the binding lock serializes checkpoint, close and finalize of one worktree"
+    reason = "the binding lock serializes checkpoint, close, finalize and the start of a turn"
 )]
-pub(crate) async fn close_worktree(
-    worktrees: &AgentWorktrees,
+pub(crate) async fn close_worktree<Busy>(
     binding: &Arc<AgentWorktreeBinding>,
     discard_submodule_files: bool,
-) -> Result<CloseOutcome, String> {
+    busy_agent: impl FnOnce() -> Busy,
+) -> Result<CloseOutcome, String>
+where
+    Busy: std::future::Future<Output = Option<String>>,
+{
     let state = binding.state.lock().await;
     if !state.stopped {
         return Err(WOKEN_AGAIN.to_string());
     }
-    if let Some(grandchild) = worktrees.created_from(binding) {
-        return Err(format!(
-            "the isolated agent {} works in a worktree created from it; close that one first",
-            grandchild.agent_path.as_str()
-        ));
+    if let Some(agent) = busy_agent().await {
+        return Err(working_in_worktree(&agent));
     }
     let blocking = Arc::clone(binding);
     let closed = tokio::task::spawn_blocking(move || {
@@ -952,13 +958,20 @@ fn retire_applied_branch(
     }
 }
 
+/// P2-1: why a worktree another agent still works in is not closed.
+pub(crate) fn working_in_worktree(agent: &str) -> String {
+    format!(
+        "agent {agent} still works in its worktree (it descends from the agent or runs in its checkout); wait for it or interrupt it, then close the worktree"
+    )
+}
+
 impl AgentWorktrees {
-    /// A registered isolated agent whose worktree was created from `binding`'s worktree.
-    fn created_from(&self, binding: &AgentWorktreeBinding) -> Option<Arc<AgentWorktreeBinding>> {
-        let root = live_key(&binding.root);
-        self.all().into_iter().find(|other| {
-            other.thread_id != binding.thread_id && live_key(&other.source_root).starts_with(&root)
-        })
+    /// The binding whose worktree holds `cwd`, for an agent that works in another agent's
+    /// worktree, such as a helper spawned there with isolation `none` (P2-1).
+    fn containing(&self, cwd: &Path) -> Option<Arc<AgentWorktreeBinding>> {
+        self.all()
+            .into_iter()
+            .find(|binding| cwd.starts_with(binding.root.as_path()))
     }
 }
 
@@ -968,27 +981,55 @@ impl AgentWorktrees {
 
 impl crate::session::session::Session {
     /// Fork hook at the start of every task: an isolated child whose worktree was removed while
-    /// it stayed loaded (Codex Desktop's cleanup, the user) gets it back before the turn runs
-    /// (R5.8). Without a binding, or with the checkout present, this is one `stat`.
-    pub(crate) async fn fork_restore_agent_worktree(&self) {
-        let Some(binding) = self
-            .services
-            .local_agent_runtime
-            .worktrees
-            .get(self.thread_id)
-        else {
-            return;
+    /// it stayed loaded (Codex Desktop's cleanup, a close, the user) gets it back before the
+    /// turn runs (R5.8), and so does an agent that works in another agent's worktree, such as
+    /// a helper spawned there with isolation `none` (P2-1). The check and the restore run
+    /// under the binding lock, which also marks the child's own worktree in use: a close that
+    /// takes the lock later refuses, and one that took it first is undone here (P3-9).
+    /// Without a binding of the tree this is a lookup in an empty map.
+    pub(crate) async fn fork_restore_agent_worktree(
+        &self,
+        turn_context: &crate::session::turn_context::TurnContext,
+    ) {
+        let worktrees = &self.services.local_agent_runtime.worktrees;
+        let (binding, own) = match worktrees.get(self.thread_id) {
+            Some(binding) => (binding, true),
+            None => match turn_context
+                .initial_environments
+                .turn_environments()
+                .filter_map(|environment| environment.cwd().to_abs_path().ok())
+                .find_map(|cwd| worktrees.containing(cwd.as_path()))
+            {
+                Some(binding) => (binding, false),
+                None => return,
+            },
         };
-        if binding.root.join(".git").exists() {
-            return;
-        }
-        if let Err(err) = ensure_worktree_present(&binding).await {
+        if let Err(err) = begin_turn(&binding, own).await {
             warn!(
-                "cannot restore the worktree of agent {} before its turn: {err}",
+                "cannot restore the worktree of agent {} before a turn: {err}",
                 binding.agent_path.as_str()
             );
         }
     }
+}
+
+/// R5.8, P3-9: under the binding lock, restores the worktree a turn is about to run in and,
+/// for the worktree's own agent (`own`), marks it in use, so a close cannot remove it between
+/// this check and the turn.
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the binding lock serializes the start of a turn with a close of its worktree"
+)]
+pub(crate) async fn begin_turn(
+    binding: &Arc<AgentWorktreeBinding>,
+    own: bool,
+) -> Result<(), String> {
+    let mut state = binding.state.lock().await;
+    let restored = restore_if_missing(binding).await;
+    if own {
+        state.stopped = false;
+    }
+    restored
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -104,6 +104,17 @@ impl LocalAgentControl {
     }
 }
 
+impl CodexThread {
+    /// Fork (agent worktree isolation, P2-1): the loaded agent rests: it started its work
+    /// and could be unloaded now, with no turn, background work or pending trigger.
+    pub(crate) async fn fork_at_rest(&self) -> bool {
+        !matches!(
+            self.agent_status().await,
+            crate::agent::AgentStatus::PendingInit
+        ) && super::is_unloadable(self).await
+    }
+}
+
 /// Unloading would kill an armed process or skip a turn a notification starts (other queued
 /// notifications are recorded by the shutdown, R3.6, R2.5), or a workflow run still waits
 /// for this child's answer.

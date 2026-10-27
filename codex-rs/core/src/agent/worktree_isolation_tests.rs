@@ -964,3 +964,79 @@ fn reload_errors_of_missing_worktrees_are_recognized() {
     );
     assert_eq!(agent_worktree_reload_error(&other), None);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Review 2026-10-27 of the deferred items (docs/fork/reviews/2026-10-27-deferred-review.md)
+// ---------------------------------------------------------------------------------------------
+
+/// A binding of a fresh agent worktree whose agent is not loaded, as after its unload.
+fn stopped_binding(home: &Path, repository: &Path) -> Arc<AgentWorktreeBinding> {
+    let agent_path = AgentPath::root().join("probe").expect("agent path");
+    let thread_id = ThreadId::new();
+    let created = spawned_worktree(home, repository, thread_id, &agent_path);
+    Arc::new(AgentWorktreeBinding {
+        thread_id,
+        agent_path,
+        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        live: LiveRoot::register(created.root.as_path(), None),
+        root: created.root.clone(),
+        cwd: created.cwd.clone(),
+        source_root: created.source_root.clone(),
+        metadata: StdMutex::new(created.metadata.clone()),
+        parent_checkout_protected: AtomicBool::new(false),
+        read_only_explorer: AtomicBool::new(false),
+        submodules: Vec::new(),
+        applied_tip: StdMutex::default(),
+        settings: WorktreeSettings::for_cli(home, /*desktop*/ None).expect("settings"),
+        sweep: None,
+        state: Mutex::new(BindingState {
+            stopped: true,
+            finalized: false,
+        }),
+    })
+}
+
+/// P3-9: the start of a turn and a close of the same worktree are serialized by the binding
+/// lock: a close that comes first is undone by the restore of the turn, and a turn that
+/// started first keeps a later close away, so the turn never runs without its worktree.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_starting_turn_and_a_close_never_leave_the_turn_without_its_worktree() {
+    let (_home, home_path, repository) = repository_fixture();
+    let binding = stopped_binding(&home_path, &repository);
+    let idle = || async { None };
+
+    let closed = ops::close_worktree(&binding, /*discard_submodule_files*/ false, idle)
+        .await
+        .expect("close the worktree of the agent at rest");
+    assert!(matches!(closed, CloseOutcome::Removed { .. }), "{closed:?}");
+    assert!(!binding.root.exists());
+    ops::begin_turn(&binding, /*own*/ true)
+        .await
+        .expect("the turn restores the worktree");
+    assert!(binding.root.join(".git").exists());
+
+    let refused = ops::close_worktree(&binding, /*discard_submodule_files*/ false, idle)
+        .await
+        .expect_err("the agent is working");
+    assert!(refused.contains("woken again"), "{refused}");
+    assert!(binding.root.join(".git").exists());
+}
+
+/// P2-1: a worktree another agent still works in is not removed, and the refusal says how to
+/// get past it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_close_refuses_while_another_agent_works_in_the_worktree() {
+    let (_home, home_path, repository) = repository_fixture();
+    let binding = stopped_binding(&home_path, &repository);
+
+    let refused = ops::close_worktree(&binding, /*discard_submodule_files*/ false, || async {
+        Some("/root/probe/helper".to_string())
+    })
+    .await
+    .expect_err("a helper works in the worktree");
+    assert_eq!(
+        refused,
+        "agent /root/probe/helper still works in its worktree (it descends from the agent or runs in its checkout); wait for it or interrupt it, then close the worktree"
+    );
+    assert!(binding.root.join(".git").exists());
+}

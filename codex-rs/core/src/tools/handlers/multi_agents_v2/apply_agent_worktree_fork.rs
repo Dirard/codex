@@ -14,6 +14,7 @@ use crate::agent::worktree_isolation::checkpoint_for_close;
 use crate::agent::worktree_isolation::close_worktree;
 use crate::agent::worktree_isolation::merge_for_parent;
 use crate::agent::worktree_isolation::record_applied;
+use crate::agent::worktree_isolation::working_in_worktree;
 use crate::hook_runtime::PreToolUseHookResult;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::run_post_tool_use_hooks;
@@ -198,9 +199,16 @@ async fn handle_apply(invocation: ToolInvocation) -> Result<FunctionToolOutput, 
                 args.target
             ))
         };
-        session
-            .services
-            .local_agent_runtime
+        let runtime = &session.services.local_agent_runtime;
+        // P2-1: a helper or descendant that works in the worktree keeps it, as the agent
+        // itself does; it is checked again right before the removal.
+        if let Some(agent) = runtime
+            .fork_worktree_busy_agent(&binding, session.thread_id)
+            .await
+        {
+            return Err(not_closed(working_in_worktree(&agent)));
+        }
+        runtime
             .fork_unload_for_close(agent_id)
             .await
             .map_err(not_closed)?;
@@ -241,7 +249,8 @@ async fn handle_apply(invocation: ToolInvocation) -> Result<FunctionToolOutput, 
         }
         text.push_str(
             &close_message(
-                &session.services.local_agent_runtime.worktrees,
+                &session.services.local_agent_runtime,
+                session.thread_id,
                 &binding,
                 &args,
             )
@@ -491,16 +500,17 @@ fn submodule_refusal(target: &str, source_root: &Path, path: &str, commit: Optio
 
 /// R12.5, R12.6: closes the worktree and says what happened.
 async fn close_message(
-    worktrees: &crate::agent::worktree_isolation::AgentWorktrees,
+    runtime: &crate::agent::control::LocalAgentRuntime,
+    caller: ThreadId,
     binding: &Arc<AgentWorktreeBinding>,
     args: &ApplyAgentWorktreeArgs,
 ) -> String {
     let target = &args.target;
     let root = binding.root.display();
     let (branch, applied, ignored) = match close_worktree(
-        worktrees,
         binding,
         /*discard_submodule_files*/ args.discard_changes,
+        || runtime.fork_worktree_busy_agent(binding, caller),
     )
     .await
     {

@@ -288,6 +288,58 @@ impl LocalAgentRuntime {
 }
 
 impl LocalAgentRuntime {
+    /// P2-1, P3-1: a loaded agent of this tree, other than the worktree's own agent and
+    /// `caller`, that still works in `binding`'s worktree: a descendant of its agent (an
+    /// isolated one included, whose worktree was created from it) or any agent whose working
+    /// directory lies in the worktree, such as a helper spawned with isolation `none`. Its
+    /// path is returned while it is not at rest; an agent at rest or not loaded does not work
+    /// there, and a later turn of it restores the worktree first (R5.8).
+    pub(crate) async fn fork_worktree_busy_agent(
+        &self,
+        binding: &AgentWorktreeBinding,
+        caller: ThreadId,
+    ) -> Option<String> {
+        let state = self.upgrade().ok()?;
+        let root =
+            dunce::canonicalize(&binding.root).unwrap_or_else(|_| binding.root.to_path_buf());
+        let in_worktree = |path: &Path| {
+            path.starts_with(binding.root.as_path())
+                || dunce::canonicalize(path).is_ok_and(|path| path.starts_with(&root))
+        };
+        for metadata in self.registry.live_agents() {
+            let Some(thread_id) = metadata.agent_id else {
+                continue;
+            };
+            if thread_id == binding.thread_id || thread_id == caller {
+                continue;
+            }
+            let Ok(thread) = state.get_thread(thread_id).await else {
+                continue;
+            };
+            let descendant = metadata.agent_path.as_ref().is_some_and(|path| {
+                path != &binding.agent_path
+                    && super::agent_matches_prefix(Some(path), &binding.agent_path)
+            });
+            let works_there = descendant
+                || in_worktree(thread.config_snapshot().await.cwd().as_path())
+                || thread
+                    .environment_selections()
+                    .await
+                    .iter()
+                    .filter_map(|selection| selection.cwd.to_abs_path().ok())
+                    .any(|cwd| in_worktree(cwd.as_path()));
+            if works_there && !thread.fork_at_rest().await {
+                return Some(
+                    metadata
+                        .agent_path
+                        .as_ref()
+                        .map_or_else(|| thread_id.to_string(), |path| path.as_str().to_string()),
+                );
+            }
+        }
+        None
+    }
+
     /// D7, R9.6: isolated agents of this tree whose thread is not loaded (after a cold resume
     /// or an eviction) and that `listed` therefore misses, as `shutdown` agents: a follow-up
     /// task reloads them. Without the feature, or without a worktree binding, nothing is added.
