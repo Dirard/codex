@@ -1014,7 +1014,14 @@ fn stopped_binding(home: &Path, repository: &Path) -> Arc<AgentWorktreeBinding> 
         applied_tip: StdMutex::default(),
         restored: StdMutex::default(),
         settings: WorktreeSettings::for_cli(home, /*desktop*/ None).expect("settings"),
-        sweep: None,
+        // A sweep target so a close updates the host record (the `closed` mark), as a real
+        // binding does; without it `update_record` is a no-op.
+        sweep: Some(SweepTarget {
+            settings: WorktreeSettings::for_cli(home, /*desktop*/ None).expect("settings"),
+            source: repository.to_path_buf(),
+            cleanup: crate::config::AgentWorktreeCleanup::default(),
+            records: home.join("agent-worktrees"),
+        }),
         state: Mutex::new(BindingState {
             stopped: true,
             finalized: false,
