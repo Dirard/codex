@@ -3912,8 +3912,11 @@ async fn a_script_that_does_not_compile_creates_no_run() -> Result<()> {
     let done = &responses.served("parent_done")[0];
     for call_id in ["call-1", "call-2", "call-3"] {
         let output = call_output(done, call_id).expect("output");
+        // R6 (live recheck 2 2026-10-27): the error names the line of the script.
         assert!(
-            output.contains("the script does not compile: SyntaxError"),
+            output.contains(
+                "the script does not compile: SyntaxError: Unexpected token ';' (line 2). No run was created."
+            ),
             "{call_id}: {output}"
         );
         assert!(
@@ -3935,5 +3938,48 @@ async fn a_script_that_does_not_compile_creates_no_run() -> Result<()> {
         !done.contains(NOTIFICATION_MARKER),
         "no run, so no notification"
     );
+    Ok(())
+}
+
+/// F4 (review 2026-10-27 of the deferred fixes): the syntax check compiles the script and
+/// runs none of it. A body that closes the function the run's cell wraps it in and leaves
+/// code at the top level does not compile there either: the call answers with the
+/// `SyntaxError` at once, and the escaped timer never runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_syntax_check_runs_no_code_of_the_script() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    let script = "export const meta = { name: 'escape', description: 'd' };\nreturn 1; }} await new Promise((resolve) => setTimeout(resolve, 8000)); async function __wf_after() {{\n";
+    parent_chain(
+        &responses,
+        "inline",
+        None,
+        "call-1",
+        json!({ "script": script }),
+    );
+    responses.rule(
+        "parent_done",
+        1,
+        Duration::ZERO,
+        |body| is_parent(body) && has_call_output(body, "call-1"),
+        message("resp-parent-done", "Done."),
+    );
+    let test = build(&server, |_| {}).await?;
+    let started = std::time::Instant::now();
+    test.submit_turn("start it").await?;
+    let elapsed = started.elapsed();
+    let done = &responses.served("parent_done")[0];
+    let output = call_output(done, "call-1").expect("output");
+    assert!(
+        output.contains("the script does not compile: SyntaxError: Unexpected token '}' (line 2)"),
+        "{output}"
+    );
+    assert!(output.contains("No run was created."), "{output}");
+    assert!(
+        elapsed < Duration::from_secs(6),
+        "the check ran the escaped timer: {elapsed:?}"
+    );
+    assert!(test.codex.workflow_runs().is_empty());
     Ok(())
 }

@@ -742,13 +742,58 @@ async fn execute_cell(
 /// How long the syntax check of a script may take.
 const SYNTAX_CHECK_YIELD_MS: u64 = 30_000;
 
+/// The syntax check after `const body = <the script body>;`: compiles the body as the strict
+/// body of an async function and, for a `SyntaxError`, throws its message with the line
+/// (binary search over the prefixes of the body that fail with the same message).
+const SYNTAX_CHECK_SOURCE: &str = r#"(() => {
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const failure = (text) => {
+    try {
+      new AsyncFunction(`"use strict";${text}\n`);
+      return null;
+    } catch (error) {
+      return error instanceof SyntaxError ? String(error.message) : null;
+    }
+  };
+  const message = failure(body);
+  if (message === null) {
+    return;
+  }
+  if (message === "Unexpected end of input") {
+    throw `SyntaxError: ${message}`;
+  }
+  const lines = body.split("\n");
+  let low = 1;
+  let high = lines.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (failure(lines.slice(0, middle).join("\n")) === message) {
+      high = middle;
+    } else {
+      low = middle + 1;
+    }
+  }
+  throw `SyntaxError: ${message} (line ${low})`;
+})();
+"#;
+
 /// N5 (live recheck 2026-10-27): compiles a validated script body in a Code Mode session of
 /// its own before a run is registered, so a syntax error answers the `workflow` call instead
-/// of a failed run's notification. The body sits in `async function __wf_main()` on the
-/// first line, as in the run's cell, so V8 compiles it the same way and reports the same
-/// lines; it is wrapped in a function that is never called, so nothing of the script runs.
-/// Only a `SyntaxError` is returned: a check that cannot run leaves the run to report it.
+/// of a failed run's notification. Only a `SyntaxError` is returned: a check that cannot run
+/// leaves the run to report it.
+///
+/// F4: the body is compiled, never run. The `AsyncFunction` constructor parses it as the
+/// strict body of an async function, which is what the run's cell wraps it in
+/// (`async function __wf_main()` in a module): the body cannot close that function and leave
+/// code at the top level, so a stray `}` is a `SyntaxError` here as it is in the cell.
+///
+/// R6 (live recheck 2 2026-10-27): V8 gives the message of a `SyntaxError` without its place,
+/// so the check names the line itself: the first line whose prefix of the script fails with
+/// the same message. The body keeps the lines of the script, so the number is the script's.
+/// An error at the end of the input names no line.
 pub(crate) async fn check_script_syntax(session: &Session, body: &str) -> Result<(), String> {
+    let body = serde_json::to_string(body)
+        .map_err(|error| format!("the script cannot be checked: {error}"))?;
     let provider = session.services.code_mode_service.session_provider();
     let code_mode = match provider.create_session().await {
         Ok(code_mode) => code_mode,
@@ -760,9 +805,7 @@ pub(crate) async fn check_script_syntax(session: &Session, body: &str) -> Result
     let request = ExecuteRequest {
         tool_call_id: "workflow-syntax-check".to_string(),
         enabled_tools: Vec::new(),
-        source: format!(
-            "async function __wf_check() {{ async function __wf_main() {{{body}\n}} }}\n"
-        ),
+        source: format!("const body = {body};\n{SYNTAX_CHECK_SOURCE}"),
         yield_time_ms: Some(SYNTAX_CHECK_YIELD_MS),
         max_output_tokens: Some(1_000),
     };

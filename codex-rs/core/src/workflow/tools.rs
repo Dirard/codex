@@ -150,7 +150,7 @@ fn workflow_description(
     };
     format!(
         r#"Run a JavaScript workflow script in the background: it orchestrates many sub-agents deterministically while you keep working, and agent answers go to the script instead of your context.
-When to use it: when a task splits into many independent pieces and separate agents clearly pay off: auditing, reviewing or searching across many files, modules or items (about five or more), independent checks of each finding, or a multi-stage find/verify/report pipeline whose intermediate results would flood your context. Then you may start one without being asked, and also when the user asks for a workflow. Every agent spends tokens: unless the user set a budget, pass a `budget_tokens` that fits the task. Not for work that one agent or a few of your own tool calls can do.
+When to use it: when a task splits into many independent pieces and separate agents clearly pay off: auditing, reviewing or searching across many files, modules or items (about five or more), independent checks of each finding, or a multi-stage find/verify/report pipeline whose intermediate results would flood your context. Then you may start one without being asked, and also when the user asks for a workflow. Every agent spends tokens, usually 10k to 50k for one focused task and more for a broad one: pass `budget_tokens` only when the user asked for a limit or the cost needs a cap, and then allow at least that much per planned agent. Not for work that one agent or a few of your own tool calls can do.
 
 The script starts with `export const meta = {{ name, description, phases }};` (name: letters, digits, `_`, `-`), followed by a body that may use `await` and `return`. The returned JSON value is the run result.
 
@@ -347,7 +347,7 @@ impl ToolExecutor<ToolInvocation> for WorkflowStartHandler {
             (
                 "resume_from".to_string(),
                 JsonSchema::string(Some(
-                    "Id of a finished, failed, cancelled or interrupted run of this thread. Agent calls with the same prompt and options reuse its successful answers instead of starting agents; the rest run live. Without `script`, `name`, `args` or `budget_tokens`, its script, args and token budget are used; `budget_tokens: null` drops its budget.".to_string(),
+                    "Id of a finished, failed, cancelled or interrupted run of this thread. Agent calls with the same prompt and options reuse its successful answers instead of starting agents; the rest run live. Without `script`, `name`, `args` or `budget_tokens`, its script, args and token budget are used; `budget_tokens: null` gives the run the budget of a new run instead.".to_string(),
                 )),
             ),
             (
@@ -362,7 +362,7 @@ impl ToolExecutor<ToolInvocation> for WorkflowStartHandler {
                         codex_tools::JsonSchemaPrimitiveType::Null,
                     ]))),
                     description: Some(
-                        "Optional token budget of the run (non-cached input plus output of its agents). When reached, agent() calls that have not started resolve to null. With `resume_from`, omit it to keep the source run's budget or pass null to drop it."
+                        "Optional token budget of the run (non-cached input plus output of its agents). When reached, agent() calls that have not started resolve to null. With `resume_from`, omit it to keep the source run's budget, or pass null for the budget of a new run (the configured default budget, if any)."
                             .into(),
                     ),
                     ..Default::default()
@@ -929,8 +929,9 @@ mod tests {
                 "auditing, reviewing or searching across many files",
                 "independent checks of each finding",
                 "Then you may start one without being asked",
-                // P3-13: the hint names the cost and the budget.
-                "Every agent spends tokens: unless the user set a budget, pass a `budget_tokens` that fits the task.",
+                // P3-13, R6 (live recheck 2): the hint names the cost per agent and when to
+                // pass a budget.
+                "Every agent spends tokens, usually 10k to 50k for one focused task and more for a broad one: pass `budget_tokens` only when the user asked for a limit or the cost needs a cap, and then allow at least that much per planned agent.",
                 "Not for work that one agent or a few of your own tool calls can do.",
             ] {
                 assert!(opening.contains(hint), "{hint:?} missing from {opening}");
@@ -1079,5 +1080,13 @@ mod tests {
             serde_json::to_value(&tool.parameters).expect("schema")["properties"]["budget_tokens"]
                 .clone();
         assert_eq!(budget["type"], json!(["integer", "null"]), "{budget}");
+        // F8: null drops the source's budget, not a configured default one (`start_run`
+        // still applies `default_budget_tokens`), and the description says exactly that.
+        let description = budget["description"].as_str().expect("description");
+        assert!(
+            description.contains("pass null for the budget of a new run"),
+            "{description}"
+        );
+        assert!(!description.contains("drop it"), "{description}");
     }
 }
