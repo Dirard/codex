@@ -1248,6 +1248,9 @@
             "powershell_shell_version": {
               "type": "boolean"
             },
+            "prediction_preserve_parent_tools": {
+              "type": "boolean"
+            },
             "prefer_mxc": {
               "type": "boolean"
             },
@@ -8131,6 +8134,9 @@
           "type": "boolean"
         },
         "powershell_shell_version": {
+          "type": "boolean"
+        },
+        "prediction_preserve_parent_tools": {
           "type": "boolean"
         },
         "prefer_mxc": {
