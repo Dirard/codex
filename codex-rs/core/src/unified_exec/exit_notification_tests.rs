@@ -147,6 +147,49 @@ fn a_watch_alone_is_awaited_only_while_it_is_fresh() {
     assert_eq!(pending.process_id, 1000);
 }
 
+/// R6.15, live recheck 2026-10-27 N1: `write_stdin` `notify_on_exit: false` ends the wait for
+/// the exit. Without an output watch the notification is off: nothing is reported or
+/// journaled, and a shutdown owes no notice. With a watch, the watch still reports the exit
+/// but is waited for only while it is fresh. `notify_on_exit: true` turns it on again.
+#[test]
+fn turning_the_exit_notification_off_ends_the_wait_for_the_exit() {
+    let now = Instant::now();
+    let quiet = now + OutputWatchWindows::default().first_match + Duration::from_secs(1);
+
+    let server = notifier(1000, "./dev.sh");
+    assert!(server.arm().is_none());
+    assert!(server.is_awaited(quiet) && server.is_pending());
+    server.disarm_exit();
+    assert!(!server.exit_requested());
+    assert!(!server.is_awaited(now), "nothing waits for the exit");
+    assert!(!server.is_pending(), "the journal drops it");
+    assert!(!server.wants_report());
+    assert!(server.on_exit(report(exited(0), b"")).is_none());
+    assert_eq!(server.settle_for_shutdown(), ShutdownSettle::Nothing);
+
+    let watched = notifier(1001, "./dev.sh");
+    let watch = OutputWatch::new(
+        1001,
+        "./dev.sh".to_string(),
+        OutputPattern::parse("ready").expect("valid"),
+    );
+    watched.set_output_watch(Some(Arc::clone(&watch)));
+    watched.arm();
+    watched.disarm_exit();
+    assert!(watched.is_armed(), "the watch still reports the exit");
+    assert!(watched.is_awaited(now), "while the watch is fresh");
+    assert!(!watched.is_awaited(quiet), "but not until the exit");
+
+    let again = notifier(1002, "./build.sh");
+    again.arm();
+    again.disarm_exit();
+    again.request_exit();
+    assert!(again.exit_requested() && again.wants_report());
+    assert!(again.arm().is_none());
+    assert!(again.is_awaited(quiet));
+    assert!(again.on_exit(report(exited(0), b"")).is_some());
+}
+
 #[test]
 fn shutdown_suppresses_and_codex_causes_replace_exit_codes() {
     let notifier1 = notifier(1000, "sleep 100");

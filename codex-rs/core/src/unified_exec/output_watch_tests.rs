@@ -407,6 +407,80 @@ fn the_notify_on_output_description_names_no_configurable_wait() {
     );
 }
 
+/// Live recheck 2026-10-27, N1 and N3: while the process runs, a notification says how to stop
+/// it, through its session and never by name, and while `notify_on_exit` is on, that codex exec
+/// waits for its exit and how to turn that off.
+#[test]
+fn a_running_process_notification_says_how_to_stop_it_and_what_waits_for_its_exit() {
+    let exit_requested = Arc::new(AtomicBool::new(true));
+    let watch = OutputWatch::with_windows(
+        7572,
+        "./dev.sh".to_string(),
+        OutputPattern::parse("ready|ERROR").expect("valid pattern"),
+        "turn".to_string(),
+        OutputWatchWindows {
+            first_match: Duration::from_secs(300),
+            quiet: Duration::from_secs(60),
+            exec_wait: Duration::from_secs(1800),
+        },
+        Arc::clone(&exit_requested),
+    );
+    let stop = "To stop it, call write_stdin with chars \"\\u0003\" (Ctrl-C) and session_id 7572; do not kill it by name (pkill, killall), which can stop processes of other sessions.";
+    watch.observe_chunk(b"server ready\n");
+    watch.match_now(/*final_batch*/ false, Instant::now());
+    let text = watch
+        .take_for_queue(false, due(), false, &boundary())
+        .expect("due");
+    assert!(
+        text.ends_with(&format!(
+            "Its exit notification is on (notify_on_exit), so codex exec and wait_agent wait for it to exit (codex exec for up to 30 minutes). If it is meant to keep running, turn that off with write_stdin {{\"session_id\": 7572, \"notify_on_exit\": false}}.\n{stop}"
+        )),
+        "{text}"
+    );
+
+    exit_requested.store(false, Ordering::Release);
+    let later = Instant::now() + Duration::from_secs(10);
+    watch.observe_chunk(b"ERROR: port in use\n");
+    watch.match_now(/*final_batch*/ false, later);
+    let text = watch
+        .take_for_queue(false, later + OUTPUT_WATCH_BATCH_WINDOW, false, &boundary())
+        .expect("due");
+    assert!(text.ends_with(&format!("\n{stop}")), "{text}");
+    assert!(!text.contains("notify_on_exit"), "{text}");
+
+    let last = later + Duration::from_secs(10);
+    watch.observe_chunk(b"ERROR: shutting down\n");
+    watch.match_now(/*final_batch*/ true, last);
+    let text = watch
+        .take_for_queue(false, last, /*exited*/ true, &boundary())
+        .expect("final batch");
+    assert!(!text.contains("To stop it"), "{text}");
+}
+
+/// Live recheck 2026-10-27, N1 and N3: the parameter descriptions name how to stop a watched
+/// process (its session, never by name) and how to stop waiting for the exit of a server.
+#[test]
+fn the_descriptions_say_how_to_stop_a_process_and_its_exit_wait() {
+    use crate::tools::handlers::shell_spec::NOTIFY_ON_EXIT_DESCRIPTION;
+    use crate::tools::handlers::shell_spec::NOTIFY_ON_OUTPUT_DESCRIPTION;
+    use crate::tools::handlers::shell_spec::WRITE_STDIN_NOTIFY_ON_EXIT_DESCRIPTION;
+    assert!(
+        NOTIFY_ON_OUTPUT_DESCRIPTION.contains(
+            "stop it with write_stdin chars \"\\u0003\" (Ctrl-C) on its session_id, not by killing it by name (pkill, killall)"
+        ),
+        "{NOTIFY_ON_OUTPUT_DESCRIPTION}"
+    );
+    assert!(
+        NOTIFY_ON_EXIT_DESCRIPTION.contains("turn it off with write_stdin notify_on_exit false"),
+        "{NOTIFY_ON_EXIT_DESCRIPTION}"
+    );
+    assert!(
+        WRITE_STDIN_NOTIFY_ON_EXIT_DESCRIPTION
+            .contains("use false for a server or watcher that should keep running"),
+        "{WRITE_STDIN_NOTIFY_ON_EXIT_DESCRIPTION}"
+    );
+}
+
 /// R6.4: a stopped watch matches nothing more.
 #[test]
 fn a_stopped_watch_ignores_output() {
@@ -567,6 +641,7 @@ fn a_watch_waits_for_its_first_match_from_the_end_of_its_turn() {
     let windows = OutputWatchWindows {
         first_match: Duration::from_secs(300),
         quiet: Duration::from_secs(60),
+        exec_wait: Duration::from_secs(1800),
     };
     let watch = OutputWatch::with_windows(
         1000,
@@ -574,6 +649,7 @@ fn a_watch_waits_for_its_first_match_from_the_end_of_its_turn() {
         OutputPattern::parse("ready").expect("valid pattern"),
         "turn-1".to_string(),
         windows,
+        Arc::new(AtomicBool::new(false)),
     );
     let start = Instant::now();
     assert!(watch.is_fresh(start + windows.quiet + Duration::from_secs(1)));
@@ -594,6 +670,7 @@ fn a_later_turn_does_not_extend_the_wait_for_the_first_match() {
     let windows = OutputWatchWindows {
         first_match: Duration::from_secs(300),
         quiet: Duration::from_secs(60),
+        exec_wait: Duration::from_secs(1800),
     };
     let watch = OutputWatch::with_windows(
         1000,
@@ -601,6 +678,7 @@ fn a_later_turn_does_not_extend_the_wait_for_the_first_match() {
         OutputPattern::parse("ready").expect("valid pattern"),
         "turn-1".to_string(),
         windows,
+        Arc::new(AtomicBool::new(false)),
     );
     let start = Instant::now();
     let later_turn_end = start + Duration::from_secs(1200);

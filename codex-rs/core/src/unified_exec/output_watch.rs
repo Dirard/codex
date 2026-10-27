@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
 use std::sync::Weak;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -62,6 +63,9 @@ pub(crate) const OUTPUT_WATCH_BACKLOG_MAX_BYTES: usize = 64 * 1024;
 pub(crate) struct OutputWatchWindows {
     pub(crate) first_match: Duration,
     pub(crate) quiet: Duration,
+    /// How long `codex exec` waits for an exit that `notify_on_exit` asks for; the watch's
+    /// notification names it (live recheck 2026-10-27, N1).
+    pub(crate) exec_wait: Duration,
 }
 
 impl OutputWatchWindows {
@@ -69,7 +73,21 @@ impl OutputWatchWindows {
         Self {
             first_match: Duration::from_millis(config.output_watch_first_match_ms),
             quiet: Duration::from_millis(config.output_watch_quiet_ms),
+            exec_wait: Duration::from_millis(config.exec_wait_timeout_ms),
         }
+    }
+}
+
+/// A wait as the model reads it: "5 minutes", "90 seconds", "1.5 seconds".
+pub(crate) fn describe_wait(wait: Duration) -> String {
+    let seconds = wait.as_secs();
+    if wait.subsec_millis() == 0 && seconds >= 60 && seconds.is_multiple_of(60) {
+        let minutes = seconds / 60;
+        format!("{minutes} minute{}", if minutes == 1 { "" } else { "s" })
+    } else if wait.subsec_millis() == 0 {
+        format!("{seconds} second{}", if seconds == 1 { "" } else { "s" })
+    } else {
+        format!("{:.1} seconds", wait.as_secs_f64())
     }
 }
 
@@ -97,6 +115,12 @@ const LINE_TRUNCATION_MARKER: &str = "…";
 const COMMAND_TRUNCATION_MARKER: &str = "…[truncated]…";
 /// First line of an output watch notification, after the session ID.
 const OUTPUT_WATCH_HEADLINE_MARK: &str = " matching the output watch \"";
+/// How a watch notification says to stop the process: through its own session, never by name
+/// (live recheck 2026-10-27, N3).
+const STOP_GUIDANCE_PREFIX: &str =
+    "To stop it, call write_stdin with chars \"\\u0003\" (Ctrl-C) and session_id ";
+const STOP_GUIDANCE_SUFFIX: &str =
+    "; do not kill it by name (pkill, killall), which can stop processes of other sessions.";
 
 /// A validated `notify_on_output` pattern (R6.2) in `regex` syntax: Unicode-aware unless that
 /// makes it too large, and matched in time linear in the line.
@@ -174,6 +198,37 @@ impl OutputPattern {
     }
 }
 
+/// What a `write_stdin` call asks of the session's notifications.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct NotificationChange {
+    /// `notify_on_output`.
+    pub(crate) output_watch: Option<OutputWatchChange>,
+    /// `notify_on_exit`: wait for the exit again, or no longer (R6.15, live recheck N1).
+    pub(crate) notify_on_exit: Option<bool>,
+}
+
+impl NotificationChange {
+    /// The notification arguments of a `write_stdin` call; they count only while exit
+    /// notifications are enabled (R6.1), and `notify_on_output` is validated before any input
+    /// is written (R6.2).
+    pub(crate) fn for_write_stdin(
+        session: &Session,
+        notify_on_output: Option<&str>,
+        notify_on_exit: Option<bool>,
+    ) -> Result<Self, String> {
+        if !session
+            .features()
+            .enabled(codex_features::Feature::ExecExitNotifications)
+        {
+            return Ok(Self::default());
+        }
+        Ok(Self {
+            output_watch: OutputWatchChange::parse(notify_on_output)?,
+            notify_on_exit,
+        })
+    }
+}
+
 /// What a `write_stdin` call asks of the session's output watch.
 #[derive(Clone, Debug)]
 pub(crate) enum OutputWatchChange {
@@ -184,21 +239,6 @@ pub(crate) enum OutputWatchChange {
 }
 
 impl OutputWatchChange {
-    /// `notify_on_output` of a `write_stdin` call; it counts only while exit notifications are
-    /// enabled (R6.1) and is validated before any input is written (R6.2).
-    pub(crate) fn for_write_stdin(
-        session: &Session,
-        value: Option<&str>,
-    ) -> Result<Option<Self>, String> {
-        if !session
-            .features()
-            .enabled(codex_features::Feature::ExecExitNotifications)
-        {
-            return Ok(None);
-        }
-        Self::parse(value)
-    }
-
     /// Parses `notify_on_output` of `write_stdin` (R6.2, R6.4).
     pub(crate) fn parse(value: Option<&str>) -> Result<Option<Self>, String> {
         match value {
@@ -239,6 +279,9 @@ pub enum OutputWatchState {
 pub struct ArmedNotifications {
     /// The exit of the running process will be reported.
     pub exit: bool,
+    /// `write_stdin` turned `notify_on_exit` off; `Some(true)` when the output watch still
+    /// reports the exit (live recheck 2026-10-27, N1).
+    pub exit_off: Option<bool>,
     pub output_watch: OutputWatchState,
 }
 
@@ -511,6 +554,9 @@ pub(crate) struct OutputWatch {
     turn_id: String,
     /// How long the watch stays fresh without a matching line (P2-3).
     windows: OutputWatchWindows,
+    /// `notify_on_exit` of the process (`ExitNotifier::exit_requested_flag`): while it is on,
+    /// the notification says what waits for the exit and how to turn that off (N1).
+    exit_requested: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for OutputWatch {
@@ -532,6 +578,7 @@ impl OutputWatch {
             pattern,
             "turn".to_string(),
             OutputWatchWindows::default(),
+            Arc::new(AtomicBool::new(false)),
         )
     }
 
@@ -541,6 +588,7 @@ impl OutputWatch {
         pattern: Arc<OutputPattern>,
         turn_id: String,
         windows: OutputWatchWindows,
+        exit_requested: Arc<AtomicBool>,
     ) -> Arc<Self> {
         Arc::new(Self {
             key: super::next_notification_key(),
@@ -554,6 +602,7 @@ impl OutputWatch {
             started_at: Instant::now(),
             turn_id,
             windows,
+            exit_requested,
         })
     }
 
@@ -601,6 +650,11 @@ impl OutputWatch {
         if self.turn_id == turn_id {
             self.lock().turn_ended_at.get_or_insert(now);
         }
+    }
+
+    /// Whether the watch found a matching line yet.
+    pub(crate) fn has_matched(&self) -> bool {
+        self.lock().last_match_at.is_some()
     }
 
     /// Whether the watch reported or still holds matching lines.
@@ -840,6 +894,10 @@ impl OutputWatch {
                 exited,
                 last,
                 unchecked,
+                exit_wait: self
+                    .exit_requested
+                    .load(Ordering::Acquire)
+                    .then_some(self.windows.exec_wait),
             },
             boundary,
         );
@@ -898,6 +956,8 @@ struct RenderInput<'a> {
     exited: bool,
     last: bool,
     unchecked: usize,
+    /// `notify_on_exit` is on: `codex exec` waits this long for the exit.
+    exit_wait: Option<Duration>,
 }
 
 /// The notification body; program output stays inside the untrusted boundary (R6.6, R6.11).
@@ -911,6 +971,7 @@ fn render(input: &RenderInput<'_>, boundary: &UntrustedBoundary) -> String {
         exited,
         last,
         unchecked,
+        exit_wait,
     } = input;
     let count = lines.total;
     let noun = if count == 1 { "line" } else { "lines" };
@@ -956,6 +1017,18 @@ fn render(input: &RenderInput<'_>, boundary: &UntrustedBoundary) -> String {
         text.push(format!(
             "This was the last notification of this output watch; call write_stdin with session_id {id} and notify_on_output to watch again. The exit is still reported."
         ));
+    }
+    if !*exited {
+        // A server the model meant to leave running kept `codex exec` waiting for its exit
+        // for the whole wait, and a model stopped a server with `pkill` by name, killing
+        // another session's server (live recheck 2026-10-27, N1, N3).
+        if let Some(exit_wait) = exit_wait {
+            text.push(format!(
+                "Its exit notification is on (notify_on_exit), so codex exec and wait_agent wait for it to exit (codex exec for up to {}). If it is meant to keep running, turn that off with write_stdin {{\"session_id\": {id}, \"notify_on_exit\": false}}.",
+                describe_wait(*exit_wait)
+            ));
+        }
+        text.push(format!("{STOP_GUIDANCE_PREFIX}{id}{STOP_GUIDANCE_SUFFIX}"));
     }
     text.join("\n")
 }

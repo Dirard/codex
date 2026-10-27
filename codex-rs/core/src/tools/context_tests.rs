@@ -834,6 +834,7 @@ fn exec_command_output_reports_armed_exit_notification() {
         Some(1000),
         ArmedNotifications {
             exit: true,
+            exit_off: None,
             output_watch: OutputWatchState::Unchanged,
         },
     );
@@ -894,6 +895,7 @@ fn exec_command_output_reports_the_output_watch() {
         Some(1000),
         ArmedNotifications {
             exit: true,
+            exit_off: None,
             output_watch: OutputWatchState::On("ready|ERROR".to_string()),
         },
     );
@@ -913,6 +915,7 @@ fn exec_command_output_reports_the_output_watch() {
         Some(1000),
         ArmedNotifications {
             exit: true,
+            exit_off: None,
             output_watch: OutputWatchState::Off,
         },
     );
@@ -928,6 +931,7 @@ fn exec_command_output_reports_the_output_watch() {
         Some(1000),
         ArmedNotifications {
             exit: false,
+            exit_off: None,
             output_watch: OutputWatchState::NotStarted(OutputWatchRefusal::Limit),
         },
     );
@@ -953,6 +957,7 @@ fn exec_command_output_reports_the_output_watch() {
             Some(1000),
             ArmedNotifications {
                 exit: false,
+                exit_off: None,
                 output_watch: OutputWatchState::NotStarted(refusal),
             },
         )
@@ -965,6 +970,7 @@ fn exec_command_output_reports_the_output_watch() {
         None,
         ArmedNotifications {
             exit: true,
+            exit_off: None,
             output_watch: OutputWatchState::On("ready".to_string()),
         },
     );

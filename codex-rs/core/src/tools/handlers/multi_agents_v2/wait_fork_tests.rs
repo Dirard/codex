@@ -35,11 +35,13 @@ fn timeout_snapshot_describes_each_terminal() {
                         session_id: 1000,
                         running_for: Duration::from_millis(300_000),
                         quiet_for: Some(Duration::from_millis(298_000)),
+                        first_match_wait: None,
                     },
                     WaitingTerminal {
                         session_id: 1001,
                         running_for: Duration::from_millis(5_000),
                         quiet_for: None,
+                        first_match_wait: None,
                     },
                 ],
                 workflow_runs: Vec::new(),
@@ -63,6 +65,37 @@ fn timeout_snapshot_describes_each_terminal() {
         )
         .message,
         "Wait timed out. Active agents: pending_init=0, running=0, interrupted=0."
+    );
+}
+
+/// Live recheck 2026-10-27, N4: a model waited for a server's "ready" with seven short waits
+/// in its turn. When a terminal has only an output watch that has not matched, the timeout
+/// says how long after the turn its first match is awaited, from the configured window.
+#[test]
+fn timeout_snapshot_says_how_long_a_first_match_is_awaited() {
+    let terminal = |session_id, first_match_wait| WaitingTerminal {
+        session_id,
+        running_for: Duration::from_millis(12_000),
+        quiet_for: None,
+        first_match_wait,
+    };
+    assert_eq!(
+        describe_background_terminals(&[terminal(1000, Some(Duration::from_secs(300)))]),
+        "Background terminals that will report their exit: 1 (session 1000: running for 12.0s, no output yet). Their exits are reported even after this turn ends, so you can end the turn instead of waiting again. Session 1000 has only an output watch that has not matched yet: its first matching line is awaited for up to 5 minutes after your turn ends, and the match starts a new turn, so end your turn now rather than wait again with a short timeout."
+    );
+    let text = describe_background_terminals(&[
+        terminal(1000, Some(Duration::from_secs(90))),
+        terminal(1001, None),
+        terminal(1002, Some(Duration::from_secs(90))),
+    ]);
+    assert!(
+        text.ends_with(
+            " Sessions 1000, 1002 have only an output watch that has not matched yet: its first matching line is awaited for up to 90 seconds after your turn ends, and the match starts a new turn, so end your turn now rather than wait again with a short timeout."
+        ),
+        "{text}"
+    );
+    assert!(
+        !describe_background_terminals(&[terminal(1001, None)]).contains("first matching line")
     );
 }
 

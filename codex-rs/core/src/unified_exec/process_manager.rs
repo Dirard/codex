@@ -1136,13 +1136,13 @@ impl UnifiedExecProcessManager {
         if process_id.is_none() {
             context.observe_exit(exit_notifier.as_deref()).await;
         }
-        // Fork: `notify_on_output` starts or stops the output watch of a live process (UC6).
+        // Fork: `notify_on_output` and `notify_on_exit` of a live process (UC6, R6.15).
         let armed_notifications = context
-            .change_output_watch(
+            .change_notifications(
                 process_id,
                 &process,
                 exit_notifier.as_ref(),
-                request.output_watch,
+                request.notifications,
                 crate::unified_exec::PollBudget::new(
                     request.max_output_tokens,
                     &request.truncation,

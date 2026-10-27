@@ -79,6 +79,16 @@ impl ExecCommandToolOutput {
         if self.armed_notifications.exit {
             lines.push(EXIT_NOTIFICATION_ARMED_LINE.to_string());
         }
+        // R6.15 (live recheck 2026-10-27, N1): `write_stdin` turned `notify_on_exit` off.
+        match self.armed_notifications.exit_off {
+            Some(true) => lines.push(
+                "Exit notification: off (codex exec and wait_agent no longer wait for this process to exit; its output watch still reports matching lines and the exit)".to_string(),
+            ),
+            Some(false) => lines.push(
+                "Exit notification: off (the exit of this process is no longer reported, and nothing waits for it)".to_string(),
+            ),
+            None => {}
+        }
         match &self.armed_notifications.output_watch {
             OutputWatchState::Unchanged => {}
             OutputWatchState::On(pattern) => lines.push(format!(

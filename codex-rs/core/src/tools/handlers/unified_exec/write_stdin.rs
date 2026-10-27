@@ -32,6 +32,9 @@ struct WriteStdinArgs {
     /// Fork: start, replace or stop the output watch of the session (UC6).
     #[serde(default)]
     notify_on_output: Option<String>,
+    /// Fork: wait for the exit of the session again, or no longer (R6.15).
+    #[serde(default)]
+    notify_on_exit: Option<bool>,
 }
 
 impl WriteStdinArgs {
@@ -95,9 +98,10 @@ impl WriteStdinHandler {
         };
         let args = WriteStdinArgs::parse(&payload)?;
         // Fork: a bad `notify_on_output` is rejected before any input is written (R6.2).
-        let output_watch = crate::unified_exec::OutputWatchChange::for_write_stdin(
+        let notifications = crate::unified_exec::NotificationChange::for_write_stdin(
             &session,
             args.notify_on_output.as_deref(),
+            args.notify_on_exit,
         )
         .map_err(FunctionCallError::RespondToModel)?;
         let truncation = step_context.output_truncation();
@@ -118,7 +122,7 @@ impl WriteStdinHandler {
                         session: &session,
                         turn: &turn,
                     }),
-                    output_watch,
+                    notifications,
                 },
             )
             .await

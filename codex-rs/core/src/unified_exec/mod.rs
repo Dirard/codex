@@ -148,8 +148,8 @@ pub(crate) struct WriteStdinRequest<'a> {
     pub max_output_tokens: Option<usize>,
     pub truncation: OutputTruncation,
     pub interaction_event: Option<WriteStdinInteractionEvent<'a>>,
-    /// Fork: `notify_on_output` starts, replaces or stops the output watch.
-    pub output_watch: Option<OutputWatchChange>,
+    /// Fork: `notify_on_output` and `notify_on_exit` change the session's notifications.
+    pub notifications: NotificationChange,
 }
 
 pub(crate) struct WriteStdinInteractionEvent<'a> {

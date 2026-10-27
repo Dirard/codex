@@ -335,7 +335,7 @@ async fn write_stdin(
                 max_output_tokens: None,
                 truncation: OutputTruncation::new(TruncationPolicy::Tokens(10_000), None),
                 interaction_event: None,
-                output_watch: None,
+                notifications: Default::default(),
             },
         )
         .await
@@ -1039,7 +1039,7 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
                 max_output_tokens: None,
                 truncation: OutputTruncation::new(TruncationPolicy::Tokens(10_000), None),
                 interaction_event: None,
-                output_watch: None,
+                notifications: Default::default(),
             },
         )
         .await;
@@ -1093,7 +1093,7 @@ async fn stdin_approval_observes_strict_review_enabled_while_queued() -> anyhow:
             max_output_tokens: None,
             truncation: OutputTruncation::new(TruncationPolicy::Tokens(10_000), None),
             interaction_event: None,
-            output_watch: None,
+            notifications: Default::default(),
         },
     ));
     let mut task_context = std::task::Context::from_waker(futures::task::noop_waker_ref());
