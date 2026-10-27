@@ -3491,6 +3491,9 @@ async fn apply_agent_worktree_close_applies_then_removes_the_checkout() -> Resul
             .path(),
     )?)?;
     assert_eq!(record["applied_tip"], tip);
+    let agents = list_agents(&server, &test, "list after the close", "list-closed").await?;
+    assert_eq!(agents["/root/worker"]["agent_status"], "shutdown");
+    assert_eq!(agents["/root/worker"]["worktree"]["status"], "removed");
 
     // A later task gets the worktree back at the applied tip, with the agent's work.
     mount_root_call(
@@ -3689,6 +3692,74 @@ async fn apply_agent_worktree_close_refuses_a_running_agent() -> Result<()> {
         "pending\n"
     );
     assert!(!root.exists());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_agents_shows_unloaded_isolated_agents() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    let isolated = spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        (ROOT_PROMPT, "spawn-unloaded"),
+        ("change a file and unload", "isolated", Some("worktree")),
+        &[("unloaded-edit", "printf 'changed\\n' >> a.txt".to_string())],
+    )
+    .await?;
+    spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        ("spawn the shared worker", "spawn-unloaded-shared"),
+        ("work in the shared checkout and unload", "shared", None),
+        &[("unloaded-shared", "true".to_string())],
+    )
+    .await?;
+    for thread_id in test.thread_manager.list_thread_ids().await {
+        if thread_id == test.session_configured.thread_id {
+            continue;
+        }
+        let thread = test.thread_manager.get_thread(thread_id).await?;
+        evict(
+            &test,
+            Child {
+                id: thread_id,
+                thread,
+            },
+        )
+        .await?;
+    }
+
+    let agents = list_agents(&server, &test, "list the unloaded workers", "list-unloaded").await?;
+
+    // D7, R9.6: the unloaded isolated agent stays visible with its worktree; the shared one is
+    // hidden as upstream hides unloaded agents.
+    assert_eq!(agents["/root/isolated"]["agent_status"], "shutdown");
+    assert_eq!(
+        agents["/root/isolated"]["worktree"],
+        json!({
+            "path": worktree_field(&isolated, "path"),
+            "branch": worktree_field(&isolated, "branch"),
+            "status": "changed",
+        })
+    );
+    assert_eq!(agents.get("/root/shared"), None);
+    let filtered = mount_root_call(
+        &server,
+        "list another subtree",
+        "list-other",
+        "list_agents",
+        json!({ "path_prefix": "other" }),
+    )
+    .await;
+    test.submit_turn("list another subtree").await?;
+    let output = filtered
+        .function_call_output_text("list-other")
+        .context("filtered list output")?;
+    assert!(!output.contains("/root/isolated"), "{output}");
     Ok(())
 }
 

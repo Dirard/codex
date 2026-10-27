@@ -44,7 +44,7 @@ impl Handler {
         } = invocation;
         let arguments = function_arguments(payload)?;
         let args: ListAgentsArgs = parse_arguments(&arguments)?;
-        let agents = session
+        let mut agents = session
             .services
             .agent_control
             .list(
@@ -55,6 +55,14 @@ impl Handler {
             )
             .await
             .map_err(wait::fork::collab_list_error("list"))?;
+        // Fork: isolated agents that are not loaded keep their worktree visible (D7, R9.6).
+        crate::agent::worktree_isolation::fork_add_unloaded(
+            &session,
+            &turn,
+            &args.path_prefix,
+            &mut agents,
+        )
+        .await;
 
         let workflow_children = session.services.local_agent_runtime.workflow_children();
         // Fork: each isolated agent's worktree (specs/agent-worktree-isolation-2026-10-25.md, R9.1).

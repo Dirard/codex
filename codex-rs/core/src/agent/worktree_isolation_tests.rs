@@ -331,6 +331,15 @@ fn isolation_note_describes_the_worktree_and_protection() {
     let unprotected = isolation_developer_note(&binding(false));
     assert!(unprotected.contains("which is still writable (the sandbox does not protect it)"));
     assert!(unprotected.contains("Keep all edits inside your working directory"));
+    // D8: only a protecting sandbox makes Git writes fail; without it they reach the parent.
+    assert!(protected.contains("(add, commit, switch, stash, merge): they fail in the sandbox."));
+    assert!(
+        !unprotected.contains("fail in the sandbox"),
+        "{unprotected}"
+    );
+    assert!(unprotected.contains(
+        "(add, commit, switch, stash, merge): they would change the repository metadata shared with the parent checkout."
+    ));
 }
 
 /// Explorer-and-questions R9.3: a read-only explorer's note names the worktree but gives no

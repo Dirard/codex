@@ -983,3 +983,28 @@ pub fn agent_worktree_reload_error(err: &codex_protocol::error::CodexErr) -> Opt
         _ => None,
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// D7, R9.6: isolated agents that are not loaded stay visible in `list_agents`
+// ---------------------------------------------------------------------------------------------
+
+/// Fork hook of `list_agents`: appends the isolated agents that `agents` misses because their
+/// thread is not loaded (after a cold resume or an eviction).
+pub(crate) async fn fork_add_unloaded(
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
+    path_prefix: &Option<String>,
+    agents: &mut Vec<crate::agent::types::LiveAgent>,
+) {
+    let unloaded = session
+        .services
+        .local_agent_runtime
+        .fork_unloaded_isolated_agents(
+            &turn.config,
+            &turn.session_source,
+            path_prefix.as_deref(),
+            agents,
+        )
+        .await;
+    agents.extend(unloaded);
+}

@@ -286,3 +286,65 @@ impl LocalAgentRuntime {
         }
     }
 }
+
+impl LocalAgentRuntime {
+    /// D7, R9.6: isolated agents of this tree whose thread is not loaded (after a cold resume
+    /// or an eviction) and that `listed` therefore misses, as `shutdown` agents: a follow-up
+    /// task reloads them. Without the feature, or without a worktree binding, nothing is added.
+    pub(crate) async fn fork_unloaded_isolated_agents(
+        &self,
+        config: &Config,
+        source: &SessionSource,
+        path_prefix: Option<&str>,
+        listed: &[crate::agent::types::LiveAgent],
+    ) -> Vec<crate::agent::types::LiveAgent> {
+        if !config
+            .features
+            .enabled(codex_features::Feature::AgentWorktreeIsolation)
+        {
+            return Vec::new();
+        }
+        let Ok(state) = self.upgrade() else {
+            return Vec::new();
+        };
+        let prefix = match path_prefix {
+            Some(prefix) => match source
+                .get_agent_path()
+                .unwrap_or_else(AgentPath::root)
+                .resolve(prefix)
+            {
+                Ok(prefix) => Some(prefix),
+                Err(_) => return Vec::new(),
+            },
+            None => None,
+        };
+        let mut unloaded = Vec::new();
+        for metadata in self.registry.live_agents() {
+            let Some(thread_id) = metadata.agent_id else {
+                continue;
+            };
+            if listed.iter().any(|agent| agent.thread_id == thread_id)
+                || self.worktrees.get(thread_id).is_none()
+                || prefix.as_ref().is_some_and(|prefix| {
+                    !super::agent_matches_prefix(metadata.agent_path.as_ref(), prefix)
+                })
+                || state.get_thread(thread_id).await.is_ok()
+            {
+                continue;
+            }
+            unloaded.push(crate::agent::types::LiveAgent {
+                thread_id,
+                metadata,
+                status: AgentStatus::Shutdown,
+            });
+        }
+        unloaded.sort_by(|left, right| {
+            left.metadata
+                .agent_path
+                .as_deref()
+                .unwrap_or_default()
+                .cmp(right.metadata.agent_path.as_deref().unwrap_or_default())
+        });
+        unloaded
+    }
+}

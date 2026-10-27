@@ -840,13 +840,17 @@ pub(crate) fn isolation_developer_note(binding: &AgentWorktreeBinding) -> String
             binding.source_root.as_path(),
         );
     }
-    let protection = if binding.parent_checkout_protected() {
-        "read-only"
+    // D8: without a protecting sandbox Git writes would succeed in the shared metadata.
+    let (protection, git_writes) = if binding.parent_checkout_protected() {
+        ("read-only", "they fail in the sandbox")
     } else {
-        "still writable (the sandbox does not protect it)"
+        (
+            "still writable (the sandbox does not protect it)",
+            "they would change the repository metadata shared with the parent checkout",
+        )
     };
     format!(
-        "You are working in an isolated git worktree at {cwd}. It was created from the {base_description} ({base_short}) of the parent checkout {source_root}, which is {protection} for you. Keep all edits inside your working directory and prefer relative paths. Do not run git commands that write repository metadata (add, commit, switch, stash, merge): they fail in the sandbox. Do not request escalated permissions to edit the parent checkout. When you finish, Codex records your changes on branch {branch} and appends an <agent_worktree> block with the merge command to your result; do not write that block yourself.",
+        "You are working in an isolated git worktree at {cwd}. It was created from the {base_description} ({base_short}) of the parent checkout {source_root}, which is {protection} for you. Keep all edits inside your working directory and prefer relative paths. Do not run git commands that write repository metadata (add, commit, switch, stash, merge): {git_writes}. Do not request escalated permissions to edit the parent checkout. When you finish, Codex records your changes on branch {branch} and appends an <agent_worktree> block with the merge command to your result; do not write that block yourself.",
         cwd = binding.cwd.display(),
         base_description = metadata.base_kind.description(),
         base_short = short_sha(&metadata.base_sha),
@@ -1477,6 +1481,7 @@ pub(crate) use ops::checkpoint_for_close;
 pub(crate) use ops::close_worktree;
 pub use ops::describe_agent_worktree;
 pub(crate) use ops::ensure_worktree_present;
+pub(crate) use ops::fork_add_unloaded;
 pub(crate) use ops::fork_guardian_action_json;
 pub(crate) use ops::listed_worktrees;
 pub(crate) use ops::merge_for_parent;
