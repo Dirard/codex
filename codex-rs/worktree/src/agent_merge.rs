@@ -125,7 +125,7 @@ pub fn merge_agent_branch(
         ours,
         tip.clone(),
     ]);
-    let output = command.output().context("failed to start git")?;
+    let output = crate::git::tracked_output(&mut command).context("failed to start git")?;
     let mut fields = output
         .stdout
         .split(|byte| *byte == b'\0')

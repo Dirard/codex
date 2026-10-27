@@ -9,6 +9,33 @@ use super::format_shortstat;
 /// never by its command name. A foreign process in the worktree (here a `sleep`, standing in
 /// for a foreign `git`) is always seen; the same pid, registered as the crate's own child, is
 /// skipped; once the guard is dropped it is seen again.
+/// Deferred-fixes-3 coordinator note: the registry of this process's own worktree holds. On a
+/// network filesystem an advisory lock need not conflict with another of the same process, so a
+/// removal reads this registry instead: a path is held while any binding registered it, and a
+/// release drops it only when the last one does. No NFS stand, so the registry is tested here
+/// and the reasoning is in the worktree spec's Decision log.
+#[test]
+fn own_holds_track_a_path_until_the_last_binding_releases_it() {
+    use super::register_own_hold;
+    use super::release_own_hold;
+    use super::this_process_holds;
+    use std::path::Path;
+
+    let path = Path::new("/tmp/codex-test-own-hold/.git/codex-agent.lock");
+    assert!(!super::this_process_holds(path));
+    register_own_hold(path);
+    assert!(this_process_holds(path));
+    register_own_hold(path);
+    assert!(this_process_holds(path), "a second binding also holds it");
+    release_own_hold(path);
+    assert!(this_process_holds(path), "one binding still holds it");
+    release_own_hold(path);
+    assert!(
+        !this_process_holds(path),
+        "the last release frees the path for a removal"
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn the_proc_scan_excludes_own_git_children_by_pid_not_name() {

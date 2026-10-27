@@ -63,7 +63,7 @@ pub(crate) fn tracked_output(command: &mut Command) -> std::io::Result<Output> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn()?;
+    let child = command.spawn()?;
     let _tracked = fork::GitChild::new(child.id());
     child.wait_with_output()
 }

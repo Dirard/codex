@@ -486,22 +486,72 @@ pub enum KeptReason {
 /// File in a worktree's administration directory that live bindings lock shared.
 const HOLD_FILE: &str = "codex-agent.lock";
 
+/// Hold files this process holds shared for a live binding, by canonical path, with how many
+/// bindings hold each (deferred-fixes-3 coordinator note). An advisory lock on a network
+/// filesystem does not reliably conflict with another lock of the *same* process, so this
+/// process's own holds are tracked here instead of relied on through the lock: a removal never
+/// tries to lock a file this process already holds, and reads a foreign hold through the lock.
+fn own_holds() -> &'static std::sync::Mutex<std::collections::HashMap<PathBuf, usize>> {
+    static OWN_HOLDS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, usize>>,
+    > = std::sync::OnceLock::new();
+    OWN_HOLDS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn register_own_hold(path: &Path) {
+    *own_holds()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .entry(path.to_path_buf())
+        .or_insert(0) += 1;
+}
+
+fn release_own_hold(path: &Path) {
+    let mut holds = own_holds()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(count) = holds.get_mut(path) {
+        *count -= 1;
+        if *count == 0 {
+            holds.remove(path);
+        }
+    }
+}
+
+fn this_process_holds(path: &Path) -> bool {
+    own_holds()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains_key(path)
+}
+
 /// A shared hold of an agent worktree by a live binding (R10.3).
 ///
 /// While any process keeps one, [`remove_if_unchanged`] and the sweep of every process leave
 /// the worktree alone: removal needs the exclusive lock. The kernel drops the lock when the
-/// process exits, so a crashed process never blocks the cleanup of its worktrees.
+/// process exits, so a crashed process never blocks the cleanup of its worktrees. A hold of
+/// this process is also recorded in [`own_holds`], so a removal from the same process does not
+/// depend on the lock conflicting with it (which it may not on a network filesystem).
 #[derive(Debug)]
 pub struct AgentWorktreeHold {
     _file: fs::File,
+    path: PathBuf,
+}
+
+impl Drop for AgentWorktreeHold {
+    fn drop(&mut self) {
+        release_own_hold(&self.path);
+    }
 }
 
 /// Holds an agent worktree for a live binding; waits while a removal holds it exclusively.
 pub fn hold_agent_worktree(root: &Path) -> Result<AgentWorktreeHold> {
-    let file = open_hold_file(root)?;
+    let path = hold_file_path(root)?;
+    let file = open_hold_file_at(&path)?;
     file.lock_shared()
         .with_context(|| format!("cannot hold the agent worktree {}", root.display()))?;
-    Ok(AgentWorktreeHold { _file: file })
+    register_own_hold(&path);
+    Ok(AgentWorktreeHold { _file: file, path })
 }
 
 /// Attempts at the exclusive lock before a worktree counts as held.
@@ -511,9 +561,14 @@ const EXCLUSIVE_ATTEMPTS: u32 = 5;
 ///
 /// A child process between `fork` and `exec` briefly shares every open file of its parent,
 /// lock included, so a hold dropped a moment ago can still look taken; a few short retries
-/// let such a copy go away.
+/// let such a copy go away. A hold of this very process is read from [`own_holds`] rather than
+/// through the lock, since an advisory lock may not conflict with another of the same process.
 fn exclusive_hold(root: &Path) -> Result<Option<fs::File>> {
-    let file = open_hold_file(root)?;
+    let path = hold_file_path(root)?;
+    if this_process_holds(&path) {
+        return Ok(None);
+    }
+    let file = open_hold_file_at(&path)?;
     for attempt in 1..=EXCLUSIVE_ATTEMPTS {
         match file.try_lock() {
             Ok(()) => return Ok(Some(file)),
@@ -535,13 +590,22 @@ fn is_held(root: &Path) -> Result<bool> {
     Ok(exclusive_hold(root)?.is_none())
 }
 
-fn open_hold_file(root: &Path) -> Result<fs::File> {
-    let path = worktree_git_dir(root)?.join(HOLD_FILE);
+/// The canonical hold-file path of a worktree, the key both the lock and [`own_holds`] use. The
+/// administration directory exists, so it canonicalizes; the hold file itself need not.
+fn hold_file_path(root: &Path) -> Result<PathBuf> {
+    let git_dir = worktree_git_dir(root)?;
+    let git_dir = dunce::canonicalize(&git_dir).unwrap_or(git_dir);
+    Ok(git_dir.join(HOLD_FILE))
+}
+
+fn open_hold_file_at(path: &Path) -> Result<fs::File> {
+    // The hold file is opened for writing even to read a foreign hold: an advisory lock on a
+    // read-only descriptor is unreliable on a network filesystem.
     fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(&path)
+        .open(path)
         .with_context(|| format!("cannot open {}", path.display()))
 }
 
