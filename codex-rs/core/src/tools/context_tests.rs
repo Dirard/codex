@@ -1,10 +1,10 @@
 use super::*;
-use crate::unified_exec::output::CapturedStream;
 use crate::context_manager::ContextManager;
 use crate::tools::registry::AnyToolResult;
 use crate::unified_exec::ArmedNotifications;
 use crate::unified_exec::OutputWatchRefusal;
 use crate::unified_exec::OutputWatchState;
+use crate::unified_exec::output::CapturedStream;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;

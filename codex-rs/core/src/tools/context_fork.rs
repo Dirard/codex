@@ -9,12 +9,12 @@ use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_utils_head_tail_buffer::format_output_omission_marker;
 pub(super) use codex_utils_output_truncation::OutputTruncation;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::formatted_truncate_text_with_config;
 use codex_utils_output_truncation::truncate_text_with_config;
-use codex_utils_head_tail_buffer::format_output_omission_marker;
 use serde_json::Value as JsonValue;
 
 use super::ExecCommandToolOutput;

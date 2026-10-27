@@ -75,6 +75,12 @@ fn rebuilds_workflow_items_from_persisted_completions() {
             .collect::<Vec<_>>()
     };
     assert_eq!(turns.len(), 2);
-    assert_eq!(payloads(&turns[0]), vec![ThreadItemPayload::Workflow(start)]);
-    assert_eq!(payloads(&turns[1]), vec![ThreadItemPayload::Workflow(finish)]);
+    assert_eq!(
+        payloads(&turns[0]),
+        vec![ThreadItemPayload::Workflow(start)]
+    );
+    assert_eq!(
+        payloads(&turns[1]),
+        vec![ThreadItemPayload::Workflow(finish)]
+    );
 }
