@@ -154,17 +154,19 @@ impl Session {
         }
     }
 
-    /// Fork hook of `on_task_finished`, before the turn's terminal event: an output watch that
-    /// still waits for its first matching line waits from the end of its turn, so the time the
-    /// model kept working does not use up the wait (R6.14, tails 2026-10-27).
-    pub(crate) async fn fork_note_turn_finished(&self) {
+    /// Fork hook of `on_task_finished` and `handle_task_abort`, before the turn's terminal
+    /// event: an output watch that still waits for its first matching line waits from the end
+    /// of the turn that started it, completed or interrupted, so the time the model kept
+    /// working does not use up the wait, and a later turn does not extend it (R6.14, tails
+    /// 2026-10-27; tails review P3-7).
+    pub(crate) async fn fork_note_turn_finished(&self, turn_id: &str) {
         if self
             .features()
             .enabled(codex_features::Feature::ExecExitNotifications)
         {
             self.services
                 .unified_exec_manager
-                .note_turn_finished()
+                .note_turn_finished(turn_id)
                 .await;
         }
     }

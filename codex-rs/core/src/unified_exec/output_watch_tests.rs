@@ -527,6 +527,7 @@ fn a_watch_waits_for_its_first_match_from_the_end_of_its_turn() {
         1000,
         "npm run dev".to_string(),
         OutputPattern::parse("ready").expect("valid pattern"),
+        "turn-1".to_string(),
         windows,
     );
     let start = Instant::now();
@@ -534,10 +535,33 @@ fn a_watch_waits_for_its_first_match_from_the_end_of_its_turn() {
     assert!(!watch.is_fresh(start + windows.first_match + Duration::from_secs(1)));
 
     let turn_end = start + Duration::from_secs(120);
-    watch.note_turn_finished(turn_end);
-    watch.note_turn_finished(turn_end + Duration::from_secs(200));
+    watch.note_turn_finished("turn-1", turn_end);
+    watch.note_turn_finished("turn-1", turn_end + Duration::from_secs(200));
     assert!(watch.is_fresh(turn_end + windows.first_match - Duration::from_secs(1)));
     assert!(!watch.is_fresh(turn_end + windows.first_match + Duration::from_secs(1)));
+}
+
+/// Tails review 2026-10-27, P3-7: only the end of the turn that started the watch counts. When
+/// that turn was interrupted before the hook ran, a later turn's end does not extend the wait,
+/// which then counts from the start of the watch.
+#[test]
+fn a_later_turn_does_not_extend_the_wait_for_the_first_match() {
+    let windows = OutputWatchWindows {
+        first_match: Duration::from_secs(300),
+        quiet: Duration::from_secs(60),
+    };
+    let watch = OutputWatch::with_windows(
+        1000,
+        "npm run dev".to_string(),
+        OutputPattern::parse("ready").expect("valid pattern"),
+        "turn-1".to_string(),
+        windows,
+    );
+    let start = Instant::now();
+    let later_turn_end = start + Duration::from_secs(1200);
+    watch.note_turn_finished("turn-2", later_turn_end);
+    assert!(!watch.is_fresh(later_turn_end + Duration::from_secs(1)));
+    assert!(watch.is_fresh(start + windows.first_match - Duration::from_secs(1)));
 }
 
 /// P3-3: an output watch notification is told apart from an exit notification by the line

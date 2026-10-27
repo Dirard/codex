@@ -1991,6 +1991,104 @@ async fn background_exit_after_an_interrupt_does_not_start_a_turn_for_waiting_ma
 }
 
 /// A Code Mode test thread with exit notifications.
+/// R6.14, tails review 2026-10-27 P3-7: an interrupted turn ends the wait of the output watch
+/// it started like a completed one. The wait for the first matching line counts from the
+/// interrupt, and the end of a later turn does not extend it: once the window passed, the
+/// silent watch no longer keeps `codex exec`, `wait_agent` or residency waiting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_interrupted_turn_starts_the_wait_for_its_watch() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_target_windows!(Ok(()), "uses POSIX shell commands");
+
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            tool_call(
+                "resp-1",
+                "watch-call",
+                "exec_command",
+                &watch_args("sleep 60", "ready", /*tty*/ false),
+            ),
+            tool_call(
+                "resp-2",
+                "blocking-call",
+                "exec_command",
+                &exec_args(
+                    "sleep 60", /*yield_time_ms*/ 30_000, /*notify_on_exit*/ false,
+                ),
+            ),
+            // The later turn outlasts the first-match window.
+            tool_call(
+                "resp-3",
+                "long-call",
+                "exec_command",
+                &exec_args(
+                    "sleep 4", /*yield_time_ms*/ 10_000, /*notify_on_exit*/ false,
+                ),
+            ),
+            message("resp-4", "Done."),
+        ],
+    )
+    .await;
+    let test = builder(/*exit_notifications*/ true)
+        .with_config(|config| {
+            config.exec_exit_notifications.output_watch_first_match_ms = 2_000;
+        })
+        .build(&server)
+        .await?;
+
+    test.codex
+        .start_or_steer_turn(codex_core::TurnInputRequest::user_input(vec![
+            codex_protocol::user_input::UserInput::Text {
+                text: "start the server, then get interrupted".to_string(),
+                text_elements: Vec::new(),
+            },
+        ]))
+        .await?;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::ExecCommandBegin(begin) if begin.call_id == "blocking-call"),
+        EVENT_TIMEOUT,
+    )
+    .await;
+    // While its turn keeps working past the window, nothing waits for the silent watch.
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    assert_eq!(
+        test.codex
+            .pending_background_terminals()
+            .await
+            .terminals
+            .len(),
+        0
+    );
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnAborted(_)),
+        EVENT_TIMEOUT,
+    )
+    .await;
+    // The interrupt ended the turn, so the wait for the first match starts now.
+    assert_eq!(
+        test.codex
+            .pending_background_terminals()
+            .await
+            .terminals
+            .len(),
+        1
+    );
+
+    test.submit_turn("keep working").await?;
+    assert_eq!(mock.requests().len(), 4);
+    let pending = test.codex.pending_background_terminals().await;
+    assert_eq!(pending.terminals, Vec::new(), "{pending:?}");
+
+    test.codex.submit(Op::CleanBackgroundTerminals).await?;
+    Ok(())
+}
+
 fn code_mode_builder() -> TestCodexBuilder {
     test_codex()
         .with_model("test-gpt-5.1-codex")

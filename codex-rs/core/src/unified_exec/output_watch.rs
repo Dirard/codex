@@ -471,6 +471,9 @@ pub(crate) struct OutputWatch {
     /// Lines the pattern was evaluated on (tests count the work).
     evaluated: AtomicUsize,
     started_at: Instant,
+    /// The turn that started the watch; only its end starts the wait for the first matching
+    /// line (tails review 2026-10-27, P3-7).
+    turn_id: String,
     /// How long the watch stays fresh without a matching line (P2-3).
     windows: OutputWatchWindows,
 }
@@ -488,13 +491,20 @@ impl std::fmt::Debug for OutputWatch {
 impl OutputWatch {
     #[cfg(test)]
     pub(crate) fn new(process_id: i32, command: String, pattern: Arc<OutputPattern>) -> Arc<Self> {
-        Self::with_windows(process_id, command, pattern, OutputWatchWindows::default())
+        Self::with_windows(
+            process_id,
+            command,
+            pattern,
+            "turn".to_string(),
+            OutputWatchWindows::default(),
+        )
     }
 
     pub(crate) fn with_windows(
         process_id: i32,
         command: String,
         pattern: Arc<OutputPattern>,
+        turn_id: String,
         windows: OutputWatchWindows,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -507,6 +517,7 @@ impl OutputWatch {
             matching: tokio::sync::Mutex::new(()),
             evaluated: AtomicUsize::new(0),
             started_at: Instant::now(),
+            turn_id,
             windows,
         })
     }
@@ -548,10 +559,13 @@ impl OutputWatch {
         }
     }
 
-    /// The turn that started the watch ended: the model now waits for the first matching
-    /// line, so its window counts from here. Later turns do not move it.
-    pub(crate) fn note_turn_finished(&self, now: Instant) {
-        self.lock().turn_ended_at.get_or_insert(now);
+    /// Turn `turn_id` ended, completed or interrupted. If it started the watch, the model now
+    /// waits for the first matching line, so its window counts from here. Other turns, such
+    /// as a later one after an interrupted start, do not move it (R6.14, P3-7).
+    pub(crate) fn note_turn_finished(&self, turn_id: &str, now: Instant) {
+        if self.turn_id == turn_id {
+            self.lock().turn_ended_at.get_or_insert(now);
+        }
     }
 
     /// Whether the watch reported or still holds matching lines.

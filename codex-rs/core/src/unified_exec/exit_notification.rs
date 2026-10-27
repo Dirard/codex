@@ -1031,6 +1031,7 @@ impl super::UnifiedExecContext {
             exit_notifier.process_id(),
             exit_notifier.command().to_string(),
             Arc::clone(pattern),
+            self.step_context.turn.sub_id.clone(),
             OutputWatchWindows::from_config(&self.step_context.turn.config.exec_exit_notifications),
         );
         {
@@ -1066,9 +1067,9 @@ impl super::UnifiedExecContext {
 }
 
 impl super::UnifiedExecProcessManager {
-    /// A turn of the thread ended: output watches that wait for their first matching line
-    /// count that wait from now (`OutputWatch::note_turn_finished`, tails 2026-10-27).
-    pub(crate) async fn note_turn_finished(&self) {
+    /// Turn `turn_id` of the thread ended: output watches it started that wait for their
+    /// first matching line count that wait from now (`OutputWatch::note_turn_finished`).
+    pub(crate) async fn note_turn_finished(&self, turn_id: &str) {
         let now = Instant::now();
         let watches: Vec<Arc<OutputWatch>> = self
             .process_store
@@ -1079,7 +1080,7 @@ impl super::UnifiedExecProcessManager {
             .filter_map(|entry| entry.exit_notifier.as_ref()?.output_watch())
             .collect();
         for watch in watches {
-            watch.note_turn_finished(now);
+            watch.note_turn_finished(turn_id, now);
         }
     }
 

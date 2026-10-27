@@ -899,7 +899,7 @@ impl Session {
                 time_to_first_token_ms,
             })
         };
-        self.fork_note_turn_finished().await; // Fork: output watches wait from the turn's end
+        self.fork_note_turn_finished(&turn_context.sub_id).await; // Fork: watches wait from here
         let saved_guardian_completion =
             matches!(event, EventMsg::TurnComplete(_)) && self.is_private_guardian_reviewer().await;
         if !saved_guardian_completion {
@@ -979,6 +979,7 @@ impl Session {
         error: Option<ErrorEvent>,
     ) {
         let sub_id = task.turn_context.sub_id.clone();
+        self.fork_note_turn_finished(&sub_id).await; // Fork: watches wait from here (P3-7)
         if task.cancellation_token.is_cancelled() {
             self.emit_turn_abort_lifecycle(reason, task.turn_context.extension_data.as_ref())
                 .await;
