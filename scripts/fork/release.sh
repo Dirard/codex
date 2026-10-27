@@ -84,6 +84,7 @@ runner_allowlist='{
 machinery_paths=(
   .github/workflows/fork-rust-release.yml
   .github/workflows/fork-ci.yml
+  .github/actions/fork-rust-toolchain/
   .github/actions/fork-setup-rust/
   .github/actions/setup-rusty-v8/
   .github/actions/setup-msvc-env/

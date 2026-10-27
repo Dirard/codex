@@ -496,6 +496,7 @@ workflows="${repo_root}/.github/workflows"
 fork_ci="${workflows}/fork-ci.yml"
 fork_release="${workflows}/fork-rust-release.yml"
 setup_rust="${repo_root}/.github/actions/fork-setup-rust/action.yml"
+rust_toolchain="${repo_root}/.github/actions/fork-rust-toolchain/action.yml"
 
 # job_block FILE JOB: the lines of one job (two-space key) of a workflow.
 job_block() {
@@ -538,8 +539,31 @@ while IFS= read -r line; do
     echo "    bad pin: ${line}" >&2
     pins_ok=0
   fi
-done < <(grep -hE '^\s*(- )?uses: [^.]' "${fork_ci}" "${fork_release}" "${setup_rust}")
+done < <(grep -hE '^\s*(- )?uses: [^.]' "${fork_ci}" "${fork_release}" "${setup_rust}" "${rust_toolchain}")
 expect workflow-pins-carry-full-versions test "${pins_ok}" -eq 1
+
+# The Rust toolchain comes from codex-rs/rust-toolchain.toml: only fork-rust-toolchain installs
+# one, and it passes the channel that rust-toolchain.sh reads from that file.
+toolchain_script="${repo_root}/scripts/fork/rust-toolchain.sh"
+expect workflow-toolchain-only-from-pin bash -c \
+  "! grep -l 'dtolnay/rust-toolchain' '${fork_ci}' '${fork_release}' '${setup_rust}' | grep -q ."
+expect workflow-toolchain-action-uses-pin grep -qE '^ +toolchain: \$\{\{ steps\.pin\.outputs\.channel \}\}$' "${rust_toolchain}"
+expect workflow-toolchain-action-runs-script grep -q 'bash scripts/fork/rust-toolchain.sh' "${rust_toolchain}"
+expect workflow-setup-rust-uses-toolchain-action grep -qE '^ +- uses: \./\.github/actions/fork-rust-toolchain$' "${setup_rust}"
+expect workflow-release-uses-toolchain-action grep -qE '^ +- uses: \./\.github/actions/fork-rust-toolchain$' "${fork_release}"
+expect toolchain-script-reads-repo-pin test -n "$("${toolchain_script}")"
+mkdir -p "${work}/toolchain"
+printf '[toolchain]\nchannel = "1.95.0"\ncomponents = ["clippy"]\n' >"${work}/toolchain/plain.toml"
+printf '[toolchain]\r\nchannel = "1.96.1"  # pinned\r\n' >"${work}/toolchain/crlf.toml"
+printf "[other]\nchannel = \"9.9.9\"\n\n[ toolchain ]\nchannel = 'nightly-2025-09-18'\n" >"${work}/toolchain/tables.toml"
+printf '[toolchain]\ncomponents = ["clippy"]\n' >"${work}/toolchain/missing.toml"
+printf '[toolchain]\nchannel = "1.95.0; rm -rf /"\n' >"${work}/toolchain/bad.toml"
+check toolchain-plain ok '^1\.95\.0$' "${toolchain_script}" "${work}/toolchain/plain.toml"
+check toolchain-crlf-comment ok '^1\.96\.1$' "${toolchain_script}" "${work}/toolchain/crlf.toml"
+check toolchain-table-only ok '^nightly-2025-09-18$' "${toolchain_script}" "${work}/toolchain/tables.toml"
+check toolchain-missing-channel fail 'no valid \[toolchain\] channel' "${toolchain_script}" "${work}/toolchain/missing.toml"
+check toolchain-bad-channel fail 'no valid \[toolchain\] channel' "${toolchain_script}" "${work}/toolchain/bad.toml"
+check toolchain-missing-file fail 'no toolchain file' "${toolchain_script}" "${work}/toolchain/absent.toml"
 
 # Release machinery covers every local action and workflow the fork uses.
 machinery="$("${release}" machinery)"
@@ -551,7 +575,7 @@ while IFS= read -r local_use; do
     echo "    not in release machinery: ${path}" >&2
     covered=0
   fi
-done < <(cat "${fork_ci}" "${fork_release}" "${setup_rust}" "${repo_root}"/.github/actions/setup-rusty-v8/action.yml \
+done < <(cat "${fork_ci}" "${fork_release}" "${setup_rust}" "${rust_toolchain}" "${repo_root}"/.github/actions/setup-rusty-v8/action.yml \
   "${repo_root}"/.github/actions/setup-msvc-env/action.yml "${repo_root}"/.github/actions/check-clean-worktree/action.yml |
   grep -oE 'uses: \./[A-Za-z0-9_./-]+' | sed 's/^uses: //' | sort -u)
 expect machinery-covers-local-actions test "${covered}" -eq 1

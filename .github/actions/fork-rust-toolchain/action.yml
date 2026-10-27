@@ -1,0 +1,35 @@
+name: fork-rust-toolchain
+description: Install the Rust toolchain pinned in codex-rs/rust-toolchain.toml, so fork CI and release builds follow the upstream pin.
+inputs:
+  components:
+    description: Comma-separated rustup components to install with the pinned toolchain.
+    required: false
+    default: ""
+  targets:
+    description: Comma-separated additional targets to install with the pinned toolchain.
+    required: false
+    default: ""
+outputs:
+  channel:
+    description: The installed toolchain channel.
+    value: ${{ steps.pin.outputs.channel }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read the toolchain pinned in codex-rs/rust-toolchain.toml
+      id: pin
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        set -euo pipefail
+        channel="$(bash scripts/fork/rust-toolchain.sh)"
+        echo "Rust toolchain from codex-rs/rust-toolchain.toml: ${channel}"
+        echo "channel=${channel}" >>"${GITHUB_OUTPUT}"
+
+    # The ref pins the action's code; `toolchain` chooses what it installs.
+    - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      with:
+        toolchain: ${{ steps.pin.outputs.channel }}
+        components: ${{ inputs.components }}
+        targets: ${{ inputs.targets }}

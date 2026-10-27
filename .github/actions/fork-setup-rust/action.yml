@@ -59,7 +59,7 @@ runs:
         fi
         "${GITHUB_WORKSPACE}/scripts/fork/ci-local.sh" sandbox-check
 
-    - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+    - uses: ./.github/actions/fork-rust-toolchain
       with:
         components: ${{ inputs.components }}
 
