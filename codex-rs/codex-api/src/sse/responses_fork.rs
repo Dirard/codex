@@ -30,8 +30,9 @@ const OPTIONAL_FIELDS: [&str; 3] = [
 /// tokens.
 ///
 /// Missing counters are derived so that `total = input + output` holds, as it does for the
-/// Responses API. Output that is not reported is at least the reported reasoning, which it
-/// includes. A reported total below its parts, such as `0`, is not a total and is replaced.
+/// Responses API; a negative counter counts as missing. Output that is not reported, or
+/// reported without input, is at least the reported reasoning, which it includes. A reported
+/// total below its parts, such as `0`, is not a total and is replaced.
 /// Usage that reports only output keeps it for spending with `input_tokens = 0`: it says
 /// nothing about the context size, and core estimates the context as for zero input
 /// (docs/fork/02-compaction-context.md R7, `fork_estimate_usage`).
@@ -48,7 +49,13 @@ pub(super) fn token_usage(usage: &Value) -> Option<TokenUsage> {
             }
         }
     }
-    let counter = |key| fields.get(key).and_then(Value::as_i64);
+    // A negative counter is not a count; it is absent (tails review 2026-10-27, P3-10).
+    let counter = |key| {
+        fields
+            .get(key)
+            .and_then(Value::as_i64)
+            .filter(|count| *count >= 0)
+    };
     let reasoning = fields
         .get(OUTPUT_TOKENS_DETAILS)
         .and_then(|details| details.get(REASONING_TOKENS))
@@ -64,7 +71,7 @@ pub(super) fn token_usage(usage: &Value) -> Option<TokenUsage> {
             debug!("response usage reports neither input, output nor total tokens: {usage}");
             return None;
         }
-        (None, Some(output), None) => (0, output, None),
+        (None, Some(output), None) => (0, output.max(reasoning), None),
         (Some(input), Some(output), total) => (input, output, total),
         (Some(input), None, total) => {
             let output = total.map_or(0, |total| total.saturating_sub(input));

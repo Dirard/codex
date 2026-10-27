@@ -310,3 +310,43 @@ async fn output_only_usage_is_kept_for_spending() {
         }
     }
 }
+
+/// Tails review 2026-10-27, P3-10: a negative counter is not a count. It is ignored like an
+/// absent one, so it neither subtracts from spending nor makes up a usage on its own, and
+/// output that is reported alone is at least its reasoning, as when output is derived.
+#[tokio::test]
+async fn negative_counters_are_ignored_and_output_covers_reasoning() {
+    for kind in ["response.completed", "response.incomplete"] {
+        for (reported, expected) in [
+            (json!({ "output_tokens": -5 }), None),
+            (
+                json!({ "input_tokens": -3, "output_tokens": 4 }),
+                Some(usage(0, 4, 4)),
+            ),
+            (
+                json!({ "input_tokens": 10, "output_tokens": -2, "total_tokens": 15 }),
+                Some(usage(10, 5, 15)),
+            ),
+            (
+                json!({ "input_tokens": 10, "output_tokens": 2, "total_tokens": -1 }),
+                Some(usage(10, 2, 12)),
+            ),
+            (
+                json!({
+                    "output_tokens": 3,
+                    "output_tokens_details": { "reasoning_tokens": 9 },
+                }),
+                Some(TokenUsage {
+                    reasoning_output_tokens: 9,
+                    ..usage(0, 9, 9)
+                }),
+            ),
+        ] {
+            assert_eq!(
+                reported_usage(kind, reported.clone()).await,
+                expected,
+                "{kind} {reported}"
+            );
+        }
+    }
+}
