@@ -1832,6 +1832,63 @@ async fn explorer_profile_applies_to_workflow_agents() -> Result<()> {
     Ok(())
 }
 
+/// Explorer fan-out (specs/explorer-and-questions-2026-10-25.md, Decision log 2026-10-27): an
+/// explorer does not spawn agents, so a workflow fans out explorers itself. Each agent of
+/// `parallel` with `agent_type: 'explorer'` runs as an explorer, and the run gets every answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_workflow_fans_out_explorers_in_parallel() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    let script = "export const meta = { name: 'fan-out', description: 'd' };\nreturn await parallel(['TASK-EXPLORE-A', 'TASK-EXPLORE-B', 'TASK-EXPLORE-C'].map(task => () => agent(task, { agent_type: 'explorer' })));\n";
+    responses.parent_runs_workflow(script, Value::Null);
+    responses.agent("TASK-EXPLORE-A", "found a", (0, 0, 0));
+    responses.agent("TASK-EXPLORE-B", "found b", (0, 0, 0));
+    responses.agent("TASK-EXPLORE-C", "found c", (0, 0, 0));
+    let test = build(&server, |config| {
+        config
+            .features
+            .enable(Feature::ExplorerProfile)
+            .expect("feature");
+    })
+    .await?;
+
+    test.submit_turn("run it").await?;
+    let run = finished_run(&test.codex).await;
+    assert_eq!(run.status, RunStatus::Completed, "{run:?}");
+    assert_eq!(
+        run_result(&test.codex, &run.run_id),
+        json!(["found a", "found b", "found c"])
+    );
+    for task in ["TASK-EXPLORE-A", "TASK-EXPLORE-B", "TASK-EXPLORE-C"] {
+        let request = &responses.served(task)[0];
+        assert!(request.contains("# Explorer profile"), "{task}: {request}");
+    }
+    let (snapshot, _) = test.codex.workflow_run(&run.run_id, false).expect("run");
+    assert_eq!(snapshot.agent_list.len(), 3);
+    for agent in &snapshot.agent_list {
+        let thread = test
+            .thread_manager
+            .get_thread(codex_protocol::ThreadId::from_string(
+                agent.thread_id.as_deref().expect("thread"),
+            )?)
+            .await?;
+        let child_config = thread.config_snapshot().await;
+        assert!(
+            child_config
+                .permission_profile
+                .file_system_sandbox_policy()
+                .entries
+                .iter()
+                .all(|entry| entry.access
+                    != codex_protocol::permissions::FileSystemAccessMode::Write),
+            "{:?}",
+            child_config.permission_profile
+        );
+    }
+    Ok(())
+}
+
 const TERMINAL_MARKER: &str = "<background_terminal_notification>";
 
 /// R3.10: an agent that ends its turn while its background terminal will report an exit

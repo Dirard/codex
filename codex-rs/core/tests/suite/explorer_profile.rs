@@ -2001,3 +2001,128 @@ async fn explorer_cannot_spawn_agents(explorer_profile: bool, spawn: Value) -> R
     }
     Ok(())
 }
+
+/// Explorer fan-out (Decision log 2026-10-27): an explorer does not spawn agents, so the
+/// parent fans out explorers itself. One parent step with two `spawn_agent` calls starts two
+/// explorers, each with the explorer profile, a read-only sandbox and no `spawn_agent`, and
+/// each answers its own task.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parent_fans_out_explorers_in_one_step() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const SCOUT_A: &str = "explorer A: map the parser";
+    const SCOUT_B: &str = "explorer B: map the renderer";
+    let server = start_mock_server().await;
+    let spawn = |message: &str, task_name: &str| {
+        json!({ "message": message, "task_name": task_name, "agent_type": "explorer" }).to_string()
+    };
+    mount_sse_once_match(
+        &server,
+        move |req: &wiremock::Request| {
+            parent_request_containing(PARENT_PROMPT)(req)
+                && !decoded_body(req).contains("spawn-scout-a")
+        },
+        sse(vec![
+            ev_response_created("resp-parent-1"),
+            ev_function_call_with_namespace(
+                "spawn-scout-a",
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &spawn(SCOUT_A, "scout_a"),
+            ),
+            ev_function_call_with_namespace(
+                "spawn-scout-b",
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &spawn(SCOUT_B, "scout_b"),
+            ),
+            ev_completed("resp-parent-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        parent_request_containing("spawn-scout-b"),
+        sse(vec![
+            ev_response_created("resp-parent-2"),
+            ev_assistant_message("msg-parent-2", "parent waits"),
+            ev_completed("resp-parent-2"),
+        ]),
+    )
+    .await;
+    let mut explorers = Vec::new();
+    for (scout, id) in [(SCOUT_A, "a"), (SCOUT_B, "b")] {
+        explorers.push((
+            scout,
+            mount_sse_once_match(
+                &server,
+                child_request_containing(scout),
+                sse(vec![
+                    ev_response_created(&format!("resp-scout-{id}")),
+                    ev_assistant_message(&format!("msg-scout-{id}"), &format!("map {id} done")),
+                    ev_completed(&format!("resp-scout-{id}")),
+                ]),
+            )
+            .await,
+        ));
+    }
+
+    let test = build_test(/*explorer_profile*/ true, |_| {})
+        .build(&server)
+        .await?;
+    test.submit_turn(PARENT_PROMPT).await?;
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let children = loop {
+        let children: Vec<_> = test
+            .thread_manager
+            .list_thread_ids()
+            .await
+            .into_iter()
+            .filter(|id| *id != test.session_configured.thread_id)
+            .collect();
+        if children.len() == 2 {
+            break children;
+        }
+        assert!(Instant::now() < deadline, "explorers: {children:?}");
+        sleep(Duration::from_millis(20)).await;
+    };
+    let mut answers = Vec::new();
+    for child_id in children {
+        let child = test.thread_manager.get_thread(child_id).await?;
+        let completed =
+            wait_for_event(&child, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+        let EventMsg::TurnComplete(completed) = completed else {
+            unreachable!("wait_for_event returns the matched event");
+        };
+        answers.push(completed.last_agent_message.unwrap_or_default());
+        let child_config = child.config_snapshot().await;
+        assert!(
+            child_config
+                .permission_profile
+                .file_system_sandbox_policy()
+                .entries
+                .iter()
+                .all(|entry| entry.access
+                    != codex_protocol::permissions::FileSystemAccessMode::Write),
+            "{:?}",
+            child_config.permission_profile
+        );
+        assert_eq!(child_config.approval_policy, AskForApproval::Never);
+    }
+    answers.sort();
+    assert_eq!(answers, vec!["map a done", "map b done"]);
+    for (scout, explorer) in explorers {
+        let request = wait_for_request(&explorer).await?;
+        let developer_text = request
+            .message_input_text_groups("developer")
+            .concat()
+            .join("\n");
+        assert!(
+            developer_text.contains("# Explorer profile"),
+            "{scout}: {developer_text}"
+        );
+        assert!(!offers_spawn_agent(&request), "{}", request.body_json());
+    }
+    Ok(())
+}
