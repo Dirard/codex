@@ -608,6 +608,68 @@ async fn a_resumed_thread_learns_the_terminals_a_dead_process_lost() -> Result<(
     Ok(())
 }
 
+/// Review of the fixes P1-1, live recheck 2 R1: the first resume in a new process. Nothing
+/// touched the journal directory in this process before (the first session runs without the
+/// feature), a dead owner left its journal and its unlocked lock file, and the resume reports
+/// the lost terminal and removes both. Before the fix the once-per-process sweep ran next to
+/// this resume and held the dead owner's lock, so about one resume in three reported nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_first_resume_of_a_new_process_learns_a_lost_terminal() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            message("resp-1", "Nothing to start."),
+            message("resp-2", "The build was lost with the old process."),
+        ],
+    )
+    .await;
+    let mut first = builder(/*exit_notifications*/ false);
+    let test = first.build(&server).await?;
+    test.submit_turn("hello").await?;
+    let thread_id = test.session_configured.thread_id;
+    let rollout_path = test
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+    test.codex.shutdown_and_wait().await?;
+
+    let dir = test.home.path().join("background_terminals");
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(
+        dir.join(format!("{thread_id}.1-deadbeef.json")),
+        r#"[{"process_id":1000,"command":"./build.sh","started_at_unix_ms":0}]"#,
+    )?;
+    std::fs::write(dir.join(format!("{thread_id}.1-deadbeef.lock")), b"")?;
+    let resumed = builder(/*exit_notifications*/ true)
+        .resume(&server, std::sync::Arc::clone(&test.home), rollout_path)
+        .await?;
+    let left: Vec<_> = std::fs::read_dir(&dir)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .collect();
+    assert_eq!(
+        left,
+        Vec::<std::ffi::OsString>::new(),
+        "the resume took the journal"
+    );
+
+    resumed.submit_turn("is the build done?").await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    let delivered = notifications(&requests[1]);
+    assert!(
+        delivered
+            .iter()
+            .any(|text| text.contains("Background terminal session 1000 was lost")),
+        "{delivered:?}"
+    );
+    Ok(())
+}
+
 /// R1.1, R1.4: without the feature nothing is advertised and nothing is delivered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn disabled_feature_keeps_tools_and_ignores_notify_on_exit() -> Result<()> {
@@ -2021,7 +2083,6 @@ async fn background_exit_after_an_interrupt_does_not_start_a_turn_for_waiting_ma
     Ok(())
 }
 
-/// A Code Mode test thread with exit notifications.
 /// R6.14, tails review 2026-10-27 P3-7: an interrupted turn ends the wait of the output watch
 /// it started like a completed one. The wait for the first matching line counts from the
 /// interrupt, and the end of a later turn does not extend it: once the window passed, the
@@ -2120,6 +2181,7 @@ async fn an_interrupted_turn_starts_the_wait_for_its_watch() -> Result<()> {
     Ok(())
 }
 
+/// A Code Mode test thread with exit notifications.
 fn code_mode_builder() -> TestCodexBuilder {
     test_codex()
         .with_model("test-gpt-5.1-codex")

@@ -269,23 +269,292 @@ async fn journals_of_dead_processes_are_cleaned_up() {
     assert_eq!(files(&dir), expected);
     assert!(!files(&dir).iter().any(|name| name.contains(&dead_owner)));
 
-    // A young dead journal keeps its journal for a resume; its temporary file goes.
+    // A young dead journal stays for a resume, with its temporary file: the sweep does not
+    // even lock an owner whose files are young (review of the fixes, P1-1).
     sweep(&dir, JOURNAL_MAX_AGE, SystemTime::now());
-    let mut expected = live_files.clone();
-    expected.extend([
-        format!("{other}.{dead_other_owner}.json"),
-        format!("{other}.{dead_other_owner}.lock"),
-    ]);
-    expected.sort();
     assert_eq!(files(&dir), expected);
 
-    // An old one goes; the live one stays, whatever its age.
+    // An old one goes, temporary file included; the live owners stay, whatever their age:
+    // a session of this process, never opened, and one of another process, locked.
+    let foreign_live = "4242-0badcafe";
+    fs::write(dir.join(format!("{other}.{foreign_live}.json")), b"[]").expect("journal");
+    let foreign_lock =
+        fs::File::create(dir.join(format!("{other}.{foreign_live}.lock"))).expect("lock file");
+    foreign_lock.lock().expect("held by another process");
     sweep(
         &dir,
         JOURNAL_MAX_AGE,
         SystemTime::now() + JOURNAL_MAX_AGE + Duration::from_secs(60),
     );
-    assert_eq!(files(&dir), live_files);
+    let mut expected = live_files;
+    expected.extend([
+        format!("{other}.{foreign_live}.json"),
+        format!("{other}.{foreign_live}.lock"),
+    ]);
+    expected.sort();
+    assert_eq!(files(&dir), expected);
+}
+
+/// Plants the journal and lock file of a dead owner of `thread`: a process killed while one
+/// terminal was armed.
+fn plant_dead_owner(dir: &Path, thread: ThreadId, owner: &str, process_id: i32) {
+    fs::create_dir_all(dir).expect("journal directory");
+    fs::write(
+        dir.join(format!("{thread}.{owner}.json")),
+        serde_json::to_vec(&[terminal(process_id, "./build.sh")]).expect("json"),
+    )
+    .expect("journal");
+    fs::write(dir.join(format!("{thread}.{owner}.lock")), b"").expect("lock file");
+}
+
+/// Review of the fixes P1-1, live recheck 2 R1: the first resume in a new process ran the
+/// once-per-process sweep next to itself, the sweep held the dead owner's lock while it checked
+/// its age, and the resume took that for a live owner (162 of 200 missed). Each round here is a
+/// new process: the sweep has not run yet.
+#[tokio::test]
+async fn the_first_resume_of_a_new_process_takes_a_dead_journal() {
+    for round in 0..200 {
+        let home = tempfile::tempdir().expect("tempdir");
+        let dir = journal_dir(home.path());
+        let thread_id = ThreadId::new();
+        plant_dead_owner(&dir, thread_id, "1-deadbeef", 7);
+        SWEPT.store(false, Ordering::Release);
+        assert_eq!(
+            TerminalJournal::new()
+                .take_lost(home.path(), thread_id)
+                .await,
+            vec![terminal(7, "./build.sh")],
+            "round {round}"
+        );
+        assert_eq!(files(&dir), Vec::<String>::new(), "round {round}");
+    }
+}
+
+/// Review of the fixes P1-1, P2-1: this process never opens the lock file of one of its own
+/// sessions, whether that session holds its lock or not: a resume and the sweep of the same
+/// process skip it, so its lock is never taken for a dead owner's, and on NFS, where closing
+/// a second descriptor would release a per-process lock, never lost. A session is registered
+/// from its first armed terminal until it ends.
+#[tokio::test]
+async fn this_process_never_probes_its_own_sessions() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let dir = journal_dir(home.path());
+    let thread_id = ThreadId::new();
+    let session = TerminalJournal::new();
+    assert!(!is_own_session(session.owner()));
+    session
+        .write(home.path(), thread_id, vec![terminal(1, "npm run dev")])
+        .await;
+    assert!(is_own_session(session.owner()));
+
+    // A registered owner whose lock is free, as if this process held it in another way.
+    let registered = "4242-00c0ffee";
+    plant_dead_owner(&dir, thread_id, registered, 2);
+    lock_ignoring_poison(&OWN_SESSIONS).insert(registered.to_string());
+    assert_eq!(
+        TerminalJournal::new()
+            .take_lost(home.path(), thread_id)
+            .await,
+        Vec::new()
+    );
+    sweep(
+        &dir,
+        JOURNAL_MAX_AGE,
+        SystemTime::now() + JOURNAL_MAX_AGE + Duration::from_secs(60),
+    );
+    assert_eq!(files(&dir).len(), 4, "{:?}", files(&dir));
+    let probe = open_foreign_lock(&lock_path(&dir, &thread_id.to_string(), session.owner()))
+        .expect("lock file");
+    assert!(matches!(
+        probe.try_lock(),
+        Err(fs::TryLockError::WouldBlock)
+    ));
+    lock_ignoring_poison(&OWN_SESSIONS).remove(registered);
+
+    session.clear(home.path(), thread_id).await;
+    assert!(!is_own_session(session.owner()));
+    let dropped = TerminalJournal::new();
+    dropped
+        .write(home.path(), thread_id, vec![terminal(3, "make")])
+        .await;
+    let owner = dropped.owner().to_string();
+    drop(dropped);
+    assert!(!is_own_session(&owner));
+}
+
+/// Review of the fixes P1-1: another process's resume or sweep holds a dead owner's lock for a
+/// moment. A resume tries again before it takes the owner for a live one.
+#[tokio::test]
+async fn a_dead_owner_is_taken_after_a_brief_foreign_lock() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let dir = journal_dir(home.path());
+    let thread_id = ThreadId::new();
+    plant_dead_owner(&dir, thread_id, "2-deadbeef", 9);
+    let lock = open_foreign_lock(&lock_path(&dir, &thread_id.to_string(), "2-deadbeef"))
+        .expect("lock file");
+    lock.lock().expect("live foreign owner");
+    // While the other process holds the lock, its owner is alive.
+    assert_eq!(
+        TerminalJournal::new()
+            .take_lost(home.path(), thread_id)
+            .await,
+        Vec::new()
+    );
+    assert_eq!(files(&dir).len(), 2);
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(30));
+        drop(lock);
+    });
+    assert_eq!(
+        TerminalJournal::new()
+            .take_lost(home.path(), thread_id)
+            .await,
+        vec![terminal(9, "./build.sh")]
+    );
+    release.join().expect("release");
+}
+
+/// Review of the fixes P3-3: a journal of the current format without its lock file is not a
+/// dead owner's. The listing may have caught the journal of a new owner without the lock file
+/// it created first; it is left alone until its lock file is there or the sweep finds it old.
+#[tokio::test]
+async fn a_journal_without_its_lock_file_is_left_alone() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let dir = journal_dir(home.path());
+    let thread_id = ThreadId::new();
+    plant_dead_owner(&dir, thread_id, "3-deadbeef", 11);
+    fs::remove_file(dir.join(format!("{thread_id}.3-deadbeef.lock"))).expect("remove lock");
+    assert_eq!(
+        TerminalJournal::new()
+            .take_lost(home.path(), thread_id)
+            .await,
+        Vec::new()
+    );
+    assert_eq!(files(&dir), vec![format!("{thread_id}.3-deadbeef.json")]);
+}
+
+/// Review of the fixes P3-1: a journal write whose call is dropped mid-way (the tool call of
+/// an interrupted turn is aborted) still leaves the session holding its lock, so no other
+/// process takes the live journal for a dead one, and the shutdown still removes the journal
+/// and its lock file.
+#[tokio::test]
+async fn a_cancelled_write_keeps_the_session_lock() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let dir = journal_dir(home.path());
+    let thread_id = ThreadId::new();
+    let session = TerminalJournal::new();
+    // Polled once, up to the blocking task, then dropped.
+    let _cancelled = tokio::time::timeout(
+        Duration::ZERO,
+        session.write(home.path(), thread_id, vec![terminal(1, "npm run dev")]),
+    )
+    .await;
+    let lock_file = lock_path(&dir, &thread_id.to_string(), session.owner());
+    let journal_file = journal_path(&dir, &thread_id.to_string(), session.owner());
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !journal_file.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the blocking write finished");
+    // The journal is complete once it exists (rename); the lock is still held.
+    let probe = open_foreign_lock(&lock_file).expect("lock file");
+    assert!(
+        matches!(probe.try_lock(), Err(fs::TryLockError::WouldBlock)),
+        "the live session lost its lock"
+    );
+    drop(probe);
+
+    session.clear(home.path(), thread_id).await;
+    assert_eq!(files(&dir), Vec::<String>::new());
+}
+
+/// Review of the fixes P3-2: lists reach the disk in the order they were taken. A write of an
+/// older list that arrives after a newer one is dropped, and a list is taken under the
+/// session's lock, so a slow snapshot keeps the next one waiting.
+#[tokio::test]
+async fn an_older_list_never_replaces_a_newer_one() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let dir = journal_dir(home.path());
+    let thread = ThreadId::new().to_string();
+    let session = TerminalJournal::new();
+    {
+        let mut files = lock_ignoring_poison(&session.files);
+        files.write(&dir, &thread, 2, &[terminal(2, "./b")]);
+        files.write(&dir, &thread, 1, &[terminal(1, "./a"), terminal(2, "./b")]);
+    }
+    let journal = journal_path(&dir, &thread, session.owner());
+    assert_eq!(read_journal(&journal), vec![terminal(2, "./b")]);
+
+    let thread_id = ThreadId::new();
+    let session = Arc::new(TerminalJournal::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let first = tokio::spawn({
+        let session = Arc::clone(&session);
+        let release = Arc::clone(&release);
+        let home = home.path().to_path_buf();
+        async move {
+            session
+                .sync(&home, thread_id, async move {
+                    release.notified().await;
+                    vec![terminal(1, "./a"), terminal(2, "./b")]
+                })
+                .await;
+        }
+    });
+    // The first snapshot is being taken under the session's lock.
+    while session.snapshots.try_lock().is_ok() {
+        tokio::task::yield_now().await;
+    }
+    let second = tokio::spawn({
+        let session = Arc::clone(&session);
+        let home = home.path().to_path_buf();
+        async move {
+            session
+                .sync(&home, thread_id, async { vec![terminal(2, "./b")] })
+                .await;
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    release.notify_one();
+    first.await.expect("first sync");
+    second.await.expect("second sync");
+    assert_eq!(
+        read_journal(&journal_path(&dir, &thread_id.to_string(), session.owner())),
+        vec![terminal(2, "./b")]
+    );
+    session.clear(home.path(), thread_id).await;
+}
+
+/// Review of the fixes P3-8 (`is_file_at`): a resume of another process that found the owner's
+/// fresh lock file unlocked removes it, while the owner waits for that lock. The owner then
+/// holds a removed file, so it takes the lock again on a new one.
+#[cfg(unix)]
+#[test]
+fn the_owner_takes_its_lock_again_when_its_lock_file_was_removed() {
+    use std::os::unix::fs::MetadataExt;
+    let home = tempfile::tempdir().expect("tempdir");
+    let dir = journal_dir(home.path());
+    fs::create_dir_all(&dir).expect("journal directory");
+    let path = lock_path(&dir, "thread", "5-0000beef");
+    let foreign = fs::File::create(&path).expect("lock file");
+    foreign.lock().expect("foreign resume holds the lock");
+    let owner = std::thread::spawn(move || acquire_owner_lock(&dir, "thread", "5-0000beef"));
+    std::thread::sleep(Duration::from_millis(100));
+    fs::remove_file(&path).expect("the foreign resume removes the lock file");
+    drop(foreign);
+    let lock = owner
+        .join()
+        .expect("owner thread")
+        .expect("the owner takes its lock");
+    let held = lock.metadata().expect("held file");
+    let current = fs::symlink_metadata(&path).expect("the lock file is there again");
+    assert_eq!(
+        (held.dev(), held.ino()),
+        (current.dev(), current.ino()),
+        "the owner holds the file at the lock path"
+    );
 }
 
 #[test]

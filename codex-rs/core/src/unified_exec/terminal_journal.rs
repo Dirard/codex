@@ -23,7 +23,15 @@
 //! live thread neither reports the first one's terminals as lost nor touches its files.
 //! Journals of dead processes are also removed when their thread is archived or deleted and,
 //! when no resume took them, after `JOURNAL_MAX_AGE` (P3-5).
+//!
+//! A lock this process holds is no sign of a live owner in another process (review of the
+//! fixes, P1-1, P2-1). The process keeps a registry of its own live sessions, whose lock files
+//! its resume, sweep and cleanup never open (on NFS, where `flock` is a per-process `fcntl`
+//! lock, opening and closing one would even release it), and it runs that work on other
+//! owners' files one at a time (`FOREIGN_WORK`), so the sweep never holds a lock that a resume
+//! of the same process is probing.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -31,6 +39,9 @@ use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
+use std::sync::PoisonError;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -67,6 +78,25 @@ const TMP_SUFFIX: &str = ".tmp";
 
 /// The sweep of old journals runs once per process.
 static SWEPT: AtomicBool = AtomicBool::new(false);
+/// Owners of this process's sessions that hold, or are taking, their journal lock (P1-1,
+/// P2-1). An owner is registered before its lock file exists and unregistered after its lock
+/// is released.
+static OWN_SESSIONS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+/// This process's work on other owners' files, one at a time: a resume, the sweep, the
+/// cleanup of an archived or deleted thread (P1-1).
+static FOREIGN_WORK: Mutex<()> = Mutex::new(());
+/// Attempts at a free lock before an owner counts as alive: another process's resume or sweep
+/// holds a dead owner's lock for a moment, a live owner for its whole session.
+const FOREIGN_LOCK_ATTEMPTS: u32 = 5;
+const FOREIGN_LOCK_RETRY: Duration = Duration::from_millis(20);
+
+fn lock_ignoring_poison<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn is_own_session(owner: &str) -> bool {
+    lock_ignoring_poison(&OWN_SESSIONS).contains(owner)
+}
 
 /// An armed terminal that has not reported yet.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -327,10 +357,43 @@ fn read_journal(path: &Path) -> Vec<JournaledTerminal> {
     }
 }
 
-/// The files of the dead owners of `thread`, other than `own`: the ones whose lock is free,
-/// and journals that have no lock file at all (the old format). Each dead owner's journal is
-/// read, then all its files are removed. Live owners' files stay as they are (P3-2).
-fn take_dead_journals(dir: &Path, thread: &str, own: Option<&str>) -> Vec<JournaledTerminal> {
+/// Opens another owner's lock file to probe it. Read and write: on NFS `flock` is emulated with
+/// `fcntl` locks, and an exclusive one needs a file open for writing (P2-1). Never for an owner
+/// of this process (`is_own_session`): there, closing the file would release its lock.
+fn open_foreign_lock(path: &Path) -> std::io::Result<File> {
+    open_options().read(true).write(true).open(path)
+}
+
+/// The lock of a dead owner, or `None` while a live one holds it. Another process's resume or
+/// sweep holds a dead owner's lock only for a moment, so a busy lock is tried a few times
+/// before its owner counts as alive (P1-1).
+fn lock_dead_owner(path: &Path, attempts: u32) -> Option<File> {
+    let lock = match open_foreign_lock(path) {
+        Ok(lock) => lock,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(err) => {
+            warn!(path = %path.display(), %err, "failed to open a background terminal journal lock");
+            return None;
+        }
+    };
+    for attempt in 1..=attempts {
+        match lock.try_lock() {
+            Ok(()) => return Some(lock),
+            Err(fs::TryLockError::WouldBlock) if attempt < attempts => {
+                std::thread::sleep(FOREIGN_LOCK_RETRY);
+            }
+            Err(fs::TryLockError::WouldBlock) => return None,
+            Err(fs::TryLockError::Error(err)) => {
+                warn!(path = %path.display(), %err, "failed to lock a background terminal journal");
+                return None;
+            }
+        }
+    }
+    None
+}
+
+/// The names of the journal directory, or of the files of `thread` in it.
+fn journal_names(dir: &Path, thread: Option<&str>) -> Vec<String> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
@@ -339,17 +402,35 @@ fn take_dead_journals(dir: &Path, thread: &str, own: Option<&str>) -> Vec<Journa
             return Vec::new();
         }
     };
-    let names: Vec<String> = entries
+    entries
         .filter_map(Result::ok)
         .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|name| JournalFile::parse(name).is_some_and(|file| file.thread() == thread))
-        .collect();
+        .filter(|name| {
+            thread.is_none_or(|thread| {
+                JournalFile::parse(name).is_some_and(|file| file.thread() == thread)
+            })
+        })
+        .collect()
+}
+
+/// The terminals in the journals of the dead owners of `thread`, whose files are then removed.
+/// A dead owner is one whose lock nobody holds. The owners of this process's sessions are not
+/// looked at (P1-1), and the owners of other live processes keep their files (P3-2). A journal
+/// of the old format, `<thread>.json`, has no owner and counts as dead. A journal whose lock
+/// file is not in the directory listing is not: its lock file may only have been created
+/// after the listing started; it is probed only when its lock file is there now (review of
+/// the fixes, P3-3).
+fn take_dead_journals(dir: &Path, thread: &str) -> Vec<JournaledTerminal> {
+    let _work = lock_ignoring_poison(&FOREIGN_WORK);
+    let names = journal_names(dir, Some(thread));
     let mut lost = Vec::new();
-    let mut owners_with_lock = Vec::new();
+    let mut owners: Vec<&str> = Vec::new();
     for name in &names {
         match JournalFile::parse(name) {
-            Some(JournalFile::Lock { owner, .. }) if Some(owner) != own => {
-                owners_with_lock.push(owner);
+            Some(JournalFile::Lock { owner, .. } | JournalFile::Journal { owner, .. })
+                if !owners.contains(&owner) =>
+            {
+                owners.push(owner);
             }
             Some(JournalFile::Legacy { .. }) => {
                 let path = dir.join(name);
@@ -359,38 +440,17 @@ fn take_dead_journals(dir: &Path, thread: &str, own: Option<&str>) -> Vec<Journa
             _ => {}
         }
     }
-    for owner in owners_with_lock {
-        let path = lock_path(dir, thread, owner);
-        let lock = match open_options().read(true).open(&path) {
-            Ok(lock) => lock,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(err) => {
-                warn!(path = %path.display(), %err, "failed to open a background terminal journal lock");
-                continue;
-            }
-        };
-        match lock.try_lock() {
-            Ok(()) => {}
-            Err(fs::TryLockError::WouldBlock) => continue,
-            Err(fs::TryLockError::Error(err)) => {
-                warn!(path = %path.display(), %err, "failed to lock a background terminal journal");
-                continue;
-            }
+    for owner in owners {
+        if is_own_session(owner) {
+            continue;
         }
-        let journal = journal_path(dir, thread, owner);
-        lost.extend(read_journal(&journal));
+        let path = lock_path(dir, thread, owner);
+        let Some(lock) = lock_dead_owner(&path, FOREIGN_LOCK_ATTEMPTS) else {
+            continue;
+        };
+        lost.extend(read_journal(&journal_path(dir, thread, owner)));
         remove_owner_files(dir, &names, thread, owner);
         drop(lock);
-    }
-    for name in &names {
-        if let Some(JournalFile::Journal { owner, .. }) = JournalFile::parse(name)
-            && Some(owner) != own
-            && !names.contains(&format!("{thread}.{owner}{LOCK_SUFFIX}"))
-        {
-            let path = dir.join(name);
-            lost.extend(read_journal(&path));
-            remove_if_present(&path);
-        }
     }
     lost
 }
@@ -413,58 +473,49 @@ fn remove_owner_files(dir: &Path, names: &[String], thread: &str, owner: &str) {
     remove_if_present(&lock_path(dir, thread, owner));
 }
 
-/// Removes the files of dead owners that are older than `max_age`, and temporary files of
-/// dead owners of any age: journals that no resume took, for example of a crashed thread that
-/// was never resumed or of the sub-agents of a crashed parent (P3-5).
+/// Removes the files of dead owners that are older than `max_age`: journals that no resume
+/// took, for example of a crashed thread that was never resumed or of the sub-agents of a
+/// crashed parent (P3-5). The age is checked first, so the sweep locks only owners whose files
+/// it removes, and never one of this process's sessions (P1-1).
 fn sweep(dir: &Path, max_age: Duration, now: SystemTime) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    let names: Vec<String> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .collect();
+    let _work = lock_ignoring_poison(&FOREIGN_WORK);
+    let names = journal_names(dir, /*thread*/ None);
     let is_old = |name: &str| {
         fs::symlink_metadata(dir.join(name))
             .and_then(|metadata| metadata.modified())
             .is_ok_and(|modified| now.duration_since(modified).is_ok_and(|age| age >= max_age))
     };
+    let mut swept: Vec<(&str, &str)> = Vec::new();
     for name in &names {
         match JournalFile::parse(name) {
-            Some(JournalFile::Lock { thread, owner }) => {
-                let path = lock_path(dir, thread, owner);
-                let Ok(lock) = open_options().read(true).open(&path) else {
-                    continue;
-                };
-                if lock.try_lock().is_err() {
-                    continue;
-                }
+            Some(
+                JournalFile::Lock { thread, owner }
+                | JournalFile::Journal { thread, owner }
+                | JournalFile::Tmp { thread, owner },
+            ) if !swept.contains(&(thread, owner)) && !is_own_session(owner) => {
+                swept.push((thread, owner));
                 let journal = format!("{thread}.{owner}{JOURNAL_SUFFIX}");
-                let old = if names.contains(&journal) {
-                    is_old(&journal)
+                let lock = format!("{thread}.{owner}{LOCK_SUFFIX}");
+                let newest = if names.contains(&journal) {
+                    journal
+                } else if names.contains(&lock) {
+                    lock
                 } else {
-                    is_old(name)
+                    name.clone()
                 };
-                if old {
-                    remove_owner_files(dir, &names, thread, owner);
-                } else {
-                    for tmp in &names {
-                        if let Some(JournalFile::Tmp {
-                            thread: tmp_thread,
-                            owner: tmp_owner,
-                        }) = JournalFile::parse(tmp)
-                            && tmp_thread == thread
-                            && tmp_owner == owner
-                        {
-                            remove_if_present(&dir.join(tmp));
-                        }
-                    }
+                if !is_old(&newest) {
+                    continue;
                 }
-            }
-            Some(JournalFile::Journal { thread, owner } | JournalFile::Tmp { thread, owner })
-                if !names.contains(&format!("{thread}.{owner}{LOCK_SUFFIX}")) && is_old(name) =>
-            {
-                remove_if_present(&dir.join(name));
+                let lock = lock_path(dir, thread, owner);
+                let held = match fs::symlink_metadata(&lock) {
+                    Ok(_) => match lock_dead_owner(&lock, /*attempts*/ 1) {
+                        Some(held) => Some(held),
+                        None => continue,
+                    },
+                    Err(_) => None,
+                };
+                remove_owner_files(dir, &names, thread, owner);
+                drop(held);
             }
             Some(JournalFile::Legacy { .. }) if is_old(name) => {
                 remove_if_present(&dir.join(name));
@@ -474,13 +525,13 @@ fn sweep(dir: &Path, max_age: Duration, now: SystemTime) {
     }
 }
 
-/// Starts the sweep of old journals once per process, in the background.
+/// The sweep of old journals, once per process, after the work of the blocking task that
+/// calls it: never alongside a resume of the same process (P1-1).
 fn sweep_once(dir: &Path) {
     if SWEPT.swap(true, Ordering::AcqRel) {
         return;
     }
-    let dir = dir.to_path_buf();
-    tokio::task::spawn_blocking(move || sweep(&dir, JOURNAL_MAX_AGE, SystemTime::now()));
+    sweep(dir, JOURNAL_MAX_AGE, SystemTime::now());
 }
 
 /// Removes the journals of dead owners of `thread_ids`, whose threads were archived or
@@ -491,7 +542,7 @@ pub(crate) async fn discard_journals(codex_home: &Path, thread_ids: &[ThreadId])
     let threads: Vec<String> = thread_ids.iter().map(ToString::to_string).collect();
     let result = tokio::task::spawn_blocking(move || {
         for thread in threads {
-            take_dead_journals(&dir, &thread, /*own*/ None);
+            take_dead_journals(&dir, &thread);
         }
     })
     .await;
@@ -503,16 +554,106 @@ pub(crate) async fn discard_journals(codex_home: &Path, thread_ids: &[ThreadId])
 /// The journal files of one session (P3-2). Each session orders its own writes, so sessions
 /// do not wait for each other's journal (P3-8).
 pub(crate) struct TerminalJournal {
+    /// The owner name, also in `files`, for tests.
+    #[cfg(test)]
     owner: String,
-    /// The exclusive lock of this owner while it has a journal; its mutex orders the writes.
-    lock: tokio::sync::Mutex<Option<File>>,
+    /// Numbers the snapshots of the terminal list in the order they are taken (review of the
+    /// fixes, P3-2): a snapshot is taken under this lock, and a write of an older snapshot never
+    /// replaces a newer one.
+    snapshots: tokio::sync::Mutex<u64>,
+    /// The session's lock and what is on disk. A blocking task stores the lock here as soon as
+    /// it takes it, so a cancelled call cannot drop it (review of the fixes, P3-1).
+    files: Arc<Mutex<OwnerFiles>>,
+}
+
+/// What a session holds of its journal.
+struct OwnerFiles {
+    owner: String,
+    /// The exclusive lock of the session's journal, from its first armed terminal to its end.
+    lock: Option<File>,
+    /// The owner is in `OWN_SESSIONS`.
+    registered: bool,
+    /// The snapshot whose list is on disk.
+    written: u64,
+    /// The session ended: nothing is written any more.
+    cleared: bool,
+}
+
+impl OwnerFiles {
+    fn register(&mut self) {
+        if !self.registered {
+            lock_ignoring_poison(&OWN_SESSIONS).insert(self.owner.clone());
+            self.registered = true;
+        }
+    }
+
+    /// Releases the lock, then the registration: from then on the owner is a foreign one.
+    fn release(&mut self) {
+        self.lock = None;
+        if self.registered {
+            lock_ignoring_poison(&OWN_SESSIONS).remove(&self.owner);
+            self.registered = false;
+        }
+    }
+
+    /// Writes snapshot `snapshot` of the terminal list, unless a newer one is on disk or the
+    /// session ended. The first non-empty list takes the session's lock (P3-2): the owner is
+    /// registered before its lock file exists, and keeps the lock until the session ends.
+    fn write(&mut self, dir: &Path, thread: &str, snapshot: u64, terminals: &[JournaledTerminal]) {
+        if self.cleared || snapshot <= self.written {
+            return;
+        }
+        if self.lock.is_none() {
+            if terminals.is_empty() {
+                self.written = snapshot;
+                return;
+            }
+            self.register();
+            match acquire_owner_lock(dir, thread, &self.owner) {
+                Ok(lock) => self.lock = Some(lock),
+                Err(err) => {
+                    warn!(%err, "failed to lock the background terminal journal");
+                    self.release();
+                    return;
+                }
+            }
+        }
+        if let Err(err) = write_owner_journal(dir, thread, &self.owner, terminals) {
+            warn!(%err, "failed to update the background terminal journal");
+            return;
+        }
+        self.written = snapshot;
+    }
+
+    /// The session ended: its journal and lock file go, whether or not it holds the lock now.
+    fn clear(&mut self, dir: &Path, thread: &str) {
+        self.cleared = true;
+        remove_if_present(&journal_path(dir, thread, &self.owner));
+        remove_if_present(&lock_path(dir, thread, &self.owner));
+        self.release();
+    }
+}
+
+impl Drop for OwnerFiles {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 impl TerminalJournal {
     pub(crate) fn new() -> Self {
+        let owner = new_owner();
         Self {
-            owner: new_owner(),
-            lock: tokio::sync::Mutex::new(None),
+            #[cfg(test)]
+            owner: owner.clone(),
+            files: Arc::new(Mutex::new(OwnerFiles {
+                owner,
+                lock: None,
+                registered: false,
+                written: 0,
+                cleared: false,
+            })),
+            snapshots: tokio::sync::Mutex::new(0),
         }
     }
 
@@ -521,92 +662,83 @@ impl TerminalJournal {
         &self.owner
     }
 
-    /// Writes `terminals` as this session's journal of `thread_id`. A session that never
-    /// journaled a terminal has nothing to remove.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "one session's journal writes are ordered: an older list must not overwrite a newer one"
-    )]
+    /// `sync` with a list taken already.
+    #[cfg(test)]
     pub(crate) async fn write(
         &self,
         codex_home: &Path,
         thread_id: ThreadId,
         terminals: Vec<JournaledTerminal>,
     ) {
-        let mut held = self.lock.lock().await;
-        if terminals.is_empty() && held.is_none() {
-            return;
-        }
+        self.sync(codex_home, thread_id, async move { terminals })
+            .await;
+    }
+
+    /// Writes the terminal list that `snapshot` takes as this session's journal of
+    /// `thread_id`. The snapshot is taken under the session's lock, so lists reach the disk in
+    /// the order they were taken (review of the fixes, P3-2).
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "snapshots are numbered in the order they are taken: an older list must not overwrite a newer one"
+    )]
+    pub(crate) async fn sync(
+        &self,
+        codex_home: &Path,
+        thread_id: ThreadId,
+        snapshot: impl std::future::Future<Output = Vec<JournaledTerminal>>,
+    ) {
+        let (number, terminals) = {
+            let mut snapshots = self.snapshots.lock().await;
+            *snapshots += 1;
+            (*snapshots, snapshot.await)
+        };
         let dir = journal_dir(codex_home);
-        sweep_once(&dir);
-        let owner = self.owner.clone();
-        let lock = held.take();
+        let files = Arc::clone(&self.files);
         let thread = thread_id.to_string();
         let result = tokio::task::spawn_blocking(move || {
-            let lock = match lock {
-                Some(lock) => lock,
-                None => match acquire_owner_lock(&dir, &thread, &owner) {
-                    Ok(lock) => lock,
-                    Err(err) => return (None, Err(err)),
-                },
-            };
-            let result = write_owner_journal(&dir, &thread, &owner, &terminals);
-            (Some(lock), result)
+            lock_ignoring_poison(&files).write(&dir, &thread, number, &terminals);
+            sweep_once(&dir);
         })
         .await;
-        match result {
-            Ok((lock, result)) => {
-                *held = lock;
-                if let Err(err) = result {
-                    warn!(%err, "failed to update the background terminal journal");
-                }
-            }
-            Err(err) => warn!(%err, "failed to update the background terminal journal"),
+        if let Err(err) = result {
+            warn!(%err, "failed to update the background terminal journal");
         }
     }
 
-    /// Removes this session's journal and lock: a shutdown recorded what the journal had to
-    /// tell (R2.5).
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "one session's journal writes are ordered: an older list must not overwrite a newer one"
-    )]
+    /// Removes this session's journal and lock: the session ended, and a shutdown recorded
+    /// what the journal had to tell (R2.5).
     pub(crate) async fn clear(&self, codex_home: &Path, thread_id: ThreadId) {
-        let mut held = self.lock.lock().await;
-        let Some(lock) = held.take() else {
-            return;
-        };
         let dir = journal_dir(codex_home);
-        let owner = self.owner.clone();
+        let files = Arc::clone(&self.files);
         let thread = thread_id.to_string();
-        let result = tokio::task::spawn_blocking(move || {
-            remove_if_present(&journal_path(&dir, &thread, &owner));
-            remove_if_present(&lock_path(&dir, &thread, &owner));
-            drop(lock);
-        })
-        .await;
+        let result =
+            tokio::task::spawn_blocking(move || lock_ignoring_poison(&files).clear(&dir, &thread))
+                .await;
         if let Err(err) = result {
             warn!(%err, "failed to remove the background terminal journal");
         }
     }
 
     /// Takes the journals of the dead owners of `thread_id`: the terminals that Codex
-    /// processes which stopped without shutting down left behind.
+    /// processes which stopped without shutting down left behind. The once-per-process sweep
+    /// runs after it in the same task (P1-1).
     pub(crate) async fn take_lost(
         &self,
         codex_home: &Path,
         thread_id: ThreadId,
     ) -> Vec<JournaledTerminal> {
         let dir = journal_dir(codex_home);
-        sweep_once(&dir);
-        let owner = self.owner.clone();
         let thread = thread_id.to_string();
-        tokio::task::spawn_blocking(move || take_dead_journals(&dir, &thread, Some(&owner)))
-            .await
-            .unwrap_or_else(|err| {
-                warn!(%err, "failed to read background terminal journals");
-                Vec::new()
-            })
+        tokio::task::spawn_blocking(move || {
+            let lost = take_dead_journals(&dir, &thread);
+            sweep_once(&dir);
+            lost
+        })
+        .await
+        .unwrap_or_else(|err| {
+            warn!(%err, "failed to read background terminal journals");
+            Vec::new()
+        })
     }
 }
 
@@ -657,23 +789,28 @@ impl Session {
         let Some(codex_home) = self.terminal_journal_home().await else {
             return;
         };
-        let journal = self.terminal_journal();
-        let terminals = self
-            .services
-            .unified_exec_manager
-            .journaled_terminals()
+        self.terminal_journal()
+            .sync(
+                &codex_home,
+                self.thread_id,
+                self.services.unified_exec_manager.journaled_terminals(),
+            )
             .await;
-        journal.write(&codex_home, self.thread_id, terminals).await;
     }
 
-    /// A shutdown recorded what it owes the model: the journal has nothing left to tell.
+    /// The session ends, and its shutdown recorded what it owes the model: the journal has
+    /// nothing left to tell. Its journal and lock go even if the feature was turned off since,
+    /// so the next resume reports no false loss (review of the fixes, P3-1).
     pub(crate) async fn fork_clear_terminal_journal(&self) {
-        let Some(codex_home) = self.terminal_journal_home().await else {
+        let Some(journal) = self
+            .services
+            .session_extension_data
+            .get::<TerminalJournal>()
+        else {
             return;
         };
-        self.terminal_journal()
-            .clear(&codex_home, self.thread_id)
-            .await;
+        let codex_home = self.get_config().await.codex_home.to_path_buf();
+        journal.clear(&codex_home, self.thread_id).await;
     }
 
     /// Fork hook of a resumed thread, after its history is rebuilt: terminals that a Codex
