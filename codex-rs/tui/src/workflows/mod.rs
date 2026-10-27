@@ -25,8 +25,13 @@ pub(crate) enum WorkflowsEvent {
     OpenRun { thread_id: ThreadId, run_id: String },
     /// Cancel a run that is not terminal.
     Cancel { thread_id: ThreadId, run_id: String },
-    /// The open run view wants its agent rows again after an update.
-    Refresh { thread_id: ThreadId, run_id: String },
+    /// The open run view wants its agent rows again after an update. The read waits `delay`
+    /// first, so an open run is read at most once per refresh interval (R8.6.6).
+    Refresh {
+        thread_id: ThreadId,
+        run_id: String,
+        delay: std::time::Duration,
+    },
     /// Answer of `thread/workflow/list`.
     ListLoaded {
         thread_id: ThreadId,

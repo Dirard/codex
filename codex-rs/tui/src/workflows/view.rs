@@ -179,28 +179,24 @@ pub(crate) fn run_view_params(
     now_ms: i64,
     selected: Option<usize>,
 ) -> SelectionViewParams {
-    let mut items = Vec::new();
-    for row in run_view_rows(run) {
-        items.push(match row {
-            RunViewRow::Cancel => cancel_item(thread_id, run, cancelling),
-            RunViewRow::Agent(seq) => {
-                let agent = run.agents.iter().flatten().find(|agent| agent.seq == seq);
-                match agent {
-                    Some(agent) => agent_item(agent),
-                    None => continue,
-                }
-            }
-            RunViewRow::NoAgents => SelectionItem {
-                name: if run.status.is_terminal() {
-                    "No agents".to_string()
-                } else {
-                    "No agents yet".to_string()
-                },
-                is_disabled: true,
-                ..Default::default()
+    // One pass in the order of `run_view_rows` (review 2026-10-27, item 10: no lookup per row).
+    let agents = run.agents.as_deref().unwrap_or_default();
+    let mut items = Vec::with_capacity(agents.len() + 1);
+    if !run.status.is_terminal() {
+        items.push(cancel_item(thread_id, run, cancelling));
+    }
+    if agents.is_empty() {
+        items.push(SelectionItem {
+            name: if run.status.is_terminal() {
+                "No agents".to_string()
+            } else {
+                "No agents yet".to_string()
             },
+            is_disabled: true,
+            ..Default::default()
         });
     }
+    items.extend(agents.iter().map(agent_item));
     // The title goes into the header: `ListSelectionView` puts its own title below the header.
     let mut header = vec![
         Line::from(format!("Workflow {}", one_line(&run.name)).bold()),
@@ -228,7 +224,7 @@ fn run_subtitle(run: &WorkflowRun, cancelling: bool, now_ms: i64) -> String {
     )
 }
 
-/// Rows of the run view in display order.
+/// Rows of the run view in display order; `run_view_params` builds its items in this order.
 pub(crate) fn run_view_rows(run: &WorkflowRun) -> Vec<RunViewRow> {
     let mut rows = Vec::new();
     if !run.status.is_terminal() {

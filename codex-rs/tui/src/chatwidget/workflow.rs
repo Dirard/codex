@@ -7,6 +7,8 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::time::Duration;
+use std::time::Instant;
 
 use codex_app_server_protocol::ThreadWorkflowUpdatedNotification;
 use codex_app_server_protocol::WorkflowItem;
@@ -27,6 +29,16 @@ use crate::workflows::view::run_view_params;
 use crate::workflows::view::run_view_rows;
 use crate::workflows::view::sorted_runs;
 
+/// How long a run opened from `/subagents` may take to load and still open its run view; a
+/// later answer only says that the run is ready (R8.6.3).
+const OPEN_GRACE: Duration = Duration::from_secs(3);
+/// Reads of an open run view are at least this far apart (R8.6.6) ...
+const REFRESH_MIN_INTERVAL: Duration = Duration::from_millis(500);
+/// ... plus this much per agent row, up to `REFRESH_MAX_INTERVAL`, so a large fan-out does not
+/// keep the thread's request queue busy with reads of the whole run.
+const REFRESH_PER_AGENT: Duration = Duration::from_millis(2);
+const REFRESH_MAX_INTERVAL: Duration = Duration::from_secs(3);
+
 /// Workflow state of a chat widget: active runs for the status line and the `/workflows`
 /// screen once it was opened.
 #[derive(Default)]
@@ -35,8 +47,13 @@ pub(super) struct WorkflowState {
     active: BTreeMap<String, WorkflowRun>,
     /// UC 8.1: runs and the open run of the screen.
     screen: Option<WorkflowScreen>,
+    /// The run the user asked to open and still waits for (R8.6.3).
+    pending_open: Option<PendingOpen>,
     /// Tests render durations against a fixed clock.
     fixed_now_ms: Option<i64>,
+    /// Tests count how often a view was built.
+    #[cfg(test)]
+    views_built: usize,
 }
 
 /// UC 8.1, type `WorkflowScreen`.
@@ -54,8 +71,20 @@ struct OpenRun {
     run: WorkflowRun,
     /// Rows in the order the run view shows them.
     rows: Vec<RunViewRow>,
+    /// A read is scheduled or in flight.
     refresh_in_flight: bool,
     refresh_pending: bool,
+    /// When the last read was sent (or will be, when it waits for the interval).
+    last_refresh_at: Option<Instant>,
+}
+
+/// UC 8.1, type `PendingOpen`: a run the user opened whose read has not answered yet.
+struct PendingOpen {
+    thread_id: ThreadId,
+    run_id: String,
+    requested_at: Instant,
+    /// The run list was open when the user asked; the answer then waits for the list.
+    from_list: bool,
 }
 
 impl WorkflowScreen {
@@ -68,6 +97,37 @@ impl WorkflowScreen {
             cancelling: BTreeSet::new(),
         }
     }
+
+    /// Whether `run` is older than what the screen already shows of that run.
+    fn is_stale(&self, run: &WorkflowRun) -> bool {
+        let newer = |known: &WorkflowRun| known.revision > run.revision;
+        self.runs.get(&run.run_id).is_some_and(newer)
+            || self
+                .open_run
+                .as_ref()
+                .is_some_and(|open| open.run.run_id == run.run_id && newer(&open.run))
+    }
+}
+
+/// Keeps the newer of the stored summary of a run and `run` (review 2026-10-27, item 7): an
+/// answer computed before an update must not replace the update.
+fn merge_summary(runs: &mut BTreeMap<String, WorkflowRun>, run: &mut WorkflowRun) {
+    if runs
+        .get(&run.run_id)
+        .is_some_and(|known| known.revision > run.revision)
+    {
+        return;
+    }
+    let agents = run.agents.take();
+    runs.insert(run.run_id.clone(), run.clone());
+    run.agents = agents;
+}
+
+/// Time between two reads of an open run (R8.6.6).
+fn refresh_interval(run: &WorkflowRun) -> Duration {
+    let agents = run.agents.as_ref().map_or(0, Vec::len);
+    let per_agents = REFRESH_PER_AGENT.saturating_mul(u32::try_from(agents).unwrap_or(u32::MAX));
+    per_agents.clamp(REFRESH_MIN_INTERVAL, REFRESH_MAX_INTERVAL)
 }
 
 impl WorkflowState {
@@ -102,6 +162,21 @@ impl WorkflowState {
     #[cfg(test)]
     pub(super) fn set_fixed_now_ms(&mut self, now_ms: i64) {
         self.fixed_now_ms = Some(now_ms);
+    }
+
+    /// Makes the pending open look `age` old, as if its read waited behind a cancel.
+    #[cfg(test)]
+    pub(super) fn age_pending_open(&mut self, age: Duration) {
+        if let Some(pending) = self.pending_open.as_mut()
+            && let Some(requested_at) = Instant::now().checked_sub(age)
+        {
+            pending.requested_at = requested_at;
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn views_built(&self) -> usize {
+        self.views_built
     }
 }
 
@@ -183,7 +258,25 @@ impl ChatWidget {
             .send(AppEvent::Workflows(WorkflowsEvent::OpenList));
     }
 
-    /// UC 8.1, "список run'ов": show the answer of `thread/workflow/list` (R8.6.2).
+    /// R8.6.6: the app asked for the runs of `thread_id`. The screen state exists from now
+    /// on, so an update that arrives before the answer is kept against it.
+    pub(crate) fn note_workflows_list_requested(&mut self, thread_id: ThreadId) {
+        self.workflows.screen_for(thread_id);
+    }
+
+    /// R8.6.3: the user opened `run_id`; its answer opens the run view only while the user
+    /// still waits for it (review 2026-10-27, item 9).
+    pub(crate) fn note_workflow_open_requested(&mut self, thread_id: ThreadId, run_id: &str) {
+        self.workflows.pending_open = Some(PendingOpen {
+            thread_id,
+            run_id: run_id.to_string(),
+            requested_at: Instant::now(),
+            from_list: self.bottom_pane.has_view(RUN_LIST_VIEW_ID),
+        });
+    }
+
+    /// UC 8.1, "список run'ов": show the answer of `thread/workflow/list` (R8.6.2). A run
+    /// that an update already moved past the answer keeps the update (R8.6.6).
     pub(crate) fn on_workflows_list_loaded(
         &mut self,
         thread_id: ThreadId,
@@ -196,18 +289,17 @@ impl ChatWidget {
                 return;
             }
         };
-        if runs.is_empty() {
+        let screen = self.workflows.screen_for(thread_id);
+        for mut run in runs {
+            merge_summary(&mut screen.runs, &mut run);
+        }
+        if screen.runs.is_empty() {
             self.add_info_message(
                 "No workflow runs in this thread.".to_string(),
                 Some("Codex starts them with the workflow tool.".to_string()),
             );
             return;
         }
-        let screen = self.workflows.screen_for(thread_id);
-        screen.runs = runs
-            .into_iter()
-            .map(|run| (run.run_id.clone(), run))
-            .collect();
         if !self.replace_workflow_list_view()
             && let Some(params) = self.workflow_list_params()
         {
@@ -225,26 +317,28 @@ impl ChatWidget {
         result: Result<WorkflowRun, String>,
     ) {
         match origin {
-            RunLoadOrigin::Open => match result {
-                Ok(run) => self.open_workflow_run(thread_id, run),
-                Err(err) => {
-                    self.add_error_message(format!("Failed to read workflow run {run_id}: {err}"));
-                }
-            },
+            RunLoadOrigin::Open => self.on_workflow_run_opened(thread_id, run_id, result),
             RunLoadOrigin::Refresh => {
                 let Some(screen) = self.workflows.screen_of(thread_id) else {
                     return;
                 };
-                let Some(open) = screen
-                    .open_run
-                    .as_mut()
-                    .filter(|open| open.run.run_id == run_id)
-                else {
+                let WorkflowScreen { runs, open_run, .. } = screen;
+                let Some(open) = open_run.as_mut().filter(|open| open.run.run_id == run_id) else {
                     return;
                 };
                 open.refresh_in_flight = false;
                 match result {
-                    Ok(run) => open.run = run,
+                    // A read that an update already moved past keeps the update's fields
+                    // and only fills in agent rows the view does not have yet.
+                    Ok(mut run) if run.revision < open.run.revision => {
+                        if open.run.agents.is_none() {
+                            open.run.agents = run.agents.take();
+                        }
+                    }
+                    Ok(mut run) => {
+                        merge_summary(runs, &mut run);
+                        open.run = run;
+                    }
                     Err(err) => tracing::warn!(%err, run_id, "failed to refresh a workflow run"),
                 }
                 let send_again = std::mem::take(&mut open.refresh_pending);
@@ -278,6 +372,54 @@ impl ChatWidget {
         }
     }
 
+    /// R8.6.3: the answer of a read the user asked for. It shows the run view while the user
+    /// waits: over the run list that is still open, or, opened from `/subagents`, within
+    /// `OPEN_GRACE` and without another popup. An open run view of the run is replaced.
+    fn on_workflow_run_opened(
+        &mut self,
+        thread_id: ThreadId,
+        run_id: String,
+        result: Result<WorkflowRun, String>,
+    ) {
+        let pending = self
+            .workflows
+            .pending_open
+            .take_if(|pending| pending.thread_id == thread_id && pending.run_id == run_id);
+        let shown = self.bottom_pane.has_view(RUN_VIEW_ID)
+            && self
+                .workflows
+                .screen_of(thread_id)
+                .and_then(|screen| screen.open_run.as_ref())
+                .is_some_and(|open| open.run.run_id == run_id);
+        let wanted = pending.as_ref().is_some_and(|pending| {
+            if pending.from_list {
+                self.bottom_pane.has_view(RUN_LIST_VIEW_ID)
+            } else {
+                pending.requested_at.elapsed() <= OPEN_GRACE
+                    && self.bottom_pane.no_modal_or_popup_active()
+            }
+        });
+        match result {
+            Ok(run) if shown || wanted => self.open_workflow_run(thread_id, run),
+            Ok(mut run) => {
+                if let Some(screen) = self.workflows.screen_of(thread_id) {
+                    merge_summary(&mut screen.runs, &mut run);
+                }
+                if pending.is_some_and(|pending| !pending.from_list) {
+                    self.add_info_message(
+                        format!("Workflow run {run_id} is ready."),
+                        Some("Open it with /workflows.".to_string()),
+                    );
+                }
+            }
+            Err(err) => {
+                if shown || pending.is_some() {
+                    self.add_error_message(format!("Failed to read workflow run {run_id}: {err}"));
+                }
+            }
+        }
+    }
+
     /// R8.6.5: mark a run `cancelling…` while its cancel is in flight.
     pub(crate) fn note_workflow_cancel_started(&mut self, thread_id: ThreadId, run_id: &str) {
         let screen = self.workflows.screen_for(thread_id);
@@ -304,27 +446,39 @@ impl ChatWidget {
             .collect()
     }
 
-    fn open_workflow_run(&mut self, thread_id: ThreadId, run: WorkflowRun) {
+    fn open_workflow_run(&mut self, thread_id: ThreadId, mut run: WorkflowRun) {
         let screen = self.workflows.screen_for(thread_id);
-        let mut summary = run.clone();
-        summary.agents = None;
-        screen.runs.insert(run.run_id.clone(), summary);
-        let rows = run_view_rows(&run);
-        let same_run = screen
+        merge_summary(&mut screen.runs, &mut run);
+        let previous = screen
             .open_run
+            .take()
+            .filter(|open| open.run.run_id == run.run_id);
+        let same_run = previous.is_some();
+        let (refresh_in_flight, refresh_pending, last_refresh_at) = previous
             .as_ref()
-            .is_some_and(|open| open.run.run_id == run.run_id);
-        let (refresh_in_flight, refresh_pending) = screen
-            .open_run
-            .as_ref()
-            .filter(|_| same_run)
-            .map(|open| (open.refresh_in_flight, open.refresh_pending))
+            .map(|open| {
+                (
+                    open.refresh_in_flight,
+                    open.refresh_pending,
+                    open.last_refresh_at,
+                )
+            })
             .unwrap_or_default();
+        // A newer update already in the view keeps its fields; the answer brings the agents.
+        let run = match previous {
+            Some(mut open) if open.run.revision > run.revision => {
+                open.run.agents = run.agents.take();
+                open.run
+            }
+            _ => run,
+        };
+        let rows = run_view_rows(&run);
         screen.open_run = Some(OpenRun {
             run,
             rows,
             refresh_in_flight,
             refresh_pending,
+            last_refresh_at,
         });
         let Some(params) = self.workflow_run_params(/*keep_selection*/ same_run) else {
             return;
@@ -337,16 +491,18 @@ impl ChatWidget {
     }
 
     /// R8.6.6: fold a run snapshot into the screen; an open run view asks for fresh agent rows.
-    fn apply_workflow_screen_update(&mut self, thread_id: ThreadId, run: WorkflowRun) {
+    /// A snapshot older than the one the screen holds changes nothing.
+    fn apply_workflow_screen_update(&mut self, thread_id: ThreadId, mut run: WorkflowRun) {
         let Some(screen) = self.workflows.screen_of(thread_id) else {
             return;
         };
+        if screen.is_stale(&run) {
+            return;
+        }
         if run.status.is_terminal() {
             screen.cancelling.remove(&run.run_id);
         }
-        let mut summary = run.clone();
-        summary.agents = None;
-        screen.runs.insert(run.run_id.clone(), summary);
+        merge_summary(&mut screen.runs, &mut run);
         let refresh = match screen.open_run.as_mut() {
             Some(open) if open.run.run_id == run.run_id => {
                 let agents = open.run.agents.take();
@@ -372,7 +528,8 @@ impl ChatWidget {
         }
     }
 
-    /// At most one read in flight per open run; later updates wait for its answer.
+    /// At most one read scheduled or in flight per open run, and reads at least
+    /// `refresh_interval` apart; later updates wait for the answer.
     fn request_workflow_run_refresh(&mut self, thread_id: ThreadId, run_id: &str) {
         let Some(open) = self
             .workflows
@@ -386,16 +543,27 @@ impl ChatWidget {
             open.refresh_pending = true;
             return;
         }
+        let now = Instant::now();
+        let delay = open
+            .last_refresh_at
+            .map(|last| (last + refresh_interval(&open.run)).saturating_duration_since(now))
+            .unwrap_or_default();
         open.refresh_in_flight = true;
+        open.last_refresh_at = Some(now + delay);
         self.app_event_tx
             .send(AppEvent::Workflows(WorkflowsEvent::Refresh {
                 thread_id,
                 run_id: run_id.to_string(),
+                delay,
             }));
     }
 
-    /// Rebuild the list view if it is open; never reopens a closed one.
+    /// Rebuild the list view if it is open; never reopens a closed one and builds nothing
+    /// while it is closed.
     fn replace_workflow_list_view(&mut self) -> bool {
+        if !self.bottom_pane.has_view(RUN_LIST_VIEW_ID) {
+            return false;
+        }
         let Some(params) = self.workflow_list_params() else {
             return false;
         };
@@ -404,21 +572,25 @@ impl ChatWidget {
 
     /// Rebuild the run view if it is open; a closed one ends the refreshes of its run.
     fn replace_workflow_run_view(&mut self) -> bool {
+        if !self.bottom_pane.has_view(RUN_VIEW_ID) {
+            if let Some(screen) = self.workflows.screen.as_mut() {
+                screen.open_run = None;
+            }
+            return false;
+        }
         let Some(params) = self.workflow_run_params(/*keep_selection*/ true) else {
             return false;
         };
-        if self.replace_selection_view_if_present(RUN_VIEW_ID, params) {
-            return true;
-        }
-        if let Some(screen) = self.workflows.screen.as_mut() {
-            screen.open_run = None;
-        }
-        false
+        self.replace_selection_view_if_present(RUN_VIEW_ID, params)
     }
 
     fn workflow_list_params(&mut self) -> Option<crate::bottom_pane::SelectionViewParams> {
         let now_ms = self.workflows.now_ms();
         let previous = self.selected_index_for_present_view(RUN_LIST_VIEW_ID);
+        #[cfg(test)]
+        {
+            self.workflows.views_built += 1;
+        }
         let screen = self.workflows.screen.as_mut()?;
         let selected_run_id = previous.and_then(|index| screen.list_order.get(index).cloned());
         let runs = sorted_runs(screen.runs.values());
@@ -445,6 +617,10 @@ impl ChatWidget {
         let previous = keep_selection
             .then(|| self.selected_index_for_present_view(RUN_VIEW_ID))
             .flatten();
+        #[cfg(test)]
+        {
+            self.workflows.views_built += 1;
+        }
         let screen = self.workflows.screen.as_mut()?;
         let thread_id = screen.thread_id;
         let cancelling = screen

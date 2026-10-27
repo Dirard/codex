@@ -651,6 +651,13 @@ impl BottomPane {
         self.composer.set_workflows_command_enabled(enabled);
     }
 
+    /// Fork: whether a view with `view_id` is on the stack (the `/workflows` screen).
+    pub(crate) fn has_view(&self, view_id: &'static str) -> bool {
+        self.view_stack
+            .iter()
+            .any(|view| view.view_id() == Some(view_id))
+    }
+
     pub fn set_ide_context_active(&mut self, active: bool) {
         self.composer.set_ide_context_active(active);
         self.request_redraw();

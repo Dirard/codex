@@ -11,6 +11,7 @@ use codex_app_server_protocol::WorkflowItem;
 use codex_app_server_protocol::WorkflowRun;
 use codex_app_server_protocol::WorkflowRunStatus;
 use pretty_assertions::assert_eq;
+use std::time::Duration;
 
 fn workflow_run(status: WorkflowRunStatus) -> WorkflowRun {
     WorkflowRun {
@@ -137,6 +138,8 @@ fn open_run_view(chat: &mut ChatWidget, thread_id: ThreadId) {
             test_fixtures::failed_run(),
         ]),
     );
+    // The app notes the open before it reads the run (R8.6.3).
+    chat.note_workflow_open_requested(thread_id, "wf-1a2b3c4d");
     chat.on_workflow_run_loaded(
         thread_id,
         "wf-1a2b3c4d".to_string(),
@@ -243,6 +246,7 @@ async fn workflow_run_view_details_and_navigation() {
         AppEvent::Workflows(WorkflowsEvent::OpenRun { run_id, .. })
             if run_id == "wf-1a2b3c4d"
     )));
+    chat.note_workflow_open_requested(thread_id, "wf-1a2b3c4d");
     chat.on_workflow_run_loaded(
         thread_id,
         "wf-1a2b3c4d".to_string(),
@@ -374,4 +378,194 @@ async fn workflow_cancel_marks_the_run_until_it_settles() {
         history.contains("Failed to cancel workflow run wf-12345678: run not found"),
         "{history}"
     );
+}
+
+fn finished_run() -> WorkflowRun {
+    let mut finished = test_fixtures::running_run();
+    finished.status = WorkflowRunStatus::Completed;
+    finished.finished_at_ms = Some(1_090_000);
+    finished.revision += 10;
+    finished
+}
+
+fn history_text(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> String {
+    drain_insert_history(rx)
+        .iter()
+        .flat_map(|lines| lines.iter())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Review 2026-10-27, item 7: a list answer computed before a terminal update does not replace
+/// the update, also when the update arrived between the request and the answer.
+#[tokio::test]
+async fn stale_list_answer_keeps_a_newer_update() {
+    let (mut chat, mut rx, thread_id) = workflow_screen_chat().await;
+    chat.on_workflows_list_loaded(thread_id, Ok(vec![test_fixtures::running_run()]));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    app_events(&mut rx);
+    update(&mut chat, thread_id, finished_run());
+    // The answer of a second `/workflows` was computed while the run still ran.
+    chat.on_workflows_list_loaded(thread_id, Ok(vec![test_fixtures::running_run()]));
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(popup.contains("wf-1a2b3c4d · completed"), "{popup}");
+    assert!(!popup.contains("x cancel run"), "{popup}");
+    assert!(
+        chat.known_workflow_runs()
+            .iter()
+            .all(|(_, _, status)| *status == WorkflowRunStatus::Completed),
+        "/subagents labels follow the newer update"
+    );
+
+    // The first `/workflows` of a widget: the update arrives after the request, before the
+    // answer.
+    let (mut chat, _rx, thread_id) = workflow_screen_chat().await;
+    chat.note_workflows_list_requested(thread_id);
+    update(&mut chat, thread_id, finished_run());
+    chat.on_workflows_list_loaded(thread_id, Ok(vec![test_fixtures::running_run()]));
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(popup.contains("wf-1a2b3c4d · completed"), "{popup}");
+}
+
+/// Review 2026-10-27, item 7: a read answered before a terminal update does not bring back
+/// `running` and `Cancel run`.
+#[tokio::test]
+async fn stale_refresh_keeps_a_newer_update() {
+    let (mut chat, mut rx, thread_id) = workflow_screen_chat().await;
+    open_run_view(&mut chat, thread_id);
+    app_events(&mut rx);
+    let later = test_fixtures::running_run();
+    update(&mut chat, thread_id, later.clone()); // read #1 in flight
+    update(&mut chat, thread_id, finished_run()); // pending
+    chat.on_workflow_run_loaded(
+        thread_id,
+        "wf-1a2b3c4d".to_string(),
+        RunLoadOrigin::Refresh,
+        Ok(later),
+    );
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(!popup.contains("Cancel run"), "{popup}");
+    assert!(popup.contains("wf-1a2b3c4d · completed"), "{popup}");
+    assert!(
+        popup.contains("#4 verify a.py:12"),
+        "agent rows stay: {popup}"
+    );
+    assert_eq!(
+        refreshes(&app_events(&mut rx)),
+        2,
+        "read #1, then the pending update reads again"
+    );
+
+    // An older update after the newer one changes nothing either.
+    update(&mut chat, thread_id, test_fixtures::running_run());
+    assert!(!render_bottom_popup(&chat, /*width*/ 100).contains("Cancel run"));
+}
+
+/// Review 2026-10-27, item 9: an answer that arrives after the user closed the list does not
+/// open the run view; from `/subagents`, a late answer only says that the run is ready.
+#[tokio::test]
+async fn late_open_answer_does_not_reopen_a_closed_screen() {
+    let (mut chat, mut rx, thread_id) = workflow_screen_chat().await;
+    chat.on_workflows_list_loaded(thread_id, Ok(vec![test_fixtures::running_run()]));
+    chat.note_workflow_open_requested(thread_id, "wf-1a2b3c4d");
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.on_workflow_run_loaded(
+        thread_id,
+        "wf-1a2b3c4d".to_string(),
+        RunLoadOrigin::Open,
+        Ok(test_fixtures::running_run()),
+    );
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        !popup.contains("Phases"),
+        "closed list, no run view: {popup}"
+    );
+    assert!(!history_text(&mut rx).contains("is ready"));
+
+    // From `/subagents` (no list): a quick answer opens the run view ...
+    chat.note_workflow_open_requested(thread_id, "wf-1a2b3c4d");
+    chat.on_workflow_run_loaded(
+        thread_id,
+        "wf-1a2b3c4d".to_string(),
+        RunLoadOrigin::Open,
+        Ok(test_fixtures::running_run()),
+    );
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(popup.contains("Phases"), "{popup}");
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    // ... a late one leaves the composer alone and says the run is ready.
+    chat.note_workflow_open_requested(thread_id, "wf-1a2b3c4d");
+    chat.workflows.age_pending_open(Duration::from_secs(30));
+    chat.on_workflow_run_loaded(
+        thread_id,
+        "wf-1a2b3c4d".to_string(),
+        RunLoadOrigin::Open,
+        Ok(test_fixtures::running_run()),
+    );
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(!popup.contains("Phases"), "{popup}");
+    assert!(
+        history_text(&mut rx).contains("Workflow run wf-1a2b3c4d is ready."),
+        "late answer"
+    );
+
+    // An answer nobody waits for (a newer open replaced it) is dropped.
+    chat.on_workflow_run_loaded(
+        thread_id,
+        "wf-1a2b3c4d".to_string(),
+        RunLoadOrigin::Open,
+        Ok(test_fixtures::running_run()),
+    );
+    assert!(!render_bottom_popup(&chat, /*width*/ 100).contains("Phases"));
+    assert!(history_text(&mut rx).is_empty());
+}
+
+/// Review 2026-10-27, item 10: updates build no view while the screen is closed, and reads
+/// of an open run are spaced by the refresh interval.
+#[tokio::test]
+async fn closed_screen_builds_nothing_and_reads_are_spaced() {
+    let (mut chat, mut rx, thread_id) = workflow_screen_chat().await;
+    open_run_view(&mut chat, thread_id);
+    let first = app_events(&mut rx);
+    assert_eq!(refreshes(&first), 0);
+
+    update(&mut chat, thread_id, test_fixtures::running_run());
+    let delays = |events: &[AppEvent]| {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                AppEvent::Workflows(WorkflowsEvent::Refresh { delay, .. }) => Some(*delay),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(delays(&app_events(&mut rx)), vec![Duration::ZERO]);
+    update(&mut chat, thread_id, test_fixtures::running_run());
+    chat.on_workflow_run_loaded(
+        thread_id,
+        "wf-1a2b3c4d".to_string(),
+        RunLoadOrigin::Refresh,
+        Ok(test_fixtures::running_run()),
+    );
+    let second = delays(&app_events(&mut rx));
+    assert_eq!(second.len(), 1, "{second:?}");
+    assert!(
+        second[0] > Duration::ZERO && second[0] <= Duration::from_millis(500),
+        "the next read waits for the interval: {second:?}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let built = chat.workflows.views_built();
+    for _ in 0..3 {
+        update(&mut chat, thread_id, test_fixtures::running_run());
+    }
+    assert_eq!(
+        chat.workflows.views_built(),
+        built,
+        "a closed screen builds no view"
+    );
+    assert_eq!(refreshes(&app_events(&mut rx)), 0);
 }

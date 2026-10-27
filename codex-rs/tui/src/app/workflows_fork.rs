@@ -6,6 +6,7 @@
 //! views. The `/subagents` hooks group workflow agents under their run (R8.6.7).
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
@@ -62,13 +63,34 @@ impl App {
                     );
                     return;
                 };
+                // Updates that arrive before the answer must not lose to it (R8.6.6).
+                self.chat_widget.note_workflows_list_requested(thread_id);
                 self.spawn_workflow_list(app_server, thread_id);
             }
             WorkflowsEvent::OpenRun { thread_id, run_id } => {
-                self.spawn_workflow_read(app_server, thread_id, run_id, RunLoadOrigin::Open);
+                // A late answer opens the run view only while the user still waits for it.
+                self.chat_widget
+                    .note_workflow_open_requested(thread_id, &run_id);
+                self.spawn_workflow_read(
+                    app_server,
+                    thread_id,
+                    run_id,
+                    RunLoadOrigin::Open,
+                    Duration::ZERO,
+                );
             }
-            WorkflowsEvent::Refresh { thread_id, run_id } => {
-                self.spawn_workflow_read(app_server, thread_id, run_id, RunLoadOrigin::Refresh);
+            WorkflowsEvent::Refresh {
+                thread_id,
+                run_id,
+                delay,
+            } => {
+                self.spawn_workflow_read(
+                    app_server,
+                    thread_id,
+                    run_id,
+                    RunLoadOrigin::Refresh,
+                    delay,
+                );
             }
             WorkflowsEvent::Cancel { thread_id, run_id } => {
                 self.chat_widget
@@ -116,10 +138,14 @@ impl App {
         thread_id: ThreadId,
         run_id: String,
         origin: RunLoadOrigin,
+        delay: Duration,
     ) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
             let result = request_handle
                 .request_typed::<ThreadWorkflowReadResponse>(ClientRequest::ThreadWorkflowRead {
                     request_id: RequestId::String(Uuid::new_v4().to_string()),
