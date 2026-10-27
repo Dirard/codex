@@ -1759,6 +1759,13 @@ async fn a_restarted_unchanged_child_is_restored_from_the_base() -> Result<()> {
     assert!(check.contains("parent edit"), "{check}");
     assert!(check.contains(UNTRACKED_FILE.trim()), "{check}");
     assert!(check.contains("detached"), "{check}");
+    // P3-5: the child is told that it starts from the base, not from work of its own.
+    let note = restore_note(&reloaded[0].single_request());
+    assert!(note.contains("from the base "), "{note}");
+    assert!(
+        note.contains("no changes of the agent were recorded"),
+        "{note}"
+    );
     Ok(())
 }
 
@@ -3329,6 +3336,154 @@ async fn a_loaded_child_gets_its_removed_worktree_back_before_its_turn() -> Resu
     assert!(check.contains(&root.display().to_string()), "{check}");
     assert!(check.contains("kept"), "{check}");
     assert!(check.contains(&format!("refs/heads/{branch}")), "{check}");
+    // P3-5: and the turn was told what the restore brought back and what it lost.
+    let note = restore_note(&resumed[0].single_request());
+    assert!(
+        note.contains(&format!(
+            "Codex recreated your worktree {} from branch {branch}",
+            root.display()
+        )),
+        "{note}"
+    );
+    assert!(
+        note.contains("edits made after your last turn ended"),
+        "{note}"
+    );
+    Ok(())
+}
+
+/// P3-5: the developer note of a turn about its worktree, empty without one.
+fn restore_note(request: &ResponsesRequest) -> String {
+    request
+        .message_input_texts("developer")
+        .into_iter()
+        .filter(|text| text.contains("worktree") && text.contains("Codex recreated"))
+        .chain(
+            request
+                .message_input_texts("developer")
+                .into_iter()
+                .filter(|text| text.contains("cannot be used")),
+        )
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// P3-5: a restore that fails before a turn reaches the turn; it used to reach only the log,
+/// and every command of the turn failed in the missing directory.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_restore_before_a_turn_reaches_the_turn() -> Result<()> {
+    const TASK: &str = "work before the path is taken";
+    const FOLLOWUP: &str = "continue after the path was taken";
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    let (child, output) = spawn_isolated_worker(
+        &server,
+        &test,
+        &mut created,
+        TASK,
+        &[("edit", "printf kept > kept.txt".to_string())],
+        PermissionProfile::Disabled,
+    )
+    .await?;
+    let root = PathBuf::from(worktree_field(&output, "path"));
+    remove_like_desktop(&test.config.cwd, &root);
+    // Something else takes the path, so the restore cannot recreate the worktree there.
+    std::fs::write(&root, "not a worktree\n")?;
+
+    mount_root_call(
+        &server,
+        "follow up after the path was taken",
+        "followup-taken",
+        "followup_task",
+        followup_arguments(FOLLOWUP),
+    )
+    .await;
+    let resumed = mount_child(&server, FOLLOWUP, &[("where", "pwd".to_string())]).await;
+    test.submit_turn("follow up after the path was taken")
+        .await?;
+    wait_for_event(&child.thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let note = restore_note(&resumed[0].single_request());
+    assert!(
+        note.contains(&format!(
+            "Your working directory is in the agent worktree {}, and it cannot be used",
+            root.display()
+        )),
+        "{note}"
+    );
+    assert!(note.contains("is occupied"), "{note}");
+    Ok(())
+}
+
+/// Q22, P3-5: a restarted child whose branch the user deleted comes back from the last
+/// commit the host recorded for it, not silently from the base, and is told so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restarted_child_without_its_branch_comes_back_from_its_last_checkpoint() -> Result<()> {
+    const TASK: &str = "work before the branch is deleted";
+    const FOLLOWUP: &str = "continue without the branch";
+    let server = start_mock_server().await;
+    let mut builder = isolation_builder(None, /*git_repository*/ true, |config| {
+        config.features.enable(Feature::Sqlite).expect("sqlite");
+    });
+    let initial = builder.build_with_auto_env(&server).await?;
+    let mut created = initial.thread_manager.subscribe_thread_created();
+    let (child, output) = spawn_isolated_worker(
+        &server,
+        &initial,
+        &mut created,
+        TASK,
+        &[("edit", "printf recorded > recorded.txt".to_string())],
+        PermissionProfile::Disabled,
+    )
+    .await?;
+    let root = PathBuf::from(worktree_field(&output, "path"));
+    let branch = worktree_field(&output, "branch");
+    let tip = git(&initial.config.cwd, &["rev-parse", &branch]);
+    child.thread.shutdown_and_wait().await?;
+    initial.codex.flush_rollout().await?;
+    // The user removes the worktree and deletes its branch.
+    remove_like_desktop(&initial.config.cwd, &root);
+    git(&initial.config.cwd, &["branch", "-D", &branch]);
+
+    let resumed = restart_in_repository(builder, &server, &initial).await?;
+    mount_root_call(
+        &server,
+        "follow up without the branch",
+        "followup-no-branch",
+        "followup_task",
+        followup_arguments(FOLLOWUP),
+    )
+    .await;
+    let reloaded = mount_child(
+        &server,
+        FOLLOWUP,
+        &[(
+            "where",
+            "pwd; cat recorded.txt; echo; git rev-parse HEAD".to_string(),
+        )],
+    )
+    .await;
+    let mut created = resumed.thread_manager.subscribe_thread_created();
+    resumed.submit_turn("follow up without the branch").await?;
+    let child = next_child(&mut created, &resumed).await?;
+    wait_turn_complete(&child).await;
+
+    let check = output_of(&reloaded, "where");
+    assert!(check.contains(&root.display().to_string()), "{check}");
+    assert!(check.contains("recorded"), "{check}");
+    assert!(check.contains(&tip), "{check}");
+    let note = restore_note(&reloaded[0].single_request());
+    assert!(
+        note.contains(&format!(
+            "from the last recorded commit {} (branch {branch} is gone)",
+            &tip[..12]
+        )),
+        "{note}"
+    );
     Ok(())
 }
 

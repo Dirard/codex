@@ -2126,7 +2126,7 @@ fn an_applied_branch_is_deleted_only_while_it_is_unchanged_and_free() {
         repository,
         &checkout.root,
         &metadata,
-        &RestoreFrom::Applied { tip: tip.clone() },
+        &RestoreFrom::Commit { tip: tip.clone() },
     )
     .expect("restore from the applied tip");
     assert_eq!(git(&checkout.root, &["rev-parse", "HEAD"]), tip);
@@ -2135,19 +2135,24 @@ fn an_applied_branch_is_deleted_only_while_it_is_unchanged_and_free() {
         fs::read_to_string(checkout.root.join("work.txt")).expect("agent file"),
         "work\n"
     );
-    // Without a usable applied commit the base restores it.
+    // P3-5: a commit that is gone fails the restore instead of starting from the base.
     fs::remove_dir_all(&checkout.root).expect("remove the checkout");
-    restore_agent_worktree(
+    let missing = "0".repeat(40);
+    assert!(!codex_worktree::usable_commit(repository, &base, &missing).expect("check"));
+    assert!(codex_worktree::usable_commit(repository, &base, &tip).expect("check"));
+    let error = restore_agent_worktree(
         &fixture.manager(),
         repository,
         &checkout.root,
         &metadata,
-        &RestoreFrom::Applied {
-            tip: "0".repeat(40),
-        },
+        &RestoreFrom::Commit { tip: missing },
     )
-    .expect("restore from the base");
-    assert_eq!(git(&checkout.root, &["rev-parse", "HEAD"]), base);
+    .expect_err("an unusable commit is not replaced by the base");
+    assert!(
+        format!("{error:#}").contains("no longer in the repository"),
+        "{error:#}"
+    );
+    assert!(!checkout.root.exists());
 }
 
 // ---------------------------------------------------------------------------------------------

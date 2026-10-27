@@ -25,6 +25,7 @@ fn binding(protected: bool) -> AgentWorktreeBinding {
         read_only_explorer: AtomicBool::new(false),
         submodules: Vec::new(),
         applied_tip: StdMutex::default(),
+        restored: StdMutex::default(),
         settings: WorktreeSettings::for_cli(Path::new("/home/u/.codex"), /*desktop*/ None)
             .expect("worktree settings"),
         sweep: None,
@@ -215,6 +216,7 @@ fn assert_block_lines_are_host_written(block: &str) {
                 "changes: ",
                 "files: ",
                 "checkout: ",
+                "restored: ",
                 "apply: ",
                 "fallback: ",
             ]
@@ -807,6 +809,7 @@ async fn concurrent_reloads_restore_a_worktree_once() {
         read_only_explorer: AtomicBool::new(false),
         submodules: Vec::new(),
         applied_tip: StdMutex::default(),
+        restored: StdMutex::default(),
         settings,
         sweep: None,
         state: Mutex::default(),
@@ -987,6 +990,7 @@ fn stopped_binding(home: &Path, repository: &Path) -> Arc<AgentWorktreeBinding> 
         read_only_explorer: AtomicBool::new(false),
         submodules: Vec::new(),
         applied_tip: StdMutex::default(),
+        restored: StdMutex::default(),
         settings: WorktreeSettings::for_cli(home, /*desktop*/ None).expect("settings"),
         sweep: None,
         state: Mutex::new(BindingState {
@@ -1039,4 +1043,121 @@ async fn a_close_refuses_while_another_agent_works_in_the_worktree() {
         "agent /root/probe/helper still works in its worktree (it descends from the agent or runs in its checkout); wait for it or interrupt it, then close the worktree"
     );
     assert!(binding.root.join(".git").exists());
+}
+
+/// Q22, P3-5: without its branch a worktree comes back from the agent's last recorded commit;
+/// the base only for an agent that never recorded one, and a record whose commit is gone
+/// fails instead of silently starting from the base.
+#[test]
+fn restore_starts_from_the_last_recorded_commit_before_the_base() {
+    let (_home, home_path, repository) = repository_fixture();
+    let agent_path = AgentPath::root().join("probe").expect("agent path");
+    let created = spawned_worktree(&home_path, &repository, ThreadId::new(), &agent_path);
+    std::fs::write(created.root.join("agent.txt"), "agent\n").expect("agent edit");
+    let CheckpointOutcome::Committed { commit, branch, .. } =
+        codex_worktree::checkpoint(CheckpointRequest {
+            root: created.root.as_path(),
+            metadata: &created.metadata,
+            agent_path: agent_path.as_str(),
+        })
+        .expect("checkpoint")
+    else {
+        panic!("the edit is recorded");
+    };
+    let mut record = codex_worktree::AgentWorktreeRecord::new(
+        created.root.as_path(),
+        created.source_root.as_path(),
+        &created.metadata,
+    );
+    let start = |record: &codex_worktree::AgentWorktreeRecord| {
+        ops::restore_start(&repository, &created.metadata, Some(record))
+    };
+
+    let from_branch = start(&record).expect("start");
+    assert_eq!(
+        from_branch.from,
+        codex_worktree::RestoreFrom::Branch {
+            name: branch.clone(),
+            tip: commit.clone()
+        }
+    );
+    assert!(
+        from_branch.source.starts_with("branch "),
+        "{}",
+        from_branch.source
+    );
+
+    git(
+        &repository,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            created.root.to_str().expect("UTF-8 path"),
+        ],
+    );
+    git(&repository, &["branch", "-D", &branch]);
+    assert_eq!(
+        start(&record).expect("start").from,
+        codex_worktree::RestoreFrom::Base
+    );
+    record.last_checkpoint = Some(commit.clone());
+    let from_commit = start(&record).expect("start");
+    assert_eq!(
+        from_commit.from,
+        codex_worktree::RestoreFrom::Commit { tip: commit }
+    );
+    assert!(
+        from_commit.source.starts_with("the last recorded commit"),
+        "{}",
+        from_commit.source
+    );
+    record.last_checkpoint = Some("f".repeat(40));
+    let error = start(&record)
+        .err()
+        .expect("a lost commit is not replaced by the base");
+    assert!(error.contains("no longer in the repository"), "{error}");
+}
+
+/// P3-5: a restore is told once to the agent, at its next turn, and once to its parent, in the
+/// next `<agent_worktree>` block; a failed restore reaches the turn instead of only the log.
+#[test]
+fn restore_notices_reach_the_agent_and_the_parent_once() {
+    let binding = binding(true);
+    assert_eq!(binding.take_restore_note(), None);
+    binding.note_restored("branch codex/agents/probe-01a1748c at 378e730aa1b2");
+    let note = binding.take_restore_note().expect("note for the agent");
+    assert!(
+        note.starts_with(
+            "Codex recreated your worktree /home/u/.codex/worktrees/6d88/demo from branch codex/agents/probe-01a1748c at 378e730aa1b2"
+        ),
+        "{note}"
+    );
+    assert!(
+        note.contains("edits made after your last turn ended"),
+        "{note}"
+    );
+    assert_eq!(binding.take_restore_note(), None);
+
+    let block = render_worktree_block(&binding, None, Ok(None));
+    assert!(
+        block.contains(
+            "\nrestored: from branch codex/agents/probe-01a1748c at 378e730aa1b2; edits not recorded before the removal are lost\n"
+        ),
+        "{block}"
+    );
+    assert_block_lines_are_host_written(&block);
+    assert!(!render_worktree_block(&binding, None, Ok(None)).contains("restored:"));
+
+    let failed = ops::turn_note(
+        &binding,
+        /*own*/ true,
+        Err("the path is occupied".into()),
+    )
+    .expect("the turn hears about the failure");
+    assert!(
+        failed.contains("cannot be used: the path is occupied"),
+        "{failed}"
+    );
+    assert_eq!(ops::turn_note(&binding, /*own*/ true, Ok(false)), None);
 }

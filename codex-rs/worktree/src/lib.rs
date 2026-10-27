@@ -53,6 +53,7 @@ pub use agent::submodule_command;
 pub use agent::sweep_agent_worktrees;
 pub use agent::unpopulated_gitlinks;
 pub use agent::unpopulated_submodule_files;
+pub use agent::usable_commit;
 pub use agent::worktree_list_fingerprint;
 pub use agent::write_agent_metadata;
 pub use agent::write_agent_record;

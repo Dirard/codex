@@ -377,61 +377,50 @@ pub(crate) async fn ensure_worktree_present(
         return Ok(());
     }
     let _state = binding.state.lock().await;
-    restore_if_missing(binding).await
+    restore_if_missing(binding).await.map(|_| ())
 }
 
 /// R5.3: the restore of [`ensure_worktree_present`]; the caller holds the binding lock.
-async fn restore_if_missing(binding: &Arc<AgentWorktreeBinding>) -> Result<(), String> {
+/// Returns whether the worktree was restored.
+async fn restore_if_missing(binding: &Arc<AgentWorktreeBinding>) -> Result<bool, String> {
     if binding.root.join(".git").exists() {
-        return Ok(());
+        return Ok(false);
     }
     let blocking = Arc::clone(binding);
     let restored = tokio::task::spawn_blocking(move || {
         let metadata = blocking.metadata();
         let source_root = blocking.source_root.as_path();
-        let from = match codex_worktree::agent_branch_for_thread(
-            source_root,
-            &metadata.branch,
-            &metadata.thread_id,
-        )
-        .map_err(|err| format!("{err:#}"))?
-        {
-            Some(branch) => RestoreFrom::Branch {
-                name: branch.branch,
-                tip: branch.tip,
-            },
-            None => restore_without_branch(
-                blocking
-                    .sweep
-                    .as_ref()
-                    .map(|target| target.records.as_path()),
-                &metadata.thread_id,
-            ),
-        };
+        let record = blocking.sweep.as_ref().and_then(|target| {
+            codex_worktree::read_agent_record(&target.records, &metadata.thread_id)
+                .ok()
+                .flatten()
+        });
+        let start = restore_start(source_root, &metadata, record.as_ref())?;
         let manager = WorktreeManager::new(blocking.settings.clone());
         codex_worktree::restore_agent_worktree(
             &manager,
             source_root,
             blocking.root.as_path(),
             &metadata,
-            &from,
+            &start.from,
         )
         .map_err(|err| format!("{err:#}"))?;
-        if let RestoreFrom::Branch { name, .. } = &from {
+        if let RestoreFrom::Branch { name, .. } = &start.from {
             blocking.record_branch(name);
         }
         blocking
             .live
             .replace_hold(hold_worktree(blocking.root.as_path()));
-        Ok::<_, String>(())
+        Ok::<_, String>(start.source)
     })
     .await
     .map_err(|err| format!("worktree restore task failed: {err}"))
     .and_then(|restored| restored);
     match restored {
-        Ok(()) => {
+        Ok(source) => {
             record_worktree_outcome("restored");
-            Ok(())
+            binding.note_restored(&source);
+            Ok(true)
         }
         Err(reason) => Err(missing_worktree_error(
             &binding.root,
@@ -439,6 +428,81 @@ async fn restore_if_missing(binding: &Arc<AgentWorktreeBinding>) -> Result<(), S
             &reason,
         )),
     }
+}
+
+/// Where a removed worktree comes back from, and how the notices name it (P3-5).
+pub(super) struct RestoreStart {
+    pub(super) from: RestoreFrom,
+    pub(super) source: String,
+}
+
+/// R5.3, R12.7, Q22, P3-5: the start of a restored worktree: the agent's own branch; without
+/// it, the last checkpoint or the applied tip the host record names while the commit is
+/// still usable; the base only when the record names no commit of the agent. A record whose
+/// commits are all gone fails the restore: the base would silently drop the agent's work.
+pub(super) fn restore_start(
+    source_root: &Path,
+    metadata: &AgentWorktreeMetadata,
+    record: Option<&codex_worktree::AgentWorktreeRecord>,
+) -> Result<RestoreStart, String> {
+    let error = |err: anyhow::Error| format!("{err:#}");
+    if let Some(branch) =
+        codex_worktree::agent_branch_for_thread(source_root, &metadata.branch, &metadata.thread_id)
+            .map_err(error)?
+    {
+        return Ok(RestoreStart {
+            source: format!("branch {} at {}", branch.branch, short_sha(&branch.tip)),
+            from: RestoreFrom::Branch {
+                name: branch.branch,
+                tip: branch.tip,
+            },
+        });
+    }
+    let recorded = record
+        .map(|record| {
+            [
+                (
+                    record.last_checkpoint.as_deref(),
+                    "the last recorded commit",
+                ),
+                (
+                    record.applied_tip.as_deref(),
+                    "the commit the parent applied",
+                ),
+            ]
+        })
+        .into_iter()
+        .flatten()
+        .filter_map(|(tip, kind)| tip.map(|tip| (tip, kind)))
+        .collect::<Vec<_>>();
+    for (tip, kind) in &recorded {
+        if codex_worktree::usable_commit(source_root, &metadata.base_sha, tip).map_err(error)? {
+            return Ok(RestoreStart {
+                source: format!(
+                    "{kind} {} (branch {} is gone)",
+                    short_sha(tip),
+                    metadata.branch
+                ),
+                from: RestoreFrom::Commit {
+                    tip: (*tip).to_string(),
+                },
+            });
+        }
+    }
+    if let Some((tip, _)) = recorded.first() {
+        return Err(format!(
+            "no agent branch holds its checkpoints, and its last recorded commit {} is no longer in the repository",
+            short_sha(tip)
+        ));
+    }
+    Ok(RestoreStart {
+        source: format!(
+            "the base {} ({}); no changes of the agent were recorded",
+            short_sha(&metadata.base_sha),
+            metadata.base_kind.description()
+        ),
+        from: RestoreFrom::Base,
+    })
 }
 
 /// R5.6: after a restart the binding of a child whose worktree was removed comes back from
@@ -472,14 +536,17 @@ pub(crate) async fn restore_missing_binding(
     .await
     .map_err(|err| format!("worktree restore task failed: {err}"))
     .and_then(|restored| restored);
-    let DiscoveredBinding {
-        root,
-        cwd,
-        source_root,
-        metadata,
-        hold,
-        submodules,
-    } = restored.map_err(|reason| missing_worktree_error(&error_root, &branch, &reason))?;
+    let (
+        DiscoveredBinding {
+            root,
+            cwd,
+            source_root,
+            metadata,
+            hold,
+            submodules,
+        },
+        source,
+    ) = restored.map_err(|reason| missing_worktree_error(&error_root, &branch, &reason))?;
     record_worktree_outcome("restored");
     let sweep = Some(SweepTarget {
         settings: settings.clone(),
@@ -487,7 +554,7 @@ pub(crate) async fn restore_missing_binding(
         cleanup,
         records,
     });
-    Ok(Arc::new(AgentWorktreeBinding {
+    let binding = Arc::new(AgentWorktreeBinding {
         thread_id,
         agent_path,
         environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
@@ -500,13 +567,16 @@ pub(crate) async fn restore_missing_binding(
         read_only_explorer: AtomicBool::new(false),
         submodules,
         applied_tip: StdMutex::default(),
+        restored: StdMutex::default(),
         settings,
         sweep,
         state: Mutex::new(BindingState {
             stopped: true,
             finalized: false,
         }),
-    }))
+    });
+    binding.note_restored(&source);
+    Ok(binding)
 }
 
 /// A child's stored cwd lies in a managed worktree that no longer exists.
@@ -522,7 +592,7 @@ fn restore_missing_blocking(
     thread_id: ThreadId,
     parent_thread_id: Option<ThreadId>,
     missing: &MissingWorktree,
-) -> Result<DiscoveredBinding, String> {
+) -> Result<(DiscoveredBinding, String), String> {
     let record = codex_worktree::read_agent_record(records, &thread_id.to_string())
         .map_err(|err| format!("{err:#}"))?
         .ok_or_else(|| "Codex has no record of the checkout it was created from".to_string())?;
@@ -536,51 +606,44 @@ fn restore_missing_blocking(
     let base_kind = record
         .base_kind()
         .ok_or_else(|| "its record has an unknown base kind".to_string())?;
-    // Q22: without a branch of its own the child changed nothing, so its recorded base
-    // restores it exactly as without a restart (R5.3); a branch the parent applied and
-    // Codex deleted comes back from its recorded tip (R12.7).
-    let from = match codex_worktree::agent_branch_for_thread(
-        &source_root,
-        &record.branch,
-        &thread_id.to_string(),
-    )
-    .map_err(|err| format!("{err:#}"))?
-    {
-        Some(recovered) => RestoreFrom::Branch {
-            name: recovered.branch,
-            tip: recovered.tip,
-        },
-        None => match record.applied_tip {
-            Some(tip) => RestoreFrom::Applied { tip },
-            None => RestoreFrom::Base,
-        },
-    };
-    let metadata = AgentWorktreeMetadata {
+    let mut metadata = AgentWorktreeMetadata {
         thread_id: thread_id.to_string(),
-        base_sha: record.base_sha,
+        base_sha: record.base_sha.clone(),
         base_kind,
-        branch: match &from {
-            RestoreFrom::Branch { name, .. } => name.clone(),
-            RestoreFrom::Applied { .. } | RestoreFrom::Base => record.branch,
-        },
+        branch: record.branch.clone(),
         source_root: source_root.to_str().map(str::to_owned),
     };
+    // Q22, P3-5: the branch, else the agent's last recorded commit, else the base of an agent
+    // that never recorded a change; the notices say which one.
+    let start = restore_start(&source_root, &metadata, Some(&record))?;
+    if let RestoreFrom::Branch { name, .. } = &start.from {
+        metadata.branch.clone_from(name);
+    }
     let manager = WorktreeManager::new(settings);
-    codex_worktree::restore_agent_worktree(&manager, &source_root, &missing.root, &metadata, &from)
-        .map_err(|err| format!("{err:#}"))?;
+    codex_worktree::restore_agent_worktree(
+        &manager,
+        &source_root,
+        &missing.root,
+        &metadata,
+        &start.from,
+    )
+    .map_err(|err| format!("{err:#}"))?;
     let cwd = if missing.cwd.is_dir() {
         missing.cwd.clone()
     } else {
         missing.root.clone()
     };
-    Ok(DiscoveredBinding {
-        root: absolute(&missing.root)?,
-        cwd: absolute(&cwd)?,
-        source_root: absolute(&source_root)?,
-        metadata,
-        hold: hold_worktree(&missing.root),
-        submodules: unpopulated_submodules(&missing.root),
-    })
+    Ok((
+        DiscoveredBinding {
+            root: absolute(&missing.root)?,
+            cwd: absolute(&cwd)?,
+            source_root: absolute(&source_root)?,
+            metadata,
+            hold: hold_worktree(&missing.root),
+            submodules: unpopulated_submodules(&missing.root),
+        },
+        start.source,
+    ))
 }
 
 /// The recorded parent checkout, accepted only when it is still the top of a Git checkout
@@ -743,12 +806,16 @@ pub(crate) async fn checkpoint_for_close(
     }
     let blocking = Arc::clone(binding);
     let checkpoint = tokio::task::spawn_blocking(move || {
-        codex_worktree::checkpoint(CheckpointRequest {
+        let checkpoint = codex_worktree::checkpoint(CheckpointRequest {
             root: blocking.root.as_path(),
             metadata: &blocking.metadata(),
             agent_path: blocking.agent_path.as_str(),
         })
-        .map_err(|err| format!("{err:#}"))
+        .map_err(|err| format!("{err:#}"));
+        if let Ok(CheckpointOutcome::Committed { commit, .. }) = &checkpoint {
+            record_checkpoint(&blocking, commit);
+        }
+        checkpoint
     })
     .await
     .map_err(|err| format!("checkpoint task failed: {err}"))??;
@@ -847,14 +914,31 @@ where
     Ok(closed)
 }
 
-/// R12.7: where a worktree without a branch of its own is restored from: the tip of a branch
-/// the parent applied, when the host record names one, otherwise the base.
-fn restore_without_branch(records: Option<&Path>, thread_id: &str) -> RestoreFrom {
-    records
-        .and_then(|records| codex_worktree::read_agent_record(records, thread_id).ok())
-        .flatten()
-        .and_then(|record| record.applied_tip)
-        .map_or(RestoreFrom::Base, |tip| RestoreFrom::Applied { tip })
+/// Q22, P3-5: records `commit` as the agent's last checkpoint in its host record (blocking),
+/// so a restore without the branch starts from it rather than from the base.
+pub(super) fn record_checkpoint(binding: &AgentWorktreeBinding, commit: &str) {
+    let Some(target) = binding.sweep.as_ref() else {
+        return;
+    };
+    let metadata = binding.metadata();
+    let recorded = codex_worktree::read_agent_record(&target.records, &metadata.thread_id)
+        .and_then(|record| {
+            let mut record = record.unwrap_or_else(|| {
+                codex_worktree::AgentWorktreeRecord::new(
+                    binding.root.as_path(),
+                    binding.source_root.as_path(),
+                    &metadata,
+                )
+            });
+            record.last_checkpoint = Some(commit.to_string());
+            codex_worktree::write_agent_record(&target.records, &record)
+        });
+    if let Err(err) = recorded {
+        warn!(
+            "cannot record the checkpoint of agent {}: {err:#}",
+            binding.agent_path.as_str()
+        );
+    }
 }
 
 /// R12.7: the tip of the agent's own branch when it is the one `apply_agent_worktree` applied
@@ -1004,18 +1088,50 @@ impl crate::session::session::Session {
                 None => return,
             },
         };
-        if let Err(err) = begin_turn(&binding, own).await {
+        let note = turn_note(&binding, own, begin_turn(&binding, own).await);
+        if let Some(note) = note {
+            // P3-5: the turn learns what happened to its working directory before it runs.
+            let item = crate::context::ContextualUserFragment::into(
+                crate::context::DeveloperInstructions::new(note),
+            );
+            self.record_conversation_items(turn_context, turn_context.model_info(), &[item])
+                .await;
+        }
+    }
+}
+
+/// P3-5: what a turn is told about the worktree it runs in: a restore of the agent's own
+/// worktree since its last turn (by this hook or by a reload), the restore of the worktree a
+/// helper works in, or a restore that failed (R5.8), which used to reach only the log.
+pub(super) fn turn_note(
+    binding: &AgentWorktreeBinding,
+    own: bool,
+    begun: Result<bool, String>,
+) -> Option<String> {
+    match begun {
+        Ok(_) if own => binding.take_restore_note(),
+        Ok(true) => Some(format!(
+            "Codex recreated the worktree {} of agent {}, which you work in, because it had been removed. Edits made in it after that agent's last turn ended, and ignored files, are gone. Check the files you rely on before you continue.",
+            binding.root.display(),
+            binding.agent_path.as_str()
+        )),
+        Ok(false) => None,
+        Err(err) => {
             warn!(
                 "cannot restore the worktree of agent {} before a turn: {err}",
                 binding.agent_path.as_str()
             );
+            Some(format!(
+                "Your working directory is in the agent worktree {}, and it cannot be used: {err}. Commands that use it fail. Do not recreate it yourself; stop and report this in your answer.",
+                binding.root.display()
+            ))
         }
     }
 }
 
 /// R5.8, P3-9: under the binding lock, restores the worktree a turn is about to run in and,
 /// for the worktree's own agent (`own`), marks it in use, so a close cannot remove it between
-/// this check and the turn.
+/// this check and the turn. Returns whether it restored the worktree.
 #[expect(
     clippy::await_holding_invalid_type,
     reason = "the binding lock serializes the start of a turn with a close of its worktree"
@@ -1023,7 +1139,7 @@ impl crate::session::session::Session {
 pub(crate) async fn begin_turn(
     binding: &Arc<AgentWorktreeBinding>,
     own: bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let mut state = binding.state.lock().await;
     let restored = restore_if_missing(binding).await;
     if own {

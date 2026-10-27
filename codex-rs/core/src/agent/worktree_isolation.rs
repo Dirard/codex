@@ -75,6 +75,9 @@ pub struct AgentWorktreeBinding {
     submodules: Vec<String>,
     /// The branch tip that `apply_agent_worktree` applied in this process (R12.7).
     applied_tip: StdMutex<Option<String>>,
+    /// What the last restore of the worktree started from, until the agent and its parent
+    /// were told (P3-5).
+    restored: StdMutex<RestoreNotices>,
     /// Managed worktree settings the worktree was created or found with.
     settings: WorktreeSettings,
     /// Repository and limits of the sweep after the tree stops (UC10); `None` keeps it out.
@@ -84,6 +87,14 @@ pub struct AgentWorktreeBinding {
     live: LiveRoot,
     /// Serializes checkpoint and finalize operations of this worktree.
     state: Mutex<BindingState>,
+}
+
+/// P3-5: the source of a restore, not yet told to the agent (its next turn) and to its
+/// parent (the next `<agent_worktree>` block).
+#[derive(Debug, Default)]
+struct RestoreNotices {
+    agent: Option<String>,
+    parent: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -119,6 +130,43 @@ impl AgentWorktreeBinding {
             .applied_tip
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(tip.to_owned());
+    }
+
+    /// P3-5: the worktree was recreated from `source`; the agent's next turn and the parent's
+    /// next block say so.
+    fn note_restored(&self, source: &str) {
+        let mut restored = self.restored.lock().unwrap_or_else(PoisonError::into_inner);
+        restored.agent = Some(source.to_string());
+        restored.parent = Some(source.to_string());
+    }
+
+    /// P3-5: the note for the agent's next turn about the last restore, once.
+    fn take_restore_note(&self) -> Option<String> {
+        let source = self
+            .restored
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .agent
+            .take()?;
+        Some(format!(
+            "Codex recreated your worktree {} from {source}, because it had been removed. Only what that commit recorded is in it: edits made after your last turn ended, and ignored files, are gone. Check the files you rely on before you continue.",
+            self.root.display()
+        ))
+    }
+
+    /// P3-5: the block line for the parent about the last restore, once.
+    fn take_restore_line(&self) -> Option<String> {
+        self.restored
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .parent
+            .take()
+            .map(|source| {
+                format!(
+                    "restored: from {}; edits not recorded before the removal are lost",
+                    block_text(&source)
+                )
+            })
     }
 
     fn applied_tip(&self) -> Option<String> {
@@ -368,6 +416,7 @@ pub(crate) async fn prepare_agent_worktree(
         read_only_explorer: AtomicBool::new(read_only_explorer),
         submodules,
         applied_tip: StdMutex::default(),
+        restored: StdMutex::default(),
         settings,
         sweep,
         state: Mutex::default(),
@@ -1045,6 +1094,7 @@ pub(crate) async fn discover_binding_or_missing(
                 read_only_explorer: AtomicBool::new(false),
                 submodules,
                 applied_tip: StdMutex::default(),
+                restored: StdMutex::default(),
                 settings,
                 sweep,
                 state: Mutex::new(BindingState {
@@ -1184,8 +1234,9 @@ pub(crate) async fn checkpoint_changes(binding: &Arc<AgentWorktreeBinding>) -> W
             agent_path: blocking.agent_path.as_str(),
         })
         .map_err(|err| format!("{err:#}"));
-        if let Ok(CheckpointOutcome::Committed { branch, .. }) = &checkpoint {
+        if let Ok(CheckpointOutcome::Committed { branch, commit, .. }) = &checkpoint {
             metadata.branch.clone_from(branch);
+            ops::record_checkpoint(&blocking, commit);
         }
         let changes = codex_worktree::branch_changes(blocking.root.as_path(), &metadata)
             .map_err(|err| format!("{err:#}"));
@@ -1291,6 +1342,8 @@ pub(crate) fn render_worktree_block(
         }
         None => lines.push("changes: none".to_string()),
     }
+    // P3-5: the parent hears once that the worktree was recreated before this turn.
+    lines.extend(binding.take_restore_line());
     lines.push(format!(
         "checkout: {}",
         quote_block_path(&binding.root.to_string_lossy())
@@ -1408,13 +1461,14 @@ async fn finalize_tree_worktree(binding: Arc<AgentWorktreeBinding>) {
     let result = tokio::task::spawn_blocking(move || {
         let mut metadata = blocking.metadata();
         if blocking.root.join(".git").exists()
-            && let CheckpointOutcome::Committed { branch, .. } =
+            && let CheckpointOutcome::Committed { branch, commit, .. } =
                 codex_worktree::checkpoint(CheckpointRequest {
                     root: blocking.root.as_path(),
                     metadata: &metadata,
                     agent_path: blocking.agent_path.as_str(),
                 })?
         {
+            ops::record_checkpoint(&blocking, &commit);
             blocking.record_branch(&branch);
             metadata.branch = branch;
         }

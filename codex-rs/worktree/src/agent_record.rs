@@ -35,10 +35,15 @@ pub struct AgentWorktreeRecord {
     pub base_kind: String,
     /// The branch name recorded at creation; checkpoints may use its free names.
     pub branch: String,
-    /// The tip of the agent branch the parent applied before Codex deleted the branch (R12.7);
-    /// a restore starts from it.
+    /// The tip of the agent branch that `apply_agent_worktree` applied (R12.7); without the
+    /// branch a restore starts from it, and a sweep retires the branch once its worktree is
+    /// gone (P3-2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub applied_tip: Option<String>,
+    /// The last checkpoint commit the host recorded for the agent (Q22, P3-5): without the
+    /// branch a restore starts from it, and a record with it never restores the base silently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_checkpoint: Option<String>,
 }
 
 impl AgentWorktreeRecord {
@@ -51,6 +56,7 @@ impl AgentWorktreeRecord {
             base_kind: metadata.base_kind.as_str().to_owned(),
             branch: metadata.branch.clone(),
             applied_tip: None,
+            last_checkpoint: None,
         }
     }
 
@@ -117,12 +123,12 @@ pub fn read_agent_record(directory: &Path, thread_id: &str) -> Result<Option<Age
     if !object_id(&record.base_sha) {
         bail!("{} has an invalid base", path.display());
     }
-    if record
-        .applied_tip
-        .as_deref()
-        .is_some_and(|tip| !object_id(tip))
+    if [&record.applied_tip, &record.last_checkpoint]
+        .into_iter()
+        .flatten()
+        .any(|tip| !object_id(tip))
     {
-        bail!("{} has an invalid applied tip", path.display());
+        bail!("{} has an invalid commit", path.display());
     }
     if record.base_kind().is_none() {
         bail!("{} has an unknown base kind", path.display());

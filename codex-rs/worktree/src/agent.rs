@@ -1088,6 +1088,7 @@ pub use maintenance::remove_agent_checkout;
 pub use maintenance::restore_agent_worktree;
 pub use maintenance::retire_applied_branch;
 pub use maintenance::sweep_agent_worktrees;
+pub use maintenance::usable_commit;
 pub use maintenance::worktree_list_fingerprint;
 pub use merge::CleanMerge;
 pub use merge::MergeOutcome;

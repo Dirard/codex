@@ -214,11 +214,22 @@ pub fn worktree_list_fingerprint(cwd: &Path) -> Result<u64> {
 pub enum RestoreFrom {
     /// The tip of the agent's own branch; the worktree HEAD is attached to it.
     Branch { name: String, tip: String },
-    /// The tip of a branch the parent applied and Codex then deleted (R12.7), detached; the
-    /// recorded base when that commit is gone or does not contain the base.
-    Applied { tip: String },
+    /// A commit of the agent without its branch, detached: the tip the parent applied
+    /// (R12.7) or the last checkpoint the host recorded (Q22, P3-5). It must still exist and
+    /// contain the recorded base ([`usable_commit`]); the restore fails otherwise instead of
+    /// starting from the base.
+    Commit { tip: String },
     /// The recorded base, detached.
     Base,
+}
+
+/// Whether `tip` is still a commit of the repository that contains `base`, so a restore can
+/// start from it (P3-5).
+pub fn usable_commit(source_root: &Path, base: &str, tip: &str) -> Result<bool> {
+    Ok(match optional_commit(source_root, tip)? {
+        Some(commit) => is_ancestor(source_root, base, &commit)?,
+        None => false,
+    })
 }
 
 /// Recreates a removed agent worktree at its old path (R5.3).
@@ -255,9 +266,12 @@ pub fn restore_agent_worktree(
             }
             tip.clone()
         }
-        RestoreFrom::Applied { tip } => match optional_commit(source_root, tip)? {
+        RestoreFrom::Commit { tip } => match optional_commit(source_root, tip)? {
             Some(commit) if is_ancestor(source_root, &metadata.base_sha, &commit)? => commit,
-            _ => recorded_base(source_root, metadata)?,
+            _ => bail!(
+                "its commit {tip} is no longer in the repository or does not contain the base {}",
+                metadata.base_sha
+            ),
         },
         RestoreFrom::Base => recorded_base(source_root, metadata)?,
     };
