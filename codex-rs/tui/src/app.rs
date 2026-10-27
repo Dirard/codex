@@ -291,6 +291,8 @@ mod warnings_tests;
 mod working_directory;
 // Fork: the `/workflows` screen (specs/dynamic-workflow-2026-10-25.md, UC 8.1).
 mod workflows_fork;
+// Fork: agent worktrees in `/subagents` (specs/agent-worktree-isolation-2026-10-25.md, R9.5).
+mod agent_worktree_fork;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;

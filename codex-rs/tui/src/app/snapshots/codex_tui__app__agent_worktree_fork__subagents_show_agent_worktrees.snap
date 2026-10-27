@@ -1,0 +1,13 @@
+---
+source: tui/src/app/agent_worktree_fork_tests.rs
+expression: "render_bottom_popup(&app.chat_widget, 120)"
+---
+  Subagents
+  Select an agent to watch. ⌥← previous, ⌥→ next.
+
+
+› 1. • /root/top     00000000-0000-0000-0000-000000000201 · worktree codex/agents/top-8a1b2c3d4e5f6071 · changed
+  2. • /root/bottom  00000000-0000-0000-0000-000000000202 · worktree 1f2e/demo · clean
+  3. • /root/shared  00000000-0000-0000-0000-000000000203
+
+  enter select · esc back

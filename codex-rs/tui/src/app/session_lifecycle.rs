@@ -212,6 +212,7 @@ impl App {
                 }
             })
             .collect();
+        let items = self.fork_annotate_agent_worktrees(items); // Fork: agent worktrees, R9.5
         // Fork: workflow agents under their run (specs/dynamic-workflow-2026-10-25.md, R8.6.7).
         let (items, initial_selected_idx) =
             self.fork_group_workflow_picker_items(items, selected, initial_selected_idx);

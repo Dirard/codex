@@ -134,6 +134,7 @@ impl App {
             let Ok(thread_id) = ThreadId::from_string(&thread.id) else {
                 continue;
             };
+            self.fork_record_agent_worktree(thread_id, &thread); // Fork: R9.5
             if !completion.visibility_changed_threads.contains(&thread_id) {
                 self.update_agent_picker_thread_visibility(
                     thread_id,

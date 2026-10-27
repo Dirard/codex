@@ -52,6 +52,8 @@ pub(crate) struct AgentNavigationState {
     picker_excluded_threads: HashSet<ThreadId>,
     /// Coalesces root refreshes while rejecting replies from a previous session.
     pub(super) picker_refresh: Option<AgentPickerRefreshState>,
+    /// Fork: the last reported worktree of isolated agents (agent-worktree-isolation, R9.5).
+    pub(super) fork_worktrees: HashMap<ThreadId, codex_app_server_protocol::ThreadAgentWorktree>,
 }
 
 /// Direction of keyboard traversal through the stable picker order.
