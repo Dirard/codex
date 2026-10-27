@@ -29,18 +29,21 @@ fn timeout_snapshot_describes_each_terminal() {
     let result = WaitAgentResult::from_outcome(
         WaitOutcome::TimedOut(
             ActiveAgentSnapshot::default(),
-            vec![
-                WaitingTerminal {
-                    session_id: 1000,
-                    running_for: Duration::from_millis(300_000),
-                    quiet_for: Some(Duration::from_millis(298_000)),
-                },
-                WaitingTerminal {
-                    session_id: 1001,
-                    running_for: Duration::from_millis(5_000),
-                    quiet_for: None,
-                },
-            ],
+            PendingWork {
+                terminals: vec![
+                    WaitingTerminal {
+                        session_id: 1000,
+                        running_for: Duration::from_millis(300_000),
+                        quiet_for: Some(Duration::from_millis(298_000)),
+                    },
+                    WaitingTerminal {
+                        session_id: 1001,
+                        running_for: Duration::from_millis(5_000),
+                        quiet_for: None,
+                    },
+                ],
+                workflow_runs: Vec::new(),
+            },
         ),
         /*requested_timeout_ms*/ None,
         /*timeout_ms*/ BACKGROUND_TERMINAL_WAIT_CAP_MS,
@@ -54,11 +57,35 @@ fn timeout_snapshot_describes_each_terminal() {
     );
     assert_eq!(
         WaitAgentResult::from_outcome(
-            WaitOutcome::TimedOut(ActiveAgentSnapshot::default(), Vec::new()),
+            WaitOutcome::TimedOut(ActiveAgentSnapshot::default(), PendingWork::default()),
             /*requested_timeout_ms*/ None,
             /*timeout_ms*/ 1_000,
         )
         .message,
         "Wait timed out. Active agents: pending_init=0, running=0, interrupted=0."
+    );
+}
+
+/// Dynamic workflow, D9 of the combined live run: a timeout names the thread's active
+/// workflow runs, whose agents the snapshot does not count.
+#[test]
+fn timeout_snapshot_names_active_workflow_runs() {
+    let result = WaitAgentResult::from_outcome(
+        WaitOutcome::TimedOut(
+            ActiveAgentSnapshot::default(),
+            PendingWork {
+                terminals: Vec::new(),
+                workflow_runs: vec!["wf-0000abcd".to_string(), "wf-0000beef".to_string()],
+            },
+        ),
+        /*requested_timeout_ms*/ None,
+        /*timeout_ms*/ 1_000,
+    );
+    assert_eq!(
+        result,
+        WaitAgentResult {
+            message: "Wait timed out. Active agents: pending_init=0, running=0, interrupted=0. Workflow runs still active: wf-0000abcd, wf-0000beef. Their agents are not counted above; each run's completion is notified automatically, and workflow_status shows its progress.".to_string(),
+            timed_out: true,
+        }
     );
 }

@@ -210,16 +210,13 @@ impl WaitAgentResult {
             ),
             WaitOutcome::Steered => ("Wait interrupted by new input.".to_string(), false),
             WaitOutcome::NoActiveAgents => ("No active agents.".to_string(), false),
-            WaitOutcome::TimedOut(snapshot, background_terminals) => {
+            WaitOutcome::TimedOut(snapshot, pending) => {
                 let mut message = format!(
                     "Wait timed out. Active agents: pending_init={}, running={}, interrupted={}.",
                     snapshot.pending_init, snapshot.running, snapshot.interrupted
                 );
-                // Fork: say what the wait is still for when terminals are pending (R4.5).
-                if !background_terminals.is_empty() {
-                    message.push(' ');
-                    message.push_str(&describe_background_terminals(&background_terminals));
-                }
+                // Fork: say what the wait is still for: terminals and workflow runs (R4.5).
+                message.push_str(&describe_pending_work(&pending));
                 (message, true)
             }
         };
@@ -260,8 +257,8 @@ enum WaitOutcome {
     Workflow,
     Steered,
     NoActiveAgents,
-    /// Agent snapshot and the terminals whose exit will still be reported.
-    TimedOut(ActiveAgentSnapshot, Vec<WaitingTerminal>),
+    /// Agent snapshot and the terminals and workflow runs still pending.
+    TimedOut(ActiveAgentSnapshot, PendingWork),
 }
 
 async fn wait_for_activity(
@@ -284,8 +281,7 @@ async fn wait_for_activity(
             if let Some(outcome) = recheck_activity(session, turn_state).await {
                 return Ok(outcome);
             }
-            let background_terminals = waiting_terminals(session).await;
-            Ok(WaitOutcome::TimedOut(snapshot, background_terminals))
+            Ok(WaitOutcome::TimedOut(snapshot, pending_work(session).await))
         }
     }
 }

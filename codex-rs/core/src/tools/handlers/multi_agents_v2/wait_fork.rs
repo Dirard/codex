@@ -1,9 +1,9 @@
 //! Fork: what a MultiAgentV2 `wait_agent` reports besides mailbox activity.
 //!
 //! A wait without active descendants returns `No active agents`; a timeout shows an
-//! active-agent snapshot and the background terminals whose exit will still be reported
-//! (`specs/background-exec-notifications-2026-10-25.md`, R4.5); workflow agents report to
-//! their run (`specs/dynamic-workflow-2026-10-25.md`, R3.3). `list_agents` names a failed
+//! active-agent snapshot, the background terminals whose exit will still be reported
+//! (`specs/background-exec-notifications-2026-10-25.md`, R4.5) and the active workflow runs;
+//! workflow agents report to their run (`specs/dynamic-workflow-2026-10-25.md`, R3.3). `list_agents` names a failed
 //! agent listing through `collab_list_error` too.
 
 use super::*;
@@ -196,10 +196,43 @@ pub(super) fn wait_outcome_for_activity(activity: InputQueueActivity) -> WaitOut
     }
 }
 
+/// What a timed-out wait still waits for besides agents: the terminals whose exit will be
+/// reported (R4.5) and the active workflow runs of the thread, whose agents the wait does not
+/// count (`specs/dynamic-workflow-2026-10-25.md`, R3.3; D9 of the combined live run).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct PendingWork {
+    pub(super) terminals: Vec<WaitingTerminal>,
+    pub(super) workflow_runs: Vec<String>,
+}
+
+pub(super) async fn pending_work(session: &crate::session::session::Session) -> PendingWork {
+    PendingWork {
+        terminals: waiting_terminals(session).await,
+        workflow_runs: crate::workflow::WorkflowRegistry::existing(session)
+            .map(|registry| registry.active_run_ids())
+            .unwrap_or_default(),
+    }
+}
+
+/// The timeout snapshot's text about pending work, each part after a space; empty when
+/// nothing is pending.
+pub(super) fn describe_pending_work(pending: &PendingWork) -> String {
+    let mut text = String::new();
+    if !pending.terminals.is_empty() {
+        text.push(' ');
+        text.push_str(&describe_background_terminals(&pending.terminals));
+    }
+    if !pending.workflow_runs.is_empty() {
+        text.push_str(&format!(
+            " Workflow runs still active: {}. Their agents are not counted above; each run's completion is notified automatically, and workflow_status shows its progress.",
+            pending.workflow_runs.join(", ")
+        ));
+    }
+    text
+}
+
 /// The terminals whose exit will still be reported, as a timeout snapshot shows them.
-pub(super) async fn waiting_terminals(
-    session: &crate::session::session::Session,
-) -> Vec<WaitingTerminal> {
+async fn waiting_terminals(session: &crate::session::session::Session) -> Vec<WaitingTerminal> {
     let now = Instant::now();
     session
         .services
