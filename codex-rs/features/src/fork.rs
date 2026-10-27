@@ -9,6 +9,21 @@ use crate::Feature;
 use crate::FeatureToml;
 use crate::FeaturesToml;
 
+/// Whether the fork, not upstream, sets the stage of `feature`: the fork's own features and
+/// upstream features that the fork moved to `Experimental`. Their keys stay out of the
+/// `x-codex-beta-features` request header, which carries only what upstream itself would
+/// send: a provider must not see keys it cannot know (review 2026-10-27, item 6).
+pub fn fork_owns_stage(feature: Feature) -> bool {
+    matches!(
+        feature,
+        Feature::ExplorerProfile
+            | Feature::AgentWorktreeIsolation
+            | Feature::ExecExitNotifications
+            | Feature::Workflows
+            | Feature::DefaultModeRequestUserInput
+    )
+}
+
 impl FeaturesToml {
     /// Adds the `enabled` flags of the fork's feature tables to [`FeaturesToml::entries`].
     pub(crate) fn fork_entries(&self, entries: &mut BTreeMap<String, bool>) {

@@ -50,6 +50,7 @@ pub use runtime_auth::RuntimeAuthMode;
 // Fork: settings and `FeaturesToml` entries of the fork's features.
 pub use feature_configs::fork::*;
 mod fork;
+pub use fork::fork_owns_stage;
 
 /// High-level lifecycle stage for a feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

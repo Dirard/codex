@@ -1339,7 +1339,8 @@ impl Session {
                 .filter(|spec| {
                     spec.id == Feature::RemoteCompactionV2
                         || (spec.stage.experimental_menu_description().is_some()
-                            && config.features.enabled(spec.id))
+                            && config.features.enabled(spec.id)
+                            && !codex_features::fork_owns_stage(spec.id)) // Fork: upstream keys only
                 })
                 .map(|spec| spec.key)
                 .collect::<Vec<_>>()

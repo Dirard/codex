@@ -42,3 +42,52 @@ pub(super) fn clamp_environment_update(
             .for_each(explorer_profile::clamp_environment_selection);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use codex_features::Feature;
+    use pretty_assertions::assert_eq;
+
+    use super::super::Session;
+    use crate::config::ConfigBuilder;
+
+    /// Review 2026-10-27, item 6: `x-codex-beta-features` carries the upstream Experimental
+    /// keys only; `explorer_profile` and the fork's Experimental stage of
+    /// `default_mode_request_user_input` stay out of it.
+    #[tokio::test]
+    async fn beta_features_header_leaves_out_fork_stages() {
+        let home = tempfile::TempDir::new().expect("create temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .fallback_cwd(Some(home.path().to_path_buf()))
+            .build()
+            .await
+            .expect("load test config");
+        for feature in [
+            Feature::ExplorerProfile,
+            Feature::DefaultModeRequestUserInput,
+            Feature::LoginShellPackagePath,
+        ] {
+            config
+                .features
+                .enable(feature)
+                .expect("test config should allow feature update");
+        }
+        let header = Session::build_model_client_beta_features_header(&config).unwrap_or_default();
+        let keys = header.split(',').collect::<Vec<_>>();
+        assert!(keys.contains(&"login_shell_package_path"), "{header}");
+        for fork_key in ["explorer_profile", "default_mode_request_user_input"] {
+            assert!(!keys.contains(&fork_key), "{fork_key} in {header}");
+        }
+        assert_eq!(
+            codex_features::FEATURES
+                .iter()
+                .filter(|spec| spec.stage.experimental_menu_description().is_some())
+                .filter(|spec| codex_features::fork_owns_stage(spec.id))
+                .map(|spec| spec.key)
+                .collect::<Vec<_>>(),
+            vec!["explorer_profile", "default_mode_request_user_input"],
+            "the fork's Experimental features"
+        );
+    }
+}
