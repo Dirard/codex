@@ -45,4 +45,13 @@ pub struct PendingBackgroundTerminal {
     /// output watch expects news.
     #[serde(default)]
     pub notify_on_exit: bool,
+    /// How much longer, in milliseconds, the output watch keeps the terminal awaited without
+    /// news: until its first matching line or, after one, until it goes quiet. Absent without
+    /// a watch that is still awaited.
+    #[ts(type = "number | null")]
+    pub output_watch_wait_ms: Option<u64>,
+    /// The output watch matched (or took over from a watch that did), so it is awaited only
+    /// while matching lines keep coming.
+    #[serde(default)]
+    pub output_watch_matched: bool,
 }

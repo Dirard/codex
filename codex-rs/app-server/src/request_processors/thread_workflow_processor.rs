@@ -125,6 +125,10 @@ impl ThreadWorkflowRequestProcessor {
                         .unwrap_or(u64::MAX),
                     output_watch: terminal.output_watch,
                     notify_on_exit: terminal.notify_on_exit,
+                    output_watch_wait_ms: terminal
+                        .output_watch_wait
+                        .map(|wait| u64::try_from(wait.as_millis()).unwrap_or(u64::MAX)),
+                    output_watch_matched: terminal.output_watch_matched,
                 })
                 .collect(),
             notification_queued: pending.notification_queued,

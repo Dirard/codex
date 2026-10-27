@@ -18,6 +18,7 @@ use crate::unified_exec::OutputWatch;
 use crate::unified_exec::PendingExitNotification;
 use crate::unified_exec::PendingTerminal;
 use crate::unified_exec::TerminatedProcesses;
+use crate::unified_exec::WatchWait;
 use codex_utils_string::untrusted::UntrustedBoundary;
 
 /// Turn trigger recorded for a turn started by a background terminal exit.
@@ -256,6 +257,10 @@ pub struct PendingBackgroundTerminal {
     /// `notify_on_exit` is on: what waits for the terminal waits for its exit (live recheck
     /// 2026-10-27, N1).
     pub notify_on_exit: bool,
+    /// How much longer its output watch keeps it awaited without news, if one is on, and
+    /// whether that wait follows a match (live recheck 2 R2).
+    pub output_watch_wait: Option<Duration>,
+    pub output_watch_matched: bool,
 }
 
 impl From<PendingTerminal> for PendingBackgroundTerminal {
@@ -266,6 +271,12 @@ impl From<PendingTerminal> for PendingBackgroundTerminal {
             running_for: tokio::time::Instant::now().saturating_duration_since(terminal.started_at),
             output_watch: terminal.output_watch,
             notify_on_exit: terminal.notify_on_exit,
+            output_watch_wait: terminal.watch_wait.map(|wait| match wait {
+                WatchWait::FirstMatchAfterTurn(left)
+                | WatchWait::FirstMatch(left)
+                | WatchWait::Quiet(left) => left,
+            }),
+            output_watch_matched: matches!(terminal.watch_wait, Some(WatchWait::Quiet(_))),
         }
     }
 }

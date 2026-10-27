@@ -16718,11 +16718,13 @@ func (v *PatchChangeKind) UnmarshalJSON(data []byte) error {
 type PathUri string
 
 type PendingBackgroundTerminal struct {
-	Command      string                `json:"command"`
-	NotifyOnExit OptionalNonNull[bool] `json:"notifyOnExit,omitzero"`
-	OutputWatch  Optional[string]      `json:"outputWatch,omitzero"`
-	ProcessID    string                `json:"processId"`
-	RunningForMs uint64                `json:"runningForMs"`
+	Command            string                `json:"command"`
+	NotifyOnExit       OptionalNonNull[bool] `json:"notifyOnExit,omitzero"`
+	OutputWatch        Optional[string]      `json:"outputWatch,omitzero"`
+	OutputWatchMatched OptionalNonNull[bool] `json:"outputWatchMatched,omitzero"`
+	OutputWatchWaitMs  Optional[uint64]      `json:"outputWatchWaitMs,omitzero"`
+	ProcessID          string                `json:"processId"`
+	RunningForMs       uint64                `json:"runningForMs"`
 }
 
 var pendingBackgroundTerminalSpec = objectSpec{
@@ -16730,6 +16732,8 @@ var pendingBackgroundTerminalSpec = objectSpec{
 		{name: "command", flags: fieldRequired | fieldRejectNull},
 		{name: "notifyOnExit", flags: fieldNonNullOptional},
 		{name: "outputWatch"},
+		{name: "outputWatchMatched", flags: fieldNonNullOptional},
+		{name: "outputWatchWaitMs"},
 		{name: "processId", flags: fieldRequired | fieldRejectNull},
 		{name: "runningForMs", flags: fieldRequired | fieldRejectNull},
 	},
@@ -16748,6 +16752,11 @@ func (v *PendingBackgroundTerminal) UnmarshalJSON(data []byte) error {
 	}
 	if err := s.finish((*wire)(v)); err != nil {
 		return err
+	}
+	if valueOutputWatchWaitMs, ok := v.OutputWatchWaitMs.Value(); ok {
+		if valueOutputWatchWaitMs < 0 {
+			return DecodeError{Field: "outputWatchWaitMs", Reason: "below minimum 0"}
+		}
 	}
 	if v.RunningForMs < 0 {
 		return DecodeError{Field: "runningForMs", Reason: "below minimum 0"}

@@ -357,8 +357,12 @@ fn pending_terminals(pending: Option<&ThreadBackgroundTerminalsPendingResponse>)
 }
 
 /// What exec waits for after a turn, and for how long at most (live recheck 2026-10-27, N1):
-/// each terminal with its exit notification or output watch. `None` while only a notification
-/// or a turn is on its way, which takes moments.
+/// each terminal with its exit notification or output watch. A terminal with an exit
+/// notification is awaited until it exits, so the line names the rest of
+/// `exec_wait_timeout_ms`; a terminal with only an output watch is awaited for the watch's own
+/// window, which the line names instead: up to its first match, or while matches keep coming
+/// (live recheck 2 R2). `None` while only a notification or a turn is on its way, which takes
+/// moments.
 pub(crate) fn waiting_message(
     pending: &ThreadBackgroundTerminalsPendingResponse,
     remaining: Duration,
@@ -375,7 +379,20 @@ pub(crate) fn waiting_message(
                 reasons.push("exit notification armed".to_string());
             }
             if let Some(pattern) = &terminal.output_watch {
-                reasons.push(format!("output watch \"{}\"", shorten(pattern)));
+                let mut watch = format!("output watch \"{}\"", shorten(pattern));
+                if !terminal.notify_on_exit
+                    && let Some(wait) = terminal.output_watch_wait_ms.map(Duration::from_millis)
+                {
+                    watch.push_str(&if terminal.output_watch_matched {
+                        format!(
+                            " (awaited while matching lines keep coming, up to {} without one)",
+                            short_duration(wait)
+                        )
+                    } else {
+                        format!(" (first match awaited up to {})", short_duration(wait))
+                    });
+                }
+                reasons.push(watch);
             }
             format!(
                 "session {} ({}): {}",
@@ -385,11 +402,22 @@ pub(crate) fn waiting_message(
             )
         })
         .collect::<Vec<_>>();
-    Some(format!(
-        "codex exec is waiting for {}; up to {}; Ctrl-C to stop",
-        terminals.join("; "),
-        short_duration(remaining)
-    ))
+    let until_exit = pending
+        .terminals
+        .iter()
+        .any(|terminal| terminal.notify_on_exit);
+    Some(if until_exit {
+        format!(
+            "codex exec is waiting for {}; up to {}; Ctrl-C to stop",
+            terminals.join("; "),
+            short_duration(remaining)
+        )
+    } else {
+        format!(
+            "codex exec is waiting for {}; Ctrl-C to stop",
+            terminals.join("; ")
+        )
+    })
 }
 
 /// "30m", "29m 40s", "45s", "1.5s".
@@ -474,8 +502,17 @@ pub(crate) fn timeout_warning(
     }
 }
 
+/// `command` (or a pattern) on one line of at most `WARNING_COMMAND_MAX_CHARS` characters,
+/// without control characters: it is the model's text, and stderr is the user's terminal
+/// (review of the fixes P3-9).
 fn shorten(command: &str) -> String {
-    let command = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    let command = command
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect::<String>();
     if command.chars().count() <= WARNING_COMMAND_MAX_CHARS {
         return command;
     }
@@ -514,6 +551,8 @@ mod tests {
                 running_for_ms: 1_805_200,
                 output_watch: None,
                 notify_on_exit: true,
+                output_watch_wait_ms: None,
+                output_watch_matched: false,
             }])),
         );
         assert_eq!(
@@ -539,6 +578,8 @@ mod tests {
             running_for_ms: 90_000,
             output_watch: Some("(?i)ready|error".to_string()),
             notify_on_exit: true,
+            output_watch_wait_ms: None,
+            output_watch_matched: false,
         };
         let watch = PendingBackgroundTerminal {
             process_id: "7573".to_string(),
@@ -546,6 +587,8 @@ mod tests {
             running_for_ms: 5_000,
             output_watch: Some("compiled".to_string()),
             notify_on_exit: false,
+            output_watch_wait_ms: None,
+            output_watch_matched: false,
         };
         assert_eq!(
             waiting_message(&pending(vec![server.clone()]), Duration::from_secs(1800)),
@@ -572,6 +615,43 @@ mod tests {
         assert_eq!(short_duration(Duration::from_millis(1_500)), "1.5s");
     }
 
+    /// Live recheck 2 R2: a terminal with only an output watch is awaited for the watch's
+    /// window, not the whole exec wait, and the line says which: up to the first match, or
+    /// while matching lines keep coming. Review of the fixes P3-9: the model's command and
+    /// pattern reach the user's terminal without control characters.
+    #[test]
+    fn waiting_message_names_the_window_of_a_watch_only_terminal() {
+        let watch = |output_watch_wait_ms, output_watch_matched| PendingBackgroundTerminal {
+            process_id: "7694".to_string(),
+            command: "./dev.sh\u{1b}[31m".to_string(),
+            running_for_ms: 90_000,
+            output_watch: Some("(?i)ready|error".to_string()),
+            notify_on_exit: false,
+            output_watch_wait_ms,
+            output_watch_matched,
+        };
+        assert_eq!(
+            waiting_message(
+                &pending(vec![watch(Some(290_000), false)]),
+                Duration::from_secs(1800)
+            ),
+            Some(
+                "codex exec is waiting for session 7694 (./dev.sh?[31m): output watch \"(?i)ready|error\" (first match awaited up to 4m 50s); Ctrl-C to stop"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            waiting_message(
+                &pending(vec![watch(Some(45_000), true)]),
+                Duration::from_secs(1700)
+            ),
+            Some(
+                "codex exec is waiting for session 7694 (./dev.sh?[31m): output watch \"(?i)ready|error\" (awaited while matching lines keep coming, up to 45s without one); Ctrl-C to stop"
+                    .to_string()
+            )
+        );
+    }
+
     /// Review 2026-10-27 P3-5 and P2-3: an interrupt and an exit that leaves running
     /// terminals say what happens to them.
     #[test]
@@ -582,6 +662,8 @@ mod tests {
             running_for_ms: 12_000,
             output_watch: None,
             notify_on_exit: true,
+            output_watch_wait_ms: None,
+            output_watch_matched: false,
         };
         assert_eq!(
             interrupt_warning(Some(&pending(vec![terminal]))),
@@ -597,6 +679,8 @@ mod tests {
             running_for_ms: 30_700,
             output_watch: None,
             notify_on_exit: true,
+            output_watch_wait_ms: None,
+            output_watch_matched: false,
         };
         assert_eq!(
             interrupted_turn_warning(&pending(vec![terminal])),

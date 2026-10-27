@@ -14921,6 +14921,20 @@
             "null"
           ]
         },
+        "outputWatchMatched": {
+          "default": false,
+          "description": "The output watch matched (or took over from a watch that did), so it is awaited only while matching lines keep coming.",
+          "type": "boolean"
+        },
+        "outputWatchWaitMs": {
+          "description": "How much longer, in milliseconds, the output watch keeps the terminal awaited without news: until its first matching line or, after one, until it goes quiet. Absent without a watch that is still awaited.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "processId": {
           "description": "The `session_id` of the terminal.",
           "type": "string"

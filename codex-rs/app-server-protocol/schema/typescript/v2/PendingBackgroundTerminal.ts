@@ -18,4 +18,15 @@ outputWatch: string | null,
  * `notify_on_exit` is on: the terminal is awaited until it exits, not only while its
  * output watch expects news.
  */
-notifyOnExit: boolean, };
+notifyOnExit: boolean,
+/**
+ * How much longer, in milliseconds, the output watch keeps the terminal awaited without
+ * news: until its first matching line or, after one, until it goes quiet. Absent without
+ * a watch that is still awaited.
+ */
+outputWatchWaitMs: number | null,
+/**
+ * The output watch matched (or took over from a watch that did), so it is awaited only
+ * while matching lines keep coming.
+ */
+outputWatchMatched: boolean, };

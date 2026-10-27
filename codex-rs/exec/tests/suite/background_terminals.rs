@@ -447,18 +447,27 @@ async fn exec_interrupted_during_a_turn_names_the_terminal_and_fails() -> anyhow
 struct DevServer {
     served: Arc<Mutex<Vec<&'static str>>>,
     bodies: Arc<Mutex<Vec<Value>>>,
-    disarm: bool,
+    /// The server is started with `notify_on_exit`.
+    notify_on_exit: bool,
+    /// `write_stdin` arguments, besides the session, that the model sends after "ready".
+    follow_up: Option<Value>,
 }
 
 const DEV_SERVER: &str = "echo starting; sleep 1; echo 'server ready'; sleep 60";
 
 impl DevServer {
-    fn new(disarm: bool) -> Self {
+    fn new(notify_on_exit: bool, follow_up: Option<Value>) -> Self {
         Self {
             served: Arc::default(),
             bodies: Arc::default(),
-            disarm,
+            notify_on_exit,
+            follow_up,
         }
+    }
+
+    /// The model turns the exit notification off after "ready".
+    fn disarming() -> Self {
+        Self::new(true, Some(json!({ "notify_on_exit": false })))
     }
 }
 
@@ -494,14 +503,16 @@ impl Respond for DevServer {
                 message("resp-disarmed", "FINAL: left it running"),
             )
         } else if text.contains(NOTIFICATION_MARKER) {
-            if self.disarm {
-                let arguments = json!({
+            if let Some(follow_up) = &self.follow_up {
+                let mut arguments = json!({
                     "session_id": notified_session_id(&text),
                     "chars": "",
                     "yield_time_ms": 250,
-                    "notify_on_exit": false,
-                })
-                .to_string();
+                });
+                for (key, value) in follow_up.as_object().into_iter().flatten() {
+                    arguments[key] = value.clone();
+                }
+                let arguments = arguments.to_string();
                 (
                     "notified",
                     responses::sse(vec![
@@ -527,7 +538,7 @@ impl Respond for DevServer {
                 "yield_time_ms": 250,
                 "login": false,
                 "notify_on_output": "ready",
-                "notify_on_exit": true,
+                "notify_on_exit": self.notify_on_exit,
             })
             .to_string();
             (
@@ -545,10 +556,9 @@ impl Respond for DevServer {
     }
 }
 
-async fn run_dev_server(disarm: bool, overrides: &[&str]) -> anyhow::Result<ExecRun> {
+async fn run_dev_server(responder: DevServer, overrides: &[&str]) -> anyhow::Result<ExecRun> {
     let test = test_codex_exec();
     let server = responses::start_mock_server().await;
-    let responder = DevServer::new(disarm);
     Mock::given(method("POST"))
         .and(path_regex(".*/responses$"))
         .respond_with(responder.clone())
@@ -586,7 +596,7 @@ async fn run_dev_server(disarm: bool, overrides: &[&str]) -> anyhow::Result<Exec
 async fn exec_says_what_it_waits_for_and_the_match_says_how_to_stop_waiting() -> anyhow::Result<()>
 {
     let run = run_dev_server(
-        /*disarm*/ false,
+        DevServer::new(/*notify_on_exit*/ true, /*follow_up*/ None),
         &[
             "features.exec_exit_notifications.enabled=true",
             "features.exec_exit_notifications.exec_wait_timeout_ms=4000",
@@ -653,7 +663,7 @@ fn input_texts(body: &Value) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn exec_stops_waiting_once_the_model_turns_the_exit_notification_off() -> anyhow::Result<()> {
     let run = run_dev_server(
-        /*disarm*/ true,
+        DevServer::disarming(),
         &[
             "features.exec_exit_notifications.enabled=true",
             "features.exec_exit_notifications.exec_wait_timeout_ms=40000",
@@ -687,6 +697,52 @@ async fn exec_stops_waiting_once_the_model_turns_the_exit_notification_off() -> 
         run.stderr.contains(
             "codex exec is exiting while background terminals still run; they are terminated now: session "
         ),
+        "stderr: {}",
+        run.stderr
+    );
+    Ok(())
+}
+
+/// Live recheck 2 R3, R2: after "ready" the model turns the watch into an error watch. The
+/// server is up, so the new watch is awaited only while it would keep matching, as after a
+/// match, not for a first match: exec exits after the quiet window, not the 45 s first-match
+/// window. Exec's line names the window of a watch-only terminal, not the whole exec wait.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exec_waits_for_a_rearmed_watch_only_while_it_would_keep_matching() -> anyhow::Result<()> {
+    let run = run_dev_server(
+        DevServer::new(
+            /*notify_on_exit*/ false,
+            Some(json!({ "notify_on_output": "(?i)error|fail" })),
+        ),
+        &[
+            "features.exec_exit_notifications.enabled=true",
+            "features.exec_exit_notifications.exec_wait_timeout_ms=60000",
+            "features.exec_exit_notifications.output_watch_quiet_ms=1000",
+            "features.exec_exit_notifications.output_watch_first_match_ms=45000",
+        ],
+    )
+    .await?;
+    assert_eq!(
+        run.code,
+        Some(0),
+        "stdout: {}\nstderr: {}",
+        run.stdout,
+        run.stderr
+    );
+    assert_eq!(
+        run.served,
+        vec!["start", "after_tool", "notified", "after_disarm"]
+    );
+    assert!(
+        run.elapsed < Duration::from_secs(35),
+        "{:?}\nstderr: {}",
+        run.elapsed,
+        run.stderr
+    );
+    assert!(
+        run.stderr
+            .contains("output watch \"ready\" (first match awaited up to ")
+            && !run.stderr.contains("; up to "),
         "stderr: {}",
         run.stderr
     );

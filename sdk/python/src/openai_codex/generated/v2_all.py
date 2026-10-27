@@ -3033,6 +3033,21 @@ class PendingBackgroundTerminal(BaseModel):
             description="The pattern of the terminal's output watch, if one is on.",
         ),
     ] = None
+    output_watch_matched: Annotated[
+        bool | None,
+        Field(
+            alias="outputWatchMatched",
+            description="The output watch matched (or took over from a watch that did), so it is awaited only while matching lines keep coming.",
+        ),
+    ] = False
+    output_watch_wait_ms: Annotated[
+        int | None,
+        Field(
+            alias="outputWatchWaitMs",
+            description="How much longer, in milliseconds, the output watch keeps the terminal awaited without news: until its first matching line or, after one, until it goes quiet. Absent without a watch that is still awaited.",
+            ge=0,
+        ),
+    ] = None
     process_id: Annotated[
         str, Field(alias="processId", description="The `session_id` of the terminal.")
     ]
