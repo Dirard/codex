@@ -814,6 +814,90 @@ async fn clearing_a_fork_feature_table_keeps_its_settings() -> Result<()> {
     Ok(())
 }
 
+/// Fork (fork-features-experimental R2.2): `/experimental` saves toggles as one batch write of
+/// `features."<key>"`, `true` to turn a default-off feature on and a clear to turn it off. For
+/// the fork's Experimental features that keeps their settings tables and leaves the top-level
+/// `[workflows]` table alone, and the config still loads: worktree isolation turned on without
+/// a tool namespace gives the MultiAgentV2 tools the namespace `agents`
+/// (agent-worktree-isolation R1.5).
+#[tokio::test]
+async fn experimental_toggles_keep_fork_feature_settings() -> Result<()> {
+    use codex_features::Feature;
+    let tmp = tempdir()?;
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    let settings = "[features.exec_exit_notifications]\nexec_wait_timeout_ms = 1500\n\n[features.agent_worktree_isolation]\ndefault_isolation = \"worktree\"\n\n[workflows]\nmax_active_runs = 5\n";
+    std::fs::write(&path, settings)?;
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let features = [
+        Feature::ExecExitNotifications,
+        Feature::Workflows,
+        Feature::AgentWorktreeIsolation,
+    ];
+    let toggle = |enabled: bool| ConfigBatchWriteParams {
+        edits: features
+            .iter()
+            .map(|feature| codex_app_server_protocol::ConfigEdit {
+                key_path: format!("features.{}", serde_json::json!(feature.key())),
+                value: if enabled {
+                    serde_json::json!(true)
+                } else {
+                    serde_json::Value::Null
+                },
+                merge_strategy: MergeStrategy::Replace,
+            })
+            .collect(),
+        file_path: None,
+        expected_version: None,
+        reload_user_config: false,
+    };
+    let written = || -> Result<TomlValue> { Ok(toml::from_str(&std::fs::read_to_string(&path)?)?) };
+
+    for enabled in [true, false] {
+        assert_eq!(
+            service.batch_write(toggle(enabled)).await?.status,
+            WriteStatus::Ok
+        );
+        let expected = format!(
+            "{}{}",
+            if enabled {
+                "[features]\nworkflows = true\n\n"
+            } else {
+                ""
+            },
+            settings
+                .replace(
+                    "[features.exec_exit_notifications]\n",
+                    &format!("[features.exec_exit_notifications]\nenabled = {enabled}\n"),
+                )
+                .replace(
+                    "[features.agent_worktree_isolation]\n",
+                    &format!("[features.agent_worktree_isolation]\nenabled = {enabled}\n"),
+                ),
+        );
+        assert_eq!(
+            written()?,
+            toml::from_str::<TomlValue>(&expected)?,
+            "{enabled}"
+        );
+
+        let config = service.load_latest_config(/*fallback_cwd*/ None).await?;
+        for feature in features {
+            assert_eq!(config.features.enabled(feature), enabled, "{feature:?}");
+        }
+        assert_eq!(config.exec_exit_notifications.exec_wait_timeout_ms, 1500);
+        assert_eq!(
+            config.agent_worktree_isolation.default_isolation,
+            codex_features::AgentIsolation::Worktree
+        );
+        assert_eq!(config.workflows.max_active_runs, 5);
+        assert_eq!(
+            config.multi_agent_v2.tool_namespace.as_deref(),
+            Some(if enabled { "agents" } else { "collaboration" })
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn clearing_user_setting_falls_back_to_packaged_default_without_override() -> Result<()> {
     let tmp = tempdir()?;

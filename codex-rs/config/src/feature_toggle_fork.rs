@@ -49,10 +49,27 @@ mod tests {
             &["features", "code_mode"],
             settings
         ));
-        // Not a structured feature (yet): a boolean toggle replaces the table anyway.
+        // `workflows` keeps its settings in the top-level `[workflows]` table, which a toggle of
+        // `features.workflows` never touches; it has no feature table to keep.
         assert!(!fork_feature_clear_keeps_table(
             &["features", "workflows"],
             settings
         ));
+    }
+
+    /// Fork-features-experimental R2.2: every fork feature with a settings table is a structured
+    /// feature, so a boolean toggle sets only its `enabled` and turning it off keeps the table.
+    #[test]
+    fn every_fork_feature_table_is_structured() {
+        for feature in FORK_FEATURE_TABLES {
+            assert!(
+                is_structured_feature_path(&["features", feature]),
+                "{feature}"
+            );
+            assert!(
+                fork_feature_clear_keeps_table(&["features", feature], ["enabled", "setting"]),
+                "{feature}"
+            );
+        }
     }
 }
