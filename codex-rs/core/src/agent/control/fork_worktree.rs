@@ -209,32 +209,20 @@ impl LocalAgentControl {
             {
                 Discovery::NotIsolated => return Ok(None),
                 Discovery::Bound(binding) => binding,
-                // R5.6: the caller's cwd (`config.cwd` before the move onto the worktree) or the
-                // parent's stored cwd names the repository whose agent branch restores it.
-                Discovery::Missing(missing) => {
-                    let parent_cwd = self.parent_stored_cwd(session_source).await;
-                    restore_missing_binding(config, thread_id, agent_path, missing, parent_cwd)
-                        .await
-                        .map_err(resume_error)?
-                }
+                // R5.6: the host record of the worktree names the parent checkout, verified
+                // against the parent thread; whoever wakes the child does not choose it.
+                Discovery::Missing(missing) => restore_missing_binding(
+                    config,
+                    thread_id,
+                    agent_path,
+                    missing,
+                    session_source.parent_thread_id(),
+                )
+                .await
+                .map_err(resume_error)?,
             };
         self.runtime.worktrees.insert(Arc::clone(&binding));
         Ok(Some(binding))
-    }
-
-    /// The working directory the child's parent thread was created in, when it is stored.
-    async fn parent_stored_cwd(&self, session_source: &SessionSource) -> Option<PathBuf> {
-        let parent_thread_id = session_source.parent_thread_id()?;
-        let state = self.runtime.upgrade().ok()?;
-        state
-            .read_stored_thread(ReadThreadParams {
-                thread_id: parent_thread_id,
-                include_archived: true,
-                include_history: false,
-            })
-            .await
-            .ok()
-            .map(|stored| stored.cwd)
     }
 }
 

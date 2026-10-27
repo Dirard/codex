@@ -26,7 +26,7 @@ fn binding(protected: bool) -> AgentWorktreeBinding {
         settings: WorktreeSettings::for_cli(Path::new("/home/u/.codex"), /*desktop*/ None)
             .expect("worktree settings"),
         sweep: None,
-        _live: LiveRoot::register(Path::new("/home/u/.codex/worktrees/6d88/demo")),
+        live: LiveRoot::register(Path::new("/home/u/.codex/worktrees/6d88/demo"), None),
         state: Mutex::default(),
     }
 }
@@ -509,17 +509,21 @@ async fn describe_agent_worktree_requires_the_feature_and_the_owner() {
     manager
         .bind_thread(&checkout.root, &thread_id.to_string())
         .expect("bind owner");
-    codex_worktree::write_agent_metadata(
-        &checkout.root,
-        &AgentWorktreeMetadata {
-            thread_id: thread_id.to_string(),
-            base_sha: base,
-            base_kind: AgentWorktreeBaseKind::WorkingTree,
-            branch: "codex/agents/probe-0000000000000000".to_string(),
-            source_root: repository.to_str().map(str::to_owned),
-        },
+    let metadata = AgentWorktreeMetadata {
+        thread_id: thread_id.to_string(),
+        base_sha: base,
+        base_kind: AgentWorktreeBaseKind::WorkingTree,
+        branch: "codex/agents/probe-0000000000000000".to_string(),
+        source_root: repository.to_str().map(str::to_owned),
+    };
+    codex_worktree::write_agent_metadata(&checkout.root, &metadata).expect("write metadata");
+    // The host records an isolated spawn's worktree (R5.6); it marks the thread as isolated
+    // once the checkout is gone (P3-6).
+    codex_worktree::write_agent_record(
+        &home_path.join("agent-worktrees"),
+        &codex_worktree::AgentWorktreeRecord::new(&checkout.root, &repository, &metadata),
     )
-    .expect("write metadata");
+    .expect("write record");
 
     let disabled = load_config(&home, "", Some(&repository))
         .await
@@ -560,4 +564,229 @@ async fn describe_agent_worktree_requires_the_feature_and_the_owner() {
             state: codex_worktree::AgentWorktreeState::Removed,
         })
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review 2026-10-27 of the finished feature (docs/fork/reviews/2026-10-27-worktree-finish-review.md)
+// ---------------------------------------------------------------------------------------------
+
+/// A repository `project` with one commit under a canonical temporary Codex home.
+fn repository_fixture() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let home = tempfile::TempDir::new().expect("create temp dir");
+    let home_path = dunce::canonicalize(home.path()).expect("canonical home");
+    let repository = home_path.join("project");
+    std::fs::create_dir_all(&repository).expect("create repository");
+    git(&repository, &["init", "--quiet", "-b", "main"]);
+    std::fs::write(repository.join("a.txt"), "a\n").expect("write file");
+    git(&repository, &["add", "."]);
+    git(
+        &repository,
+        &[
+            "-c",
+            "user.name=Codex Test",
+            "-c",
+            "user.email=codex@example.invalid",
+            "commit",
+            "--quiet",
+            "--no-gpg-sign",
+            "-m",
+            "initial",
+        ],
+    );
+    (home, home_path, repository)
+}
+
+/// An agent worktree created from `source` as an isolated spawn creates it.
+fn spawned_worktree(
+    home: &Path,
+    source: &Path,
+    thread_id: ThreadId,
+    agent_path: &AgentPath,
+) -> CreatedWorktree {
+    create_worktree_blocking(
+        WorktreeSettings::for_cli(home, /*desktop*/ None).expect("settings"),
+        &home.join("agent-worktrees"),
+        source,
+        AgentWorktreeBaseKind::WorkingTree,
+        thread_id.to_string(),
+        agent_branch_name(agent_path, thread_id),
+    )
+    .expect("create the agent worktree")
+}
+
+/// Records a change of the agent on its branch, then removes its worktree by hand.
+fn checkpoint_and_remove(created: &CreatedWorktree, agent_path: &AgentPath, repository: &Path) {
+    std::fs::write(created.root.join("agent.txt"), "agent\n").expect("agent edit");
+    codex_worktree::checkpoint(CheckpointRequest {
+        root: created.root.as_path(),
+        metadata: &created.metadata,
+        agent_path: agent_path.as_str(),
+    })
+    .expect("checkpoint");
+    git(
+        repository,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            created.root.to_str().expect("UTF-8 path"),
+        ],
+    );
+}
+
+/// P2-2: after a restart a child woken by an isolated sibling comes back from its parent's
+/// checkout, so that checkout never stays writable for it.
+#[tokio::test]
+async fn a_restored_child_woken_by_a_sibling_is_bound_to_the_parent_checkout() {
+    let (home, home_path, repository) = repository_fixture();
+    let sibling_path = AgentPath::root().join("sibling").expect("agent path");
+    let sibling = spawned_worktree(&home_path, &repository, ThreadId::new(), &sibling_path);
+    let child_path = AgentPath::root().join("child").expect("agent path");
+    let child_id = ThreadId::new();
+    let child = spawned_worktree(&home_path, &repository, child_id, &child_path);
+    checkpoint_and_remove(&child, &child_path, &repository);
+
+    // The sibling sends the follow-up: the reload runs with its cwd.
+    let config = load_config(
+        &home,
+        "[features.agent_worktree_isolation]\nenabled = true\n",
+        Some(sibling.cwd.as_path()),
+    )
+    .await
+    .expect("config");
+    let binding = restore_missing_binding(
+        &config,
+        child_id,
+        child_path,
+        MissingWorktree {
+            root: child.root.to_path_buf(),
+            cwd: child.cwd.to_path_buf(),
+        },
+        /*parent_thread_id*/ Some(ThreadId::new()),
+    )
+    .await
+    .expect("restore the child");
+
+    assert_eq!(binding.source_root.as_path(), repository.as_path());
+    // P3-7: the base comes from the host record, not from the branch.
+    assert_eq!(binding.metadata().base_sha, child.metadata.base_sha);
+    let roots = rebase_workspace_roots(
+        &[absolute(&repository).expect("absolute")],
+        &binding.source_root,
+        &binding.root,
+    );
+    assert_eq!(roots, vec![binding.root.clone()]);
+}
+
+/// P2-2: a nested isolated child comes back from its isolated parent's worktree, not from
+/// the main checkout of whoever wakes it.
+#[tokio::test]
+async fn a_restored_nested_child_is_bound_to_the_parent_worktree() {
+    let (home, home_path, repository) = repository_fixture();
+    let parent_path = AgentPath::root().join("parent").expect("agent path");
+    let parent_id = ThreadId::new();
+    let parent = spawned_worktree(&home_path, &repository, parent_id, &parent_path);
+    let child_path = parent_path.join("child").expect("agent path");
+    let child_id = ThreadId::new();
+    let child = spawned_worktree(&home_path, parent.root.as_path(), child_id, &child_path);
+    checkpoint_and_remove(&child, &child_path, &repository);
+
+    // The root, working in the main checkout of the same name, wakes the grandchild.
+    let config = load_config(
+        &home,
+        "[features.agent_worktree_isolation]\nenabled = true\n",
+        Some(&repository),
+    )
+    .await
+    .expect("config");
+    let missing = MissingWorktree {
+        root: child.root.to_path_buf(),
+        cwd: child.cwd.to_path_buf(),
+    };
+    // A recorded parent checkout that belongs to another thread is refused, not guessed at.
+    let error = restore_missing_binding(
+        &config,
+        child_id,
+        child_path.clone(),
+        missing.clone(),
+        /*parent_thread_id*/ Some(ThreadId::new()),
+    )
+    .await
+    .expect_err("the worktree of another thread is not the parent checkout");
+    assert!(error.contains("not to its parent"), "{error}");
+    assert!(!child.root.exists());
+    let binding = restore_missing_binding(&config, child_id, child_path, missing, Some(parent_id))
+        .await
+        .expect("restore the nested child");
+
+    assert_eq!(binding.source_root, parent.root);
+    let roots = rebase_workspace_roots(
+        std::slice::from_ref(&parent.root),
+        &binding.source_root,
+        &binding.root,
+    );
+    assert_eq!(roots, vec![binding.root.clone()]);
+}
+
+/// P3-6: a removed managed checkout reports `removed` only for a thread that had its own
+/// agent worktree there.
+#[tokio::test]
+async fn a_removed_checkout_is_reported_only_for_an_isolated_thread() {
+    let (home, home_path, repository) = repository_fixture();
+    let manager = WorktreeManager::new(
+        WorktreeSettings::for_cli(&home_path, /*desktop*/ None).expect("settings"),
+    );
+    // A `codex exec --worktree` checkout that a non-isolated child inherited as its cwd.
+    let checkout = manager
+        .create(&CreateWorktree {
+            source_cwd: repository.clone(),
+            base: None,
+        })
+        .expect("create worktree");
+    std::fs::remove_dir_all(&checkout.root).expect("remove the checkout");
+    let config = load_config(
+        &home,
+        "[features.agent_worktree_isolation]\nenabled = true\n",
+        Some(&repository),
+    )
+    .await
+    .expect("config");
+    assert_eq!(
+        describe_agent_worktree(&config, ThreadId::new(), &checkout.cwd).await,
+        None
+    );
+}
+
+/// P3-8: two reloads of one child restoring its worktree at once both succeed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_reloads_restore_a_worktree_once() {
+    let (_home, home_path, repository) = repository_fixture();
+    let agent_path = AgentPath::root().join("probe").expect("agent path");
+    let thread_id = ThreadId::new();
+    let created = spawned_worktree(&home_path, &repository, thread_id, &agent_path);
+    let settings = WorktreeSettings::for_cli(&home_path, /*desktop*/ None).expect("settings");
+    let binding = Arc::new(AgentWorktreeBinding {
+        thread_id,
+        agent_path,
+        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        live: LiveRoot::register(created.root.as_path(), None),
+        root: created.root.clone(),
+        cwd: created.cwd.clone(),
+        source_root: created.source_root.clone(),
+        metadata: StdMutex::new(created.metadata.clone()),
+        parent_checkout_protected: AtomicBool::new(false),
+        read_only_explorer: AtomicBool::new(false),
+        settings,
+        sweep: None,
+        state: Mutex::default(),
+    });
+    std::fs::remove_dir_all(&created.root).expect("remove the checkout");
+
+    let (first, second) = tokio::join!(
+        ensure_worktree_present(&binding),
+        ensure_worktree_present(&binding)
+    );
+
+    assert_eq!((first, second), (Ok(()), Ok(())));
+    assert!(created.root.join(".git").exists());
 }

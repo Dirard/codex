@@ -75,8 +75,9 @@ pub struct AgentWorktreeBinding {
     settings: WorktreeSettings,
     /// Repository and limits of the sweep after the tree stops (UC10); `None` keeps it out.
     sweep: Option<SweepTarget>,
-    /// Keeps a sweep of this process away from the worktree while the binding lives.
-    _live: LiveRoot,
+    /// Keeps the sweep and finalize of every process away from the worktree while the binding
+    /// lives (R10.3).
+    live: LiveRoot,
     /// Serializes checkpoint and finalize operations of this worktree.
     state: Mutex<BindingState>,
 }
@@ -306,9 +307,12 @@ pub(crate) async fn prepare_agent_worktree(
     let thread_id_text = thread_id.to_string();
     let blocking_source_cwd = source_cwd.clone();
     let blocking_settings = settings.clone();
+    let records = agent_records_dir(config);
+    let blocking_records = records.clone();
     let created = tokio::task::spawn_blocking(move || {
         create_worktree_blocking(
             blocking_settings,
+            &blocking_records,
             blocking_source_cwd.as_path(),
             base_kind,
             thread_id_text,
@@ -322,6 +326,7 @@ pub(crate) async fn prepare_agent_worktree(
         cwd,
         source_root,
         metadata,
+        hold,
         base_duration,
         create_duration,
     } = created;
@@ -329,12 +334,13 @@ pub(crate) async fn prepare_agent_worktree(
         settings: settings.clone(),
         source: source_root.to_path_buf(),
         cleanup: config.agent_worktree_isolation.cleanup,
+        records,
     });
     let binding = Arc::new(AgentWorktreeBinding {
         thread_id,
         agent_path: agent_path.clone(),
         environment_id: environment_id.clone(),
-        _live: LiveRoot::register(root.as_path()),
+        live: LiveRoot::register(root.as_path(), hold),
         root,
         cwd,
         source_root,
@@ -383,12 +389,16 @@ struct CreatedWorktree {
     cwd: AbsolutePathBuf,
     source_root: AbsolutePathBuf,
     metadata: AgentWorktreeMetadata,
+    hold: Option<codex_worktree::AgentWorktreeHold>,
     base_duration: Duration,
     create_duration: Duration,
 }
 
+/// Creates the worktree, its owner record and agent metadata, and the host record of where
+/// it came from (R5.6), then holds it for the new binding.
 fn create_worktree_blocking(
     settings: WorktreeSettings,
+    records: &Path,
     source_cwd: &Path,
     base_kind: AgentWorktreeBaseKind,
     thread_id: String,
@@ -420,6 +430,16 @@ fn create_worktree_blocking(
     let recorded = manager
         .bind_thread(&checkout.root, &thread_id)
         .and_then(|()| codex_worktree::write_agent_metadata(&checkout.root, &metadata))
+        .and_then(|()| {
+            codex_worktree::write_agent_record(
+                records,
+                &codex_worktree::AgentWorktreeRecord::new(
+                    &checkout.root,
+                    &checkout.source_root,
+                    &metadata,
+                ),
+            )
+        })
         .map_err(unavailable)
         .and_then(|()| {
             Ok((
@@ -430,6 +450,7 @@ fn create_worktree_blocking(
         });
     match recorded {
         Ok((root, cwd, source_root)) => Ok(CreatedWorktree {
+            hold: ops::hold_worktree(root.as_path()),
             root,
             cwd,
             source_root,
@@ -489,6 +510,12 @@ pub(crate) fn agent_branch_name(agent_path: &AgentPath, thread_id: ThreadId) -> 
         .iter()
         .collect::<String>();
     format!("codex/agents/{}-{suffix}", agent_path.name())
+}
+
+/// Host records of where each agent worktree came from (R5.6), outside the managed root so
+/// that removing worktrees by hand keeps them.
+fn agent_records_dir(config: &Config) -> std::path::PathBuf {
+    config.codex_home.as_path().join("agent-worktrees")
 }
 
 /// Shares Desktop's managed root (`$CODEX_HOME/worktrees` or `desktop.git-worktree-root`).
@@ -872,27 +899,36 @@ pub(crate) async fn discover_binding_or_missing(
     stored_cwd: &Path,
 ) -> Result<Discovery, String> {
     let settings = worktree_settings(config)?;
+    let records = agent_records_dir(config);
     let stored_cwd = stored_cwd.to_path_buf();
     let blocking_settings = settings.clone();
+    let blocking_records = records.clone();
     let discovered = tokio::task::spawn_blocking(move || {
-        discover_binding_blocking(blocking_settings, thread_id, &stored_cwd)
+        discover_binding_blocking(blocking_settings, &blocking_records, thread_id, &stored_cwd)
     })
     .await
     .map_err(|err| format!("worktree discovery failed: {err}"))??;
     Ok(match discovered {
         DiscoveryResult::NotIsolated => Discovery::NotIsolated,
         DiscoveryResult::Missing(missing) => Discovery::Missing(missing),
-        DiscoveryResult::Bound((root, cwd, source_root, metadata)) => {
+        DiscoveryResult::Bound(DiscoveredBinding {
+            root,
+            cwd,
+            source_root,
+            metadata,
+            hold,
+        }) => {
             let sweep = Some(SweepTarget {
                 settings: settings.clone(),
                 source: source_root.to_path_buf(),
                 cleanup: config.agent_worktree_isolation.cleanup,
+                records,
             });
             Discovery::Bound(Arc::new(AgentWorktreeBinding {
                 thread_id,
                 agent_path,
                 environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-                _live: LiveRoot::register(root.as_path()),
+                live: LiveRoot::register(root.as_path(), hold),
                 root,
                 cwd,
                 source_root,
@@ -910,12 +946,14 @@ pub(crate) async fn discover_binding_or_missing(
     })
 }
 
-type DiscoveredBinding = (
-    AbsolutePathBuf,
-    AbsolutePathBuf,
-    AbsolutePathBuf,
-    AgentWorktreeMetadata,
-);
+/// A binding found or restored on disk, held for this process.
+struct DiscoveredBinding {
+    root: AbsolutePathBuf,
+    cwd: AbsolutePathBuf,
+    source_root: AbsolutePathBuf,
+    metadata: AgentWorktreeMetadata,
+    hold: Option<codex_worktree::AgentWorktreeHold>,
+}
 
 enum DiscoveryResult {
     NotIsolated,
@@ -925,6 +963,7 @@ enum DiscoveryResult {
 
 fn discover_binding_blocking(
     settings: WorktreeSettings,
+    records: &Path,
     thread_id: ThreadId,
     stored_cwd: &Path,
 ) -> Result<DiscoveryResult, String> {
@@ -979,12 +1018,25 @@ fn discover_binding_blocking(
         .strip_prefix(&root)
         .map(Path::to_path_buf)
         .unwrap_or_default();
-    Ok(DiscoveryResult::Bound((
-        absolute(&root)?,
-        absolute(&root.join(relative))?,
-        absolute(&source_root)?,
+    // Worktrees created before the host records existed get one now, from metadata the host
+    // wrote, so they can be restored after a removal too (R5.6).
+    let thread = thread_id.to_string();
+    if matches!(
+        codex_worktree::read_agent_record(records, &thread),
+        Ok(None)
+    ) && let Err(err) = codex_worktree::write_agent_record(
+        records,
+        &codex_worktree::AgentWorktreeRecord::new(&root, &source_root, &metadata),
+    ) {
+        warn!("cannot record agent worktree {}: {err:#}", root.display());
+    }
+    Ok(DiscoveryResult::Bound(DiscoveredBinding {
+        hold: ops::hold_worktree(&root),
+        root: absolute(&root)?,
+        cwd: absolute(&root.join(relative))?,
+        source_root: absolute(&source_root)?,
         metadata,
-    )))
+    }))
 }
 
 /// Checkpoints the worktree and renders the completion-mail block (spec UC4).
@@ -1224,6 +1276,9 @@ async fn finalize_tree_worktree(binding: Arc<AgentWorktreeBinding>) {
             blocking.record_branch(&branch);
             metadata.branch = branch;
         }
+        // The stopped child no longer uses its worktree; a live binding of another process
+        // still keeps it (R10.3).
+        blocking.live.release_hold();
         codex_worktree::remove_if_unchanged(
             blocking.source_root.as_path(),
             blocking.root.as_path(),

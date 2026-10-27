@@ -17,27 +17,28 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::SubAgentSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+/// Worktree states read at once for one answer: each costs a few Git processes.
+const ANNOTATION_CONCURRENCY: usize = 8;
+
 /// Sets `extra.agentWorktree` of every spawned sub-agent thread that works in its own
 /// managed worktree; other threads stay unchanged.
 pub(super) async fn annotate_agent_worktrees<'a>(
     config: &Config,
     threads: impl IntoIterator<Item = &'a mut Thread>,
 ) {
+    use futures::StreamExt as _;
     if !config.features.enabled(Feature::AgentWorktreeIsolation) {
         return;
     }
-    futures::future::join_all(
-        threads
-            .into_iter()
-            .filter(|thread| {
-                matches!(
-                    &thread.source,
-                    SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
-                )
-            })
-            .map(|thread| annotate(config, thread)),
-    )
-    .await;
+    let sub_agents = threads.into_iter().filter(|thread| {
+        matches!(
+            &thread.source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+        )
+    });
+    futures::stream::iter(sub_agents)
+        .for_each_concurrent(ANNOTATION_CONCURRENCY, |thread| annotate(config, thread))
+        .await;
 }
 
 async fn annotate(config: &Config, thread: &mut Thread) {

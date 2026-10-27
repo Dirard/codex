@@ -3,16 +3,17 @@
 //! Spec: `specs/agent-worktree-isolation-2026-10-25.md`, UC5 (restore a removed worktree, R5.3,
 //! R5.6), UC9 (worktree state) and UC10 (sweep forgotten worktrees).
 
-use super::AgentWorktreeBaseKind;
+use super::AGENT_COMMIT_AUTHOR_EMAIL;
 use super::AgentWorktreeMetadata;
-use super::BASE_KIND_TRAILER;
-use super::BASE_TRAILER;
+use super::KeptReason;
 use super::LAST_FREE_BRANCH_SUFFIX;
 use super::RemoveOutcome;
-use super::SNAPSHOT_MESSAGE;
 use super::THREAD_TRAILER;
 use super::branch_ref;
+use super::exclusive_hold;
 use super::has_changes;
+use super::is_ancestor;
+use super::is_held;
 use super::optional_commit;
 use super::own_branch_tip;
 use super::read_agent_metadata;
@@ -66,7 +67,8 @@ pub struct AgentWorktreeStatus {
 }
 
 /// Reads the state of an agent worktree (R9.1). Ignored files such as build output do not
-/// count as changes.
+/// count as changes. The own branch is checked first: with it the worktree is changed and
+/// no `git status` runs.
 pub fn agent_worktree_status(
     root: &Path,
     metadata: &AgentWorktreeMetadata,
@@ -96,16 +98,15 @@ pub fn agent_worktree_status(
 pub struct RecoveredBranch {
     pub branch: String,
     pub tip: String,
-    pub base_sha: String,
-    pub base_kind: AgentWorktreeBaseKind,
 }
 
 /// Finds the thread's own agent branch in the repository of `source_root` (R5.6).
 ///
 /// The recorded name and its free names `-2` through `-20` are tried in order. A branch is the
-/// thread's own when its first-parent history holds a checkpoint commit whose
-/// `Codex-Thread-Id` trailer names the thread. The base comes from the newest such commit's
-/// `Codex-Agent-Base` trailers, or for older checkpoints from the parent of the oldest one.
+/// thread's own when its first-parent history holds a checkpoint commit that the host wrote
+/// for the thread: author `Codex Agent`, subject `codex agent <path> checkpoint` and a
+/// `Codex-Thread-Id` trailer naming the thread. The base is not read from the branch, whose
+/// commits can come from the agent itself; the R4.9 trailers are informational.
 pub fn agent_branch_for_thread(
     source_root: &Path,
     recorded_branch: &str,
@@ -118,26 +119,17 @@ pub fn agent_branch_for_thread(
         let Some(tip) = optional_commit(source_root, &reference)? else {
             continue;
         };
-        if let Some((base_sha, base_kind)) = thread_base_on_branch(source_root, &tip, thread_id)? {
-            return Ok(Some(RecoveredBranch {
-                branch: name,
-                tip,
-                base_sha,
-                base_kind,
-            }));
+        if holds_thread_checkpoint(source_root, &tip, thread_id)? {
+            return Ok(Some(RecoveredBranch { branch: name, tip }));
         }
     }
     Ok(None)
 }
 
-/// The base recorded by the thread's checkpoints in the first-parent history of `tip`.
-fn thread_base_on_branch(
-    source_root: &Path,
-    tip: &str,
-    thread_id: &str,
-) -> Result<Option<(String, AgentWorktreeBaseKind)>> {
+/// Whether the first-parent history of `tip` holds a host checkpoint of the thread.
+fn holds_thread_checkpoint(source_root: &Path, tip: &str, thread_id: &str) -> Result<bool> {
     let format = format!(
-        "--format=%H%x00%P%x00%(trailers:key={THREAD_TRAILER},valueonly,separator=%x2C)%x00%(trailers:key={BASE_TRAILER},valueonly,separator=%x2C)%x00%(trailers:key={BASE_KIND_TRAILER},valueonly,separator=%x2C)%x1e"
+        "--format=%ae%x00%s%x00%(trailers:key={THREAD_TRAILER},valueonly,separator=%x2C)%x1e"
     );
     let output = git_output(
         source_root,
@@ -152,52 +144,68 @@ fn thread_base_on_branch(
         ],
     )?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut newest_base = None;
-    let mut oldest_parent = None;
-    for record in stdout.split('\u{1e}') {
+    Ok(stdout.split('\u{1e}').any(|record| {
         let fields = record
             .trim_start_matches('\n')
             .split('\0')
             .collect::<Vec<_>>();
-        let [_, parents, threads, base, base_kind] = fields.as_slice() else {
-            continue;
+        let [author, subject, threads] = fields.as_slice() else {
+            return false;
         };
-        if !threads.split(',').any(|value| value.trim() == thread_id) {
-            continue;
-        }
-        if newest_base.is_none() {
-            let base = base.trim();
-            if is_full_object_id(base)
-                && let Some(kind) = AgentWorktreeBaseKind::parse(base_kind.trim())
-            {
-                newest_base = Some((base.to_string(), kind));
-            }
-        }
-        oldest_parent = parents.split_whitespace().next().map(str::to_owned);
-    }
-    if let Some(base) = newest_base {
-        return Ok(Some(base));
-    }
-    let Some(parent) = oldest_parent else {
-        return Ok(None);
-    };
-    // Checkpoints older than R4.9 carry no base trailers: the base is the parent of the
-    // thread's oldest checkpoint, and a snapshot commit marks a `working_tree` base.
-    let subject = git_output(
-        source_root,
-        GitOperation::Metadata,
-        ["log", "-1", "--format=%s", parent.as_str(), "--"],
-    )?;
-    let kind = if String::from_utf8_lossy(&subject.stdout).trim() == SNAPSHOT_MESSAGE {
-        AgentWorktreeBaseKind::WorkingTree
-    } else {
-        AgentWorktreeBaseKind::Head
-    };
-    Ok(Some((parent, kind)))
+        *author == AGENT_COMMIT_AUTHOR_EMAIL
+            && subject.starts_with("codex agent ")
+            && subject.ends_with(" checkpoint")
+            && threads.split(',').any(|value| value.trim() == thread_id)
+    }))
 }
 
-fn is_full_object_id(value: &str) -> bool {
-    matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+/// Another checkout than `except` that has `branch` checked out, if any. A registered
+/// checkout that is missing right now (an unmounted drive) counts: it comes back with the
+/// branch checked out.
+fn branch_checkout(source_root: &Path, branch: &str, except: &Path) -> Result<Option<PathBuf>> {
+    let reference = branch_ref(branch)?;
+    let output = git_output(
+        source_root,
+        GitOperation::Metadata,
+        ["worktree", "list", "--porcelain", "-z"],
+    )?;
+    let fields = output
+        .stdout
+        .split(|byte| *byte == b'\0')
+        .collect::<Vec<_>>();
+    for entry in fields.split(|field| field.is_empty()) {
+        let mut root = None;
+        let mut checked_out = false;
+        for field in entry {
+            if let Some(path) = field.strip_prefix(b"worktree ") {
+                root = Some(crate::git::git_path_from_bytes(path)?);
+            } else if field.strip_prefix(b"branch ") == Some(reference.as_bytes()) {
+                checked_out = true;
+            }
+        }
+        if checked_out
+            && let Some(root) = root
+            && root != except
+        {
+            return Ok(Some(root));
+        }
+    }
+    Ok(None)
+}
+
+/// A hash of the repository's worktree list. It changes when a worktree is added or removed
+/// or moves its HEAD, so a caller can skip sweeping a repository where nothing happened.
+pub fn worktree_list_fingerprint(cwd: &Path) -> Result<u64> {
+    use std::hash::Hash as _;
+    use std::hash::Hasher as _;
+    let output = git_output(
+        cwd,
+        GitOperation::Metadata,
+        ["worktree", "list", "--porcelain", "-z"],
+    )?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    output.stdout.hash(&mut hasher);
+    Ok(hasher.finish())
 }
 
 /// Where a restored worktree starts.
@@ -211,9 +219,11 @@ pub enum RestoreFrom {
 
 /// Recreates a removed agent worktree at its old path (R5.3).
 ///
-/// The path must be free. A stale registration of the old checkout is pruned first, the
-/// worktree is populated like a new managed worktree, and its owner record and agent metadata
-/// are written again. On failure nothing is left behind.
+/// The path must be free. A branch must still contain the recorded base and must not be
+/// checked out in another checkout: the next checkpoint would move it under that checkout.
+/// Only a stale registration of this very path is replaced; other missing worktrees of the
+/// repository keep theirs. The worktree is populated like a new managed worktree, and its
+/// owner record and agent metadata are written again. On failure nothing is left behind.
 pub fn restore_agent_worktree(
     manager: &WorktreeManager,
     source_root: &Path,
@@ -225,7 +235,22 @@ pub fn restore_agent_worktree(
         bail!("the path {} is occupied", root.display());
     }
     let commit = match from {
-        RestoreFrom::Branch { tip, .. } => tip.clone(),
+        RestoreFrom::Branch { name, tip } => {
+            if !is_ancestor(source_root, &metadata.base_sha, tip)? {
+                bail!(
+                    "the recorded base {} is not an ancestor of branch {name}",
+                    metadata.base_sha
+                );
+            }
+            // The stale registration of `root` itself is replaced below.
+            if let Some(checkout) = branch_checkout(source_root, name, root)? {
+                bail!(
+                    "branch {name} is checked out in {}; switch that checkout to another branch first",
+                    checkout.display()
+                );
+            }
+            tip.clone()
+        }
         RestoreFrom::Base => {
             optional_commit(source_root, &metadata.base_sha)?.with_context(|| {
                 format!(
@@ -240,13 +265,15 @@ pub fn restore_agent_worktree(
         .context("the worktree path has no parent directory")?;
     fs::create_dir_all(bucket)
         .with_context(|| format!("cannot recreate the bucket {}", bucket.display()))?;
-    let _ = git_output(source_root, GitOperation::Metadata, ["worktree", "prune"]);
+    // `--force` replaces only a stale registration of this path (not a locked one); unlike
+    // `git worktree prune` it leaves other missing worktrees registered.
     if let Err(error) = git_output(
         source_root,
         GitOperation::WorkingTree,
         [
             OsStr::new("worktree"),
             OsStr::new("add"),
+            OsStr::new("--force"),
             OsStr::new("--detach"),
             OsStr::new("--no-checkout"),
             root.as_os_str(),
@@ -329,7 +356,8 @@ fn populate_restored(
 pub struct SweepPolicy {
     /// Unchanged worktrees kept among the most recently active ones.
     pub keep_count: usize,
-    /// Unchanged worktrees idle at least this long are removed.
+    /// Unchanged worktrees idle at least this long are removed, and so are worktrees whose
+    /// work is all on their own branch when they can be restored from it.
     pub max_idle: Duration,
     /// Unchanged worktrees idle less than this are never removed.
     pub min_idle: Duration,
@@ -345,26 +373,36 @@ pub struct SweepReport {
     pub failed: Vec<(PathBuf, String)>,
 }
 
-/// Removes forgotten unchanged agent worktrees of the repository at `source_cwd` (UC10).
+/// Removes forgotten agent worktrees of the repository at `source_cwd` (UC10).
 ///
 /// Only managed worktrees with agent metadata confirmed by their owner record are
-/// considered; `in_use` holds the ones bound in this process. Changed worktrees and agent
-/// branches are never touched. An unchanged worktree is removed when it has been idle for
+/// considered. A worktree is never removed while `in_use` reports it bound in this process,
+/// while a live binding of any process holds it ([`super::hold_agent_worktree`]), or while
+/// `source_cwd` lies in it. An unchanged worktree is removed when it has been idle for
 /// `max_idle`, or when it is not among the `keep_count` most recently active unchanged ones
-/// and has been idle for `min_idle`. Failures are counted and leave the worktree in place.
+/// and has been idle for `min_idle`. A worktree whose HEAD is the tip of its own branch and
+/// that has no uncommitted changes holds nothing the branch lacks; it is removed after
+/// `max_idle` when `restorable` says a reload can bring it back from the branch (R5.3).
+/// Other changed worktrees and all agent branches are never touched. Failures are counted
+/// and leave the worktree in place.
 pub fn sweep_agent_worktrees(
     manager: &WorktreeManager,
     source_cwd: &Path,
     policy: &SweepPolicy,
     in_use: &dyn Fn(&Path) -> bool,
+    restorable: &dyn Fn(&AgentWorktreeMetadata) -> bool,
     now: SystemTime,
 ) -> Result<SweepReport> {
     let source_root = super::repository_root(source_cwd)?;
+    let session_cwd = dunce::canonicalize(source_cwd).unwrap_or_else(|_| source_cwd.to_path_buf());
     let mut report = SweepReport::default();
     let mut unchanged = Vec::new();
+    let mut parked = Vec::new();
     for worktree in manager.list(source_cwd)? {
         let root = worktree.root;
-        if in_use(&root) {
+        let canonical_root = dunce::canonicalize(&root).unwrap_or_else(|_| root.clone());
+        if in_use(&root) || session_cwd.starts_with(&canonical_root) {
+            report.kept += 1;
             continue;
         }
         let metadata = match read_agent_metadata(&root) {
@@ -383,11 +421,29 @@ pub fn sweep_agent_worktrees(
                 continue;
             }
         }
+        // A live agent of another process: no need to read its state.
+        match is_held(&root) {
+            Ok(false) => {}
+            Ok(true) => {
+                report.kept += 1;
+                continue;
+            }
+            Err(error) => {
+                report.failed.push((root, format!("{error:#}")));
+                continue;
+            }
+        }
         // Read the activity before inspecting the worktree.
         let activity = last_activity(&root).unwrap_or(now);
+        let idle = now.duration_since(activity).unwrap_or_default();
         match agent_worktree_status(&root, &metadata) {
             Ok(status) if status.state == AgentWorktreeState::Clean => {
                 unchanged.push((activity, root, metadata));
+            }
+            Ok(status)
+                if status.branch.is_some() && idle >= policy.max_idle && restorable(&metadata) =>
+            {
+                parked.push((root, metadata));
             }
             Ok(_) => report.kept += 1,
             Err(error) => report.failed.push((root, format!("{error:#}"))),
@@ -402,13 +458,63 @@ pub fn sweep_agent_worktrees(
             report.kept += 1;
             continue;
         }
-        match remove_if_unchanged(&source_root, &root, &metadata) {
-            Ok(RemoveOutcome::Removed | RemoveOutcome::AlreadyMissing) => report.removed.push(root),
-            Ok(RemoveOutcome::Kept(_)) => report.kept += 1,
-            Err(error) => report.failed.push((root, format!("{error:#}"))),
-        }
+        record_removal(
+            &mut report,
+            root.clone(),
+            remove_if_unchanged(&source_root, &root, &metadata),
+        );
+    }
+    for (root, metadata) in parked {
+        record_removal(
+            &mut report,
+            root.clone(),
+            remove_if_parked(&source_root, &root, &metadata),
+        );
     }
     Ok(report)
+}
+
+fn record_removal(report: &mut SweepReport, root: PathBuf, outcome: Result<RemoveOutcome>) {
+    match outcome {
+        Ok(RemoveOutcome::Removed | RemoveOutcome::AlreadyMissing) => report.removed.push(root),
+        Ok(RemoveOutcome::Kept(_)) => report.kept += 1,
+        Err(error) => report.failed.push((root, format!("{error:#}"))),
+    }
+}
+
+/// Removes a worktree whose HEAD is the tip of its own branch and that has no uncommitted
+/// changes: the branch holds all its work and restores it (R5.3). Ignored files are lost,
+/// as for an unchanged worktree.
+fn remove_if_parked(
+    source_root: &Path,
+    root: &Path,
+    metadata: &AgentWorktreeMetadata,
+) -> Result<RemoveOutcome> {
+    let Some(_exclusive) = exclusive_hold(root)? else {
+        return Ok(RemoveOutcome::Kept(KeptReason::InUse));
+    };
+    let Some(tip) = own_branch_tip(root, &metadata.branch)? else {
+        return Ok(RemoveOutcome::Kept(KeptReason::Changes));
+    };
+    if optional_commit(root, "HEAD")?.as_deref() != Some(tip.as_str()) {
+        return Ok(RemoveOutcome::Kept(KeptReason::Commits));
+    }
+    if has_changes(root)? {
+        return Ok(RemoveOutcome::Kept(KeptReason::Changes));
+    }
+    git_output(
+        source_root,
+        GitOperation::WorkingTree,
+        [
+            OsStr::new("worktree"),
+            OsStr::new("remove"),
+            OsStr::new("--force"),
+            root.as_os_str(),
+        ],
+    )
+    .context("cannot remove the agent worktree kept on its branch")?;
+    remove_empty_bucket(root);
+    Ok(RemoveOutcome::Removed)
 }
 
 /// The canonical root of the Git checkout that contains `cwd`.

@@ -468,6 +468,104 @@ pub enum KeptReason {
     Changes,
     /// The worktree HEAD moved away from the base.
     Commits,
+    /// A live binding of some process holds the worktree ([`hold_agent_worktree`]).
+    InUse,
+}
+
+/// File in a worktree's administration directory that live bindings lock shared.
+const HOLD_FILE: &str = "codex-agent.lock";
+
+/// A shared hold of an agent worktree by a live binding (R10.3).
+///
+/// While any process keeps one, [`remove_if_unchanged`] and the sweep of every process leave
+/// the worktree alone: removal needs the exclusive lock. The kernel drops the lock when the
+/// process exits, so a crashed process never blocks the cleanup of its worktrees.
+#[derive(Debug)]
+pub struct AgentWorktreeHold {
+    _file: fs::File,
+}
+
+/// Holds an agent worktree for a live binding; waits while a removal holds it exclusively.
+pub fn hold_agent_worktree(root: &Path) -> Result<AgentWorktreeHold> {
+    let file = open_hold_file(root)?;
+    file.lock_shared()
+        .with_context(|| format!("cannot hold the agent worktree {}", root.display()))?;
+    Ok(AgentWorktreeHold { _file: file })
+}
+
+/// Attempts at the exclusive lock before a worktree counts as held.
+const EXCLUSIVE_ATTEMPTS: u32 = 5;
+
+/// The exclusive lock of a worktree that no live binding holds; `None` while one does.
+///
+/// A child process between `fork` and `exec` briefly shares every open file of its parent,
+/// lock included, so a hold dropped a moment ago can still look taken; a few short retries
+/// let such a copy go away.
+fn exclusive_hold(root: &Path) -> Result<Option<fs::File>> {
+    let file = open_hold_file(root)?;
+    for attempt in 1..=EXCLUSIVE_ATTEMPTS {
+        match file.try_lock() {
+            Ok(()) => return Ok(Some(file)),
+            Err(fs::TryLockError::WouldBlock) if attempt < EXCLUSIVE_ATTEMPTS => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(fs::TryLockError::WouldBlock) => return Ok(None),
+            Err(fs::TryLockError::Error(error)) => {
+                return Err(error)
+                    .with_context(|| format!("cannot lock the agent worktree {}", root.display()));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Whether a live binding of any process holds the worktree right now.
+fn is_held(root: &Path) -> Result<bool> {
+    Ok(exclusive_hold(root)?.is_none())
+}
+
+fn open_hold_file(root: &Path) -> Result<fs::File> {
+    let path = worktree_git_dir(root)?.join(HOLD_FILE);
+    fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("cannot open {}", path.display()))
+}
+
+/// The administration directory of a linked worktree, read from its `.git` file without a
+/// Git process when possible.
+fn worktree_git_dir(root: &Path) -> Result<PathBuf> {
+    if let Ok(pointer) = fs::read_to_string(root.join(".git"))
+        && let Some(path) = pointer.strip_prefix("gitdir: ")
+    {
+        let path = Path::new(path.trim_end_matches(['\n', '\r']));
+        return Ok(if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            root.join(path)
+        });
+    }
+    git_path(root, ["rev-parse", "--path-format=absolute", "--git-dir"])
+}
+
+/// Drops the registration of a worktree whose checkout is gone, and only that one: unlike
+/// `git worktree prune`, other missing worktrees (for example on an unmounted drive) keep
+/// theirs. Failures are ignored; a stale registration is harmless.
+fn drop_missing_registration(source_root: &Path, root: &Path) {
+    if source_root.is_dir() {
+        let _ = git_output(
+            source_root,
+            GitOperation::Metadata,
+            [
+                OsStr::new("worktree"),
+                OsStr::new("remove"),
+                OsStr::new("--force"),
+                root.as_os_str(),
+            ],
+        );
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -480,22 +578,26 @@ pub enum RemoveOutcome {
 
 /// Removes an agent worktree that never changed (spec step "remove the worktree").
 ///
-/// Keeps the worktree when its own branch exists, when it has tracked or untracked
-/// non-ignored changes, or when its HEAD left the base. A branch of the same name outside the
-/// worktree history is not its own. Ignored files such as build output do not prevent
-/// removal.
+/// Keeps the worktree when a live binding of any process holds it, when its own branch
+/// exists, when it has tracked or untracked non-ignored changes, or when its HEAD left the
+/// base. A branch of the same name outside the worktree history is not its own. Ignored
+/// files such as build output do not prevent removal. A missing checkout loses only its own
+/// registration.
 pub fn remove_if_unchanged(
     source_root: &Path,
     root: &Path,
     metadata: &AgentWorktreeMetadata,
 ) -> Result<RemoveOutcome> {
     if !root.join(".git").exists() {
-        if source_root.is_dir() {
-            let _ = git_output(source_root, GitOperation::Metadata, ["worktree", "prune"]);
-        }
+        drop_missing_registration(source_root, root);
         remove_empty_bucket(root);
         return Ok(RemoveOutcome::AlreadyMissing);
     }
+    // The exclusive lock is kept until the worktree is gone, so no binding can take it over
+    // between the checks and the removal (R10.3).
+    let Some(_exclusive) = exclusive_hold(root)? else {
+        return Ok(RemoveOutcome::Kept(KeptReason::InUse));
+    };
     if own_branch_tip(root, &metadata.branch)?.is_some() {
         return Ok(RemoveOutcome::Kept(KeptReason::Branch));
     }
@@ -582,7 +684,9 @@ fn is_ancestor(root: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
 
 fn has_changes(root: &Path) -> Result<bool> {
     // Without optional locks `status` does not rewrite the index, so inspecting a worktree
-    // does not count as activity for the sweep (R10.4).
+    // does not count as activity for the sweep (R10.4). Only whether anything changed
+    // matters: `normal` reports an untracked directory once instead of walking all of it,
+    // and still hides directories without untracked, non-ignored files.
     let status = git_output(
         root,
         GitOperation::WorkingTree,
@@ -591,7 +695,7 @@ fn has_changes(root: &Path) -> Result<bool> {
             "status",
             "--porcelain=v1",
             "-z",
-            "--untracked-files=all",
+            "--untracked-files=normal",
         ],
     )?;
     Ok(!status.stdout.is_empty())
@@ -732,6 +836,8 @@ fn format_shortstat(files: usize, insertions: u64, deletions: u64) -> String {
 mod maintenance;
 #[path = "agent_merge.rs"]
 mod merge;
+#[path = "agent_record.rs"]
+mod record;
 
 pub use maintenance::AgentWorktreeState;
 pub use maintenance::AgentWorktreeStatus;
@@ -745,10 +851,15 @@ pub use maintenance::checkout_root;
 pub use maintenance::last_activity;
 pub use maintenance::restore_agent_worktree;
 pub use maintenance::sweep_agent_worktrees;
+pub use maintenance::worktree_list_fingerprint;
 pub use merge::CleanMerge;
 pub use merge::MergeOutcome;
 pub use merge::MergedChange;
 pub use merge::merge_agent_branch;
+pub use record::AgentWorktreeRecord;
+pub use record::prune_agent_records;
+pub use record::read_agent_record;
+pub use record::write_agent_record;
 
 #[cfg(test)]
 #[path = "agent_tests.rs"]
