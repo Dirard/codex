@@ -7,7 +7,7 @@
 //! - `[output_truncation]`: `docs/fork/02-compaction-context.md`.
 //! - `features.explorer_profile`: `specs/explorer-and-questions-2026-10-25.md`.
 //! - `features.agent_worktree_isolation`: `specs/agent-worktree-isolation-2026-10-25.md`.
-//! - `features.multi_agent_v2.message_delivery`, `agents.max_spawned_threads_per_turn`:
+//! - `features.multi_agent_v2.message_delivery`, the removed `agents.max_spawned_threads_per_turn`:
 //!   `docs/fork/01-multi-agent-runtime.md`, `docs/fork/03-tools-mcp-code-mode.md`.
 
 use codex_config::config_toml::ConfigToml;
@@ -26,8 +26,6 @@ use serde::Serialize;
 
 use super::DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE;
 use super::MultiAgentV2Config;
-
-pub const DEFAULT_MAX_SPAWNED_THREADS_PER_TURN: usize = 16;
 
 /// Fork: whether a workflow run needs the user's approval before it starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -380,20 +378,18 @@ pub(super) fn resolve_agent_profiles(
     Ok((explorer_profile, agent_worktree_isolation))
 }
 
-/// `agents.max_spawned_threads_per_turn`, at least 1.
-pub(super) fn resolve_max_spawned_threads_per_turn(
+/// `agents.max_spawned_threads_per_turn` limited the children of one root input until the
+/// fork removed its cumulative spawn budget (2026-10-26, docs/fork/01-multi-agent-runtime.md
+/// F1). A config that still sets it loads; the key is ignored with a startup warning.
+pub(super) fn warn_removed_agents_keys(
     agents: Option<&codex_config::config_toml::AgentsToml>,
-) -> std::io::Result<usize> {
-    let max_spawned_threads_per_turn = agents
-        .and_then(|agents| agents.max_spawned_threads_per_turn)
-        .unwrap_or(DEFAULT_MAX_SPAWNED_THREADS_PER_TURN);
-    if max_spawned_threads_per_turn == 0 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "agents.max_spawned_threads_per_turn must be at least 1",
-        ));
+    startup_warnings: &mut Vec<String>,
+) {
+    if agents.is_some_and(|agents| agents.max_spawned_threads_per_turn.is_some()) {
+        startup_warnings.push(
+            "`agents.max_spawned_threads_per_turn` is deprecated and ignored. Codex no longer limits the total number of agents spawned for one input; remove this setting from config.toml or profile configuration files.".to_owned(),
+        );
     }
-    Ok(max_spawned_threads_per_turn)
 }
 
 /// Plaintext message delivery and worktree isolation need a tool namespace other than

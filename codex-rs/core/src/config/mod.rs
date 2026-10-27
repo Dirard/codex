@@ -1156,9 +1156,6 @@ pub struct Config {
     /// Fork: limits of background workflow runs (`[workflows]`).
     pub workflows: WorkflowsConfig,
 
-    /// Maximum cumulative child threads created by one external root user input.
-    pub max_spawned_threads_per_turn: usize,
-
     /// Fork: settings applied to `explorer` children while `explorer_profile` is enabled.
     pub explorer_profile: ExplorerProfileConfig,
 
@@ -4106,8 +4103,7 @@ impl Config {
                 "agents.max_concurrent_threads_per_session must be at least 1",
             ));
         }
-        let max_spawned_threads_per_turn =
-            fork::resolve_max_spawned_threads_per_turn(cfg.agents.as_ref())?;
+        fork::warn_removed_agents_keys(cfg.agents.as_ref(), &mut startup_warnings);
         let agent_max_depth = cfg
             .agents
             .as_ref()
@@ -4714,7 +4710,6 @@ impl Config {
             // Fork: settings of the fork's features (config/fork.rs).
             output_truncation: fork::output_truncation_config(cfg.output_truncation),
             workflows: WorkflowsConfig::from_toml(cfg.workflows.as_ref())?,
-            max_spawned_threads_per_turn,
             explorer_profile,
             agent_worktree_isolation,
             exec_exit_notifications: ExecExitNotificationsConfig::from_features_toml(

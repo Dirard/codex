@@ -334,7 +334,6 @@ async fn new_config(
         workflows: Default::default(),
         agents_enabled: true,
         agent_max_threads: Some(6),
-        max_spawned_threads_per_turn: 16,
         agent_default_subagent_model: None,
         agent_default_subagent_reasoning_effort: None,
         agent_interrupt_message_enabled: false,

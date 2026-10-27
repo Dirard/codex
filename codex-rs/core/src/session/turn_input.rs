@@ -237,13 +237,10 @@ pub(super) async fn handle(
     request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
     mode: TurnInputMode,
     submission_id: String,
-    turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
 ) -> CodexResult<TurnInputSubmission> {
     let request = request.into();
     let result = match mode {
-        TurnInputMode::StartOrSteer => {
-            start_or_steer(session, request, submission_id, turn_spawn_budget).await
-        }
+        TurnInputMode::StartOrSteer => start_or_steer(session, request, submission_id).await,
         TurnInputMode::StartIfIdle => {
             let kind = match &request.request.input {
                 SubmittedTurnInput::UserInput { content, .. } if !content.is_empty() => {
@@ -337,7 +334,6 @@ async fn start_or_steer(
     session: &Arc<Session>,
     request: WithTurnExtensionData<TurnInputRequest>,
     submission_id: String,
-    turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
 ) -> CodexResult<TurnInputSubmission> {
     let WithTurnExtensionData {
         request,
@@ -427,9 +423,6 @@ async fn start_or_steer(
             else {
                 unreachable!("explicit user input can enter Plan mode");
             };
-            session
-                .fork_begin_turn_spawn_budget(&turn_context, turn_spawn_budget)
-                .await;
             turn_context
                 .turn_metadata_state
                 .update_responsesapi_client_metadata(responsesapi_client_metadata);
@@ -579,9 +572,6 @@ async fn start_if_idle(
             return Err(error);
         }
     };
-    session
-        .fork_begin_user_turn_spawn_budget(&turn_context, kind == TurnStartKind::User)
-        .await;
     turn_context
         .turn_metadata_state
         .update_responsesapi_client_metadata(responsesapi_client_metadata);
@@ -803,7 +793,6 @@ impl Session {
             }),
             TurnInputMode::StartOrSteer,
             submission_id.clone(),
-            /*turn_spawn_budget*/ None,
         )
         .await;
         match submission {

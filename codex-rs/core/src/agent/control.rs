@@ -97,9 +97,6 @@ pub(crate) mod fork_completion;
 mod fork_delivery;
 mod fork_worktree;
 pub(crate) mod workflow_children;
-#[cfg(test)]
-pub(crate) use crate::agent::registry::AgentRegistry;
-pub(crate) use crate::agent::types::TurnSpawnBudget;
 use fork_completion::CompletionWatcherStart;
 
 /// Per-session controller handle for a local agent tree.
@@ -152,30 +149,10 @@ impl LocalAgentControl {
         input: Vec<UserInput>,
         start_options: TurnStartOptions,
     ) -> CodexResult<String> {
-        self.send_input_with_spawn_budget(
-            agent_id,
-            input,
-            start_options,
-            /*turn_spawn_budget*/ None,
-        )
-        .await
-    }
-
-    pub(crate) async fn send_input_with_spawn_budget(
-        &self,
-        agent_id: ThreadId,
-        input: Vec<UserInput>,
-        start_options: TurnStartOptions,
-        turn_spawn_budget: Option<TurnSpawnBudget>,
-    ) -> CodexResult<String> {
         let state = self.runtime.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
         let result = match thread
-            .submit_turn_input_with_mode(
-                TurnInputRequest::user_input(input).on_start(start_options),
-                codex_protocol::turn_input::TurnInputMode::StartOrSteer,
-                turn_spawn_budget,
-            )
+            .start_or_steer_turn(TurnInputRequest::user_input(input).on_start(start_options))
             .await
         {
             Ok(TurnInputSubmission::Started { turn_id, .. }) => Ok(turn_id),
@@ -202,24 +179,6 @@ impl LocalAgentControl {
         agent_communication_context: AgentCommunicationContext,
         start_options: TurnStartOptions,
     ) -> CodexResult<String> {
-        self.send_inter_agent_communication_with_spawn_budget(
-            agent_id,
-            communication,
-            agent_communication_context,
-            start_options,
-            /*turn_spawn_budget*/ None,
-        )
-        .await
-    }
-
-    pub(crate) async fn send_inter_agent_communication_with_spawn_budget(
-        &self,
-        agent_id: ThreadId,
-        communication: InterAgentCommunication,
-        agent_communication_context: AgentCommunicationContext,
-        start_options: TurnStartOptions,
-        turn_spawn_budget: Option<TurnSpawnBudget>,
-    ) -> CodexResult<String> {
         let state = self.runtime.upgrade()?;
         if communication.trigger_turn {
             let thread = state.get_thread(agent_id).await?;
@@ -233,7 +192,6 @@ impl LocalAgentControl {
             communication,
             agent_communication_context,
             start_options,
-            turn_spawn_budget,
         )
         .await
     }
@@ -294,7 +252,6 @@ impl LocalAgentControl {
         communication: InterAgentCommunication,
         context: AgentCommunicationContext,
         start_options: TurnStartOptions,
-        turn_spawn_budget: Option<TurnSpawnBudget>,
     ) -> CodexResult<String> {
         self.submit_inter_agent_communication(
             agent_id,
@@ -302,7 +259,6 @@ impl LocalAgentControl {
             communication,
             context,
             start_options,
-            turn_spawn_budget,
         )
         .await
     }
@@ -314,7 +270,6 @@ impl LocalAgentControl {
         mut communication: InterAgentCommunication,
         context: AgentCommunicationContext,
         start_options: TurnStartOptions,
-        turn_spawn_budget: Option<TurnSpawnBudget>,
     ) -> CodexResult<String> {
         let observers = state.extensions.message_lifecycle_contributors();
         let delivery = (!observers.is_empty()).then(|| {
@@ -365,7 +320,7 @@ impl LocalAgentControl {
                 agent_id,
                 state,
                 state
-                    .send_op_with_spawn_budget(
+                    .send_op(
                         agent_id,
                         Op::InterAgentCommunication {
                             communication,
@@ -373,7 +328,6 @@ impl LocalAgentControl {
                         },
                         parent_turn_id,
                         root_turn_id,
-                        turn_spawn_budget,
                         delivery,
                     )
                     .await,

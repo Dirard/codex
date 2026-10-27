@@ -164,9 +164,6 @@ impl LocalAgentControl {
     }
 }
 
-#[path = "control/turn_spawn_budget_tests.rs"]
-mod turn_spawn_budget_tests;
-
 #[path = "control/fork_completion_tests.rs"]
 mod fork_completion_tests;
 
@@ -925,56 +922,6 @@ async fn spawn_agent_errors_when_manager_dropped() {
 }
 
 #[tokio::test]
-async fn pre_creation_spawn_failure_releases_turn_budget() {
-    let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
-    let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-        parent_thread_id,
-        depth: 1,
-        agent_path: None,
-        agent_nickname: None,
-        agent_role: None,
-    });
-    let budget = TurnSpawnBudget::new(/*limit*/ 1);
-    let invalid_fork = SpawnAgentOptions {
-        fork_mode: Some(SpawnAgentForkMode::FullHistory),
-        fork_parent_spawn_call_id: None,
-        parent_thread_id: Some(parent_thread_id),
-        turn_spawn_budget: Some(budget.clone()),
-        ..Default::default()
-    };
-    assert!(
-        harness
-            .control
-            .spawn_agent_with_metadata(
-                harness.config.clone(),
-                text_input("invalid fork"),
-                Some(session_source.clone()),
-                invalid_fork,
-            )
-            .await
-            .is_err()
-    );
-
-    assert!(
-        harness
-            .control
-            .spawn_agent_with_metadata(
-                harness.config.clone(),
-                text_input("valid child"),
-                Some(session_source),
-                SpawnAgentOptions {
-                    parent_thread_id: Some(parent_thread_id),
-                    turn_spawn_budget: Some(budget),
-                    ..Default::default()
-                },
-            )
-            .await
-            .is_ok()
-    );
-}
-
-#[tokio::test]
 async fn resume_agent_errors_when_manager_dropped() {
     let control = LocalAgentControl::default();
     let (_home, config) = test_config().await;
@@ -1208,12 +1155,7 @@ async fn evicted_v2_agent_keeps_queued_background_terminal_notification() {
     );
 
     control
-        .ensure_v2_agent_loaded(
-            harness.config.clone(),
-            child_id,
-            /*parent*/ None,
-            Some(TurnSpawnBudget::new(/*limit*/ 1)),
-        )
+        .ensure_v2_agent_loaded(harness.config.clone(), child_id, /*parent*/ None)
         .await
         .expect("known v2 agent should reload");
     let reloaded = harness.manager.get_thread(child_id).await.unwrap();
@@ -1285,7 +1227,6 @@ async fn cancelled_v2_send_finishes_reload_registration() {
             mode: MessageDeliveryMode::TriggerTurn,
         },
         start_options: Default::default(),
-        turn_spawn_budget: None,
     };
     let mut created = harness.manager.subscribe_thread_created();
     let state = control.runtime.upgrade().unwrap();
@@ -1404,7 +1345,6 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
     let _ = config.features.enable(Feature::Sqlite);
     config.model = Some("gpt-5.6-sol".to_string());
     config.multi_agent_v2.max_concurrent_threads_per_session = 3;
-    config.max_spawned_threads_per_turn = 1;
     config.permissions.allow_login_shell = true;
     config
         .permissions
@@ -1527,12 +1467,7 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
     let mut parent_turn = parent_thread.session.new_default_turn().await;
     let residency_pin = match route {
         V2ReloadRoute::Sender => control
-            .ensure_v2_agent_loaded(
-                sender_config,
-                spawned_agent.thread_id,
-                /*parent*/ None,
-                Some(TurnSpawnBudget::new(/*limit*/ 1)),
-            )
+            .ensure_v2_agent_loaded(sender_config, spawned_agent.thread_id, /*parent*/ None)
             .await
             .expect("known v2 agent should reload"),
         V2ReloadRoute::NestedParent => {
@@ -1635,56 +1570,6 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
         ),
         "residency reload must preserve the worker provider instead of inheriting its sender's provider",
     );
-
-    let reloaded_step = reloaded_child
-        .session
-        .capture_step_context(
-            reloaded_child.session.new_default_turn().await,
-            &CancellationToken::new(),
-        )
-        .await
-        .expect("reloaded child should capture a step");
-    let grandchild_source = |agent_path: &str| {
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id: spawned_agent.thread_id,
-            depth: 2,
-            agent_path: Some(AgentPath::try_from(agent_path).expect("grandchild agent path")),
-            agent_nickname: None,
-            agent_role: None,
-        })
-    };
-    harness
-        .control
-        .spawn_agent_with_metadata(
-            harness.config.clone(),
-            text_input("first grandchild"),
-            Some(grandchild_source("/root/worker/first")),
-            SpawnAgentOptions {
-                parent_thread_id: Some(spawned_agent.thread_id),
-                turn_spawn_budget: Some(reloaded_step.turn_spawn_budget.clone()),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("fresh cold-resume epoch should allow one grandchild");
-    let error = harness
-        .control
-        .spawn_agent_with_metadata(
-            harness.config.clone(),
-            text_input("second grandchild"),
-            Some(grandchild_source("/root/worker/second")),
-            SpawnAgentOptions {
-                parent_thread_id: Some(spawned_agent.thread_id),
-                turn_spawn_budget: Some(reloaded_step.turn_spawn_budget.clone()),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect_err("cold-resume epoch should be exhausted");
-    let CodexErrorDetails::AgentLimitReached { max_threads } = error.details() else {
-        panic!("expected AgentLimitReached");
-    };
-    assert_eq!(*max_threads, 1);
 
     let communication = InterAgentCommunication::new(
         AgentPath::root(),
@@ -1858,12 +1743,7 @@ async fn cancelled_cold_resume_finishes_residency_accounting() {
         let config = config.clone();
         async move {
             control
-                .ensure_v2_agent_loaded(
-                    config,
-                    spawned_agent.thread_id,
-                    /*parent*/ None,
-                    Some(TurnSpawnBudget::new(/*limit*/ 1)),
-                )
+                .ensure_v2_agent_loaded(config, spawned_agent.thread_id, /*parent*/ None)
                 .await
         }
     });
@@ -2203,7 +2083,6 @@ async fn cold_resume_with_thread_instructions_preserves_lazy_v2_child_inheritanc
                     cyber_access_program: turn.cyber_access_program,
                     ..Default::default()
                 },
-                turn_spawn_budget: None,
             })
             .await
             .expect("message should reload the grandchild");
@@ -2353,7 +2232,6 @@ async fn v2_reload_preserves_shared_instructions_after_root_unloads(
                 cyber_access_program: sender_turn.cyber_access_program,
                 ..Default::default()
             },
-            turn_spawn_budget: None,
         })
         .await
         .expect("reload target from a surviving child");
@@ -5039,7 +4917,7 @@ async fn multi_agent_v2_terminal_status_is_published_after_parent_mailbox() {
         &expected_status,
     )
     .expect("completed status should render");
-    let (mailbox_items, start_options, _) = worker_thread
+    let (mailbox_items, start_options) = worker_thread
         .session
         .input_queue
         .drain_mailbox_input_items()
@@ -5182,7 +5060,7 @@ async fn multi_agent_v2_terminal_error_is_published_after_parent_mailbox() {
         &expected_status,
     )
     .expect("errored status should render");
-    let (mailbox_items, start_options, _) = worker_thread
+    let (mailbox_items, start_options) = worker_thread
         .session
         .input_queue
         .drain_mailbox_input_items()

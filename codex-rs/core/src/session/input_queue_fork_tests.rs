@@ -125,11 +125,7 @@ async fn background_notifications_queue_after_mail_and_report_activity() {
         )
         .await;
     input_queue
-        .enqueue_mailbox_communication(
-            mail.clone().into(),
-            Default::default(),
-            /*turn_spawn_budget*/ None,
-        )
+        .enqueue_mailbox_communication(mail.clone().into(), Default::default())
         .await;
     activity_rx.changed().await.expect("activity");
     assert!(input_queue.has_pending_queued_input().await);
@@ -150,7 +146,7 @@ async fn background_notifications_queue_after_mail_and_report_activity() {
         .await;
     assert!(input_queue.has_waking_background_notifications().await);
 
-    let (items, _, _) = input_queue.drain_mailbox_input_items().await;
+    let (items, _) = input_queue.drain_mailbox_input_items().await;
     assert_eq!(
         items,
         vec![
@@ -207,7 +203,7 @@ async fn background_notifications_are_bounded() {
     // The dropped notification still asks for a turn.
     assert!(input_queue.has_waking_background_notifications().await);
 
-    let (items, _, _) = input_queue.drain_mailbox_input_items().await;
+    let (items, _) = input_queue.drain_mailbox_input_items().await;
     assert_eq!(items.len(), MAX_PENDING_BACKGROUND_NOTIFICATIONS + 1);
     assert_eq!(
         items.last(),
@@ -288,7 +284,7 @@ async fn draining_a_notification_runs_its_release_callback() {
     }
     assert!(input_queue.withdraw_background_notification(2).await);
     assert!(released.lock().expect("released").is_empty());
-    let (items, _, _) = input_queue.drain_mailbox_input_items().await;
+    let (items, _) = input_queue.drain_mailbox_input_items().await;
     assert_eq!(items.len(), 1);
     assert_eq!(*released.lock().expect("released"), vec![1]);
 }
@@ -408,14 +404,10 @@ async fn non_regular_tasks_leave_background_notifications_queued() {
         /*trigger_turn*/ false,
     );
     input_queue
-        .enqueue_mailbox_communication(
-            mail.clone().into(),
-            Default::default(),
-            /*turn_spawn_budget*/ None,
-        )
+        .enqueue_mailbox_communication(mail.clone().into(), Default::default())
         .await;
 
-    let (items, _, _) = input_queue
+    let (items, _) = input_queue
         .drain_mailbox_input_items_for_task(/*take_background_notifications*/ false)
         .await;
     assert_eq!(items, vec![TurnInput::InterAgentCommunication(mail.into())]);
@@ -424,7 +416,7 @@ async fn non_regular_tasks_leave_background_notifications_queued() {
     // The withdrawal key survived.
     assert!(input_queue.withdraw_background_notification(7).await);
 
-    let (items, _, _) = input_queue.drain_mailbox_input_items().await;
+    let (items, _) = input_queue.drain_mailbox_input_items().await;
     assert_eq!(
         items,
         vec![TurnInput::ResponseItem(ResponseItemEnvelope::new(
@@ -521,7 +513,7 @@ async fn output_watch_notifications_replace_their_queued_entry_and_are_not_count
         assert_eq!(outcome, expected);
     }
 
-    let (items, _, _) = input_queue.drain_mailbox_input_items().await;
+    let (items, _) = input_queue.drain_mailbox_input_items().await;
     let output_items = items
         .iter()
         .filter(|item| {
@@ -574,11 +566,7 @@ async fn lost_wake_input_returns_to_the_front_of_the_thread_queues() {
         /*trigger_turn*/ false,
     );
     input_queue
-        .enqueue_mailbox_communication(
-            later_mail.clone().into(),
-            Default::default(),
-            /*turn_spawn_budget*/ None,
-        )
+        .enqueue_mailbox_communication(later_mail.clone().into(), Default::default())
         .await;
     input_queue
         .enqueue_background_notification(
@@ -628,7 +616,7 @@ async fn lost_wake_input_returns_to_the_front_of_the_thread_queues() {
         .await;
 
     assert!(input_queue.has_trigger_turn_mailbox_items().await);
-    let (items, start_options, _) = input_queue.drain_mailbox_input_items().await;
+    let (items, start_options) = input_queue.drain_mailbox_input_items().await;
     assert_eq!(
         items,
         vec![

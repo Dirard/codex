@@ -14,8 +14,6 @@ use super::InputQueueActivity;
 use super::PendingMailboxCommunication;
 use super::TurnInput;
 use super::TurnInputQueue;
-/// The parent names the spawn budget of queued mail through `fork::*`, without a `use`.
-pub(super) use crate::agent::types::TurnSpawnBudget;
 use crate::agent_communication::PENDING_MAILBOX_MESSAGES;
 use crate::context::BackgroundTerminalNotification;
 use crate::context::ContextualUserFragment;
@@ -292,9 +290,8 @@ impl InputQueue {
     /// Fork (H5 in `docs/fork/01-multi-agent-runtime.md`): a wake that lost its turn
     /// reservation before its turn started puts the input it took back in front of the thread
     /// queues; nothing else would deliver it. Mail that asks for a turn gets the start options
-    /// of the wake (queue-only mail has none), without a spawn budget; background
-    /// notifications go back as an abort returns them. Other input of the reservation is
-    /// dropped, as `clear_pending` drops it.
+    /// of the wake (queue-only mail has none); background notifications go back as an abort
+    /// returns them. Other input of the reservation is dropped, as `clear_pending` drops it.
     pub(crate) async fn requeue_lost_wake_input(
         &self,
         input: Vec<TurnInput>,
@@ -320,7 +317,6 @@ impl InputQueue {
                 pending.push_front(PendingMailboxCommunication {
                     communication,
                     start_options,
-                    turn_spawn_budget: None,
                     _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
                 });
             }
@@ -378,9 +374,7 @@ impl InputQueue {
 
     /// Fork: drains mail and the queued background notifications; the body is upstream's
     /// `drain_mailbox_input_items`, renamed `drain_mailbox_input_items_for_task`.
-    pub(crate) async fn drain_mailbox_input_items(
-        &self,
-    ) -> (Vec<TurnInput>, TurnStartOptions, Option<TurnSpawnBudget>) {
+    pub(crate) async fn drain_mailbox_input_items(&self) -> (Vec<TurnInput>, TurnStartOptions) {
         self.drain_mailbox_input_items_for_task(/*take_background_notifications*/ true)
             .await
     }

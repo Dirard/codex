@@ -473,6 +473,6 @@ fn merge_rate_limit_fields(
 #[path = "session_tests.rs"]
 mod tests;
 
-// Fork: spawn budget and prepared compaction windows.
+// Fork: prepared compaction windows and the estimated auto-compact baseline.
 #[path = "session_fork.rs"]
 mod fork;

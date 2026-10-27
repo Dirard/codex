@@ -39,7 +39,6 @@ impl Handler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
-            step_context,
             turn,
             payload,
             call_id,
@@ -59,12 +58,7 @@ impl Handler {
             let resume_config = build_agent_message_resume_config(turn.as_ref())
                 .map_err(FunctionCallError::RespondToModel)?;
             local_agent_control
-                .ensure_v2_agent_loaded(
-                    resume_config,
-                    receiver_thread_id,
-                    /*parent*/ None,
-                    Some(step_context.turn_spawn_budget.clone()),
-                )
+                .ensure_v2_agent_loaded(resume_config, receiver_thread_id, /*parent*/ None)
                 .await
                 .map_err(|err| collab_agent_error(receiver_thread_id, err))?
         } else {
@@ -101,7 +95,7 @@ impl Handler {
             )
             .await;
         let result = local_agent_control
-            .send_input_with_spawn_budget(
+            .send_input(
                 receiver_thread_id,
                 input_items,
                 crate::TurnStartOptions {
@@ -111,7 +105,6 @@ impl Handler {
                     cyber_access_program: turn.cyber_access_program,
                     ..Default::default()
                 },
-                Some(step_context.turn_spawn_budget.clone()),
             )
             .await
             .map_err(|err| collab_agent_error(receiver_thread_id, err));

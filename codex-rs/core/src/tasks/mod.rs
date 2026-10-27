@@ -501,16 +501,11 @@ impl Session {
             }
             None
         };
-        let (input, mut start_options, turn_spawn_budget) =
+        let (input, mut start_options) =
             self.input_queue.get_pending_input(&self.active_turn).await;
-        // Fork: a triggered wake keeps the spawn budget of its mail and starts a V1 watcher.
-        let has_trigger_turn = input.iter().any(
+        if !input.iter().any(
             |item| matches!(item, TurnInput::InterAgentCommunication(mail) if mail.trigger_turn),
-        );
-        if has_trigger_turn && let Some(turn_spawn_budget) = turn_spawn_budget {
-            self.set_turn_spawn_budget(turn_spawn_budget).await;
-        }
-        if !has_trigger_turn {
+        ) {
             // Queue-only wakes retain the previous turn context without selecting a new task.
             start_options = previous_options;
             start_options.cyber_access_program = self

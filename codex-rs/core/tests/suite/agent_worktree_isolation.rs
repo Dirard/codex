@@ -899,10 +899,7 @@ async fn isolation_requires_a_single_local_environment() -> Result<()> {
 async fn a_spawn_rejected_after_worktree_creation_leaves_no_worktree() -> Result<()> {
     const TASK: &str = "first of two in one turn";
     let server = start_mock_server().await;
-    let test = isolation_codex(&server, /*git_repository*/ true, |config| {
-        config.max_spawned_threads_per_turn = 1;
-    })
-    .await?;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
     mount_sse_once_match(
         &server,
         move |request: &wiremock::Request| {
@@ -920,7 +917,8 @@ async fn a_spawn_rejected_after_worktree_creation_leaves_no_worktree() -> Result
                 "spawn-second",
                 NAMESPACE,
                 "spawn_agent",
-                &spawn_arguments("second over the limit", "second", Some("worktree")).to_string(),
+                // The backend rejects the second agent at the same path after its worktree exists.
+                &spawn_arguments("second at the same path", "first", Some("worktree")).to_string(),
             ),
             ev_completed("resp-two-spawns"),
         ]),
@@ -941,12 +939,12 @@ async fn a_spawn_rejected_after_worktree_creation_leaves_no_worktree() -> Result
     )
     .await;
     mount_child(&server, TASK, &[]).await;
-    mount_child(&server, "second over the limit", &[]).await;
+    mount_child(&server, "second at the same path", &[]).await;
     let mut created = test.thread_manager.subscribe_thread_created();
     test.submit_turn(ROOT_PROMPT).await?;
     wait_turn_complete(&next_child(&mut created, &test).await?).await;
 
-    // R2.7: the rejected spawn created a worktree before the limit check and removed it.
+    // R2.7: the rejected spawn created a worktree before the backend check and removed it.
     let request = done.single_request();
     let outputs = ["spawn-first", "spawn-second"].map(|call_id| {
         request
@@ -956,7 +954,7 @@ async fn a_spawn_rejected_after_worktree_creation_leaves_no_worktree() -> Result
     assert_eq!(
         outputs
             .iter()
-            .filter(|output| output.contains("limit"))
+            .filter(|output| output.contains("already exists"))
             .count(),
         1,
         "{outputs:?}"

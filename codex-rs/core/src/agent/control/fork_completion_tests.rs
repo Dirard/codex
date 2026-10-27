@@ -259,7 +259,6 @@ impl LostWake {
                 )
                 .into(),
                 TurnStartOptions::default(),
-                /*turn_spawn_budget*/ None,
             )
             .await;
         let session = Arc::clone(&child_thread.session);

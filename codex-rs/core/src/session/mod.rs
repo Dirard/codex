@@ -320,7 +320,6 @@ pub(crate) mod fork_background;
 mod fork_compaction;
 mod fork_explorer;
 mod fork_output_truncation;
-mod fork_spawn_budget;
 #[cfg(test)]
 mod fork_test_support;
 mod fork_turn;
@@ -534,7 +533,6 @@ pub(crate) struct SessionSpawnArgs {
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
     pub(crate) inherited_environments: Option<TurnEnvironmentSnapshot>,
-    pub(crate) turn_spawn_budget: Option<crate::agent::control::TurnSpawnBudget>, // Fork
     /// Parent rollout trace used only to derive fresh spawned child traces.
     ///
     /// Root sessions and non-thread-spawn subagents pass a disabled context;
@@ -657,7 +655,6 @@ impl Session {
             user_shell_override,
             inherited_exec_policy,
             inherited_environments,
-            turn_spawn_budget,
             parent_rollout_thread_trace,
             parent_trace: _,
             environment_requests,
@@ -1042,9 +1039,6 @@ impl Session {
                 Err(error) => map_session_init_error(&error, &config.codex_home),
             }
         })?;
-        if let Some(turn_spawn_budget) = turn_spawn_budget {
-            session.set_turn_spawn_budget(turn_spawn_budget).await;
-        }
         if let Some(message) = initial_service_tier_warning {
             session
                 .send_event_raw(Event {
@@ -1117,7 +1111,6 @@ impl SessionIo {
             trace,
             parent_turn_id,
             root_turn_id,
-            turn_spawn_budget: None,
             residency_guard,
             message_delivery,
         };
@@ -1145,7 +1138,6 @@ impl SessionIo {
         &self,
         request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
         mode: TurnInputMode,
-        turn_spawn_budget: Option<crate::agent::control::TurnSpawnBudget>,
     ) -> CodexResult<TurnInputSubmission> {
         let id = new_submission_id();
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -1165,7 +1157,6 @@ impl SessionIo {
             turn_extension_init,
             parent_turn_id: None,
             root_turn_id: None,
-            turn_spawn_budget,
             residency_guard: None,
             message_delivery: None,
         })
@@ -1193,7 +1184,6 @@ impl SessionIo {
             turn_extension_init,
             parent_turn_id: None,
             root_turn_id: None,
-            turn_spawn_budget: None,
             residency_guard: None,
             message_delivery: None,
         })
@@ -4202,9 +4192,6 @@ impl Session {
             return Err(CodexErr::TurnAborted);
         }
         let (executor_hook_sources, mcp, tool_router, extension_data) = prepared_tools??;
-        let turn_spawn_budget = self
-            .current_turn_spawn_budget(turn_context.config.max_spawned_threads_per_turn)
-            .await;
         Ok(Arc::new(StepContext {
             preempt: turn_context
                 .config
@@ -4216,7 +4203,6 @@ impl Session {
             token_budget,
             session_telemetry,
             turn: turn_context,
-            turn_spawn_budget,
             extension_data,
             environments,
             inherited_environments,

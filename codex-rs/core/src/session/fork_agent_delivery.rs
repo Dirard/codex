@@ -36,7 +36,6 @@ impl Session {
                 id.clone(),
                 communication,
                 TurnStartOptions::default(),
-                /*turn_spawn_budget*/ None,
             )
             .await;
             id

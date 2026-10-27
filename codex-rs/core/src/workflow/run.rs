@@ -89,7 +89,7 @@ pub(crate) struct WorkflowRun {
     script_error: Mutex<Option<String>>,
     journal: Journal,
     pub(crate) gate: OrderedGate,
-    /// Agents this run started: its only start limit (UC4, R4.2), not a `TurnSpawnBudget`.
+    /// Agents this run started: the run's own start limit (UC4, R4.2).
     started_agents: AtomicUsize,
     /// Cancels queued calls, running agents and the cell.
     cancel: CancellationToken,

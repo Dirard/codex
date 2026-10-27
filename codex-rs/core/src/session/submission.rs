@@ -15,8 +15,6 @@ pub(crate) struct Submission {
     pub trace: Option<W3cTraceContext>,
     pub parent_turn_id: Option<String>,
     pub root_turn_id: Option<String>,
-    /// Fork: runtime-only delegation epoch; never crosses the protocol boundary.
-    pub turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
     /// Keeps a V2 recipient resident until this submission is handled or dropped.
     pub residency_guard: Option<OwnedRwLockReadGuard<()>>,
     /// Owns delivery until dispatch; failed or abandoned submissions discard it.

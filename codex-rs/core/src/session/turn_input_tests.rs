@@ -86,7 +86,6 @@ async fn submit_start_only(
         TurnInputRequest::new(input),
         TurnInputMode::StartIfIdle,
         "test-submission".to_string(),
-        /*turn_spawn_budget*/ None,
     )
     .await
     .expect("start-only submission should be valid")
@@ -107,7 +106,6 @@ async fn submit_steer_only(
             expected_turn_id: expected_turn_id.to_string(),
         },
         "test-submission".to_string(),
-        /*turn_spawn_budget*/ None,
     )
     .await
     .expect("steer-only submission should be valid")
@@ -156,7 +154,6 @@ async fn steering_does_not_wait_for_realtime_history() {
                 }]),
                 mode,
                 "steer-submission".to_string(),
-                /*turn_spawn_budget*/ None,
             ),
         )
         .await
@@ -203,7 +200,6 @@ async fn accepted_input_applies_thread_settings() {
         }),
         TurnInputMode::StartOrSteer,
         "sub-1".to_string(),
-        /*turn_spawn_budget*/ None,
     )
     .await
     .expect("submit user turn");
@@ -340,7 +336,6 @@ async fn start_only_rejects_current_plan_before_validating_settings() {
         .with_thread_settings(invalid_override.clone()),
         TurnInputMode::StartIfIdle,
         "automatic-plan-submission".to_string(),
-        /*turn_spawn_budget*/ None,
     )
     .await
     .expect("current Plan must reject before settings validation");
@@ -372,7 +367,6 @@ async fn start_only_rejects_current_plan_before_validating_settings() {
         .with_thread_settings(invalid_override),
         TurnInputMode::StartIfIdle,
         "invalid-automatic-submission".to_string(),
-        /*turn_spawn_budget*/ None,
     )
     .await;
     let error = result.expect_err("invalid automatic settings must be rejected");
@@ -840,7 +834,6 @@ async fn start_only_rejects_pending_trigger_turn_without_injecting() {
             )
             .into(),
             Default::default(),
-            /*turn_spawn_budget*/ None,
         )
         .await;
 
@@ -895,7 +888,7 @@ async fn agent_message_wake_reservation_preserves_existing_boundaries(
     );
     session
         .input_queue
-        .enqueue_mailbox_communication(communication.clone().into(), Default::default(), None)
+        .enqueue_mailbox_communication(communication.clone().into(), Default::default())
         .await;
 
     assert!(session.reserve_pending_work_turn().await.is_none());
@@ -987,7 +980,6 @@ async fn steer_only_enforces_expected_turn_id() {
         ),
         TurnInputMode::StartOrSteer,
         "test-submission".to_string(),
-        /*turn_spawn_budget*/ None,
     )
     .await
     .expect("standalone output should steer the active turn");
@@ -1071,7 +1063,6 @@ async fn rejects_non_regular_turns() {
             TurnInputRequest::user_input(steer_input),
             TurnInputMode::StartOrSteer,
             "test-submission".to_string(),
-            /*turn_spawn_budget*/ None,
         )
         .await
         .expect("start-or-steer submission should be valid");
@@ -1126,7 +1117,6 @@ async fn steer_preserves_request_origin(
             expected_turn_id: turn_context.sub_id.clone(),
         },
         "steer-submission".to_owned(),
-        /*turn_spawn_budget*/ None,
     )
     .await
     .unwrap();

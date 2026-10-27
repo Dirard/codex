@@ -24,7 +24,7 @@ impl Session {
         mut input: Vec<TurnInput>,
     ) -> (Vec<TurnInput>, Vec<TurnInput>) {
         let take_background_notifications = task_kind == TaskKind::Regular;
-        let (mut pending_items, _, _) = self
+        let (mut pending_items, _) = self
             .input_queue
             .drain_mailbox_input_items_for_task(take_background_notifications)
             .await;

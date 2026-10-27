@@ -261,9 +261,7 @@ impl LocalAgentControl {
                     .map_err(|err| {
                         CodexErr::InvalidRequest(format!("invalid stored agent path: {err}"))
                     })?;
-                let mut reservation = registry.reserve_spawn_slot(
-                    /*max_threads*/ None, /*turn_spawn_budget*/ None,
-                )?;
+                let mut reservation = registry.reserve_spawn_slot(/*max_threads*/ None)?;
                 let mut metadata = self.prepare_agent_metadata(
                     &mut reservation,
                     config,
@@ -334,7 +332,6 @@ impl LocalAgentControl {
         mut config: Config,
         thread_id: ThreadId,
         parent: Option<Arc<CodexThread>>,
-        turn_spawn_budget: Option<TurnSpawnBudget>,
     ) -> CodexResult<Option<tokio::sync::OwnedRwLockReadGuard<()>>> {
         let membership = self.runtime.admit_start()?;
         let state = self.runtime.upgrade()?;
@@ -694,7 +691,6 @@ impl LocalAgentControl {
                     inherited_instructions,
                     inherited_exec_policy,
                     client_mcp_extensions,
-                    turn_spawn_budget,
                     owner_thread_id,
                     thread_id,
                     residency_slot,
@@ -723,7 +719,6 @@ impl LocalAgentControl {
         inherited_instructions: Option<SessionInstructions>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         client_mcp_extensions: Option<codex_protocol::mcp::ClientMcpExtensions>,
-        turn_spawn_budget: Option<TurnSpawnBudget>,
         owner_thread_id: Option<ThreadId>,
         thread_id: ThreadId,
         residency_slot: super::residency::V2ResidencySlot,
@@ -746,7 +741,6 @@ impl LocalAgentControl {
                 inherited_instructions,
                 inherited_exec_policy,
                 client_mcp_extensions,
-                turn_spawn_budget: turn_spawn_budget.clone(),
             })
             .await
         {
@@ -766,10 +760,6 @@ impl LocalAgentControl {
                     if already_running {
                         drop(residency_slot);
                         return Ok(residency_pin);
-                    }
-                    if let Some(turn_spawn_budget) = turn_spawn_budget {
-                        let session = &reloaded_thread.thread.session;
-                        session.set_turn_spawn_budget(turn_spawn_budget).await;
                     }
                     residency_slot.commit(reloaded_thread.thread_id);
                     // Register before listeners can forward events from the resumed thread.
@@ -872,7 +862,7 @@ impl LocalAgentControl {
         let mut reservation = self
             .runtime
             .registry
-            .reserve_spawn_slot(reservation_max_threads, options.turn_spawn_budget.as_ref())?;
+            .reserve_spawn_slot(reservation_max_threads)?;
         let inherited_environments = match &options.environments {
             Some(environments) => Some(environments.clone()),
             None => {
@@ -988,7 +978,6 @@ impl LocalAgentControl {
                 self.clone(),
                 parent_thread_id,
                 inherited_exec_policy,
-                options.turn_spawn_budget.clone(),
             )
             .await
             .map_err(|err| err.with_agent_context(AgentErrorContext::ChildStartup))?;
@@ -1102,7 +1091,6 @@ impl LocalAgentControl {
                     communication,
                     context,
                     start_options,
-                    /*turn_spawn_budget*/ None,
                 )
                 .await
                 .map_err(|err| err.with_agent_context(AgentErrorContext::InputAdmission))?;
@@ -1624,7 +1612,7 @@ impl LocalAgentControl {
         let mut reservation = self
             .runtime
             .registry
-            .reserve_spawn_slot(agent_max_threads, /*turn_spawn_budget*/ None)?;
+            .reserve_spawn_slot(agent_max_threads)?;
         let (session_source, agent_metadata) = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -1664,7 +1652,6 @@ impl LocalAgentControl {
                 inherited_instructions: None,
                 inherited_exec_policy,
                 client_mcp_extensions: None,
-                turn_spawn_budget: None,
             })
             .await?;
         // Fork: a resume that found the child running leaves its registration as it is.

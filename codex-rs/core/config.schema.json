@@ -139,12 +139,6 @@
           "description": "Maximum nesting depth for V1 agent threads. Ignored by V2.",
           "format": "int32",
           "type": "integer"
-        },
-        "max_spawned_threads_per_turn": {
-          "description": "Maximum cumulative child threads created by one external root user input. Defaults to 16. Automatic follow-ups share the same budget.",
-          "format": "uint",
-          "minimum": 1.0,
-          "type": "integer"
         }
       },
       "type": "object"

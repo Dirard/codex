@@ -785,10 +785,8 @@ pub struct AgentsToml {
     #[serde(alias = "max_threads")]
     #[schemars(range(min = 1))]
     pub max_concurrent_threads_per_session: Option<usize>,
-    // Fork: bounded delegation per root input (docs/fork/01-multi-agent-runtime.md).
-    /// Maximum cumulative child threads created by one external root user input.
-    /// Defaults to 16. Automatic follow-ups share the same budget.
-    #[schemars(range(min = 1))]
+    /// Fork: removed cumulative spawn limit, retained as a no-op that warns at startup.
+    #[schemars(skip)]
     pub max_spawned_threads_per_turn: Option<usize>,
     /// Maximum nesting depth for V1 agent threads. Ignored by V2.
     pub max_depth: Option<i32>,

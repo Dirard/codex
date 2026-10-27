@@ -57,7 +57,7 @@ pub(crate) struct ThreadSpawnResult {
 }
 
 /// Fork: settings of a child started by a workflow run (dynamic workflow, UC3). The run counts
-/// its own agent starts (UC4, R4.2), so the child gets no spawn budget at all.
+/// its own agent starts (UC4, R4.2).
 pub(crate) struct WorkflowSpawnOptions {
     pub final_output_json_schema: Option<serde_json::Value>,
     /// Appended to the child's developer instructions.
@@ -92,8 +92,8 @@ pub(crate) async fn spawn(
     .await
 }
 
-/// Fork: start a fresh child for a workflow run with collaboration tools disabled, the
-/// workflow agent instructions and no spawn budget (dynamic workflow, UC3, R3.1, R3.4, R4.2).
+/// Fork: start a fresh child for a workflow run with collaboration tools disabled and the
+/// workflow agent instructions (dynamic workflow, UC3, R3.1, R3.4).
 pub(crate) async fn spawn_workflow_child(
     session: &Arc<Session>,
     step_context: &Arc<StepContext>,
@@ -256,10 +256,6 @@ async fn spawn_with(
                 disabled_plugin_ids: Some(turn.disabled_plugin_ids.clone()),
                 multi_agent_v2_usage_hints,
                 cyber_access_program: turn.cyber_access_program,
-                // Fork: a workflow child neither spends nor gets a spawn budget (R4.2).
-                turn_spawn_budget: workflow
-                    .is_none()
-                    .then(|| step_context.turn_spawn_budget.clone()),
                 worktree: prepared_worktree
                     .as_ref()
                     .map(PreparedAgentWorktree::spawn_worktree),

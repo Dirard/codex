@@ -783,8 +783,6 @@ impl AgentCall<'_> {
                     turn_trigger: Some(WORKFLOW_TURN_TRIGGER.to_string()),
                     ..Default::default()
                 },
-                // R4.2: the run counts its agents; workflow children get no spawn budget.
-                turn_spawn_budget: None,
             })
             .await
             .map(|_| ())

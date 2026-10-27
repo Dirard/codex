@@ -513,7 +513,6 @@ fn settings_submission(
             trace: None,
             parent_turn_id: None,
             root_turn_id: None,
-            turn_spawn_budget: None,
             residency_guard: None,
             message_delivery: None,
         },

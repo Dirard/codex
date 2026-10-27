@@ -9921,64 +9921,76 @@ async fn load_config_resolves_agent_controls() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Fork (UC4, R4.2 of specs/fork-completion-2026-10-26.md): the cumulative spawn budget is
+/// gone, but a config.toml that still sets `agents.max_spawned_threads_per_turn` loads. The key
+/// is ignored with a startup warning, and the upstream agent limits still apply.
 #[tokio::test]
-async fn load_config_defaults_max_spawned_threads_per_turn() -> std::io::Result<()> {
+async fn removed_max_spawned_threads_per_turn_loads_with_a_warning() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[agents]
+max_spawned_threads_per_turn = 200
+max_threads = 3
+max_depth = 2
+
+[agents.researcher]
+description = "Research role."
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
 
     assert_eq!(
-        config.max_spawned_threads_per_turn,
-        DEFAULT_MAX_SPAWNED_THREADS_PER_TURN
+        (config.agent_max_threads, config.agent_max_depth),
+        (Some(3), 2)
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.description.as_deref()),
+        Some("Research role.")
+    );
+    assert_eq!(
+        config
+            .startup_warnings
+            .iter()
+            .filter(|warning| warning.contains("`agents.max_spawned_threads_per_turn`"))
+            .collect::<Vec<_>>(),
+        vec![
+            "`agents.max_spawned_threads_per_turn` is deprecated and ignored. Codex no longer limits the total number of agents spawned for one input; remove this setting from config.toml or profile configuration files."
+        ]
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn load_config_resolves_max_spawned_threads_per_turn_override() -> std::io::Result<()> {
+async fn config_without_max_spawned_threads_per_turn_has_no_removal_warning() -> std::io::Result<()>
+{
     let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            agents: Some(AgentsToml {
-                max_spawned_threads_per_turn: Some(7),
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        "[agents]\nmax_threads = 3\n",
+    )?;
 
-    assert_eq!(config.max_spawned_threads_per_turn, 7);
-    Ok(())
-}
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
 
-#[tokio::test]
-async fn load_config_rejects_zero_max_spawned_threads_per_turn() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let result = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            agents: Some(AgentsToml {
-                max_spawned_threads_per_turn: Some(0),
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await;
-
-    let err = result.expect_err("zero cumulative spawn limit should be rejected");
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-    assert_eq!(
-        err.to_string(),
-        "agents.max_spawned_threads_per_turn must be at least 1"
+    assert!(
+        !config
+            .startup_warnings
+            .iter()
+            .any(|warning| warning.contains("max_spawned_threads_per_turn")),
+        "{:?}",
+        config.startup_warnings
     );
     Ok(())
 }

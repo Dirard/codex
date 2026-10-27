@@ -596,7 +596,6 @@ async fn child_threads_inherit_parent_dynamic_tools() {
         manager.agent_control(),
         Some(parent.thread_id),
         /*inherited_exec_policy*/ None,
-        /*turn_spawn_budget*/ None,
     ))
     .await
     .expect("start fresh child thread");
@@ -610,7 +609,6 @@ async fn child_threads_inherit_parent_dynamic_tools() {
         manager.agent_control(),
         Some(parent.thread_id),
         /*inherited_exec_policy*/ None,
-        /*turn_spawn_budget*/ None,
     ))
     .await
     .expect("fork child thread");
@@ -2534,7 +2532,6 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
             inherited_instructions: None,
             inherited_exec_policy: None,
             client_mcp_extensions: None,
-            turn_spawn_budget: None,
         })
         .await
         .expect("identify the active thread");

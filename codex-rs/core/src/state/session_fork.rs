@@ -1,15 +1,13 @@
-//! Fork: session state of the cumulative spawn budget (docs/fork/01-multi-agent-runtime.md F1),
-//! of prepared compaction windows (docs/fork/02-compaction-context.md F1) and of the estimated
-//! auto-compact baseline (R7). A child of `state::session`, so it reaches the private fields.
+//! Fork: session state of prepared compaction windows (docs/fork/02-compaction-context.md F1)
+//! and of the estimated auto-compact baseline (R7). A child of `state::session`, so it reaches
+//! the private fields.
 
 use super::SessionState;
-use crate::agent::control::TurnSpawnBudget;
 use crate::state::auto_compact_window::PreparedAutoCompactWindow;
 
 /// Fork: the fork's fields of `SessionState`, one aggregate field upstream.
 #[derive(Default)]
 pub(super) struct SessionStateFork {
-    turn_spawn_budget: Option<TurnSpawnBudget>,
     estimated_prefill: Option<EstimatedPrefill>,
 }
 
@@ -21,21 +19,6 @@ struct EstimatedPrefill {
 }
 
 impl SessionState {
-    pub(crate) fn start_turn_spawn_budget(&mut self, limit: usize) {
-        self.fork.turn_spawn_budget = Some(TurnSpawnBudget::new(limit));
-    }
-
-    pub(crate) fn set_turn_spawn_budget(&mut self, budget: TurnSpawnBudget) {
-        self.fork.turn_spawn_budget = Some(budget);
-    }
-
-    pub(crate) fn current_turn_spawn_budget(&mut self, limit: usize) -> TurnSpawnBudget {
-        self.fork
-            .turn_spawn_budget
-            .get_or_insert_with(|| TurnSpawnBudget::new(limit))
-            .clone()
-    }
-
     /// Fork R7 (docs/fork/02-compaction-context.md): the `body_after_prefix` baseline of a
     /// window whose responses report no context size. Once per window it becomes the estimate
     /// of the request that a response answered (`request_tokens`), so that the tool

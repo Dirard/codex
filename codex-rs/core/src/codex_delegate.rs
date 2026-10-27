@@ -156,7 +156,6 @@ pub(crate) async fn run_codex_thread_interactive(
         user_shell_override: None,
         inherited_environments: Some(parent_environments.clone()),
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
-        turn_spawn_budget: None,
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         parent_trace: None,
         environment_requests: parent_environments
@@ -285,7 +284,6 @@ pub(crate) async fn run_codex_thread_one_shot(
                 ..Default::default()
             }),
             TurnInputMode::StartIfIdle,
-            /*turn_spawn_budget*/ None,
         )
         .await?;
     match submission {
@@ -319,7 +317,6 @@ pub(crate) async fn run_codex_thread_one_shot(
                         trace: None,
                         parent_turn_id: None,
                         root_turn_id: None,
-                        turn_spawn_budget: None,
                         residency_guard: None,
                         message_delivery: None,
                     })
@@ -423,7 +420,7 @@ async fn forward_event_or_shutdown(
 /// Forward ops from a caller to a sub-agent, respecting cancellation.
 async fn forward_ops(
     io: Arc<SessionIo>,
-    rx_ops: Receiver<crate::session::Submission>,
+    rx_ops: Receiver<Submission>,
     cancel_token_ops: CancellationToken,
 ) {
     loop {

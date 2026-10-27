@@ -84,11 +84,10 @@ pub async fn inter_agent_communication(
     sub_id: String,
     communication: crate::PendingAgentMessage,
     start_options: codex_protocol::turn_input::TurnStartOptions,
-    turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
 ) {
     let trigger_turn = communication.trigger_turn;
     sess.input_queue
-        .enqueue_mailbox_communication(communication, start_options, turn_spawn_budget)
+        .enqueue_mailbox_communication(communication, start_options)
         .await;
     crate::agent_communication::emit_agent_communication_receive(&sub_id);
     if trigger_turn
@@ -496,7 +495,6 @@ pub(super) async fn submission_loop(
             op = ?sub.op,
             "Submission"
         );
-        let turn_spawn_budget = sub.turn_spawn_budget.clone();
         let dispatch_span = submission_dispatch_span(&sub);
         let should_exit = async {
             match sub.op {
@@ -577,9 +575,7 @@ pub(super) async fn submission_loop(
                         request: *request,
                         turn_extension_init: sub.turn_extension_init,
                     };
-                    let result =
-                        turn_input::handle(&sess, request, mode, sub.id.clone(), turn_spawn_budget)
-                            .await;
+                    let result = turn_input::handle(&sess, request, mode, sub.id.clone()).await;
                     let _ = reply.send(result);
                     false
                 }
@@ -665,14 +661,8 @@ pub(super) async fn submission_loop(
                 } => {
                     let communication =
                         crate::PendingAgentMessage::new(communication, sub.message_delivery);
-                    inter_agent_communication(
-                        &sess,
-                        sub.id.clone(),
-                        communication,
-                        start_options,
-                        turn_spawn_budget,
-                    )
-                    .await;
+                    inter_agent_communication(&sess, sub.id.clone(), communication, start_options)
+                        .await;
                     false
                 }
                 Op::ExecApproval {

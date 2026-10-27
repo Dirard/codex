@@ -14,7 +14,7 @@ impl LocalAgentControl {
     /// terminal status, while their residency is pinned. Queue-only mail for an unloaded
     /// recipient is retained in the runtime mailbox, as `submit_inter_agent_communication` does.
     /// Results are queue-only; turn-triggering mail belongs to `send_inter_agent_communication`,
-    /// which also carries turn start options and spawn budgets.
+    /// which also carries turn start options.
     pub(crate) async fn enqueue_inter_agent_communication(
         &self,
         agent_id: ThreadId,

@@ -372,7 +372,6 @@ struct ThreadSpawnRequest {
     inherited_environments: Option<TurnEnvironmentSnapshot>,
     inherited_instructions: Option<SessionInstructions>,
     inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
-    turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
     user_shell_override: Option<crate::shell::Shell>,
 }
 
@@ -394,7 +393,6 @@ impl ThreadSpawnRequest {
             inherited_environments: None,
             inherited_instructions: None,
             inherited_exec_policy: None,
-            turn_spawn_budget: None,
             user_shell_override: None,
         }
     }
@@ -442,7 +440,6 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) inherited_instructions: Option<SessionInstructions>,
     pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     pub(crate) client_mcp_extensions: Option<ClientMcpExtensions>,
-    pub(crate) turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
 }
 
 /// Shared, `Arc`-owned state for [`ThreadManager`]. This `Arc` is required to have a single
@@ -1842,26 +1839,6 @@ impl ThreadManagerState {
         root_turn_id: Option<String>,
         message_delivery: Option<crate::agent_communication::MessageDelivery>,
     ) -> CodexResult<String> {
-        self.send_op_with_spawn_budget(
-            thread_id,
-            op,
-            parent_turn_id,
-            root_turn_id,
-            /*turn_spawn_budget*/ None,
-            message_delivery,
-        )
-        .await
-    }
-
-    pub(crate) async fn send_op_with_spawn_budget(
-        &self,
-        thread_id: ThreadId,
-        op: Op,
-        parent_turn_id: Option<String>,
-        root_turn_id: Option<String>,
-        turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
-        message_delivery: Option<crate::agent_communication::MessageDelivery>,
-    ) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
         let residency_guard = if matches!(op, Op::InterAgentCommunication { .. }) {
             thread
@@ -1881,12 +1858,12 @@ impl ThreadManagerState {
         }
         thread
             .io
-            .submit_with_spawn_budget(
+            .submit_with_trace(
                 op,
+                /*trace*/ None,
                 parent_turn_id,
                 root_turn_id,
                 residency_guard,
-                turn_spawn_budget,
                 message_delivery,
             )
             .await
@@ -2060,7 +2037,6 @@ impl ThreadManagerState {
         agent_control: LocalAgentControl,
         parent_thread_id: Option<ThreadId>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
-        turn_spawn_budget: Option<crate::agent::types::TurnSpawnBudget>,
     ) -> CodexResult<NewThread> {
         (options.client_mcp_extensions, options.prompt_cache_key) =
             self.inherited_child_settings(parent_thread_id).await;
@@ -2076,7 +2052,6 @@ impl ThreadManagerState {
             request.forked_from_thread_id = parent_thread_id;
             request.fork_persistence = ForkPersistence::CopiedDeferred;
         }
-        request.turn_spawn_budget = turn_spawn_budget;
         Box::pin(self.spawn_thread(request)).await
     }
 
@@ -2096,7 +2071,6 @@ impl ThreadManagerState {
             inherited_instructions,
             inherited_exec_policy,
             client_mcp_extensions,
-            turn_spawn_budget,
         } = options;
         let (parent_client_mcp_extensions, inherited_prompt_cache_key) =
             self.inherited_child_settings(parent_thread_id).await;
@@ -2125,7 +2099,6 @@ impl ThreadManagerState {
         request.inherited_environments = inherited_environments;
         request.inherited_instructions = inherited_instructions;
         request.inherited_exec_policy = inherited_exec_policy;
-        request.turn_spawn_budget = turn_spawn_budget;
         Box::pin(self.spawn_thread_outcome(request)).await
     }
 
@@ -2191,7 +2164,6 @@ impl ThreadManagerState {
             inherited_environments,
             inherited_instructions,
             inherited_exec_policy,
-            turn_spawn_budget,
             user_shell_override,
         } = request;
         let history_initialization = if matches!(
@@ -2490,7 +2462,6 @@ impl ThreadManagerState {
             metrics_service_name,
             inherited_environments,
             inherited_exec_policy,
-            turn_spawn_budget,
             parent_rollout_thread_trace,
             user_shell_override,
             parent_trace,

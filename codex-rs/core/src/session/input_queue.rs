@@ -113,7 +113,6 @@ pub(crate) struct InputQueue {
 pub(crate) struct PendingMailboxCommunication {
     pub(crate) communication: crate::PendingAgentMessage,
     start_options: TurnStartOptions,
-    turn_spawn_budget: Option<TurnSpawnBudget>, // Fork: spawn budget
     _diagnostics_guard: GaugeGuard,
 }
 
@@ -155,7 +154,6 @@ impl InputQueue {
                     .map(|communication| PendingMailboxCommunication {
                         communication,
                         start_options: TurnStartOptions::default(),
-                        turn_spawn_budget: None,
                         _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
                     }),
             );
@@ -223,7 +221,6 @@ impl InputQueue {
         &self,
         communication: crate::PendingAgentMessage,
         start_options: TurnStartOptions,
-        turn_spawn_budget: Option<TurnSpawnBudget>,
     ) {
         let mut pending = self.mailbox_pending_mails.lock().await;
         // Mail retained while unloaded precedes new submissions to the loaded session.
@@ -231,7 +228,6 @@ impl InputQueue {
         pending.push_back(PendingMailboxCommunication {
             communication,
             start_options,
-            turn_spawn_budget,
             _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
         });
         self.activity_tx.send_replace(InputQueueActivity::Mailbox);
@@ -263,14 +259,9 @@ impl InputQueue {
     pub(crate) async fn drain_mailbox_input_items_for_task(
         &self,
         take_background_notifications: bool,
-    ) -> (Vec<TurnInput>, TurnStartOptions, Option<TurnSpawnBudget>) {
+    ) -> (Vec<TurnInput>, TurnStartOptions) {
         let pending_mails = self.drain_mailbox().await;
         // A later follow-up supersedes the earlier choice, including an omitted choice.
-        let turn_spawn_budget = pending_mails
-            .iter()
-            .rev()
-            .find(|mail| mail.communication.trigger_turn)
-            .and_then(|mail| mail.turn_spawn_budget.clone());
         let mut start_options = pending_mails
             .iter()
             .rev()
@@ -301,7 +292,7 @@ impl InputQueue {
             .collect();
         self.fork_take_background_notifications(take_background_notifications, &mut items)
             .await;
-        (items, start_options, turn_spawn_budget)
+        (items, start_options)
     }
 
     pub(crate) async fn turn_state_for_sub_id(
@@ -440,7 +431,7 @@ impl InputQueue {
     pub(crate) async fn get_pending_input(
         &self,
         active_turn: &Mutex<Option<ActiveTurn>>,
-    ) -> (Vec<TurnInput>, TurnStartOptions, Option<TurnSpawnBudget>) {
+    ) -> (Vec<TurnInput>, TurnStartOptions) {
         let (pending_input, accepts_mailbox_delivery) = {
             let mut active = active_turn.lock().await;
             match active.as_mut() {
@@ -459,16 +450,15 @@ impl InputQueue {
             }
         };
         if !accepts_mailbox_delivery {
-            return (pending_input, TurnStartOptions::default(), None);
+            return (pending_input, TurnStartOptions::default());
         }
-        let (mailbox_items, start_options, turn_spawn_budget) =
-            self.drain_mailbox_input_items().await;
+        let (mailbox_items, start_options) = self.drain_mailbox_input_items().await;
         if pending_input.is_empty() {
-            (mailbox_items, start_options, turn_spawn_budget)
+            (mailbox_items, start_options)
         } else {
             let mut pending_input = pending_input;
             pending_input.extend(mailbox_items);
-            (pending_input, start_options, turn_spawn_budget)
+            (pending_input, start_options)
         }
     }
 
@@ -624,11 +614,7 @@ mod tests {
             /*trigger_turn*/ false,
         );
         input_queue
-            .enqueue_mailbox_communication(
-                mail_one.into(),
-                Default::default(),
-                /*turn_spawn_budget*/ None,
-            )
+            .enqueue_mailbox_communication(mail_one.into(), Default::default())
             .await;
         let mail_two = make_mail(
             AgentPath::root(),
@@ -637,11 +623,7 @@ mod tests {
             /*trigger_turn*/ false,
         );
         input_queue
-            .enqueue_mailbox_communication(
-                mail_two.into(),
-                Default::default(),
-                /*turn_spawn_budget*/ None,
-            )
+            .enqueue_mailbox_communication(mail_two.into(), Default::default())
             .await;
 
         activity_rx.changed().await.expect("mailbox update");
@@ -766,18 +748,10 @@ mod tests {
         );
 
         input_queue
-            .enqueue_mailbox_communication(
-                mail_one.clone().into(),
-                Default::default(),
-                /*turn_spawn_budget*/ None,
-            )
+            .enqueue_mailbox_communication(mail_one.clone().into(), Default::default())
             .await;
         input_queue
-            .enqueue_mailbox_communication(
-                mail_two.clone().into(),
-                Default::default(),
-                /*turn_spawn_budget*/ None,
-            )
+            .enqueue_mailbox_communication(mail_two.clone().into(), Default::default())
             .await;
 
         assert_eq!(
@@ -826,11 +800,10 @@ mod tests {
                             root_turn_id: root_turn_id.map(str::to_string),
                             ..Default::default()
                         },
-                        /*turn_spawn_budget*/ None,
                     )
                     .await;
             }
-            let (_, start_options, _) = input_queue.drain_mailbox_input_items().await;
+            let (_, start_options) = input_queue.drain_mailbox_input_items().await;
             assert_eq!(
                 start_options.parent_turn_id.as_deref(),
                 expected_parent_turn_id
@@ -858,11 +831,10 @@ mod tests {
                             cyber_access_program: program,
                             ..Default::default()
                         },
-                        /*turn_spawn_budget*/ None,
                     )
                     .await;
             }
-            let (_, start_options, _) = input_queue.drain_mailbox_input_items().await;
+            let (_, start_options) = input_queue.drain_mailbox_input_items().await;
             assert_eq!(start_options.cyber_access_program, latest);
         }
     }
@@ -878,11 +850,7 @@ mod tests {
             /*trigger_turn*/ false,
         );
         input_queue
-            .enqueue_mailbox_communication(
-                queued_mail.into(),
-                Default::default(),
-                /*turn_spawn_budget*/ None,
-            )
+            .enqueue_mailbox_communication(queued_mail.into(), Default::default())
             .await;
         assert!(!input_queue.has_trigger_turn_mailbox_items().await);
 
@@ -893,11 +861,7 @@ mod tests {
             /*trigger_turn*/ true,
         );
         input_queue
-            .enqueue_mailbox_communication(
-                trigger_mail.into(),
-                Default::default(),
-                /*turn_spawn_budget*/ None,
-            )
+            .enqueue_mailbox_communication(trigger_mail.into(), Default::default())
             .await;
         assert!(input_queue.has_trigger_turn_mailbox_items().await);
     }

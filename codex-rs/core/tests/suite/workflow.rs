@@ -683,8 +683,8 @@ async fn budget_and_isolation_resolve_to_null_without_spawning() -> Result<()> {
     Ok(())
 }
 
-/// R4.1, R4.2, R4.4: one agent at a time, in call order; the run's own spawn budget
-/// replaces the parent's, and the agent limit resolves later calls to null.
+/// R4.1, R4.2, R4.4: one agent at a time, in call order; the run's own agent limit resolves
+/// later calls to null.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn agents_start_in_call_order_within_run_limits() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -700,8 +700,6 @@ return await parallel(['TASK-1', 'TASK-2', 'TASK-3', 'TASK-4'].map(task => () =>
     let test = build(&server, |config| {
         config.workflows.max_concurrent_agents = 1;
         config.workflows.max_agents_per_run = 3;
-        // The parent's own per-input spawn budget does not limit the run.
-        config.max_spawned_threads_per_turn = 1;
     })
     .await?;
 

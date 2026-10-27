@@ -2,8 +2,6 @@ use super::ThreadEvictionOutcome;
 use crate::StartThreadOptions;
 use crate::ThreadManager;
 use crate::agent::LocalAgentControl;
-use crate::agent::control::TurnSpawnBudget;
-use crate::agent::registry::AgentRegistry;
 use crate::agent::types::AgentMetadata;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
@@ -23,7 +21,6 @@ use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
 async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
@@ -59,15 +56,8 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
         )
         .await
         .expect("first resident slot");
-    let first = spawn_v2_subagent(
-        &control,
-        &state,
-        config.clone(),
-        root.thread_id,
-        "worker-1",
-        /*turn_spawn_budget*/ None,
-    )
-    .await;
+    let first =
+        spawn_v2_subagent(&control, &state, config.clone(), root.thread_id, "worker-1").await;
     first_slot.commit(first.thread_id);
     mark_thread_completed(first.thread.as_ref()).await;
 
@@ -87,76 +77,11 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
         },
         Ok(_) => panic!("expected evicted thread to be missing"),
     }
-    let second = spawn_v2_subagent(
-        &control,
-        &state,
-        config,
-        root.thread_id,
-        "worker-2",
-        /*turn_spawn_budget*/ None,
-    )
-    .await;
+    let second = spawn_v2_subagent(&control, &state, config, root.thread_id, "worker-2").await;
     second_slot.commit(second.thread_id);
 
     assert!(manager.get_thread(root.thread_id).await.is_ok());
     assert!(manager.get_thread(second.thread_id).await.is_ok());
-}
-
-#[tokio::test]
-async fn spawned_v2_agent_inherits_turn_budget_before_publication() {
-    let mut config = test_config().await;
-    let _ = config.features.enable(Feature::MultiAgentV2);
-    let temp_home = tempfile::tempdir().expect("create temp home");
-    config.codex_home = temp_home.path().to_path_buf().try_into().unwrap();
-    config.cwd = temp_home.path().to_path_buf().try_into().unwrap();
-    let manager = ThreadManager::with_models_provider_and_home_for_tests(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-        config.codex_home.to_path_buf(),
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-    );
-    let root = manager
-        .start_thread(StartThreadOptions::new(config.clone()))
-        .await
-        .expect("start root thread");
-    let control = manager.agent_control();
-    let state = control
-        .runtime
-        .upgrade()
-        .expect("thread manager should be live");
-    let budget = TurnSpawnBudget::new(/*limit*/ 1);
-    let child = spawn_v2_subagent(
-        &control,
-        &state,
-        config,
-        root.thread_id,
-        "worker",
-        Some(budget.clone()),
-    )
-    .await;
-    let registry = Arc::new(AgentRegistry::default());
-    let _spent_slot = registry
-        .reserve_spawn_slot(/*max_threads*/ None, Some(&budget))
-        .expect("spend the inherited budget");
-
-    let step = child
-        .thread
-        .session
-        .capture_step_context(
-            child.thread.session.new_default_turn().await,
-            &CancellationToken::new(),
-        )
-        .await
-        .expect("capture child step");
-    let Err(err) =
-        registry.reserve_spawn_slot(/*max_threads*/ None, Some(&step.turn_spawn_budget))
-    else {
-        panic!("child should share the exhausted inherited budget");
-    };
-    let CodexErrorDetails::AgentLimitReached { max_threads } = err.details() else {
-        panic!("expected AgentLimitReached");
-    };
-    assert_eq!(*max_threads, 1);
 }
 
 #[tokio::test]
@@ -193,15 +118,8 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
         )
         .await
         .expect("first resident slot");
-    let first = spawn_v2_subagent(
-        &control,
-        &state,
-        config.clone(),
-        root.thread_id,
-        "worker-1",
-        /*turn_spawn_budget*/ None,
-    )
-    .await;
+    let first =
+        spawn_v2_subagent(&control, &state, config.clone(), root.thread_id, "worker-1").await;
     first_slot.commit(first.thread_id);
     mark_thread_interrupted(first.thread.as_ref()).await;
 
@@ -221,25 +139,13 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
         },
         Ok(_) => panic!("expected evicted thread to be missing"),
     }
-    let second = spawn_v2_subagent(
-        &control,
-        &state,
-        config.clone(),
-        root.thread_id,
-        "worker-2",
-        /*turn_spawn_budget*/ None,
-    )
-    .await;
+    let second =
+        spawn_v2_subagent(&control, &state, config.clone(), root.thread_id, "worker-2").await;
     second_slot.commit(second.thread_id);
     mark_thread_completed(second.thread.as_ref()).await;
 
     let err = control
-        .ensure_v2_agent_loaded(
-            config.clone(),
-            first.thread_id,
-            /*parent*/ None,
-            Some(TurnSpawnBudget::new(config.max_spawned_threads_per_turn)),
-        )
+        .ensure_v2_agent_loaded(config, first.thread_id, /*parent*/ None)
         .await
         .expect_err("evicted interrupted agent should stay lost");
     match err.details() {
@@ -459,7 +365,6 @@ async fn spawn_v2_subagent(
     config: Config,
     parent_thread_id: ThreadId,
     label: &str,
-    turn_spawn_budget: Option<TurnSpawnBudget>,
 ) -> crate::thread_manager::NewThread {
     state
         .spawn_child_thread(
@@ -473,7 +378,6 @@ async fn spawn_v2_subagent(
             control.clone(),
             Some(parent_thread_id),
             /*inherited_exec_policy*/ None,
-            turn_spawn_budget,
         )
         .await
         .expect("spawn v2 subagent")
@@ -490,7 +394,7 @@ async fn spawn_thread_spawn_agent(
     let reservation = control
         .runtime
         .registry
-        .reserve_spawn_slot(/*max_threads*/ None, /*turn_spawn_budget*/ None)
+        .reserve_spawn_slot(/*max_threads*/ None)
         .expect("reserve spawn slot");
     let agent = state
         .spawn_child_thread(
@@ -508,7 +412,6 @@ async fn spawn_thread_spawn_agent(
             control.clone(),
             Some(parent_thread_id),
             /*inherited_exec_policy*/ None,
-            /*turn_spawn_budget*/ None,
         )
         .await
         .expect("spawn thread-spawn agent");
