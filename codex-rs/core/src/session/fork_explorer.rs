@@ -52,8 +52,8 @@ mod tests {
     use crate::config::ConfigBuilder;
 
     /// Review 2026-10-27, item 6: `x-codex-beta-features` carries the upstream Experimental
-    /// keys only; `explorer_profile` and the fork's Experimental stage of
-    /// `default_mode_request_user_input` stay out of it.
+    /// keys only; the fork's own Experimental features and the fork's Experimental stage of
+    /// `default_mode_request_user_input` stay out of it (fork-features-experimental R2.1).
     #[tokio::test]
     async fn beta_features_header_leaves_out_fork_stages() {
         let home = tempfile::TempDir::new().expect("create temp dir");
@@ -63,11 +63,17 @@ mod tests {
             .build()
             .await
             .expect("load test config");
-        for feature in [
+        let fork_features = [
+            Feature::ExecExitNotifications,
+            Feature::Workflows,
             Feature::ExplorerProfile,
+            Feature::AgentWorktreeIsolation,
             Feature::DefaultModeRequestUserInput,
-            Feature::LoginShellPackagePath,
-        ] {
+        ];
+        for feature in fork_features
+            .into_iter()
+            .chain([Feature::LoginShellPackagePath])
+        {
             config
                 .features
                 .enable(feature)
@@ -76,7 +82,7 @@ mod tests {
         let header = Session::build_model_client_beta_features_header(&config).unwrap_or_default();
         let keys = header.split(',').collect::<Vec<_>>();
         assert!(keys.contains(&"login_shell_package_path"), "{header}");
-        for fork_key in ["explorer_profile", "default_mode_request_user_input"] {
+        for fork_key in fork_features.map(Feature::key) {
             assert!(!keys.contains(&fork_key), "{fork_key} in {header}");
         }
         assert_eq!(
@@ -86,7 +92,7 @@ mod tests {
                 .filter(|spec| codex_features::fork_owns_stage(spec.id))
                 .map(|spec| spec.key)
                 .collect::<Vec<_>>(),
-            vec!["explorer_profile", "default_mode_request_user_input"],
+            fork_features.map(Feature::key).to_vec(),
             "the fork's Experimental features"
         );
     }

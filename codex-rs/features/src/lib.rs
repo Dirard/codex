@@ -1162,13 +1162,21 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ExecExitNotifications,
         key: "exec_exit_notifications",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Background process notifications",
+            menu_description: "Background commands can notify the model when they exit or print a matching line, so it does not poll them; codex exec waits for these notifications before it exits.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Workflows,
         key: "workflows",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Dynamic workflows",
+            menu_description: "The model can run a JavaScript workflow that fans out subagents in the background and reports back once when it ends; workflow agents start without your conversation.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     // Fork end
@@ -1585,7 +1593,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::AgentWorktreeIsolation,
         key: "agent_worktree_isolation",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Subagent worktrees",
+            menu_description: "Subagents can work in their own git worktree and the parent agent applies their changes with apply_agent_worktree; local git checkouts only, not on Windows.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     // Fork end

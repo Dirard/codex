@@ -53,6 +53,10 @@ fn experimental_features_display_metadata() {
     for feature in [
         Feature::AnalyticsPlanHistory,
         Feature::LoginShellPackagePath,
+        // Fork: Experimental stages of the fork's features (fork-features-experimental R2.1).
+        Feature::ExecExitNotifications,
+        Feature::Workflows,
+        Feature::AgentWorktreeIsolation,
     ] {
         let stage = feature.stage();
         let (app_tx, _app_rx) = tokio::sync::mpsc::unbounded_channel();
