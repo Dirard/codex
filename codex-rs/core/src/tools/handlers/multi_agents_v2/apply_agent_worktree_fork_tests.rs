@@ -119,11 +119,21 @@ fn close_answers_escape_names_from_the_worktree() {
         let text = kept_reason(reason, std::slice::from_ref(&forged));
         assert!(!text.contains('\n'), "{text}");
     }
-    assert!(
-        kept_reason(
-            codex_worktree::KeptReason::Process,
-            &["pid 7: sleep 60".to_string()]
-        )
-        .contains("write_stdin")
+    // K5 (deferred-fixes-3): a process the `/proc` safety net finds is outside Codex's
+    // background terminals, so the refusal names it by pid and says it must exit, without the
+    // write_stdin advice that only fits a session of the tree.
+    let process = kept_reason(
+        codex_worktree::KeptReason::Process,
+        &["pid 7: sleep 60".to_string()],
     );
+    assert!(process.contains("pid 7: sleep 60"), "{process}");
+    assert!(process.contains("outside Codex"), "{process}");
+    assert!(!process.contains("write_stdin"), "{process}");
+    assert!(!process.contains("session_id"), "{process}");
+    // K2: a nested repository's work is not saved by a push alone.
+    let nested = kept_reason(
+        codex_worktree::KeptReason::NestedRepository,
+        &["tool (commits that the repository does not have)".to_string()],
+    );
+    assert!(nested.contains("save that work elsewhere"), "{nested}");
 }
