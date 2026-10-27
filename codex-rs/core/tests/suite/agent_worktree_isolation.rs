@@ -4586,6 +4586,11 @@ async fn apply_agent_worktree_close_names_a_watched_process_of_a_resting_helper(
         /*git_repository*/ true,
         |config| {
             config.agent_max_depth = 2;
+            // The watch is only armed (and so keeps the helper loaded) with this feature on.
+            config
+                .features
+                .enable(Feature::ExecExitNotifications)
+                .expect("exec exit notifications");
         },
     )
     .await?;
@@ -4607,14 +4612,16 @@ async fn apply_agent_worktree_close_names_a_watched_process_of_a_resting_helper(
         )],
     )
     .await;
-    // A watched process: `notify_on_output` arms a watch, so the helper stays loaded while it
-    // rests. Before R7 this made the helper look like an agent still at work.
+    // A watched process: `notify_on_exit` arms a watch, so the helper stays loaded (not at
+    // rest) while it rests between turns. Before R7 this made the helper look like an agent
+    // still at work, and the close refused with advice the model could not act on.
     let server_args = json!({
         "cmd": "d=\"$PWD\"; sleep 6; mkdir -p \"$d/out\" && printf 'ready\\n' > \"$d/out/server.log\"",
         "shell": "bash",
         "login": false,
         "yield_time_ms": 300,
         "notify_on_output": "ready",
+        "notify_on_exit": true,
     });
     mount_sse_once_match(
         &server,
