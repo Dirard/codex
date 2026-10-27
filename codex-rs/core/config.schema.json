@@ -1734,8 +1734,14 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "output_watch_first_match_ms": {
+          "description": "How long an output watch alone keeps `codex exec`, `wait_agent` and agent residency waiting for its first matching line, such as a server's \"ready\", counted from the end of the turn that started the watch, in milliseconds. Defaults to 300000 (5 minutes).",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "output_watch_quiet_ms": {
-          "description": "How long an output watch alone keeps `codex exec`, `wait_agent` and agent residency waiting after its process last printed a matching line (or after the watch started), in milliseconds; `notify_on_exit` waits for the exit instead. Defaults to 60000.",
+          "description": "How long an output watch alone keeps `codex exec`, `wait_agent` and agent residency waiting after its process last printed a matching line, in milliseconds; `notify_on_exit` waits for the exit instead. Defaults to 60000.",
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"

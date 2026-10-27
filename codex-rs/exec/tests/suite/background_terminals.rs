@@ -28,6 +28,9 @@ struct Routed {
     bodies: Arc<Mutex<Vec<Value>>>,
     /// Arguments of the first turn's `exec_command`.
     arguments: Value,
+    /// How long the answer that ends the first turn takes, so the turn keeps running after
+    /// the background command started.
+    after_tool_delay: Duration,
 }
 
 /// `exec_command` arguments that start `command` with an exit notification.
@@ -83,7 +86,12 @@ impl Respond for Routed {
         };
         self.served.lock().expect("served").push(name);
         self.bodies.lock().expect("bodies").push(body);
-        responses::sse_response(sse)
+        let delay = if name == "after_tool" {
+            self.after_tool_delay
+        } else {
+            Duration::ZERO
+        };
+        responses::sse_response(sse).set_delay(delay)
     }
 }
 
@@ -102,12 +110,21 @@ async fn run_exec(command: &str, overrides: &[&str]) -> anyhow::Result<ExecRun> 
 }
 
 async fn run_exec_with(arguments: Value, overrides: &[&str]) -> anyhow::Result<ExecRun> {
+    run_exec_routed(arguments, Duration::ZERO, overrides).await
+}
+
+async fn run_exec_routed(
+    arguments: Value,
+    after_tool_delay: Duration,
+    overrides: &[&str],
+) -> anyhow::Result<ExecRun> {
     let test = test_codex_exec();
     let server = responses::start_mock_server().await;
     let routed = Routed {
         served: Arc::default(),
         bodies: Arc::default(),
         arguments,
+        after_tool_delay,
     };
     Mock::given(method("POST"))
         .and(path_regex(".*/responses$"))
@@ -274,6 +291,52 @@ async fn exec_does_not_wait_for_a_quiet_output_watch() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Tails 2026-10-27: a server that prints "ready" later than `output_watch_quiet_ms` is still
+/// waited for. Before its first matching line a watch waits `output_watch_first_match_ms`, and
+/// from the end of the turn that started it: here the turn goes on for 4 s after the server
+/// started, the window is 4 s, and "ready" comes 6 s after the start, so neither a quiet
+/// window nor a first-match window counted from the watch start would see it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exec_waits_for_the_first_match_of_a_slow_server() -> anyhow::Result<()> {
+    let command = "echo starting; sleep 6; echo 'server ready'; sleep 60";
+    let run = run_exec_routed(
+        json!({
+            "cmd": command,
+            "yield_time_ms": 250,
+            "login": false,
+            "notify_on_output": "ready",
+        }),
+        Duration::from_secs(4),
+        &[
+            "features.exec_exit_notifications.enabled=true",
+            "features.exec_exit_notifications.exec_wait_timeout_ms=40000",
+            "features.exec_exit_notifications.output_watch_quiet_ms=1000",
+            "features.exec_exit_notifications.output_watch_first_match_ms=4000",
+        ],
+    )
+    .await?;
+    assert_eq!(
+        run.code,
+        Some(0),
+        "stdout: {}\nstderr: {}",
+        run.stdout,
+        run.stderr
+    );
+    assert_eq!(
+        run.served,
+        vec!["start", "after_tool", "notified"],
+        "stderr: {}",
+        run.stderr
+    );
+    assert!(
+        run.stdout.contains("FINAL: the build printed built-ok"),
+        "stdout: {}",
+        run.stdout
+    );
+    assert!(run.elapsed < Duration::from_secs(30), "{:?}", run.elapsed);
+    Ok(())
+}
+
 /// Review 2026-10-27 P3-5: Ctrl-C while exec waits for a background terminal names the
 /// terminal it leaves and exits with an error, as the timeout does.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -284,6 +347,7 @@ async fn exec_interrupted_while_waiting_names_the_terminal_and_fails() -> anyhow
         served: Arc::default(),
         bodies: Arc::default(),
         arguments: notify_on_exit("sleep 60; echo never"),
+        after_tool_delay: Duration::ZERO,
     };
     Mock::given(method("POST"))
         .and(path_regex(".*/responses$"))

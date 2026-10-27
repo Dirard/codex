@@ -899,6 +899,7 @@ impl Session {
                 time_to_first_token_ms,
             })
         };
+        self.fork_note_turn_finished().await; // Fork: output watches wait from the turn's end
         let saved_guardian_completion =
             matches!(event, EventMsg::TurnComplete(_)) && self.is_private_guardian_reviewer().await;
         if !saved_guardian_completion {

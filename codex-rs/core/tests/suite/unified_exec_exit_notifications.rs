@@ -1694,9 +1694,12 @@ async fn wait_agent_returns_on_an_output_notification() -> Result<()> {
 
 /// Review 2026-10-27 P2-1: matching an expensive pattern never runs on the async runtime or
 /// under the output buffer and thread-queue locks. Two watched processes flood 4 KiB lines
-/// that `.{0,255}Z` has to scan in full, and another turn still finishes promptly.
+/// that `(?:[ -~]{0,40}){25}q#` has to scan in full (one of the costliest patterns under the
+/// size limit: its lazy DFA gives up, about 40 ms a line in release), and another turn still
+/// finishes promptly.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_expensive_output_pattern_does_not_stall_other_turns() -> Result<()> {
+    const EXPENSIVE_PATTERN: &str = "(?:[ -~]{0,40}){25}q#";
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     skip_if_target_windows!(Ok(()), "uses POSIX shell commands");
@@ -1710,13 +1713,13 @@ async fn an_expensive_output_pattern_does_not_stall_other_turns() -> Result<()> 
                 "resp-1",
                 "flood-a",
                 "exec_command",
-                &watch_args(flood, ".{0,255}Z", /*tty*/ false),
+                &watch_args(flood, EXPENSIVE_PATTERN, /*tty*/ false),
             ),
             tool_call(
                 "resp-2",
                 "flood-b",
                 "exec_command",
-                &watch_args(flood, ".{0,255}Z", /*tty*/ false),
+                &watch_args(flood, EXPENSIVE_PATTERN, /*tty*/ false),
             ),
             message("resp-3", "Both are running."),
             message("resp-4", "pong"),

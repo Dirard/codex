@@ -52,18 +52,44 @@ pub(crate) const OUTPUT_WATCH_MAX_ACTIVE: usize = 8;
 /// and counted, so a process that prints faster than the pattern matches cannot grow memory
 /// or the work behind it (P2-1).
 pub(crate) const OUTPUT_WATCH_BACKLOG_MAX_BYTES: usize = 64 * 1024;
-/// A watch alone keeps `codex exec`, `wait_agent` and agent residency waiting only until its
-/// process printed no matching line for this long; `notify_on_exit` waits for the exit
-/// (review 2026-10-27, P2-3). `[features.exec_exit_notifications] output_watch_quiet_ms`
-/// overrides it.
-#[cfg(test)]
-pub(crate) const OUTPUT_WATCH_QUIET_RELEASE: Duration =
-    Duration::from_millis(crate::config::DEFAULT_OUTPUT_WATCH_QUIET_MS);
-/// Compiled size limit of a pattern. The matcher's work per byte grows with it, so it bounds
-/// the cost of one line: `.{0,255}Z` (about 22 KiB) still fits, nested counted repetitions
-/// such as `(?:.{0,30}){30}Z` do not (P2-1).
-pub(crate) const OUTPUT_WATCH_REGEX_SIZE_LIMIT: usize = 32 * 1024;
+/// How long a watch alone keeps `codex exec`, `wait_agent` and agent residency waiting
+/// (review 2026-10-27, P2-3; `notify_on_exit` waits for the exit instead). Before its first
+/// matching line the model waits for that line, such as a server's "ready", from the end of
+/// the turn that started the watch: `first_match`. After a matching line it waits only while
+/// more keep coming: `quiet` (tails 2026-10-27). `[features.exec_exit_notifications]
+/// output_watch_first_match_ms` and `output_watch_quiet_ms` set them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OutputWatchWindows {
+    pub(crate) first_match: Duration,
+    pub(crate) quiet: Duration,
+}
+
+impl OutputWatchWindows {
+    pub(crate) fn from_config(config: &crate::config::ExecExitNotificationsConfig) -> Self {
+        Self {
+            first_match: Duration::from_millis(config.output_watch_first_match_ms),
+            quiet: Duration::from_millis(config.output_watch_quiet_ms),
+        }
+    }
+}
+
+impl Default for OutputWatchWindows {
+    fn default() -> Self {
+        Self::from_config(&crate::config::ExecExitNotificationsConfig::default())
+    }
+}
+/// Compiled size limit of a pattern (`regex` NFA bytes). The lazy DFA matches realistic
+/// patterns in microseconds per line; when a pattern makes the DFA give up, the fallback works
+/// per byte in proportion to this size, so it bounds the cost of one line: about 40 ms for a
+/// 4 KiB line at the limit in a release build (P2-1; Decision log of
+/// `specs/background-exec-notifications-2026-10-25.md`, 2026-10-27 tails). Two Unicode classes
+/// such as `\w+@\w+` fit; large counted repetitions of `.` or `\w`, such as `.{0,255}`, do not.
+pub(crate) const OUTPUT_WATCH_REGEX_SIZE_LIMIT: usize = 128 * 1024;
+/// Cache of the lazy DFA of one pattern; past it, the DFA falls back as above.
+const OUTPUT_WATCH_REGEX_DFA_SIZE_LIMIT: usize = 512 * 1024;
 const OUTPUT_WATCH_REGEX_NEST_LIMIT: u32 = 64;
+/// The error for a pattern over `OUTPUT_WATCH_REGEX_SIZE_LIMIT`.
+const OUTPUT_PATTERN_TOO_COSTLY: &str = r"notify_on_output is too costly to match on every output line; use a simpler pattern: + or * instead of large counted repetitions such as .{0,255} or (?:.{0,30}){30}, and ASCII classes such as [A-Za-z0-9_] or (?-u:\w) instead of many Unicode classes such as \w";
 /// Label of the boundary lines around matching lines.
 const MATCHES_LABEL: &str = "matches";
 const LINE_TRUNCATION_MARKER: &str = "…";
@@ -71,10 +97,11 @@ const COMMAND_TRUNCATION_MARKER: &str = "…[truncated]…";
 /// First line of an output watch notification, after the session ID.
 const OUTPUT_WATCH_HEADLINE_MARK: &str = " matching the output watch \"";
 
-/// A validated `notify_on_output` pattern (R6.2).
+/// A validated `notify_on_output` pattern (R6.2) in `regex` syntax: Unicode-aware and matched
+/// in time linear in the line.
 pub(crate) struct OutputPattern {
     source: String,
-    regex: regex_lite::Regex,
+    regex: regex::Regex,
 }
 
 impl std::fmt::Debug for OutputPattern {
@@ -92,17 +119,14 @@ impl OutputPattern {
                 source.len()
             ));
         }
-        let regex = regex_lite::RegexBuilder::new(source)
+        let regex = regex::RegexBuilder::new(source)
             .size_limit(OUTPUT_WATCH_REGEX_SIZE_LIMIT)
+            .dfa_size_limit(OUTPUT_WATCH_REGEX_DFA_SIZE_LIMIT)
             .nest_limit(OUTPUT_WATCH_REGEX_NEST_LIMIT)
             .build()
-            .map_err(|err| {
-                let err = err.to_string();
-                if err.contains("size limit") {
-                    "notify_on_output is too costly to match on every output line; use a simpler pattern without large or nested counted repetitions such as (?:.{0,30}){30}".to_string()
-                } else {
-                    format!("notify_on_output is not a valid regular expression: {err}")
-                }
+            .map_err(|err| match err {
+                regex::Error::CompiledTooBig(_) => OUTPUT_PATTERN_TOO_COSTLY.to_string(),
+                err => format!("notify_on_output is not a valid regular expression: {err}"),
             })?;
         Ok(Arc::new(Self {
             source: source.to_string(),
@@ -330,8 +354,11 @@ struct WatchState {
     last_queued_at: Option<Instant>,
     /// A new notification may not be queued before this (the interval of R6.7).
     retry_at: Option<Instant>,
-    /// When the watch started or last found a matching line (P2-3).
+    /// When the watch last found a matching line (P2-3).
     last_match_at: Option<Instant>,
+    /// When the turn that started the watch ended; the wait for the first matching line
+    /// counts from then (tails 2026-10-27).
+    turn_ended_at: Option<Instant>,
     stopped: bool,
 }
 
@@ -443,8 +470,9 @@ pub(crate) struct OutputWatch {
     matching: tokio::sync::Mutex<()>,
     /// Lines the pattern was evaluated on (tests count the work).
     evaluated: AtomicUsize,
+    started_at: Instant,
     /// How long the watch stays fresh without a matching line (P2-3).
-    quiet_release: Duration,
+    windows: OutputWatchWindows,
 }
 
 impl std::fmt::Debug for OutputWatch {
@@ -460,28 +488,26 @@ impl std::fmt::Debug for OutputWatch {
 impl OutputWatch {
     #[cfg(test)]
     pub(crate) fn new(process_id: i32, command: String, pattern: Arc<OutputPattern>) -> Arc<Self> {
-        Self::with_quiet_release(process_id, command, pattern, OUTPUT_WATCH_QUIET_RELEASE)
+        Self::with_windows(process_id, command, pattern, OutputWatchWindows::default())
     }
 
-    pub(crate) fn with_quiet_release(
+    pub(crate) fn with_windows(
         process_id: i32,
         command: String,
         pattern: Arc<OutputPattern>,
-        quiet_release: Duration,
+        windows: OutputWatchWindows,
     ) -> Arc<Self> {
         Arc::new(Self {
             key: super::next_notification_key(),
             process_id,
             command,
             pattern,
-            state: Mutex::new(WatchState {
-                last_match_at: Some(Instant::now()),
-                ..WatchState::default()
-            }),
+            state: Mutex::new(WatchState::default()),
             wake: Notify::new(),
             matching: tokio::sync::Mutex::new(()),
             evaluated: AtomicUsize::new(0),
-            quiet_release,
+            started_at: Instant::now(),
+            windows,
         })
     }
 
@@ -501,15 +527,31 @@ impl OutputWatch {
         self.lock().stopped
     }
 
-    /// Whether the watch still expects news: it is on and its process printed a matching
-    /// line, or the watch started, less than its quiet period ago (P2-3).
+    /// Whether the watch still expects news (P2-3): it is on and holds undelivered events, or
+    /// its process printed a matching line less than `quiet` ago, or, before any matching
+    /// line, the turn that started the watch ended (or is still running and started it) less
+    /// than `first_match` ago (tails 2026-10-27).
     pub(crate) fn is_fresh(&self, now: Instant) -> bool {
         let state = self.lock();
-        !state.stopped
-            && (state.first_event_at.is_some()
-                || state
-                    .last_match_at
-                    .is_some_and(|last| now < last + self.quiet_release))
+        if state.stopped {
+            return false;
+        }
+        if state.first_event_at.is_some() {
+            return true;
+        }
+        match state.last_match_at {
+            Some(last) => now < last + self.windows.quiet,
+            None => {
+                let waiting_since = state.turn_ended_at.unwrap_or(self.started_at);
+                now < waiting_since.max(self.started_at) + self.windows.first_match
+            }
+        }
+    }
+
+    /// The turn that started the watch ended: the model now waits for the first matching
+    /// line, so its window counts from here. Later turns do not move it.
+    pub(crate) fn note_turn_finished(&self, now: Instant) {
+        self.lock().turn_ended_at.get_or_insert(now);
     }
 
     /// Whether the watch reported or still holds matching lines.

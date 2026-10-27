@@ -3044,6 +3044,7 @@ dependencies = [
  "predicates",
  "pretty_assertions",
  "rand 0.9.3",
+ "regex",
  "regex-lite",
  "rmcp",
  "serde",

@@ -1023,17 +1023,11 @@ impl super::UnifiedExecContext {
         if others >= OUTPUT_WATCH_MAX_ACTIVE {
             return OutputWatchState::NotStarted(OutputWatchRefusal::Limit);
         }
-        let quiet_ms = self
-            .step_context
-            .turn
-            .config
-            .exec_exit_notifications
-            .output_watch_quiet_ms;
-        let watch = OutputWatch::with_quiet_release(
+        let watch = OutputWatch::with_windows(
             exit_notifier.process_id(),
             exit_notifier.command().to_string(),
             Arc::clone(pattern),
-            Duration::from_millis(quiet_ms),
+            OutputWatchWindows::from_config(&self.step_context.turn.config.exec_exit_notifications),
         );
         {
             let mut output = process.output_handles().output_buffer.lock().await;
@@ -1064,6 +1058,23 @@ impl super::UnifiedExecContext {
 }
 
 impl super::UnifiedExecProcessManager {
+    /// A turn of the thread ended: output watches that wait for their first matching line
+    /// count that wait from now (`OutputWatch::note_turn_finished`, tails 2026-10-27).
+    pub(crate) async fn note_turn_finished(&self) {
+        let now = Instant::now();
+        let watches: Vec<Arc<OutputWatch>> = self
+            .process_store
+            .lock()
+            .await
+            .processes
+            .values()
+            .filter_map(|entry| entry.exit_notifier.as_ref()?.output_watch())
+            .collect();
+        for watch in watches {
+            watch.note_turn_finished(now);
+        }
+    }
+
     /// Whether the thread waits for a live process or for a notification on its way into the
     /// thread queue (`ExitNotifier::is_awaited`).
     pub(crate) async fn has_pending_exit_notifications(&self) -> bool {

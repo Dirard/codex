@@ -223,16 +223,21 @@ pub struct ExecExitNotificationsConfig {
     /// How long an output watch alone is waited for after its last matching line (review
     /// 2026-10-27, P2-3).
     pub output_watch_quiet_ms: u64,
+    /// How long an output watch alone is waited for before its first matching line, from the
+    /// end of the turn that started it (tails 2026-10-27).
+    pub output_watch_first_match_ms: u64,
 }
 
 pub const DEFAULT_EXEC_WAIT_TIMEOUT_MS: u64 = 30 * 60 * 1000;
 pub const DEFAULT_OUTPUT_WATCH_QUIET_MS: u64 = 60 * 1000;
+pub const DEFAULT_OUTPUT_WATCH_FIRST_MATCH_MS: u64 = 5 * 60 * 1000;
 
 impl Default for ExecExitNotificationsConfig {
     fn default() -> Self {
         Self {
             exec_wait_timeout_ms: DEFAULT_EXEC_WAIT_TIMEOUT_MS,
             output_watch_quiet_ms: DEFAULT_OUTPUT_WATCH_QUIET_MS,
+            output_watch_first_match_ms: DEFAULT_OUTPUT_WATCH_FIRST_MATCH_MS,
         }
     }
 }
@@ -252,6 +257,9 @@ impl ExecExitNotificationsConfig {
             output_watch_quiet_ms: configured
                 .and_then(|config| config.output_watch_quiet_ms)
                 .unwrap_or(DEFAULT_OUTPUT_WATCH_QUIET_MS),
+            output_watch_first_match_ms: configured
+                .and_then(|config| config.output_watch_first_match_ms)
+                .unwrap_or(DEFAULT_OUTPUT_WATCH_FIRST_MATCH_MS),
         }
     }
 }

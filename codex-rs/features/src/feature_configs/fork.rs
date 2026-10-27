@@ -56,10 +56,15 @@ pub struct ExecExitNotificationsConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exec_wait_timeout_ms: Option<u64>,
     /// How long an output watch alone keeps `codex exec`, `wait_agent` and agent residency
-    /// waiting after its process last printed a matching line (or after the watch started),
-    /// in milliseconds; `notify_on_exit` waits for the exit instead. Defaults to 60000.
+    /// waiting after its process last printed a matching line, in milliseconds;
+    /// `notify_on_exit` waits for the exit instead. Defaults to 60000.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_watch_quiet_ms: Option<u64>,
+    /// How long an output watch alone keeps `codex exec`, `wait_agent` and agent residency
+    /// waiting for its first matching line, such as a server's "ready", counted from the end
+    /// of the turn that started the watch, in milliseconds. Defaults to 300000 (5 minutes).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_watch_first_match_ms: Option<u64>,
 }
 
 impl FeatureConfig for ExecExitNotificationsConfigToml {

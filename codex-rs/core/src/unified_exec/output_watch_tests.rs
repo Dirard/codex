@@ -310,22 +310,31 @@ fn patterns_are_validated() {
             .is_err_and(|err| err.starts_with("notify_on_output is not a valid regular expression")),
         "{invalid:?}"
     );
-    // P2-1: the compiled size bounds the work per line; realistic patterns and `.{0,255}Z`
-    // fit, nested counted repetitions do not.
+    // P2-1: the compiled size bounds the work per line; realistic patterns, Unicode ones
+    // included, fit, large or nested counted repetitions do not.
     for accepted in [
-        ".{0,255}Z",
+        ".{0,64}Z",
         r"(?i)(webpack compiled|compiled successfully|ready in \d+|listening on|local:\s+http|error|failed|exception|EADDRINUSE|ECONNREFUSED|unhandled|traceback)",
         "(?i)ready|listening|error|fail|exception|warning|started|compiled|built|done|success|crash|killed|timeout|refused|denied",
+        r"(?i)ошибка|готово|\p{Cyrillic}+:",
+        r"\w+@\w+",
+        r"(?-u:\w)+@(?-u:\w)+\.(?-u:\w)+",
     ] {
         assert!(OutputPattern::parse(accepted).is_ok(), "{accepted}");
     }
-    for costly in ["(?:.{0,30}){30}Z", "(?:(?:(?:.?){20}){20}){20}Z"] {
+    for costly in [
+        ".{0,255}Z",
+        r"\w{0,100}Z",
+        "(?:.{0,30}){30}Z",
+        "(?:(?:(?:.?){20}){20}){20}Z",
+    ] {
         assert_eq!(
             OutputPattern::parse(costly).map(|_| ()),
-            Err("notify_on_output is too costly to match on every output line; use a simpler pattern without large or nested counted repetitions such as (?:.{0,30}){30}".to_string()),
+            Err(OUTPUT_PATTERN_TOO_COSTLY.to_string()),
             "{costly}"
         );
     }
+    assert!(OUTPUT_PATTERN_TOO_COSTLY.contains("(?:.{0,30}){30}"));
     assert!(matches!(
         OutputWatchChange::parse(Some("")),
         Ok(Some(OutputWatchChange::Stop))
@@ -335,6 +344,22 @@ fn patterns_are_validated() {
         OutputWatchChange::parse(Some("ready")),
         Ok(Some(OutputWatchChange::Watch(_)))
     ));
+}
+
+/// Tails 2026-10-27: patterns are `regex` syntax, so `(?i)` ignores case beyond ASCII and
+/// `\p{..}` classes work; with `regex-lite` neither did.
+#[test]
+fn unicode_patterns_match_output_lines() {
+    let watch = watch(r"(?i)ошибка|\p{Greek}{3}");
+    watch.observe_chunk("ОШИБКА: диск заполнен\nall good\nσφάλμα\n".as_bytes());
+    watch.match_now(/*final_batch*/ false, Instant::now());
+    let text = watch
+        .take_for_queue(false, due(), false, &boundary())
+        .expect("matching lines");
+    assert_eq!(
+        quoted_lines(&text),
+        vec!["ОШИБКА: диск заполнен".to_string(), "σφάλμα".to_string()]
+    );
 }
 
 /// R6.4: a stopped watch matches nothing more.
@@ -360,7 +385,7 @@ fn a_stopped_watch_ignores_output() {
 /// task matches complete lines, and an unterminated line only once it stays unchanged.
 #[test]
 fn the_pattern_is_evaluated_only_by_the_matcher() {
-    let watch = watch(".{0,255}Z");
+    let watch = watch(".{0,64}Z");
     let line = format!("{}\n", "x".repeat(OUTPUT_WATCH_MATCH_MAX_BYTES - 1));
     for _ in 0..4 {
         watch.observe_chunk(line.as_bytes());
@@ -467,25 +492,52 @@ fn lines_a_poll_showed_are_not_reported_again() {
     );
 }
 
-/// P2-3: a watch is fresh until its process printed no matching line for the quiet period.
+/// P2-3: after a matching line, a watch is fresh until its process printed no matching line
+/// for the quiet period.
 #[test]
 fn a_watch_goes_quiet_without_matching_lines() {
+    let windows = OutputWatchWindows::default();
     let watch = watch("ready");
     let start = Instant::now();
     assert!(watch.is_fresh(start));
-    assert!(!watch.is_fresh(start + OUTPUT_WATCH_QUIET_RELEASE + Duration::from_secs(1)));
-    let later = start + OUTPUT_WATCH_QUIET_RELEASE;
+    let later = start + Duration::from_secs(2);
     watch.observe_chunk(b"ready\n");
     watch.match_now(false, later);
     assert!(
-        watch.is_fresh(later + OUTPUT_WATCH_QUIET_RELEASE),
+        watch.is_fresh(later + windows.first_match + windows.quiet),
         "undelivered events"
     );
     watch.take_for_queue(false, later + OUTPUT_WATCH_BATCH_WINDOW, false, &boundary());
-    assert!(watch.is_fresh(later + OUTPUT_WATCH_QUIET_RELEASE - Duration::from_secs(1)));
-    assert!(!watch.is_fresh(later + OUTPUT_WATCH_QUIET_RELEASE + Duration::from_secs(1)));
+    assert!(watch.is_fresh(later + windows.quiet - Duration::from_secs(1)));
+    assert!(!watch.is_fresh(later + windows.quiet + Duration::from_secs(1)));
     watch.stop();
     assert!(!watch.is_fresh(later));
+}
+
+/// Tails 2026-10-27: before its first matching line, such as a slow server's "ready", a watch
+/// waits `first_match`, not `quiet`, and from the end of the turn that started it, so the time
+/// the model kept working does not count. Later turns do not move the wait.
+#[test]
+fn a_watch_waits_for_its_first_match_from_the_end_of_its_turn() {
+    let windows = OutputWatchWindows {
+        first_match: Duration::from_secs(300),
+        quiet: Duration::from_secs(60),
+    };
+    let watch = OutputWatch::with_windows(
+        1000,
+        "npm run dev".to_string(),
+        OutputPattern::parse("ready").expect("valid pattern"),
+        windows,
+    );
+    let start = Instant::now();
+    assert!(watch.is_fresh(start + windows.quiet + Duration::from_secs(1)));
+    assert!(!watch.is_fresh(start + windows.first_match + Duration::from_secs(1)));
+
+    let turn_end = start + Duration::from_secs(120);
+    watch.note_turn_finished(turn_end);
+    watch.note_turn_finished(turn_end + Duration::from_secs(200));
+    assert!(watch.is_fresh(turn_end + windows.first_match - Duration::from_secs(1)));
+    assert!(!watch.is_fresh(turn_end + windows.first_match + Duration::from_secs(1)));
 }
 
 /// P3-3: an output watch notification is told apart from an exit notification by the line

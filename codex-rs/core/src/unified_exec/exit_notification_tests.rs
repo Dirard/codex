@@ -106,7 +106,7 @@ fn observing_after_the_exit_returns_the_final_watch_batch_too() {
 #[test]
 fn a_watch_alone_is_awaited_only_while_it_is_fresh() {
     let now = Instant::now();
-    let quiet = now + OUTPUT_WATCH_QUIET_RELEASE + Duration::from_secs(1);
+    let quiet = now + OutputWatchWindows::default().first_match + Duration::from_secs(1);
     let watch = OutputWatch::new(
         1000,
         "npm run dev".to_string(),

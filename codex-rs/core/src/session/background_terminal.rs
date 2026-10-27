@@ -153,6 +153,21 @@ impl Session {
         }
     }
 
+    /// Fork hook of `on_task_finished`, before the turn's terminal event: an output watch that
+    /// still waits for its first matching line waits from the end of its turn, so the time the
+    /// model kept working does not use up the wait (R6.14, tails 2026-10-27).
+    pub(crate) async fn fork_note_turn_finished(&self) {
+        if self
+            .features()
+            .enabled(codex_features::Feature::ExecExitNotifications)
+        {
+            self.services
+                .unified_exec_manager
+                .note_turn_finished()
+                .await;
+        }
+    }
+
     /// Whether this thread still expects or holds a background terminal notification.
     pub(crate) async fn has_pending_background_terminal_work(&self) -> bool {
         self.input_queue.has_background_notifications().await
