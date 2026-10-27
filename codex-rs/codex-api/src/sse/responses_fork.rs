@@ -26,12 +26,15 @@ const OPTIONAL_FIELDS: [&str; 3] = [
     "codex_rollout_budget_units",
 ];
 
-/// Token usage of a response, or `None` when it reports neither input nor total tokens: such
-/// usage says nothing about the context size, and core estimates the context instead.
+/// Token usage of a response, or `None` when it reports none of input, output and total
+/// tokens.
 ///
 /// Missing counters are derived so that `total = input + output` holds, as it does for the
 /// Responses API. Output that is not reported is at least the reported reasoning, which it
 /// includes. A reported total below its parts, such as `0`, is not a total and is replaced.
+/// Usage that reports only output keeps it for spending with `input_tokens = 0`: it says
+/// nothing about the context size, and core estimates the context as for zero input
+/// (docs/fork/02-compaction-context.md R7, `fork_estimate_usage`).
 pub(super) fn token_usage(usage: &Value) -> Option<TokenUsage> {
     let Value::Object(fields) = usage else {
         return None;
@@ -57,10 +60,11 @@ pub(super) fn token_usage(usage: &Value) -> Option<TokenUsage> {
         counter(OUTPUT_TOKENS),
         counter(TOTAL_TOKENS),
     ) {
-        (None, _, None) => {
-            debug!("response usage reports neither input nor total tokens: {usage}");
+        (None, None, None) => {
+            debug!("response usage reports neither input, output nor total tokens: {usage}");
             return None;
         }
+        (None, Some(output), None) => (0, output, None),
         (Some(input), Some(output), total) => (input, output, total),
         (Some(input), None, total) => {
             let output = total.map_or(0, |total| total.saturating_sub(input));

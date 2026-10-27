@@ -315,3 +315,53 @@ async fn first_party_usage_stays_as_reported() {
     sample(&sess, &step, &[], Some(TokenUsage::default())).await;
     assert_eq!(sess.get_total_token_usage().await, 0);
 }
+
+/// R7 follow-up: usage that reports only output (`codex-api` keeps it with `input_tokens = 0`)
+/// does not tell the context size from any provider, so the context is estimated as without
+/// usage, and the output stays for spending. Before, `codex-api` dropped such usage, and its
+/// output tokens were never spent.
+#[tokio::test]
+async fn output_only_usage_is_estimated_and_spent() {
+    for first_party in [true, false] {
+        let (sess, step) =
+            session_for(AutoCompactTokenLimitScope::BodyAfterPrefix, first_party).await;
+        sess.replace_history(
+            vec![message("user", "draft the notes")],
+            /*reference_context_item*/ None,
+        )
+        .await;
+        let reported = TokenUsage {
+            output_tokens: 500,
+            total_tokens: 500,
+            ..TokenUsage::default()
+        };
+
+        let request = sample(
+            &sess,
+            &step,
+            &[message("assistant", &"long answer ".repeat(4_000))],
+            Some(reported),
+        )
+        .await;
+        assert_eq!(
+            sess.get_total_token_usage().await,
+            request_estimate(&sess, &step).await,
+            "first party {first_party}"
+        );
+        assert!(
+            scope_tokens(&sess, &step).await > 2_000,
+            "first party {first_party}"
+        );
+        assert_eq!(
+            prefill(&sess).await,
+            Some(estimate_of(&sess, &step, &request).await),
+            "first party {first_party}"
+        );
+        let spent = sess.total_token_usage().await.expect("usage");
+        assert_eq!(
+            (spent.input_tokens, spent.output_tokens),
+            (0, 500),
+            "first party {first_party}"
+        );
+    }
+}

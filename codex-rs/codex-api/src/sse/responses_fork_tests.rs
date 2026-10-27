@@ -257,15 +257,15 @@ async fn malformed_optional_field_keeps_the_others() {
     }
 }
 
-/// Without input or total tokens the usage says nothing about the context size; core estimates
-/// the context instead.
+/// Usage without any of input, output and total tokens says nothing; core estimates the
+/// context instead.
 #[tokio::test]
-async fn usage_without_context_size_is_dropped() {
+async fn usage_without_counters_is_dropped() {
     for kind in ["response.completed", "response.incomplete"] {
         for reported in [
             json!({}),
             json!(null),
-            json!({ "output_tokens": 2 }),
+            json!({ "output_tokens": "2" }),
             json!({ "input_tokens": "3" }),
             json!({ "input_tokens_details": { "cached_tokens": 1 } }),
             json!(42),
@@ -273,6 +273,38 @@ async fn usage_without_context_size_is_dropped() {
             assert_eq!(
                 reported_usage(kind, reported.clone()).await,
                 None,
+                "{kind} {reported}"
+            );
+        }
+    }
+}
+
+/// R7 follow-up (docs/fork/02-compaction-context.md): usage that reports only output keeps it
+/// for spending. `input_tokens = 0` says that the input was not counted, so core estimates the
+/// context, as for zero usage of a provider that is not the first-party one.
+#[tokio::test]
+async fn output_only_usage_is_kept_for_spending() {
+    for kind in ["response.completed", "response.incomplete"] {
+        for (reported, expected) in [
+            (json!({ "output_tokens": 2 }), usage(0, 2, 2)),
+            (
+                json!({ "input_tokens": null, "output_tokens": 7, "total_tokens": null }),
+                usage(0, 7, 7),
+            ),
+            (
+                json!({
+                    "output_tokens": 9,
+                    "output_tokens_details": { "reasoning_tokens": 4 },
+                }),
+                TokenUsage {
+                    reasoning_output_tokens: 4,
+                    ..usage(0, 9, 9)
+                },
+            ),
+        ] {
+            assert_eq!(
+                reported_usage(kind, reported.clone()).await,
+                Some(expected),
                 "{kind} {reported}"
             );
         }

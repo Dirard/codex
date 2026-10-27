@@ -2341,6 +2341,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     "zero usage"
 )]
 #[test_case::test_case(Some(json!({"input_tokens": 1_000})), true; "usage without output")]
+#[test_case::test_case(Some(json!({"output_tokens": 500})), false; "output only usage")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_runs_without_complete_usage(
     usage: Option<Value>,

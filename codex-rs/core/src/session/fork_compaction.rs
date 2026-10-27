@@ -76,8 +76,10 @@ impl Session {
     /// usage counted nothing) or no output (every real response has output, so its output was
     /// not counted). Then the reported input stays and the estimated output of the response is
     /// added. First-party usage is complete by contract and stays as upstream reads it,
-    /// including the zero usage of test fixtures. The reported counters stay for spending;
-    /// only the context size is estimated.
+    /// including the zero usage of test fixtures. Usage that reports output but no input, as
+    /// `codex-api` keeps usage that reports only output, does not tell the context size from
+    /// any provider. The reported counters stay for spending; only the context size is
+    /// estimated.
     ///
     /// Unlike `recompute_token_usage` this emits no `TokenCount`, which the sampling step sends
     /// after its tools resolve. The `body_after_prefix` baseline of the window is the estimate
@@ -93,6 +95,7 @@ impl Session {
         let turn_context = step_context.turn.as_ref();
         let reported_input = match token_usage {
             None => None,
+            Some(usage) if usage.input_tokens <= 0 && usage.output_tokens > 0 => None,
             Some(_) if turn_context.provider.info().is_openai() => return,
             Some(usage) if usage.input_tokens <= 0 => None,
             Some(usage) if usage.output_tokens <= 0 => Some(usage.input_tokens),
