@@ -73,6 +73,6 @@ impl ThreadManagerState {
         let Ok(parent) = self.get_thread(parent_thread_id).await else {
             return Vec::new();
         };
-        parent.session.dynamic_tools().await
+        parent.session.dynamic_tools().await.to_vec()
     }
 }

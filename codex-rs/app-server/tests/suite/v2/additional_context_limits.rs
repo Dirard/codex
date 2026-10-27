@@ -306,6 +306,7 @@ fn context_entry(value: &str) -> AdditionalContextEntry {
     AdditionalContextEntry {
         value: value.to_string(),
         kind: AdditionalContextKind::Untrusted,
+        name: None,
     }
 }
 

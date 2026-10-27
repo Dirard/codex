@@ -380,6 +380,7 @@ async fn apply_branch(call: ApplyCall) -> Result<String, FunctionCallError> {
         call_id.clone(),
         &HookToolName::apply_patch(),
         &serde_json::json!({ "command": merged_patch }),
+        /*tool_cwd*/ None,
         &hook_environments,
     )
     .await
@@ -444,11 +445,13 @@ async fn apply_branch(call: ApplyCall) -> Result<String, FunctionCallError> {
     let post = run_post_tool_use_hooks(
         &session,
         step_context.as_ref(),
-        call_id,
-        HookToolName::apply_patch().name().to_string(),
-        HookToolName::apply_patch().matcher_aliases().to_vec(),
-        serde_json::json!({ "command": patch }),
-        serde_json::Value::String(content.clone()),
+        crate::tools::registry::PostToolUsePayload {
+            tool_cwd: None,
+            tool_name: HookToolName::apply_patch(),
+            tool_use_id: call_id,
+            tool_input: serde_json::json!({ "command": patch }),
+            tool_response: serde_json::Value::String(content.clone()),
+        },
         &hook_environments,
     )
     .await;

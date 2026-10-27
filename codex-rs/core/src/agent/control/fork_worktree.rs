@@ -14,6 +14,7 @@ use crate::agent::worktree_isolation::restore_missing_binding;
 use crate::codex_thread::CodexThread;
 use crate::context::DeveloperInstructions;
 use crate::thread_manager::StartThreadOptions;
+use codex_history::RolloutItem;
 use std::path::Path;
 use std::path::PathBuf;
 

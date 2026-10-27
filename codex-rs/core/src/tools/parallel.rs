@@ -627,6 +627,7 @@ mod tests {
             Some("custom_collaboration"),
             /*description_override*/ None,
             /*parameters_override*/ None,
+            codex_features::MultiAgentMessageDelivery::default(),
         );
         let registry = ToolRegistry::from_tools([handler]);
         let registered = registry

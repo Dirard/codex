@@ -150,7 +150,7 @@ pub(crate) async fn run_codex_thread_interactive(
         dynamic_tools: if matches!(subagent_source, SubAgentSource::Review) {
             Vec::new()
         } else {
-            parent_session.dynamic_tools().await
+            parent_session.dynamic_tools().await.to_vec()
         },
         metrics_service_name: None,
         user_shell_override: None,

@@ -790,7 +790,7 @@ impl ExitNotifier {
         (process_stored && request.notify.enabled).then(|| {
             Self::with_request(
                 request.process_id,
-                request.hook_command.clone(),
+                request.prepared.hook_command.clone(),
                 started_at,
                 request.notify.requested(),
                 request.notify.exit,

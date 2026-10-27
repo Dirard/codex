@@ -68,7 +68,13 @@ fn rebuilds_workflow_items_from_persisted_completions() {
 
     let turns = build_turns_from_rollout_items(&items);
 
+    let payloads = |turn: &Turn| {
+        turn.items
+            .iter()
+            .map(|item| item.payload.clone())
+            .collect::<Vec<_>>()
+    };
     assert_eq!(turns.len(), 2);
-    assert_eq!(turns[0].items, vec![ThreadItem::Workflow(start)]);
-    assert_eq!(turns[1].items, vec![ThreadItem::Workflow(finish)]);
+    assert_eq!(payloads(&turns[0]), vec![ThreadItemPayload::Workflow(start)]);
+    assert_eq!(payloads(&turns[1]), vec![ThreadItemPayload::Workflow(finish)]);
 }

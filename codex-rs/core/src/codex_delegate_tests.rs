@@ -485,7 +485,7 @@ async fn delegate_dynamic_tools(
     .await
     .expect("delegate session should start");
 
-    let delegate_tools = session.dynamic_tools().await;
+    let delegate_tools = session.dynamic_tools().await.to_vec();
     io.shutdown_and_wait()
         .await
         .expect("delegate session should shut down");

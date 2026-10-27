@@ -614,12 +614,12 @@ async fn child_threads_inherit_parent_dynamic_tools() {
     .expect("fork child thread");
 
     assert_eq!(
-        fresh_child.thread.session.dynamic_tools().await,
-        dynamic_tools
+        fresh_child.thread.session.dynamic_tools().await.as_ref(),
+        dynamic_tools.as_slice()
     );
     assert_eq!(
-        forked_child.thread.session.dynamic_tools().await,
-        dynamic_tools
+        forked_child.thread.session.dynamic_tools().await.as_ref(),
+        dynamic_tools.as_slice()
     );
 
     manager

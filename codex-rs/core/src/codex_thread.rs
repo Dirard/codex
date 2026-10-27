@@ -1010,7 +1010,7 @@ impl CodexThread {
 
     /// Fork: the dynamic tools of this load, compared with `thread/resume` replacements.
     pub async fn dynamic_tools(&self) -> Vec<codex_protocol::dynamic_tools::DynamicToolSpec> {
-        self.session.dynamic_tools().await
+        self.session.dynamic_tools().await.to_vec()
     }
 
     /// Returns the active turn's reviewer, including live updates, or the thread default.

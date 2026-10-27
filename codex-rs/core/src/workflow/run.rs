@@ -878,6 +878,7 @@ async fn drive_cell(
                     WaitRequest {
                         cell_id: cell_id.clone(),
                         yield_time_ms: CELL_YIELD_TIME_MS,
+                        max_output_tokens: None,
                     },
                     /*preempt*/ None,
                 );
@@ -908,7 +909,7 @@ async fn terminate_cell(
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     interrupt_children(session, run).await;
-    if let Err(error) = code_mode.terminate(cell_id).await {
+    if let Err(error) = code_mode.terminate(cell_id.into()).await {
         warn!(run_id = %run.id, %error, "failed to terminate the workflow cell");
     }
     Ok(CellEnd::Terminated)

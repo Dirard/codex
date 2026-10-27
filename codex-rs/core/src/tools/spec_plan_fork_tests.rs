@@ -295,12 +295,11 @@ async fn explorer_tool_router_hides_write_and_client_tools() {
         turn.session_source = explorer_source("explorer");
         // R2.10: with multi-agent V2 the plan registers `spawn_agent`.
         turn.multi_agent_version = MultiAgentVersion::V2;
-        turn.dynamic_tools = vec![dynamic_tool(
+        let dynamic_tools = vec![dynamic_tool(
             /*namespace*/ None,
             "client_echo",
             /*defer_loading*/ false,
-        )]
-        .into();
+        )];
         let turn = Arc::new(turn);
         let step_context = StepContext::for_test(Arc::clone(&turn));
         let router = crate::tools::spec_plan::build_tool_router(
@@ -312,6 +311,7 @@ async fn explorer_tool_router_hides_write_and_client_tools() {
             /*apps_enabled*/ false,
             &turn.extension_data,
             /*tool_suggest_candidates*/ None,
+            &dynamic_tools,
         )
         .expect("build explorer tool router");
         let plan = ToolPlanProbe::from_router(router);

@@ -32,8 +32,7 @@ impl LocalAgentControl {
             communication.id = Some(message_id.clone());
             MessageDelivery::publish(context.sender_thread_id, message_id, observers)
         });
-        let communication_for_log =
-            crate::agent_communication::logging_enabled().then(|| communication.clone());
+        let log_content = crate::agent_communication::send_log_content(&communication);
         // A second attempt observes the registry after an eviction that raced the pin.
         let mut attempts_left = 2;
         let communication_id = loop {
@@ -85,14 +84,12 @@ impl LocalAgentControl {
                 ))
                 .await;
         };
-        if let Some(communication) = communication_for_log {
-            crate::agent_communication::emit_agent_communication_send(
-                &communication_id,
-                &context,
-                &communication,
-                agent_id,
-            );
-        }
+        crate::agent_communication::emit_agent_communication_send(
+            &communication_id,
+            &context,
+            log_content.as_deref(),
+            agent_id,
+        );
         Ok(communication_id)
     }
 

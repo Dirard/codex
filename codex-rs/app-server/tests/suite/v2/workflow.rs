@@ -15,7 +15,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -261,7 +261,7 @@ async fn launch_workflow(app: &mut TestAppServer) -> Result<(String, String, Wor
     let started = loop {
         let completed: ItemCompletedNotification =
             timeout(READ_TIMEOUT, app.read_notification("item/completed")).await??;
-        if let ThreadItem::Workflow(item) = completed.item {
+        if let ThreadItemPayload::Workflow(item) = completed.item.payload {
             assert_eq!(completed.turn_id, turn.id);
             break item;
         }
@@ -373,7 +373,7 @@ async fn workflow_run_streams_updates_and_replays_its_items() -> Result<()> {
     let finished = loop {
         let completed: ItemCompletedNotification =
             timeout(READ_TIMEOUT, app.read_notification("item/completed")).await??;
-        if let ThreadItem::Workflow(item) = completed.item
+        if let ThreadItemPayload::Workflow(item) = completed.item.payload
             && item.status.is_terminal()
         {
             assert_eq!(completed.thread_id, thread_id);
@@ -474,8 +474,8 @@ async fn workflow_run_streams_updates_and_replays_its_items() -> Result<()> {
             .iter()
             .filter(|turn| turn.id == turn_id)
             .flat_map(|turn| turn.items.iter())
-            .filter_map(|item| match item {
-                ThreadItem::Workflow(item) => Some(item.clone()),
+            .filter_map(|item| match &item.payload {
+                ThreadItemPayload::Workflow(item) => Some(item.clone()),
                 _ => None,
             })
             .collect()

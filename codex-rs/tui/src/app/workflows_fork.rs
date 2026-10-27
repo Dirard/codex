@@ -11,7 +11,7 @@ use std::time::Duration;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadWorkflowCancelParams;
 use codex_app_server_protocol::ThreadWorkflowCancelResponse;
 use codex_app_server_protocol::ThreadWorkflowListParams;
@@ -297,7 +297,7 @@ impl App {
             .and_then(|channel| channel.store.try_lock().ok())
         {
             for item in store.turns.iter().flat_map(|turn| turn.items.iter()) {
-                if let ThreadItem::Workflow(item) = item {
+                if let ThreadItemPayload::Workflow(item) = &item.payload {
                     note(&item.run_id, &item.name, item.status);
                 }
             }
@@ -307,12 +307,12 @@ impl App {
                 };
                 match notification.as_ref() {
                     ServerNotification::ItemStarted(started) => {
-                        if let ThreadItem::Workflow(item) = &started.item {
+                        if let ThreadItemPayload::Workflow(item) = &started.item.payload {
                             note(&item.run_id, &item.name, item.status);
                         }
                     }
                     ServerNotification::ItemCompleted(completed) => {
-                        if let ThreadItem::Workflow(item) = &completed.item {
+                        if let ThreadItemPayload::Workflow(item) = &completed.item.payload {
                             note(&item.run_id, &item.name, item.status);
                         }
                     }
