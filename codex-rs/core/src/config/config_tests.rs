@@ -12589,9 +12589,13 @@ message_delivery = "plaintext"
 }
 
 /// Fork: the backend rejects `spawn_agent` with an `isolation` parameter in the reserved
-/// default namespace, so worktree isolation needs a custom one (R1.5).
+/// default namespace (R1.5). With worktree isolation enabled, an unset namespace becomes
+/// `agents` for every MultiAgentV2 tool; an explicit reserved namespace turns isolation off for
+/// the session with a startup warning instead of failing the load. Plaintext delivery keeps
+/// its own check on the resulting namespace.
 #[tokio::test]
-async fn agent_worktree_isolation_requires_a_custom_tool_namespace() -> std::io::Result<()> {
+async fn agent_worktree_isolation_uses_agents_unless_the_reserved_namespace_is_set()
+-> std::io::Result<()> {
     async fn load(contents: &str) -> std::io::Result<Config> {
         let codex_home = TempDir::new()?;
         std::fs::write(codex_home.path().join(CONFIG_TOML_FILE), contents)?;
@@ -12601,32 +12605,91 @@ async fn agent_worktree_isolation_requires_a_custom_tool_namespace() -> std::io:
             .build()
             .await
     }
+    let isolation_warnings = |config: &Config| {
+        config
+            .startup_warnings
+            .iter()
+            .filter(|warning| warning.contains("agent_worktree_isolation"))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
 
-    for reserved in [
-        "[features.multi_agent_v2]\nenabled = true\n\n[features.agent_worktree_isolation]\nenabled = true\n",
-        "[features.multi_agent_v2]\nenabled = true\ntool_namespace = \"collaboration\"\n\n[features.agent_worktree_isolation]\nenabled = true\n",
+    // An unset namespace: the table form, the boolean form `/experimental` and
+    // `codex features enable` write, and without `features.multi_agent_v2`, because the model
+    // catalog selects MultiAgentV2 for most models without it.
+    for unset in [
+        "[features.multi_agent_v2]\nenabled = true\n\n[features.agent_worktree_isolation]\nenabled = true\nbase = \"head\"\n",
+        "[features]\nmulti_agent_v2 = true\nagent_worktree_isolation = true\n",
+        "[features.agent_worktree_isolation]\nenabled = true\n",
     ] {
-        let err = load(reserved)
-            .await
-            .expect_err("isolation with the reserved default namespace should fail");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-        assert_eq!(
-            err.to_string(),
-            "features.agent_worktree_isolation requires features.multi_agent_v2.tool_namespace to be set to a non-reserved namespace such as \"agents\""
+        let config = load(unset).await?;
+        assert!(
+            config.features.enabled(Feature::AgentWorktreeIsolation),
+            "{unset}"
         );
+        assert_eq!(
+            config.multi_agent_v2.tool_namespace.as_deref(),
+            Some("agents"),
+            "{unset}"
+        );
+        assert_eq!(isolation_warnings(&config), Vec::<String>::new(), "{unset}");
     }
+    let table = load(
+        "[features.multi_agent_v2]\nenabled = true\n\n[features.agent_worktree_isolation]\nenabled = true\nbase = \"head\"\n",
+    )
+    .await?;
+    assert_eq!(table.agent_worktree_isolation.base, AgentWorktreeBase::Head);
 
+    // The reserved namespace set explicitly: the session loads without isolation and warns.
+    let reserved = load(
+        "[features.multi_agent_v2]\nenabled = true\ntool_namespace = \"collaboration\"\n\n[features.agent_worktree_isolation]\nenabled = true\n",
+    )
+    .await?;
+    assert!(!reserved.features.enabled(Feature::AgentWorktreeIsolation));
+    assert_eq!(
+        reserved.multi_agent_v2.tool_namespace.as_deref(),
+        Some("collaboration")
+    );
+    assert_eq!(
+        isolation_warnings(&reserved),
+        vec![AGENT_WORKTREE_ISOLATION_RESERVED_NAMESPACE_WARNING.to_string()]
+    );
+
+    // A custom namespace stays, and without isolation the default stays.
     let custom = load(
-        "[features.multi_agent_v2]\nenabled = true\ntool_namespace = \"agents\"\n\n[features.agent_worktree_isolation]\nenabled = true\nbase = \"head\"\n",
+        "[features.multi_agent_v2]\nenabled = true\ntool_namespace = \"delegation\"\n\n[features.agent_worktree_isolation]\nenabled = true\n",
     )
     .await?;
     assert!(custom.features.enabled(Feature::AgentWorktreeIsolation));
     assert_eq!(
-        custom.agent_worktree_isolation.base,
-        AgentWorktreeBase::Head
+        custom.multi_agent_v2.tool_namespace.as_deref(),
+        Some("delegation")
     );
-    // Without MultiAgentV2 there is no `spawn_agent` V2 schema to reject.
-    load("[features.agent_worktree_isolation]\nenabled = true\n").await?;
+    let without_isolation = load("[features.multi_agent_v2]\nenabled = true\n").await?;
+    assert_eq!(
+        without_isolation.multi_agent_v2.tool_namespace.as_deref(),
+        Some("collaboration")
+    );
+
+    // Plaintext delivery passes with the namespace isolation chose and still fails with the
+    // reserved one, isolation or not.
+    let plaintext = load(
+        "[features.multi_agent_v2]\nenabled = true\nmessage_delivery = \"plaintext\"\n\n[features.agent_worktree_isolation]\nenabled = true\n",
+    )
+    .await?;
+    assert_eq!(
+        plaintext.multi_agent_v2.tool_namespace.as_deref(),
+        Some("agents")
+    );
+    let err = load(
+        "[features.multi_agent_v2]\nenabled = true\nmessage_delivery = \"plaintext\"\ntool_namespace = \"collaboration\"\n\n[features.agent_worktree_isolation]\nenabled = true\n",
+    )
+    .await
+    .expect_err("plaintext delivery with the reserved namespace should fail");
+    assert_eq!(
+        err.to_string(),
+        "features.multi_agent_v2.message_delivery = \"plaintext\" requires features.multi_agent_v2.tool_namespace to be set to a non-reserved namespace"
+    );
     Ok(())
 }
 

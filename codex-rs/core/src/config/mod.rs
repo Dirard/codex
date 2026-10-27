@@ -4087,7 +4087,12 @@ impl Config {
             ));
         }
         validate_multi_agent_v2_tool_namespace(multi_agent_v2.tool_namespace.as_deref())?;
-        fork::validate_tool_namespace(&features, &multi_agent_v2)?;
+        let (features, multi_agent_v2) = fork::resolve_tool_namespace(
+            cfg.features.as_ref(),
+            features,
+            multi_agent_v2,
+            &mut startup_warnings,
+        )?;
         let agents_enabled = cfg
             .agents
             .as_ref()

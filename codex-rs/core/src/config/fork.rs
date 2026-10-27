@@ -18,13 +18,13 @@ pub(super) use codex_features::AgentWorktreeBase;
 use codex_features::AgentWorktreeIsolationConfigToml;
 use codex_features::Feature;
 use codex_features::FeatureToml;
-use codex_features::Features;
 use codex_features::FeaturesToml;
 pub(super) use codex_features::MultiAgentMessageDelivery;
 use codex_protocol::openai_models::ReasoningEffort;
 use serde::Serialize;
 
 use super::DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE;
+use super::ManagedFeatures;
 use super::MultiAgentV2Config;
 
 /// Fork: whether a workflow run needs the user's approval before it starts.
@@ -388,23 +388,21 @@ pub(crate) fn agent_worktree_isolation_toml_config(
     }
 }
 
-/// Fork: worktree isolation adds an `isolation` parameter to `spawn_agent`. The Responses
-/// backend checks the tools of the reserved default namespace against its own definitions
-/// and rejects every request that carries the extra parameter, so the feature needs a custom
-/// namespace (spec `specs/agent-worktree-isolation-2026-10-25.md`, R1.5).
-fn validate_agent_worktree_isolation_namespace(
-    isolation_enabled: bool,
-    namespace: Option<&str>,
-) -> std::io::Result<()> {
-    if isolation_enabled
-        && namespace.is_none_or(|namespace| namespace == DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE)
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "features.agent_worktree_isolation requires features.multi_agent_v2.tool_namespace to be set to a non-reserved namespace such as \"agents\"",
-        ));
-    }
-    Ok(())
+/// Fork: namespace of the MultiAgentV2 tools while worktree isolation is enabled and
+/// `features.multi_agent_v2.tool_namespace` is unset (agent-worktree-isolation, R1.5).
+pub(crate) const AGENT_WORKTREE_ISOLATION_TOOL_NAMESPACE: &str = "agents";
+
+/// Startup warning of a session whose worktree isolation is off because the configured
+/// namespace is the reserved default (agent-worktree-isolation, R1.5).
+pub(crate) const AGENT_WORKTREE_ISOLATION_RESERVED_NAMESPACE_WARNING: &str = "Subagent worktrees (`features.agent_worktree_isolation`) are off for this session: `features.multi_agent_v2.tool_namespace` is set to the reserved namespace \"collaboration\", whose `spawn_agent` tool the Responses API rejects with the extra `isolation` parameter. To use subagent worktrees, remove `tool_namespace` (Codex then uses \"agents\") or set it to another namespace such as \"agents\".";
+
+/// Whether `features.multi_agent_v2.tool_namespace` is set.
+fn multi_agent_v2_tool_namespace_is_set(features_toml: Option<&FeaturesToml>) -> bool {
+    features_toml
+        .and_then(|features| features.multi_agent_v2.as_ref())
+        .is_some_and(|feature| {
+            matches!(feature, FeatureToml::Config(config) if config.tool_namespace.is_some())
+        })
 }
 
 /// `[output_truncation]` limits; omitted values keep the defaults.
@@ -449,27 +447,61 @@ pub(super) fn warn_removed_agents_keys(
     }
 }
 
-/// Plaintext message delivery and worktree isolation need a tool namespace other than
-/// the reserved default. The upstream namespace checks accept exactly the namespaces
-/// these checks reject (none or the default), so their order does not matter.
-pub(super) fn validate_tool_namespace(
-    features: &Features,
-    multi_agent_v2: &MultiAgentV2Config,
-) -> std::io::Result<()> {
-    let namespace = multi_agent_v2.tool_namespace.as_deref();
-    if multi_agent_v2.message_delivery == MultiAgentMessageDelivery::Plaintext
-        && namespace.is_none_or(|namespace| namespace == DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE)
-    {
+/// Plaintext message delivery and worktree isolation need a tool namespace other than the
+/// reserved default: the Responses backend checks the tools of that namespace against its own
+/// definitions, and worktree isolation adds an `isolation` parameter to `spawn_agent` that it
+/// rejects on every request (agent-worktree-isolation, R1.5).
+///
+/// - Worktree isolation with `features.multi_agent_v2.tool_namespace` unset: every MultiAgentV2
+///   tool uses [`AGENT_WORKTREE_ISOLATION_TOOL_NAMESPACE`], as if the user had set it, so turning
+///   the feature on from `/experimental` or `codex features enable` needs nothing else. The
+///   check is not limited to `features.multi_agent_v2`: the model catalog selects MultiAgentV2
+///   for most models without it.
+/// - Worktree isolation with the namespace set to the reserved default: the session runs
+///   without isolation (no `isolation` parameter, `apply_agent_worktree` or worktree sweep) and
+///   starts with a warning that says how to get it back, instead of failing to load.
+/// - Plaintext delivery keeps its own check on the resulting namespace, so it still fails
+///   without a namespace unless worktree isolation chose one.
+///
+/// The upstream namespace check accepts both the reserved default and
+/// [`AGENT_WORKTREE_ISOLATION_TOOL_NAMESPACE`], so running it first does not matter.
+pub(super) fn resolve_tool_namespace(
+    features_toml: Option<&FeaturesToml>,
+    mut features: ManagedFeatures,
+    mut multi_agent_v2: MultiAgentV2Config,
+    startup_warnings: &mut Vec<String>,
+) -> std::io::Result<(ManagedFeatures, MultiAgentV2Config)> {
+    let isolation_enabled = features.enabled(Feature::AgentWorktreeIsolation);
+    if isolation_enabled && !multi_agent_v2_tool_namespace_is_set(features_toml) {
+        tracing::info!(
+            "features.agent_worktree_isolation is enabled and features.multi_agent_v2.tool_namespace is unset; MultiAgentV2 tools use the namespace \"{AGENT_WORKTREE_ISOLATION_TOOL_NAMESPACE}\""
+        );
+        multi_agent_v2.tool_namespace = Some(AGENT_WORKTREE_ISOLATION_TOOL_NAMESPACE.to_string());
+    }
+    let reserved = multi_agent_v2
+        .tool_namespace
+        .as_deref()
+        .is_none_or(|namespace| namespace == DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE);
+    if multi_agent_v2.message_delivery == MultiAgentMessageDelivery::Plaintext && reserved {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "features.multi_agent_v2.message_delivery = \"plaintext\" requires features.multi_agent_v2.tool_namespace to be set to a non-reserved namespace",
         ));
     }
-    validate_agent_worktree_isolation_namespace(
-        features.enabled(Feature::MultiAgentV2)
-            && features.enabled(Feature::AgentWorktreeIsolation),
-        namespace,
-    )
+    if isolation_enabled && reserved {
+        features
+            .disable(Feature::AgentWorktreeIsolation)
+            .map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "features.agent_worktree_isolation cannot be turned off ({err}), but it needs features.multi_agent_v2.tool_namespace to be unset or a non-reserved namespace such as \"{AGENT_WORKTREE_ISOLATION_TOOL_NAMESPACE}\""
+                    ),
+                )
+            })?;
+        startup_warnings.push(AGENT_WORKTREE_ISOLATION_RESERVED_NAMESPACE_WARNING.to_owned());
+    }
+    Ok((features, multi_agent_v2))
 }
 
 /// Fork: whether `ConfigEdit::ClearPath { segments }` of a fork feature should write

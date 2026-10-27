@@ -99,13 +99,14 @@ pub enum AgentWorktreeBase {
     Head,
 }
 
-/// `[features.agent_worktree_isolation]` settings for isolated MultiAgentV2 children. The
-/// feature requires `features.multi_agent_v2.tool_namespace` to name a custom namespace such
-/// as `agents`. Agent worktrees share the managed root with Codex Desktop, whose automatic
-/// cleanup removes them like the worktrees of inactive threads once the root holds more than
-/// `[desktop] worktree-keep-count`; the agent's work stays on its branch and Codex restores
-/// the worktree, but ignored files such as build output are lost. Raise
-/// `worktree-keep-count` or set `worktree-auto-cleanup-enabled = false` to keep them.
+/// `[features.agent_worktree_isolation]` settings for isolated MultiAgentV2 children. While the
+/// feature is enabled, MultiAgentV2 tools use the namespace `agents` unless
+/// `features.multi_agent_v2.tool_namespace` is set; the reserved namespace `collaboration` turns
+/// the feature off with a startup warning. Agent worktrees share the managed root with Codex
+/// Desktop, whose automatic cleanup removes them like the worktrees of inactive threads once
+/// the root holds more than `[desktop] worktree-keep-count`; the agent's work stays on its
+/// branch and Codex restores the worktree, but ignored files such as build output are lost.
+/// Raise `worktree-keep-count` or set `worktree-auto-cleanup-enabled = false` to keep them.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AgentWorktreeIsolationConfigToml {
