@@ -113,6 +113,17 @@ impl CodexThread {
             crate::agent::AgentStatus::PendingInit
         ) && super::is_unloadable(self).await
     }
+
+    /// Fork (R7, deferred-fixes-3): the agent is actively in a turn, as opposed to resting with
+    /// only background work. A close names such an agent as still working and waits for it; an
+    /// agent at rest whose only tie to the worktree is a background process is named by the
+    /// process check instead, with the session_id and command that stop it.
+    pub(crate) async fn fork_in_turn(&self) -> bool {
+        matches!(
+            self.agent_status().await,
+            crate::agent::AgentStatus::PendingInit | crate::agent::AgentStatus::Running
+        ) || self.session.active_turn.lock().await.is_some()
+    }
 }
 
 /// Unloading would kill an armed process or skip a turn a notification starts (other queued

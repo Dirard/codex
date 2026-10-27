@@ -4570,6 +4570,131 @@ async fn apply_agent_worktree_close_waits_for_a_background_process_in_the_worktr
     Ok(())
 }
 
+/// R7 (deferred-fixes-3 live recheck): a helper at rest that left a *watched* background
+/// process (`notify_on_output`) in the agent's worktree is named by the process check, with its
+/// session_id and how to stop it — not refused as an agent that "still works", which would be
+/// advice the model cannot act on. The watched process keeps the helper loaded, but it is not
+/// in a turn, so it is not an agent at work.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_close_names_a_watched_process_of_a_resting_helper() -> Result<()> {
+    const CHILD_TASK: &str = "delegate the watched dev server to a helper";
+    const HELPER_TASK: &str = "start the watched dev server in the shared worktree";
+    let server = start_mock_server().await;
+    let test = isolation_codex_with_model(
+        &server,
+        Some(NESTING_MODEL),
+        /*git_repository*/ true,
+        |config| {
+            config.agent_max_depth = 2;
+        },
+    )
+    .await?;
+    let spawn = mount_root_call(
+        &server,
+        ROOT_PROMPT,
+        "spawn-child",
+        "spawn_agent",
+        spawn_arguments(CHILD_TASK, "child", Some("worktree")),
+    )
+    .await;
+    mount_agent(
+        &server,
+        CHILD_TASK,
+        &[],
+        vec![(
+            "spawn-helper",
+            spawn_arguments(HELPER_TASK, "helper", Some("none")),
+        )],
+    )
+    .await;
+    // A watched process: `notify_on_output` arms a watch, so the helper stays loaded while it
+    // rests. Before R7 this made the helper look like an agent still at work.
+    let server_args = json!({
+        "cmd": "d=\"$PWD\"; sleep 6; mkdir -p \"$d/out\" && printf 'ready\\n' > \"$d/out/server.log\"",
+        "shell": "bash",
+        "login": false,
+        "yield_time_ms": 300,
+        "notify_on_output": "ready",
+    });
+    mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            let text = body_text(request);
+            text.contains(HELPER_TASK)
+                && !text.contains(ROOT_PROMPT)
+                && !text.contains(CHILD_TASK)
+                && !has_output(request, "helper-server")
+        },
+        sse(vec![
+            ev_response_created("resp-helper-0"),
+            ev_exec_command_call_with_args("helper-server", &server_args),
+            ev_completed("resp-helper-0"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            let text = body_text(request);
+            text.contains(HELPER_TASK)
+                && !text.contains(ROOT_PROMPT)
+                && !text.contains(CHILD_TASK)
+                && has_output(request, "helper-server")
+        },
+        sse(vec![
+            ev_response_created("resp-helper-1"),
+            final_answer("resp-helper-1", "the server runs"),
+            ev_completed("resp-helper-1"),
+        ]),
+    )
+    .await;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    test.submit_turn(ROOT_PROMPT).await?;
+    let child = next_child(&mut created, &test).await?;
+    let helper = next_child(&mut created, &test).await?;
+    wait_turn_complete(&child).await;
+    wait_turn_complete(&helper).await;
+    let root = PathBuf::from(worktree_field(&spawn_output(&spawn, "spawn-child"), "path"));
+    let processes = helper.thread.list_background_terminals().await;
+    let [process] = processes.as_slice() else {
+        panic!("the helper's watched process runs: {processes:?}");
+    };
+
+    let refused = mount_root_call(
+        &server,
+        "close while the watched server runs",
+        "close-server",
+        "apply_agent_worktree",
+        close_arguments("child", /*discard_changes*/ false),
+    )
+    .await;
+    test.submit_turn_with_permission_profile(
+        "close while the watched server runs",
+        workspace_only_profile(),
+    )
+    .await?;
+    let output = refused
+        .function_call_output_text("close-server")
+        .context("refused close output")?;
+    assert!(
+        output.contains(&format!(
+            "a background process of agent /root/child/helper (session_id {}, `",
+            process.process_id
+        )),
+        "the refusal names the process, not a working agent: {output}"
+    );
+    assert!(
+        !output.contains("still works in its worktree"),
+        "the resting helper is not refused as an agent at work: {output}"
+    );
+    assert!(
+        output.contains("Nothing was applied or removed"),
+        "{output}"
+    );
+    assert!(root.join(".git").exists());
+    Ok(())
+}
+
 /// F10 (review 2026-10-27 of the deferred fixes), P2-1: a helper the agent spawned with
 /// isolation `none` works in the agent's worktree, so its next turn brings back the worktree
 /// a close removed and tells the helper so before it runs.

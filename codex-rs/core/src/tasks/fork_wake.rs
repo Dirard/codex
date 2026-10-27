@@ -56,6 +56,9 @@ impl Session {
         let Some(wake) = turn_context.extension_data.remove::<WakeStart>() else {
             return;
         };
+        // K4: the turn never started, so drop any holder record its start hook wrote, or a
+        // close would wait the full grace period for a turn that is not coming.
+        self.fork_drop_holder_turn(turn_context).await;
         self.input_queue
             .extend_pending_input_for_turn_state(wake.reservation.as_ref(), drained)
             .await;

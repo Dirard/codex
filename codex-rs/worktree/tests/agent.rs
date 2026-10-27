@@ -2807,8 +2807,16 @@ fn retired_commits_never_lose_their_record_and_orphans_go_once_committed() {
     fs::remove_file(records.join(format!("{THREAD_ID}.json"))).expect("drop the record");
 
     // Without a record: the ref stays while the parent holds the work only uncommitted.
-    let orphans =
-        || codex_worktree::prune_orphan_applied_refs(repository, &records).expect("prune orphans");
+    let later = SystemTime::now() + Duration::from_secs(48 * 3600);
+    let orphans = || {
+        codex_worktree::prune_orphan_applied_refs(
+            repository,
+            &records,
+            later,
+            Duration::from_secs(24 * 3600),
+        )
+        .expect("prune orphans")
+    };
     let applied = codex_worktree::applied_ref(THREAD_ID).expect("applied ref");
     assert_eq!(orphans(), 0);
     assert_eq!(git(repository, &["rev-parse", &applied]), tip);
@@ -2818,6 +2826,56 @@ fn retired_commits_never_lose_their_record_and_orphans_go_once_committed() {
         &["commit", "--quiet", "--no-gpg-sign", "-m", "take the work"],
     );
     assert_eq!(orphans(), 1);
+    assert!(git_fails(repository, &["rev-parse", "--verify", &applied]));
+}
+
+/// K7: a retired commit ref is pruned only once it is older than the idle window, so a cleanup
+/// run from a second CODEX_HOME does not drop a ref a live agent of another home just retired.
+/// No work is lost regardless, since the deletion still waits for the checkout's HEAD to hold
+/// the changes.
+#[test]
+fn an_orphan_applied_ref_is_pruned_only_once_it_is_old_enough() {
+    let fixture = Fixture::new();
+    let repository = &fixture.repository;
+    let records = fixture.codex_home.join("agent-worktrees");
+    let base = snapshot_working_tree(repository).expect("snapshot");
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    fs::write(checkout.root.join("work.txt"), "work\n").expect("agent change");
+    checkpoint_worktree(&checkout.root, &metadata);
+    let tip = git(repository, &["rev-parse", BRANCH]);
+    fs::write(repository.join("work.txt"), "work\n").expect("parent applies");
+    assert_eq!(
+        codex_worktree::remove_agent_checkout(
+            repository,
+            &checkout.root,
+            &metadata,
+            /*discard_unrecorded*/ false
+        )
+        .expect("close"),
+        RemoveOutcome::Removed
+    );
+    assert!(
+        codex_worktree::retire_applied_branch(repository, &checkout.root, &metadata, &tip)
+            .expect("retire")
+    );
+    // The parent's HEAD holds the work, so only the age gate decides.
+    git(repository, &["add", "work.txt"]);
+    git(
+        repository,
+        &["commit", "--quiet", "--no-gpg-sign", "-m", "take the work"],
+    );
+    let applied = codex_worktree::applied_ref(THREAD_ID).expect("applied ref");
+    let min_age = Duration::from_secs(24 * 3600);
+    let prune = |now: SystemTime| {
+        codex_worktree::prune_orphan_applied_refs(repository, &records, now, min_age)
+            .expect("prune orphans")
+    };
+
+    // A fresh ref (its tip was just committed) is kept: a live agent of another home may own it.
+    assert_eq!(prune(SystemTime::now()), 0);
+    assert_eq!(git(repository, &["rev-parse", &applied]), tip);
+    // Once older than the window, it is pruned.
+    assert_eq!(prune(SystemTime::now() + Duration::from_secs(48 * 3600)), 1);
     assert!(git_fails(repository, &["rev-parse", "--verify", &applied]));
 }
 

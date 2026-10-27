@@ -255,19 +255,38 @@ fn drop_retired_commit(record: &AgentWorktreeRecord) -> Result<bool> {
 /// the checkout's HEAD contains their changes over the base their checkpoint commit names
 /// (`Codex-Agent-Base`); others stay, since they may hold the only copy of an agent's work.
 /// Returns how many it deleted; a repository that cannot be read deletes nothing.
-pub fn prune_orphan_applied_refs(source_root: &Path, directory: &Path) -> Result<usize> {
+///
+/// K7 (deferred-fixes-3 review): the refs are shared by the repository, but each `CODEX_HOME`
+/// keeps its own records, so a cleanup from a second home (a live run with a separate home,
+/// Desktop and CLI with different homes) sees no record for a ref the first home created and
+/// could drop it, leaving the first home's record naming a commit a later `gc` removes. A ref
+/// is pruned only once it is at least `min_age` old (its tip's commit time at or before
+/// `now - min_age`): a ref a live agent retired points at a fresh checkpoint commit, while a
+/// ref whose record this home pruned had to be `min_age` old to be pruned at all. No work is
+/// lost either way, since the deletion still waits for the checkout's HEAD to hold the changes.
+pub fn prune_orphan_applied_refs(
+    source_root: &Path,
+    directory: &Path,
+    now: SystemTime,
+    min_age: Duration,
+) -> Result<usize> {
     let refs = git_output(
         source_root,
         GitOperation::Metadata,
         [
             "for-each-ref",
-            "--format=%(refname)%00%(objectname)%00%(trailers:key=Codex-Agent-Base,valueonly,separator=%x2C)",
+            "--format=%(refname)%00%(objectname)%00%(committerdate:unix)%00%(trailers:key=Codex-Agent-Base,valueonly,separator=%x2C)",
             "refs/codex/agents/applied/",
         ],
     )?;
+    let cutoff = now
+        .checked_sub(min_age)
+        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
     let mut pruned = 0;
     for line in String::from_utf8_lossy(&refs.stdout).lines() {
-        let [reference, tip, base] = line.split('\0').collect::<Vec<_>>()[..] else {
+        let [reference, tip, committed, base] = line.split('\0').collect::<Vec<_>>()[..] else {
             continue;
         };
         let Some(thread_id) = reference.strip_prefix("refs/codex/agents/applied/") else {
@@ -277,7 +296,14 @@ pub fn prune_orphan_applied_refs(source_root: &Path, directory: &Path) -> Result
             continue;
         };
         let base = base.split(',').next().unwrap_or_default().trim();
+        // K7: only a ref whose tip is at least `min_age` old can be this home's leftover; a
+        // fresher one may belong to a live agent of another home.
+        let old_enough = committed
+            .trim()
+            .parse::<u64>()
+            .is_ok_and(|committed| committed <= cutoff);
         if path.exists()
+            || !old_enough
             || !matches!(base.len(), 40 | 64)
             || !base.bytes().all(|byte| byte.is_ascii_hexdigit())
             || !super::maintenance::head_contains(source_root, base, tip).unwrap_or(false)

@@ -294,7 +294,8 @@ impl LocalAgentRuntime {
     /// - a turn of another agent that started there and does not show as running yet
     ///   (`holders`, recorded by the turn-start hook);
     /// - a loaded agent other than the worktree's own and `caller` that works there
-    ///   ([`crate::agent::worktree_isolation::works_in_worktree`]) and is not at rest;
+    ///   ([`crate::agent::worktree_isolation::works_in_worktree`]) and is in a turn (R7); an
+    ///   agent at rest with only a background process there is left to the process check;
     /// - a live background process (unified exec) of any loaded session of the tree, the
     ///   worktree's own agent (at rest; a turn of it is refused by the unload) and `caller`
     ///   included, whose working directory lies in it.
@@ -333,22 +334,29 @@ impl LocalAgentRuntime {
                 loaded.push((thread_id, path, thread));
             }
         }
-        for holder in holders {
+        // F6, K4: whether each holder's thread is loaded and in a turn; the decision itself is
+        // the unit-tested `holder_worktree_use`.
+        let mut holder_in_turn = std::collections::HashMap::new();
+        for holder in &holders {
             if holder.thread_id == caller {
                 continue;
             }
-            let Some((_, _, thread)) = loaded
+            if let Some((_, _, thread)) = loaded
                 .iter()
                 .find(|(thread_id, _, _)| *thread_id == holder.thread_id)
-            else {
-                continue;
-            };
-            if thread.session.active_turn.lock().await.is_some() {
-                return Some(WorktreeUse::Agent(holder.agent));
+            {
+                holder_in_turn.insert(
+                    holder.thread_id,
+                    thread.session.active_turn.lock().await.is_some(),
+                );
             }
-            if !holder.progressed() {
-                return Some(WorktreeUse::StartingTurn(holder.agent));
-            }
+        }
+        if let Some(used) = crate::agent::worktree_isolation::holder_worktree_use(
+            &holders,
+            caller,
+            &holder_in_turn,
+        ) {
+            return Some(used);
         }
         for (thread_id, path, thread) in &loaded {
             if *thread_id == binding.thread_id || *thread_id == caller {
@@ -363,8 +371,12 @@ impl LocalAgentRuntime {
                     .filter_map(|selection| selection.cwd.to_abs_path().ok())
                     .map(|cwd| cwd.to_path_buf()),
             );
+            // R7: only an agent actually in a turn is named as still working. An agent at rest
+            // that keeps a watched background process in the worktree is left to the process
+            // check below, which names the session_id and command that stop it, rather than
+            // told to "wait for it or interrupt it" for a turn that will never come.
             if crate::agent::worktree_isolation::works_in_worktree(binding, path.as_ref(), &cwds)
-                && !thread.fork_at_rest().await
+                && thread.fork_in_turn().await
             {
                 return Some(WorktreeUse::Agent(name(*thread_id, path)));
             }

@@ -606,14 +606,19 @@ fn kept_reason(reason: codex_worktree::KeptReason, details: &[String]) -> String
             "the agent put files into the directories of submodules this worktree does not check out ({}), and Codex does not record them; move them out first, or close with discard_changes to remove them",
             quoted_names(details)
         ),
-        // F3: a checkpoint records only the gitlink of a nested repository.
+        // F3, K2: a checkpoint records only the gitlink of a nested repository, so its own
+        // commits and uncommitted files live only in it. Codex cannot save them, and a push
+        // helps only if the repository has a remote; say to save the work, not just push it.
         codex_worktree::KeptReason::NestedRepository => format!(
-            "repositories nested in it hold work that Codex records only as a submodule pointer ({}); push or move that work first, or close with discard_changes to remove it",
+            "repositories nested in it hold work that Codex records only as a submodule pointer ({}); save that work elsewhere first (commit and push it to its own remote, or copy it out of the worktree), or close with discard_changes to remove it",
             quoted_names(details)
         ),
-        // F1: never removed under a running process, whatever the confirmation.
+        // F1, K5: this reason comes from the `/proc` safety net, which the tree's own
+        // background terminals never reach (the core check names them by session_id first).
+        // What it finds is a process outside Codex — a user shell, an editor, another Codex —
+        // so a `write_stdin` on a session_id would not reach it; it must exit on its own.
         codex_worktree::KeptReason::Process => format!(
-            "processes still run in it ({}); stop them first (a background terminal with write_stdin chars \"\\u0003\" on its session_id), then close the worktree",
+            "a process outside Codex's background terminals has its working directory in it ({}); it must exit first — stop it outside Codex, or leave that directory — then close the worktree",
             quoted_names(details)
         ),
     }

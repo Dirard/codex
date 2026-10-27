@@ -351,8 +351,12 @@ fn sweep_blocking(target: &SweepTarget) -> anyhow::Result<Option<codex_worktree:
     if let Err(err) = codex_worktree::prune_agent_records(&target.records, now, max_idle) {
         warn!("cannot prune agent worktree records: {err:#}");
     }
-    // F9: retired commits whose record is gone go once the checkout's HEAD holds them.
-    if let Err(err) = codex_worktree::prune_orphan_applied_refs(&target.source, &target.records) {
+    // F9: retired commits whose record is gone go once the checkout's HEAD holds them. K7:
+    // only refs at least `max_idle` old are pruned, so a cleanup from a second CODEX_HOME does
+    // not drop a ref a live agent of another home just retired.
+    if let Err(err) =
+        codex_worktree::prune_orphan_applied_refs(&target.source, &target.records, now, max_idle)
+    {
         warn!("cannot prune retired agent commits: {err:#}");
     }
     let fingerprint = codex_worktree::worktree_list_fingerprint(&target.source)?;
@@ -481,19 +485,24 @@ pub(super) fn saved_work(
     metadata: &AgentWorktreeMetadata,
     record: Option<&codex_worktree::AgentWorktreeRecord>,
 ) -> String {
-    if let Ok(Some(branch)) =
-        codex_worktree::agent_branch_for_thread(source_root, &metadata.branch, &metadata.thread_id)
-    {
+    let branch_lookup =
+        codex_worktree::agent_branch_for_thread(source_root, &metadata.branch, &metadata.thread_id);
+    if let Ok(Some(branch)) = &branch_lookup {
         return format!(
             "changes recorded before it was removed are on branch {}",
             branch.branch
         );
     }
     let Some(record) = record else {
-        return format!(
-            "changes recorded before it was removed, if any, are on branch {}",
-            metadata.branch
-        );
+        // K6: name the recorded branch only when the lookup could not run (`Err`); a definite
+        // `Ok(None)` means there is no such branch, so do not point at one.
+        return match branch_lookup {
+            Err(_) => format!(
+                "changes recorded before it was removed, if any, are on branch {}",
+                metadata.branch
+            ),
+            Ok(_) => "Codex keeps no record of changes of the agent".to_string(),
+        };
     };
     let recorded = [&record.last_checkpoint, &record.applied_tip]
         .into_iter()
@@ -1002,6 +1011,16 @@ where
         } else {
             IgnoredEntries::default()
         };
+        // K6: a discarding close that drops files Codex never records (in submodule
+        // directories or nested repositories) must not later claim it held all recorded work.
+        let discarded_unrecorded = discard_unrecorded
+            && root.join(".git").exists()
+            && (codex_worktree::unpopulated_submodule_files(root)
+                .map(|files| !files.is_empty())
+                .unwrap_or(false)
+                || codex_worktree::nested_repositories(root)
+                    .map(|nested| !nested.is_empty())
+                    .unwrap_or(false));
         // The binding's own hold would keep the exclusive lock away (R10.3).
         blocking.live.release_hold();
         let outcome = codex_worktree::remove_agent_checkout(
@@ -1019,8 +1038,9 @@ where
             blocking.live.replace_hold(hold_worktree(root));
         }
         let outcome = outcome?;
-        if outcome == RemoveOutcome::Removed {
-            // R6: the restore that follows says that this close lost nothing recorded.
+        if outcome == RemoveOutcome::Removed && !discarded_unrecorded {
+            // R6: the restore that follows says that this close lost nothing recorded. K6: not
+            // after a discard that removed files Codex never records, which it did lose.
             update_record(&blocking, "close", |record| record.closed = true);
         }
         Ok::<_, String>(match outcome {
@@ -1241,7 +1261,7 @@ pub(crate) fn works_in_worktree(
 /// What keeps a worktree from being closed besides its own agent (P2-1, F1, F6).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum WorktreeUse {
-    /// A loaded agent that works in the worktree and is not at rest.
+    /// A loaded agent that works in the worktree and is in a turn (R7).
     Agent(String),
     /// An agent whose turn started in the worktree and does not show as running yet.
     StartingTurn(String),
@@ -1253,6 +1273,33 @@ pub(crate) enum WorktreeUse {
         command: String,
         caller: bool,
     },
+}
+
+/// F6, K4 (deferred-fixes-3): whether a recorded holder turn keeps a close away. For each
+/// holder other than the caller, `in_turn` carries whether that thread is loaded (a present
+/// key) and in a turn (its value). A loaded holder in a turn is an agent still at work; one
+/// loaded, not in a turn and whose status channel has not moved since the hook recorded it
+/// ([`HolderTurn::progressed`]) is a turn that started but has not registered yet. A holder
+/// that is not loaded, or whose turn has progressed, keeps nothing — a lost wake drops its
+/// record, so this never waits for a turn that is not coming.
+pub(crate) fn holder_worktree_use(
+    holders: &[HolderTurn],
+    caller: ThreadId,
+    in_turn: &std::collections::HashMap<ThreadId, bool>,
+) -> Option<WorktreeUse> {
+    for holder in holders {
+        if holder.thread_id == caller {
+            continue;
+        }
+        match in_turn.get(&holder.thread_id) {
+            Some(true) => return Some(WorktreeUse::Agent(holder.agent.clone())),
+            Some(false) if !holder.progressed() => {
+                return Some(WorktreeUse::StartingTurn(holder.agent.clone()));
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 impl WorktreeUse {
@@ -1353,6 +1400,36 @@ impl crate::session::session::Session {
             self.record_conversation_items(turn_context, turn_context.model_info(), &[item])
                 .await;
         }
+    }
+
+    /// K4 (deferred-fixes-3): a turn-start hook of a helper records a `HolderTurn` in the
+    /// worktree it works in, so a close during the window before the turn registers waits for
+    /// it. When the turn never starts — a wake whose reservation an interrupt took, with no
+    /// lifecycle — that record would otherwise keep a close refusing "is starting a turn" for
+    /// the full grace period. Dropping it here lets a close proceed at once. The own agent's
+    /// hook records no holder, so this only touches the worktree a helper works in.
+    pub(crate) async fn fork_drop_holder_turn(
+        &self,
+        turn_context: &crate::session::turn_context::TurnContext,
+    ) {
+        let worktrees = &self.services.local_agent_runtime.worktrees;
+        if worktrees.get(self.thread_id).is_some() {
+            return;
+        }
+        let Some(binding) = turn_context
+            .initial_environments
+            .turn_environments()
+            .filter_map(|environment| environment.cwd().to_abs_path().ok())
+            .find_map(|cwd| worktrees.containing(cwd.as_path()))
+        else {
+            return;
+        };
+        binding
+            .state
+            .lock()
+            .await
+            .holder_turns
+            .retain(|turn| turn.thread_id != self.thread_id);
     }
 }
 

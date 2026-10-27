@@ -1049,6 +1049,80 @@ async fn a_starting_turn_and_a_close_never_leave_the_turn_without_its_worktree()
     assert!(binding.root.join(".git").exists());
 }
 
+/// K6 (deferred-fixes-3): a discarding close that drops work Codex never records (a nested
+/// repository's commits here) is not marked as a close that held everything, so a later
+/// restore does not claim only ignored files are gone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_discarding_close_that_drops_nested_work_is_not_marked_lossless() {
+    let (_home, home_path, repository) = repository_fixture();
+    let binding = stopped_binding(&home_path, &repository);
+    let records = home_path.join("agent-worktrees");
+    let thread_id = binding.thread_id.to_string();
+
+    // The agent creates a repository in its worktree and a checkpoint records its gitlink.
+    let tool = binding.root.join("tool");
+    std::fs::create_dir_all(&tool).expect("create the nested repository");
+    git(&tool, &["init", "--quiet", "-b", "main"]);
+    std::fs::write(tool.join("x.txt"), "x\n").expect("nested file");
+    git(&tool, &["add", "."]);
+    git(
+        &tool,
+        &[
+            "-c",
+            "user.name=Codex Test",
+            "-c",
+            "user.email=codex@example.invalid",
+            "commit",
+            "--quiet",
+            "--no-gpg-sign",
+            "-m",
+            "nested",
+        ],
+    );
+    codex_worktree::checkpoint(CheckpointRequest {
+        root: binding.root.as_path(),
+        metadata: &binding.metadata(),
+        agent_path: binding.agent_path.as_str(),
+    })
+    .expect("checkpoint");
+
+    let closed = ops::close_worktree(&binding, /*discard_unrecorded*/ true, |_| async { None })
+        .await
+        .expect("discarding close");
+    assert!(matches!(closed, CloseOutcome::Removed { .. }), "{closed:?}");
+    let record = codex_worktree::read_agent_record(&records, &thread_id)
+        .expect("read record")
+        .expect("the record exists");
+    assert!(
+        !record.closed,
+        "a discard that dropped nested work did not hold everything"
+    );
+}
+
+/// R6, K8 (`closed_mark_on_already_missing`): a close that finds the checkout already gone
+/// does not mark the host record as closed — the removal was someone else's, so a later
+/// restore keeps its warning that edits may be lost rather than claiming nothing was.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_close_of_an_already_missing_checkout_does_not_mark_it_closed() {
+    let (_home, home_path, repository) = repository_fixture();
+    let binding = stopped_binding(&home_path, &repository);
+    let records = home_path.join("agent-worktrees");
+    let thread_id = binding.thread_id.to_string();
+    // The checkout vanished (another process, the user): the close finds it already missing.
+    std::fs::remove_dir_all(&binding.root).expect("remove the checkout");
+    let closed = ops::close_worktree(&binding, /*discard_unrecorded*/ false, |_| async { None })
+        .await
+        .expect("close an already-missing checkout");
+    assert!(matches!(closed, CloseOutcome::Removed { .. }), "{closed:?}");
+    let record = codex_worktree::read_agent_record(&records, &thread_id)
+        .expect("read record")
+        .expect("the record exists");
+    assert!(
+        !record.closed,
+        "an already-missing checkout is not a close that recorded everything"
+    );
+}
+
 /// P2-1: a worktree another agent still works in is not removed, and the refusal says how to
 /// get past it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1136,6 +1210,72 @@ fn a_started_turn_progresses_with_any_status_update() {
             ..holder
         }
         .progressed()
+    );
+}
+
+/// K4 (deferred-fixes-3): the holder decision that `fork_worktree_use` makes. A holder loaded
+/// and in a turn is an agent still at work; one loaded, not in a turn and whose status has not
+/// moved is starting a turn; a holder that progressed, or is not loaded, or is the caller,
+/// keeps nothing.
+#[test]
+fn holder_worktree_use_reads_the_turn_state() {
+    use codex_protocol::protocol::AgentStatus;
+    use std::collections::HashMap;
+
+    let caller = ThreadId::new();
+    let make = |id: ThreadId,
+                agent: &str,
+                status: tokio::sync::watch::Receiver<AgentStatus>| HolderTurn {
+        thread_id: id,
+        agent: agent.to_string(),
+        status,
+        started: Instant::now(),
+    };
+    let fresh = || tokio::sync::watch::channel(AgentStatus::Completed(None));
+
+    // A holder in a turn: the agent still works.
+    let in_turn = ThreadId::new();
+    let (_keep_in_turn, receiver) = fresh();
+    let holder = make(in_turn, "/root/probe/helper", receiver);
+    assert_eq!(
+        holder_worktree_use(
+            std::slice::from_ref(&holder),
+            caller,
+            &HashMap::from([(in_turn, true)]),
+        ),
+        Some(WorktreeUse::Agent("/root/probe/helper".to_string()))
+    );
+    // The same holder loaded but not in a turn, with an unchanged status: starting a turn.
+    assert_eq!(
+        holder_worktree_use(
+            std::slice::from_ref(&holder),
+            caller,
+            &HashMap::from([(in_turn, false)]),
+        ),
+        Some(WorktreeUse::StartingTurn("/root/probe/helper".to_string()))
+    );
+    // A holder whose status moved since the hook: its turn progressed, so it keeps nothing.
+    let progressed = ThreadId::new();
+    let (sender, receiver) = fresh();
+    sender.send_replace(AgentStatus::Running);
+    let moved = make(progressed, "/root/probe/moved", receiver);
+    assert_eq!(
+        holder_worktree_use(
+            std::slice::from_ref(&moved),
+            caller,
+            &HashMap::from([(progressed, false)]),
+        ),
+        None
+    );
+    // A holder that is not loaded keeps nothing, and neither does the caller's own holder.
+    let (_keep, receiver) = fresh();
+    let unloaded = make(ThreadId::new(), "/root/probe/gone", receiver);
+    assert_eq!(holder_worktree_use(&[unloaded], caller, &HashMap::new()), None);
+    let (_keep_caller, receiver) = fresh();
+    let own = make(caller, "/root", receiver);
+    assert_eq!(
+        holder_worktree_use(&[own], caller, &HashMap::from([(caller, true)])),
+        None
     );
 }
 
@@ -1376,6 +1516,12 @@ fn restore_texts_name_where_the_work_is() {
             .ends_with("; Codex keeps no record of changes of the agent"),
         "{}",
         unknown.source
+    );
+    // K6: with no record and no branch (the lookup returns `Ok(None)`), the failed-restore
+    // text does not name a branch that does not exist.
+    assert_eq!(
+        ops::saved_work(&repository, metadata, None),
+        "Codex keeps no record of changes of the agent"
     );
     let applied =
         ops::restore_start(&repository, metadata, None, Some(&gone), None).expect("start");
