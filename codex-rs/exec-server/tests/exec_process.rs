@@ -843,8 +843,13 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
             }),
         )
         .await??;
-        let (stdout, stderr, status, closed) =
-            collect_process_output_from_events(started.process).await?;
+        // A login shell snapshot in the sandbox and curl through the TLS proxy (`--max-time 5`)
+        // can stay silent for longer than the 2 s per-event default under load.
+        let (stdout, stderr, status, closed) = collect_process_output_from_events_with_timeout(
+            started.process,
+            Duration::from_secs(30),
+        )
+        .await?;
         let expected_stderr = if expect_snapshot_fallback {
             "Credential masking is unavailable for this shell snapshot; running with unmasked credentials.\n"
         } else {
