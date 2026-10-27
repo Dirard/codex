@@ -243,7 +243,17 @@ fn record_cached(
         worktree,
         worktree_details,
     } = answer;
-    let script_value = script_value(details, &value, worktree_details.as_ref());
+    let script_worktree = match (&worktree_details, &worktree) {
+        _ if !isolated => ScriptWorktree::NotIsolated,
+        (Some(details), _) => ScriptWorktree::Recorded(details),
+        (None, Some(_)) => ScriptWorktree::Unrecorded(format!(
+            "the journal of {from} records this agent's worktree only as text; the log of {from} names its branch"
+        )),
+        (None, None) => ScriptWorktree::Unrecorded(format!(
+            "the journal of {from} does not record this agent's worktree; the log of {from} may name its branch"
+        )),
+    };
+    let script_value = script_value(details, &value, script_worktree);
     run.journal(JournalEvent::AgentFinished {
         call: Some(seq),
         key,
@@ -272,15 +282,41 @@ fn apply_hint(details: Option<&JsonValue>) -> String {
         .unwrap_or_default()
 }
 
-/// R3.13: what a successful call resolves to in the script: the bare answer, or with
-/// `details: true` the answer and the worktree details of an isolated agent (null for a call
-/// without isolation or a journal that does not record them).
-fn script_value(details: bool, answer: &JsonValue, worktree: Option<&JsonValue>) -> JsonValue {
-    if details {
-        json!({ "answer": answer, "worktree": worktree })
-    } else {
-        answer.clone()
+/// What `details: true` knows about the worktree of a call (R3.13, P3-10).
+enum ScriptWorktree<'a> {
+    /// The call ran without isolation: its changes are in the shared checkout.
+    NotIsolated,
+    /// The worktree details Codex recorded for the isolated agent.
+    Recorded(&'a JsonValue),
+    /// An isolated agent whose details are not recorded, with the reason.
+    Unrecorded(String),
+}
+
+/// R3.13, P3-10: what a successful call resolves to in the script: the bare answer, or with
+/// `details: true` the answer and `worktree`. `worktree.isolated` and `worktree.recorded`
+/// tell a call without isolation (`{isolated: false}`) from an isolated one whose details are
+/// missing (`{isolated: true, recorded: false, error}`), so a script never mistakes one for
+/// the other and silently skips changes. The details carry no git command: the parent applies
+/// them with `apply_agent_worktree` (D1), and the run log keeps the block with its fallback.
+fn script_value(details: bool, answer: &JsonValue, worktree: ScriptWorktree<'_>) -> JsonValue {
+    if !details {
+        return answer.clone();
     }
+    let worktree = match worktree {
+        ScriptWorktree::NotIsolated => json!({ "isolated": false }),
+        ScriptWorktree::Recorded(details) => {
+            let mut details = details.clone();
+            if let Some(fields) = details.as_object_mut() {
+                fields.insert("isolated".to_string(), json!(true));
+                fields.insert("recorded".to_string(), json!(true));
+            }
+            details
+        }
+        ScriptWorktree::Unrecorded(error) => {
+            json!({ "isolated": true, "recorded": false, "agent": null, "error": error })
+        }
+    };
+    json!({ "answer": answer, "worktree": worktree })
 }
 
 struct AgentCall<'a> {
@@ -855,11 +891,18 @@ impl AgentCall<'_> {
                     Some(report) => (Some(report.text), Some(report.details)),
                     None => (None, None),
                 };
-                let script_value = script_value(
-                    self.options.details == Some(true),
-                    &value,
-                    worktree_details.as_ref(),
-                );
+                let script_worktree = match &worktree_details {
+                    _ if self.isolation() != AgentIsolation::Worktree => {
+                        ScriptWorktree::NotIsolated
+                    }
+                    Some(details) => ScriptWorktree::Recorded(details),
+                    None => ScriptWorktree::Unrecorded(
+                        "Codex could not report this agent's worktree; the run log says why"
+                            .to_string(),
+                    ),
+                };
+                let script_value =
+                    script_value(self.options.details == Some(true), &value, script_worktree);
                 self.run.journal(JournalEvent::AgentFinished {
                     call: Some(self.seq),
                     key: self.key.clone(),

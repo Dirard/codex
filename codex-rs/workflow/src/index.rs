@@ -16,7 +16,11 @@ use std::sync::Mutex;
 use std::sync::PoisonError;
 
 use crate::is_valid_run_id;
+use crate::meta::MAX_DESCRIPTION_CHARS;
+use crate::meta::MAX_PHASE_TITLE_CHARS;
+use crate::snapshot::MAX_LOG_CHARS;
 use crate::snapshot::RunSnapshot;
+use crate::snapshot::truncate_chars;
 
 /// File name of the run index inside a thread's workflow directory.
 pub const INDEX_FILE: &str = "runs.jsonl";
@@ -49,9 +53,53 @@ pub fn append_index(thread_dir: &Path, snapshot: &RunSnapshot) -> io::Result<()>
     file.flush()
 }
 
+/// Longest run name of an index line, as `meta.name` allows.
+const MAX_NAME_CHARS: usize = 64;
+/// Most phases and null reasons an index line keeps.
+const MAX_LISTED: usize = 256;
+/// Longest null reason of an index line.
+const MAX_REASON_CHARS: usize = 64;
+
+/// R6.8, P3-11: an index line as the journal could have produced it, or `None`. Only a
+/// finished run is indexed; the per-call list, log tail and result preview are not kept, and
+/// free text is cut to the limits the run itself had, so a hand-edited or damaged line cannot
+/// list a running run or carry more than a journal would.
+fn checked_entry(entry: RunSnapshot) -> Option<RunSnapshot> {
+    if !is_valid_run_id(&entry.run_id) || !entry.status.is_terminal() {
+        return None;
+    }
+    let mut entry = index_entry(&entry);
+    entry.name = truncate_chars(&entry.name, MAX_NAME_CHARS);
+    entry.description = truncate_chars(&entry.description, MAX_DESCRIPTION_CHARS);
+    entry.error = entry
+        .error
+        .map(|error| truncate_chars(&error, MAX_LOG_CHARS));
+    entry.current_phase = entry
+        .current_phase
+        .map(|phase| truncate_chars(&phase, MAX_PHASE_TITLE_CHARS));
+    entry.phases.truncate(MAX_LISTED);
+    for phase in &mut entry.phases {
+        phase.title = truncate_chars(&phase.title, MAX_PHASE_TITLE_CHARS);
+    }
+    entry.null_reasons = std::mem::take(&mut entry.null_reasons)
+        .into_iter()
+        .take(MAX_LISTED)
+        .map(|(reason, count)| (truncate_chars(&reason, MAX_REASON_CHARS), count))
+        .collect();
+    if entry
+        .resume
+        .as_ref()
+        .is_some_and(|resume| !is_valid_run_id(&resume.from))
+    {
+        entry.resume = None;
+    }
+    Some(entry)
+}
+
 /// R6.8: the indexed runs of `thread_dir` in the order they first appear, each with its last
-/// line. Lines that do not parse, such as one a stopped process cut, and lines with an
-/// invalid run id are skipped; a missing index is empty.
+/// line. Lines that do not parse, such as one a stopped process cut, lines with an invalid
+/// run id and lines of a run that has not finished are skipped (P3-11); a missing index is
+/// empty.
 pub fn read_index(thread_dir: &Path) -> io::Result<Vec<RunSnapshot>> {
     let bytes = match std::fs::read(thread_dir.join(INDEX_FILE)) {
         Ok(bytes) => bytes,
@@ -64,12 +112,12 @@ pub fn read_index(thread_dir: &Path) -> io::Result<Vec<RunSnapshot>> {
         if line.trim_ascii().is_empty() {
             continue;
         }
-        let Ok(entry) = serde_json::from_slice::<RunSnapshot>(line) else {
+        let Some(entry) = serde_json::from_slice::<RunSnapshot>(line)
+            .ok()
+            .and_then(checked_entry)
+        else {
             continue;
         };
-        if !is_valid_run_id(&entry.run_id) {
-            continue;
-        }
         match positions.get(&entry.run_id) {
             Some(&position) => entries[position] = entry,
             None => {

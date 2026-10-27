@@ -128,10 +128,18 @@ fn restore_runs(dir: &Path) -> RestoredRuns {
             continue;
         }
         present.insert(run_id.clone());
-        if indexed.contains(&run_id) {
-            continue;
-        }
         let run_dir = entry.path();
+        if indexed.contains(&run_id) {
+            // P3-11: an index line is trusted while the journal was last written when the
+            // run finished; otherwise the journal decides, and a line it contradicts is
+            // replaced below.
+            match indexed_line_holds(&index, &run_id, &run_dir) {
+                Some(true) => continue,
+                Some(false) => index.retain(|entry| entry.run_id != run_id),
+                // A journal that cannot be read keeps its index line.
+                None => continue,
+            }
+        }
         let Ok((first, last)) = journal_bounds(&run_dir.join(JOURNAL_FILE)) else {
             continue;
         };
@@ -195,6 +203,40 @@ fn restore_runs(dir: &Path) -> RestoredRuns {
         interrupted,
         past: index,
     }
+}
+
+/// How far the time of a journal's last write may be from the finish time its index line
+/// names: `run_finished` is appended right when the run finishes.
+const INDEX_CLOCK_SLACK_MS: i64 = 5_000;
+
+/// P3-11: whether the index line of `run_id` still describes its journal: `Some(true)` when
+/// the journal was last written when the line says the run finished (no read), or when its
+/// last record finishes the run with the line's status; `Some(false)` when the journal
+/// contradicts the line, such as a stopped run that a line calls finished; `None` when the
+/// journal cannot be read.
+fn indexed_line_holds(index: &[RunSnapshot], run_id: &str, run_dir: &Path) -> Option<bool> {
+    let line = index.iter().rfind(|entry| entry.run_id == run_id)?;
+    let journal = run_dir.join(JOURNAL_FILE);
+    let written_ms = std::fs::metadata(&journal)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok());
+    if let (Some(written_ms), Some(finished_ms)) = (written_ms, line.finished_at_ms)
+        && (written_ms - finished_ms).abs() <= INDEX_CLOCK_SLACK_MS
+    {
+        return Some(true);
+    }
+    let (first, last) = journal_bounds(&journal).ok()?;
+    // A journal without a single readable record is no evidence against the line.
+    if first.is_none() && last.is_none() {
+        return None;
+    }
+    Some(matches!(
+        last.map(|record| record.event),
+        Some(JournalEvent::RunFinished { status, .. })
+            if RunStatus::parse(&status) == Some(line.status)
+    ))
 }
 
 /// Serializes the marking of stopped runs in this process: two lookups of one run, such as
@@ -334,6 +376,61 @@ pub(super) async fn find_or_restore_run(
         restored,
         registry.update_sender(),
     ))))
+}
+
+/// P3-12: the run `run_id` of this thread for reading only (`thread/workflow/read`): a run
+/// of this process, or one of an earlier process rebuilt from its journal. Nothing is written
+/// and nothing is registered: a stopped run reads as `interrupted` without that record, and
+/// the rebuilt run sits in a small cache of the registry that drops the least recently read.
+pub(super) async fn read_run(
+    session: &Session,
+    config: &Config,
+    run_id: &str,
+) -> Option<Arc<WorkflowRun>> {
+    let registry = WorkflowRegistry::existing(session);
+    if let Some(run) = registry.as_ref().and_then(|registry| registry.get(run_id)) {
+        return Some(run);
+    }
+    if config.ephemeral || !is_valid_run_id(run_id) {
+        return None;
+    }
+    let registry = registry.unwrap_or_else(|| WorkflowRegistry::for_session(session));
+    if let Some(run) = registry.cached_read(run_id) {
+        return Some(run);
+    }
+    let run_dir = thread_runs_dir(config, session.thread_id).join(run_id);
+    let owned_id = run_id.to_string();
+    let restored = tokio::task::spawn_blocking(move || read_only_run(&owned_id, &run_dir))
+        .await
+        .ok()?
+        .map_err(|error| warn!(%run_id, %error, "failed to read a workflow run"))
+        .ok()?;
+    let run = Arc::new(WorkflowRun::restored(restored, registry.update_sender()));
+    registry.cache_read(Arc::clone(&run));
+    Some(run)
+}
+
+/// P3-12: [`load_run`] without the `interrupted` record: a journal a stopped process left
+/// without `run_finished` reads as interrupted, in memory only.
+fn read_only_run(run_id: &str, run_dir: &Path) -> std::io::Result<RestoredRun> {
+    let mut run = load_run(run_id, run_dir)?;
+    if !run.tracker.snapshot(false).status.is_terminal() {
+        let finished_at_ms = std::fs::metadata(run_dir.join(JOURNAL_FILE))
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+            .unwrap_or_else(now_ms);
+        run.tracker
+            .settle_open_calls(codex_workflow::null_reason::INTERRUPTED);
+        run.tracker.finish(
+            RunStatus::Interrupted,
+            finished_at_ms,
+            None,
+            Some(STOPPED_ERROR.to_string()),
+        );
+    }
+    Ok(run)
 }
 
 /// The run `resume_from` names and the cache of its successful answers (R6.3).

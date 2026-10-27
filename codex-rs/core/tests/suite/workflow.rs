@@ -1562,7 +1562,8 @@ const EDIT_CALL_ID: &str = "edit-cmd";
 
 /// R3.13 (Q20): `details: true` resolves to `{answer, worktree}`, where `worktree` describes
 /// the isolated agent's checkpoint and names the agent `apply_agent_worktree` accepts; a call
-/// without isolation gets a null `worktree`, a call without the option the bare answer. The
+/// without isolation gets `{isolated: false}` (P3-10), a call without the option the bare
+/// answer. The
 /// journal keeps the bare answer with both forms of the worktree, and `resume_from` returns
 /// the journaled details without starting agents (R6.3).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1698,9 +1699,12 @@ async fn details_return_the_worktree_of_isolated_agents() -> Result<()> {
     );
     assert!(worktree["checkout"].as_str().is_some(), "{worktree}");
     assert_eq!(worktree["error"], Value::Null, "{worktree}");
+    // P3-10: a call without isolation is told apart from an isolated one.
+    assert_eq!(worktree["isolated"], true, "{worktree}");
+    assert_eq!(worktree["recorded"], true, "{worktree}");
     assert_eq!(
         result["plain"],
-        json!({ "answer": "plain", "worktree": null })
+        json!({ "answer": "plain", "worktree": { "isolated": false } })
     );
     assert_eq!(result["bare"], "bare");
     // The journal keeps the bare answer and both forms of the worktree.
@@ -1709,7 +1713,12 @@ async fn details_return_the_worktree_of_isolated_agents() -> Result<()> {
         .find(|record| record["kind"] == "agent_finished" && record["call"] == 1)
         .expect("agent_finished");
     assert_eq!(journaled["value"], "edited", "{journaled}");
-    assert_eq!(journaled["worktree_details"], *worktree, "{journaled}");
+    let mut recorded = worktree.clone();
+    if let Some(fields) = recorded.as_object_mut() {
+        fields.remove("isolated");
+        fields.remove("recorded");
+    }
+    assert_eq!(journaled["worktree_details"], recorded, "{journaled}");
     assert!(
         journaled["worktree"]
             .as_str()
@@ -2910,6 +2919,9 @@ async fn finished_runs_are_restored_by_id_after_restart() -> Result<()> {
     assert_eq!(listed[0].status, RunStatus::Completed);
     assert_eq!(listed[0].agents.completed, 1);
     assert!(listed[0].result_preview.is_none(), "{listed:?}");
+    let journal = run_dir(&resumed, &run.run_id).join("journal.jsonl");
+    let index = run_dir(&resumed, "runs.jsonl");
+    let (journal_before, index_before) = (std::fs::read(&journal)?, std::fs::read(&index)?);
     let (read, result) = resumed
         .codex
         .read_workflow_run(&run.run_id, /*include_result*/ true)
@@ -2917,6 +2929,32 @@ async fn finished_runs_are_restored_by_id_after_restart() -> Result<()> {
         .expect("a past run is read by id");
     assert_eq!(read.agent_list.len(), 1, "{read:?}");
     assert_eq!(result.as_deref(), Some("\"the answer\""));
+    // P3-12: reading writes nothing and registers nothing.
+    assert!(
+        resumed.codex.workflow_run(&run.run_id, false).is_none(),
+        "a read run is not registered"
+    );
+    assert_eq!(std::fs::read(&journal)?, journal_before);
+    assert_eq!(std::fs::read(&index)?, index_before);
+    // A run a stopped process left after the load reads as interrupted, still without a
+    // record of that in its journal or the index.
+    let stopped = run_dir(&resumed, OLD_RUN_ID);
+    std::fs::create_dir_all(&stopped)?;
+    let started = json!({"seq": 1, "kind": "run_started", "run_id": OLD_RUN_ID, "name": "stopped", "script_sha256": "s", "args_sha256": "a", "parent_turn_id": "t", "resume_from": null});
+    std::fs::write(stopped.join("journal.jsonl"), format!("{started}\n"))?;
+    let (read, _) = resumed
+        .codex
+        .read_workflow_run(OLD_RUN_ID, /*include_result*/ false)
+        .await
+        .expect("a stopped run is read by id");
+    assert_eq!(read.status, RunStatus::Interrupted, "{read:?}");
+    assert_eq!(
+        std::fs::read_to_string(stopped.join("journal.jsonl"))?,
+        format!("{started}\n")
+    );
+    assert_eq!(std::fs::read(&index)?, index_before);
+    assert!(resumed.codex.workflow_run(OLD_RUN_ID, false).is_none());
+    std::fs::remove_dir_all(&stopped)?;
     let cancelled = resumed
         .codex
         .cancel_workflow_run(&run.run_id)
@@ -3372,6 +3410,8 @@ async fn workflow_runs_on_the_grpc_code_mode_host() -> Result<()> {
 
 const ISOLATED_SCRIPT: &str = "export const meta = { name: 'isolated', description: 'd' };\nreturn await agent('TASK-ISOLATED', { isolation: 'worktree' });\n";
 const OLD_RUN_ID: &str = "wf-0000c0de";
+/// The script of the old run, asking for the worktree details its journal lacks.
+const OLD_DETAILS_SCRIPT: &str = "export const meta = { name: 'isolated', description: 'd' };\nreturn await agent('TASK-ISOLATED', { isolation: 'worktree', details: true });\n";
 
 /// The id of a run that is not one of `known`, once the thread has one.
 async fn new_run_id(codex: &CodexThread, known: &[&str]) -> String {
@@ -3410,7 +3450,8 @@ fn write_old_isolated_run(test: &TestCodex) -> Result<()> {
     let key = codex_workflow::call_key("TASK-ISOLATED", &opts);
     let dir = run_dir(test, OLD_RUN_ID);
     std::fs::create_dir_all(&dir)?;
-    std::fs::write(dir.join("script.js"), ISOLATED_SCRIPT)?;
+    // `details` is not part of the call key, so the old answer still serves the call.
+    std::fs::write(dir.join("script.js"), OLD_DETAILS_SCRIPT)?;
     std::fs::write(dir.join("args.json"), "null")?;
     let records = [
         json!({"seq": 1, "kind": "run_started", "run_id": OLD_RUN_ID, "name": "isolated", "script_sha256": "s", "args_sha256": "a", "parent_turn_id": "t", "resume_from": null}),
@@ -3573,7 +3614,22 @@ async fn resumed_isolated_answers_keep_their_worktree_report() -> Result<()> {
     )
     .await;
     let third = finished_run_with_id(&test.codex, &third_id).await;
-    assert_eq!(run_result(&test.codex, &third_id), json!("old answer"));
+    // P3-10: an isolated call whose journal lacks the details says so, unlike a call without
+    // isolation, so a script does not mistake it for "no changes".
+    assert_eq!(
+        run_result(&test.codex, &third_id),
+        json!({
+            "answer": "old answer",
+            "worktree": {
+                "isolated": true,
+                "recorded": false,
+                "agent": null,
+                "error": format!(
+                    "the journal of {OLD_RUN_ID} does not record this agent's worktree; the log of {OLD_RUN_ID} may name its branch"
+                ),
+            },
+        })
+    );
     let marker = format!(
         "agent 1 answered from the journal of {OLD_RUN_ID}, which does not record that isolated agent's worktree; look for its branch in the log of {OLD_RUN_ID}"
     );

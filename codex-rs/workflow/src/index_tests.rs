@@ -66,3 +66,52 @@ fn index_keeps_the_last_entry_of_each_run() {
         vec![index_entry(&first_again), index_entry(&second)]
     );
 }
+
+/// P3-11: a line is taken only as a journal could have produced it: a run that has not
+/// finished is not listed, and lists, tail, preview and free text keep the limits of a run.
+#[test]
+fn index_lines_are_checked_when_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut running = finished_run("wf-00000001", RunStatus::Completed);
+    running.status = RunStatus::Running;
+    let mut oversized = finished_run("wf-00000002", RunStatus::Failed);
+    oversized.name = "n".repeat(500);
+    oversized.description = "d".repeat(5_000);
+    oversized.error = Some("e".repeat(5_000));
+    oversized.logs_tail = vec!["x".repeat(10); 50];
+    oversized.result_preview = Some("p".repeat(5_000));
+    oversized.null_reasons = (0..1_000)
+        .map(|index| (format!("{index}{}", "r".repeat(100)), 1))
+        .collect();
+    let text = [&running, &oversized]
+        .iter()
+        .map(|line| format!("{}\n", serde_json::to_string(line).expect("json")))
+        .collect::<String>();
+    std::fs::write(dir.path().join(INDEX_FILE), text).expect("write");
+
+    let entries = read_index(dir.path()).expect("index");
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.run_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["wf-00000002"]
+    );
+    let entry = &entries[0];
+    assert_eq!(entry.run_id, "wf-00000002");
+    assert_eq!(entry.name.chars().count(), 64);
+    assert_eq!(entry.description.chars().count(), 2_000);
+    assert_eq!(
+        entry.error.as_deref().map(|error| error.chars().count()),
+        Some(2_000)
+    );
+    assert!(entry.logs_tail.is_empty() && entry.agent_list.is_empty());
+    assert_eq!(entry.result_preview, None);
+    assert_eq!(entry.null_reasons.len(), 256);
+    assert!(
+        entry
+            .null_reasons
+            .keys()
+            .all(|reason| reason.chars().count() <= 64)
+    );
+}

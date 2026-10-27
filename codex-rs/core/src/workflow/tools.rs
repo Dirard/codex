@@ -144,13 +144,13 @@ fn workflow_description(
     worktree_isolation: bool,
 ) -> String {
     let isolation_option = if worktree_isolation {
-        ", `isolation: \"worktree\"` (the agent works in its own git worktree; to bring its changes into your checkout call `apply_agent_worktree` with the target the run log names for it, not a raw `git apply`; `details: true` resolves to `{answer, worktree: {agent, branch, changed, files}}`, whose `agent` is that target)"
+        ", `isolation: \"worktree\"` (the agent works in its own git worktree; to bring its changes into your checkout call `apply_agent_worktree` with the target the run log names for it, not a raw `git apply`; `details: true` resolves to `{answer, worktree}`: `{isolated: false}` without isolation, otherwise `{isolated: true, recorded, agent, branch, changed, files}` whose `agent` is that target, with `recorded: false` and an `error` when Codex has no details)"
     } else {
         ""
     };
     format!(
         r#"Run a JavaScript workflow script in the background: it orchestrates many sub-agents deterministically while you keep working, and agent answers go to the script instead of your context.
-When to use it: start one yourself, without being asked, when a task splits into many independent pieces: auditing, reviewing or searching across many files, modules or items (about five or more), independent checks of each finding, or a multi-stage find/verify/report pipeline whose intermediate results would flood your context. Also when the user asks for a workflow. Not for work that one agent or a few of your own tool calls can do.
+When to use it: when a task splits into many independent pieces and separate agents clearly pay off: auditing, reviewing or searching across many files, modules or items (about five or more), independent checks of each finding, or a multi-stage find/verify/report pipeline whose intermediate results would flood your context. Then you may start one without being asked, and also when the user asks for a workflow. Every agent spends tokens: unless the user set a budget, pass a `budget_tokens` that fits the task. Not for work that one agent or a few of your own tool calls can do.
 
 The script starts with `export const meta = {{ name, description, phases }};` (name: letters, digits, `_`, `-`), followed by a body that may use `await` and `return`. The returned JSON value is the run result.
 
@@ -207,11 +207,29 @@ struct WorkflowArgs {
     name: Option<String>,
     #[serde(default)]
     args: Option<JsonValue>,
-    #[serde(default)]
-    budget_tokens: Option<u64>,
+    /// Absent: the default, or with `resume_from` the source run's budget (D3); `null`: no
+    /// budget of the call, also with `resume_from` (P3-13).
+    #[serde(default, deserialize_with = "present")]
+    budget_tokens: Option<Option<u64>>,
     /// UC6, R6.3: a terminal run of this thread whose successful answers this run reuses.
     #[serde(default)]
     resume_from: Option<String>,
+}
+
+/// Deserializes a field that is present, `null` included, as `Some`; with `#[serde(default)]`
+/// an absent field stays `None`.
+fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+/// D3, P3-13: the budget of a call: an explicit value or `null` wins; without one a resumed
+/// run keeps the budget of its source.
+fn call_budget(explicit: Option<Option<u64>>, source: Option<u64>) -> Option<u64> {
+    explicit.unwrap_or(source)
 }
 
 /// What a `workflow` call runs, once `script`, `name` and `resume_from` are resolved.
@@ -266,7 +284,7 @@ async fn resolve_script_source(
             script: explicit_script.unwrap_or_default(),
             args_json: explicit_args.unwrap_or_else(|| "null".to_string()),
             resume: None,
-            budget_tokens,
+            budget_tokens: budget_tokens.flatten(),
         });
     };
     let source = super::resume::resume_source(session, &turn.config, &run_id).await?;
@@ -284,8 +302,10 @@ async fn resolve_script_source(
         script,
         args_json,
         resume: Some(source.cache),
-        budget_tokens: budget_tokens
-            .or(source.run.snapshot(/*include_agents*/ false).budget_tokens),
+        budget_tokens: call_budget(
+            budget_tokens,
+            source.run.snapshot(/*include_agents*/ false).budget_tokens,
+        ),
     })
 }
 
@@ -327,7 +347,7 @@ impl ToolExecutor<ToolInvocation> for WorkflowStartHandler {
             (
                 "resume_from".to_string(),
                 JsonSchema::string(Some(
-                    "Id of a finished, failed, cancelled or interrupted run of this thread. Agent calls with the same prompt and options reuse its successful answers instead of starting agents; the rest run live. Without `script`, `name`, `args` or `budget_tokens`, its script, args and token budget are used.".to_string(),
+                    "Id of a finished, failed, cancelled or interrupted run of this thread. Agent calls with the same prompt and options reuse its successful answers instead of starting agents; the rest run live. Without `script`, `name`, `args` or `budget_tokens`, its script, args and token budget are used; `budget_tokens: null` drops its budget.".to_string(),
                 )),
             ),
             (
@@ -336,9 +356,17 @@ impl ToolExecutor<ToolInvocation> for WorkflowStartHandler {
             ),
             (
                 "budget_tokens".to_string(),
-                JsonSchema::integer(Some(
-                    "Optional token budget of the run (non-cached input plus output of its agents). When reached, agent() calls that have not started resolve to null.".to_string(),
-                )),
+                JsonSchema {
+                    schema_type: Some(codex_tools::JsonSchemaType::Multiple(Box::new([
+                        codex_tools::JsonSchemaPrimitiveType::Integer,
+                        codex_tools::JsonSchemaPrimitiveType::Null,
+                    ]))),
+                    description: Some(
+                        "Optional token budget of the run (non-cached input plus output of its agents). When reached, agent() calls that have not started resolve to null. With `resume_from`, omit it to keep the source run's budget or pass null to drop it."
+                            .into(),
+                    ),
+                    ..Default::default()
+                },
             ),
         ]);
         function_tool(
@@ -879,9 +907,12 @@ mod tests {
                 .next()
                 .expect("the description has an opening paragraph");
             for hint in [
-                "When to use it: start one yourself, without being asked",
+                "When to use it: when a task splits into many independent pieces and separate agents clearly pay off",
                 "auditing, reviewing or searching across many files",
                 "independent checks of each finding",
+                "Then you may start one without being asked",
+                // P3-13: the hint names the cost and the budget.
+                "Every agent spends tokens: unless the user set a budget, pass a `budget_tokens` that fits the task.",
                 "Not for work that one agent or a few of your own tool calls can do.",
             ] {
                 assert!(opening.contains(hint), "{hint:?} missing from {opening}");
@@ -891,7 +922,7 @@ mod tests {
         assert!(!without.contains("apply_agent_worktree"), "{without}");
         assert!(
             with.contains(
-                "`details: true` resolves to `{answer, worktree: {agent, branch, changed, files}}`, whose `agent` is that target"
+                "`details: true` resolves to `{answer, worktree}`: `{isolated: false}` without isolation, otherwise `{isolated: true, recorded, agent, branch, changed, files}` whose `agent` is that target"
             ),
             "{with}"
         );
@@ -979,5 +1010,36 @@ mod tests {
         );
         let (_, unlimited) = approval_question(&meta, &workflows, None, None);
         assert!(unlimited.ends_with("with no token budget."), "{unlimited}");
+    }
+
+    /// D3, P3-13: a resumed run keeps the budget of its source unless the call names one, and
+    /// an explicit `null` drops it; without `resume_from` `null` is no budget, as before.
+    #[test]
+    fn an_explicit_null_budget_drops_the_inherited_one() {
+        let parse = |arguments: JsonValue| {
+            serde_json::from_value::<WorkflowArgs>(arguments)
+                .expect("arguments")
+                .budget_tokens
+        };
+        let absent = parse(json!({ "resume_from": "wf-00000001" }));
+        let null = parse(json!({ "resume_from": "wf-00000001", "budget_tokens": null }));
+        let given = parse(json!({ "resume_from": "wf-00000001", "budget_tokens": 7 }));
+        assert_eq!((absent, null, given), (None, Some(None), Some(Some(7))));
+        assert_eq!(call_budget(absent, Some(500)), Some(500));
+        assert_eq!(call_budget(null, Some(500)), None);
+        assert_eq!(call_budget(given, Some(500)), Some(7));
+        assert_eq!(null.flatten(), None);
+        let ToolSpec::Function(tool) = (WorkflowStartHandler {
+            max_concurrent_agents: 2,
+            max_agents_per_run: 10,
+            worktree_isolation: false,
+        })
+        .spec() else {
+            panic!("a function tool");
+        };
+        let budget =
+            serde_json::to_value(&tool.parameters).expect("schema")["properties"]["budget_tokens"]
+                .clone();
+        assert_eq!(budget["type"], json!(["integer", "null"]), "{budget}");
     }
 }

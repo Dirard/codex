@@ -19,13 +19,16 @@ impl CodexThread {
     }
 
     /// Fork: one run's snapshot with its per-call list, and its full result when asked; a run
-    /// of an earlier process is rebuilt from its journal first (R6.7, R8.8).
+    /// of an earlier process is rebuilt from its journal first (R6.7, R8.8). Reading writes
+    /// nothing and registers nothing (P3-12): a stopped run reads as interrupted, and the
+    /// rebuilt run stays in a small read cache.
     pub async fn read_workflow_run(
         &self,
         run_id: &str,
         include_result: bool,
     ) -> Option<(RunSnapshot, Option<String>)> {
-        let run = self.find_workflow_run(run_id).await?;
+        let config = self.session.get_config().await;
+        let run = super::resume::read_run(&self.session, &config, run_id).await?;
         let result = include_result.then(|| run.result_json()).flatten();
         Some((run.snapshot(/*include_agents*/ true), result))
     }

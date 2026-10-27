@@ -1,5 +1,6 @@
 //! Runs of one thread (UC1, R1.5; UC9, R9.3).
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
@@ -20,14 +21,21 @@ pub(crate) struct WorkflowRegistry {
     /// R6.8: index entries of finished runs of earlier processes, listed until a lookup by
     /// id registers the run itself.
     past: Mutex<Vec<RunSnapshot>>,
+    /// P3-12: runs of earlier processes rebuilt for `thread/workflow/read`, most recently
+    /// read last; not registered, so they never join the thread's runs.
+    read_cache: Mutex<VecDeque<Arc<WorkflowRun>>>,
     updates: broadcast::Sender<String>,
 }
+
+/// Runs of earlier processes the read cache keeps.
+const READ_CACHE_RUNS: usize = 8;
 
 impl Default for WorkflowRegistry {
     fn default() -> Self {
         Self {
             runs: Mutex::new(Vec::new()),
             past: Mutex::new(Vec::new()),
+            read_cache: Mutex::new(VecDeque::new()),
             updates: broadcast::channel(UPDATE_CHANNEL_CAPACITY).0,
         }
     }
@@ -94,6 +102,32 @@ impl WorkflowRegistry {
     /// Every run of the thread in start order.
     pub(crate) fn all(&self) -> Vec<Arc<WorkflowRun>> {
         self.runs().clone()
+    }
+
+    /// P3-12: a run of an earlier process read before and still in the read cache.
+    pub(crate) fn cached_read(&self, run_id: &str) -> Option<Arc<WorkflowRun>> {
+        let mut cache = self
+            .read_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let position = cache.iter().position(|run| run.id == run_id)?;
+        let run = cache.remove(position)?;
+        cache.push_back(Arc::clone(&run));
+        Some(run)
+    }
+
+    /// P3-12: keep a run rebuilt for reading, dropping the least recently read one beyond
+    /// [`READ_CACHE_RUNS`].
+    pub(crate) fn cache_read(&self, run: Arc<WorkflowRun>) {
+        let mut cache = self
+            .read_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        cache.retain(|cached| cached.id != run.id);
+        cache.push_back(run);
+        while cache.len() > READ_CACHE_RUNS {
+            cache.pop_front();
+        }
     }
 
     /// R6.8: keep the index entries of the thread's runs of earlier processes.

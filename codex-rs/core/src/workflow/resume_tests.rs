@@ -172,3 +172,60 @@ fn past_runs_load_from_the_index() {
     assert_eq!(statuses(&again.past), expected);
     assert_eq!(registered(&again.interrupted), vec!["wf-0000000c"]);
 }
+
+/// P3-11: an index line that calls a stopped run finished does not hide the journal from the
+/// `interrupted` marking: its finish time does not match the journal's last write, so the
+/// journal decides, and the line is replaced. A line of a run whose journal agrees stays.
+#[test]
+fn an_index_line_does_not_hide_a_stopped_journal() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let thread_dir = home.path();
+    let stopped_dir = write_run(thread_dir, "wf-0000000a", &[started("wf-0000000a", None)]);
+    append_index(thread_dir, &finished_entry("wf-0000000a")).expect("index");
+    write_run(
+        thread_dir,
+        "wf-0000000b",
+        &[started("wf-0000000b", None), FINISHED.to_string()],
+    );
+    append_index(thread_dir, &finished_entry("wf-0000000b")).expect("index");
+
+    let restored = restore_runs(thread_dir);
+
+    let status = |run_id: &str| {
+        restored
+            .past
+            .iter()
+            .find(|entry| entry.run_id == run_id)
+            .map(|entry| entry.status)
+    };
+    assert_eq!(status("wf-0000000a"), Some(RunStatus::Interrupted));
+    assert_eq!(status("wf-0000000b"), Some(RunStatus::Completed));
+    assert_eq!(run_finished_count(&stopped_dir), 1);
+    assert_eq!(
+        restored
+            .interrupted
+            .iter()
+            .map(|run| run.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["wf-0000000a"]
+    );
+    // The replaced line is in the index, and the agreeing one was not appended again.
+    let index =
+        std::fs::read_to_string(thread_dir.join(codex_workflow::INDEX_FILE)).expect("index");
+    assert_eq!(
+        index
+            .lines()
+            .filter(|line| line.contains("\"run_id\":\"wf-0000000b\""))
+            .count(),
+        1,
+        "{index}"
+    );
+    let lines = read_index(thread_dir).expect("index");
+    assert_eq!(
+        lines
+            .iter()
+            .find(|entry| entry.run_id == "wf-0000000a")
+            .map(|entry| entry.status),
+        Some(RunStatus::Interrupted)
+    );
+}
