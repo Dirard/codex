@@ -337,17 +337,20 @@ async fn exec_waits_for_the_first_match_of_a_slow_server() -> anyhow::Result<()>
     Ok(())
 }
 
-/// Review 2026-10-27 P3-5: Ctrl-C while exec waits for a background terminal names the
-/// terminal it leaves and exits with an error, as the timeout does.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn exec_interrupted_while_waiting_names_the_terminal_and_fails() -> anyhow::Result<()> {
+/// Starts `codex exec` with a background terminal, sends Ctrl-C once the request that ends
+/// its first turn reached the model plus `pause`, and returns the exit code and stderr. With
+/// a long `after_tool_delay` the Ctrl-C lands while that turn still runs.
+async fn interrupt_exec(
+    after_tool_delay: Duration,
+    pause: Duration,
+) -> anyhow::Result<(Option<i32>, String)> {
     let test = test_codex_exec();
     let server = responses::start_mock_server().await;
     let routed = Routed {
         served: Arc::default(),
         bodies: Arc::default(),
         arguments: notify_on_exit("sleep 60; echo never"),
-        after_tool_delay: Duration::ZERO,
+        after_tool_delay,
     };
     Mock::given(method("POST"))
         .and(path_regex(".*/responses$"))
@@ -374,7 +377,6 @@ async fn exec_interrupted_while_waiting_names_the_terminal_and_fails() -> anyhow
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
-    // The first turn ended; exec now waits for the terminal.
     let waited = tokio::time::timeout(Duration::from_secs(30), async {
         while !routed
             .served
@@ -388,9 +390,9 @@ async fn exec_interrupted_while_waiting_names_the_terminal_and_fails() -> anyhow
     .await;
     if waited.is_err() {
         let _ = child.kill();
-        anyhow::bail!("the first turn did not end");
+        anyhow::bail!("the first turn did not reach its last step");
     }
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    tokio::time::sleep(pause).await;
     let pid = libc::pid_t::try_from(child.id())?;
     // SAFETY: `pid` is our own child process.
     assert_eq!(unsafe { libc::kill(pid, libc::SIGINT) }, 0);
@@ -399,13 +401,41 @@ async fn exec_interrupted_while_waiting_names_the_terminal_and_fails() -> anyhow
         tokio::task::spawn_blocking(move || child.wait_with_output()),
     )
     .await???;
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.code(), Some(1), "stderr: {stderr}");
+    Ok((
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+    ))
+}
+
+/// Review 2026-10-27 P3-5: Ctrl-C while exec waits for a background terminal names the
+/// terminal it leaves and exits with an error, as the timeout does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exec_interrupted_while_waiting_names_the_terminal_and_fails() -> anyhow::Result<()> {
+    // The first turn ended; exec now waits for the terminal.
+    let (code, stderr) = interrupt_exec(Duration::ZERO, Duration::from_millis(1500)).await?;
+    assert_eq!(code, Some(1), "stderr: {stderr}");
     assert!(
         stderr.contains(
             "codex exec was interrupted while it waited for background terminals; still pending: session "
         ) && stderr.contains(" (sleep 60; echo never, running for "),
         "stderr: {stderr}"
     );
+    Ok(())
+}
+
+/// Combined live run 2026-10-27, D5: Ctrl-C during the first turn interrupts that turn; exec
+/// was not waiting for terminals yet, and its warning says so while it names them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exec_interrupted_during_a_turn_names_the_terminal_and_fails() -> anyhow::Result<()> {
+    let (code, stderr) =
+        interrupt_exec(Duration::from_secs(60), Duration::from_millis(1000)).await?;
+    assert_eq!(code, Some(1), "stderr: {stderr}");
+    assert!(
+        stderr.contains(
+            "codex exec was interrupted during a turn; background terminals still pending: session "
+        ) && stderr.contains(" (sleep 60; echo never, running for "),
+        "stderr: {stderr}"
+    );
+    assert!(!stderr.contains("while it waited"), "stderr: {stderr}");
     Ok(())
 }

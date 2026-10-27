@@ -139,11 +139,17 @@ impl TerminalWait {
             return false;
         }
         if self.last_turn_interrupted {
-            self.waiting = None;
+            // A turn that exec ran while it waited (one an exit notification started) ends
+            // that wait; the first turn ran before exec waited for anything (live run D5).
+            let was_waiting = self.waiting.take().is_some();
             if let Some(pending) = self.pending(client, request_ids).await
                 && !pending.terminals.is_empty()
             {
-                event_processor.process_warning(interrupt_warning(Some(&pending)));
+                event_processor.process_warning(if was_waiting {
+                    interrupt_warning(Some(&pending))
+                } else {
+                    interrupted_turn_warning(&pending)
+                });
             }
             return false;
         }
@@ -359,6 +365,16 @@ pub(crate) fn interrupt_warning(
     }
 }
 
+/// An interrupt ended a turn before exec waited for terminals (combined live run D5).
+pub(crate) fn interrupted_turn_warning(
+    pending: &ThreadBackgroundTerminalsPendingResponse,
+) -> String {
+    format!(
+        "codex exec was interrupted during a turn; background terminals still pending: {}. They are terminated now and their exits are not reported.",
+        pending_terminals(Some(pending)).join(", ")
+    )
+}
+
 /// Exec exits while terminals still run that nothing waits for (P2-3).
 pub(crate) fn running_terminals_warning(terminals: &[ThreadBackgroundTerminal]) -> Option<String> {
     if terminals.is_empty() {
@@ -470,6 +486,16 @@ mod tests {
         assert_eq!(
             interrupt_warning(None),
             "codex exec was interrupted while it waited for background terminal notifications; they are not reported."
+        );
+        let terminal = PendingBackgroundTerminal {
+            process_id: "7961".to_string(),
+            command: "./build.sh".to_string(),
+            running_for_ms: 30_700,
+            output_watch: None,
+        };
+        assert_eq!(
+            interrupted_turn_warning(&pending(vec![terminal])),
+            "codex exec was interrupted during a turn; background terminals still pending: session 7961 (./build.sh, running for 30.7s). They are terminated now and their exits are not reported."
         );
         assert_eq!(running_terminals_warning(&[]), None);
         let running = ThreadBackgroundTerminal {
