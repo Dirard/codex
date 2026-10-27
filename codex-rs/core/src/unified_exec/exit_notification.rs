@@ -231,7 +231,7 @@ impl ExitNotifier {
     }
 
     fn reports_exit(&self, state: &NotifierState) -> bool {
-        state.armed && !(self.exit.turned_off() && !state.watching())
+        state.armed && (!self.exit.turned_off() || state.watching())
     }
 
     /// Whether the exit watcher must build the exit report: the exit will be reported, or the
