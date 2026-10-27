@@ -396,6 +396,11 @@ fn role_texts_describe_the_enforced_limits() {
     let instructions = developer_instructions(&profile);
     assert!(instructions.contains("Only MCP tools annotated read-only are available to you"));
     assert!(instructions.contains("You cannot spawn agents"));
+    // Review 2026-10-27, item 4: base instructions and MCP server descriptions still mention
+    // tools the explorer does not have.
+    assert!(instructions.contains(
+        "A tool that is not in your tool list is unavailable to you even where other instructions or tool descriptions mention it"
+    ));
     assert!(instructions.contains("including any worktree you run in"));
     assert!(instructions.contains("Messages you send to other agents share one budget"));
 }
