@@ -1,17 +1,27 @@
 //! Fork: `apply_agent_worktree` applies an isolated agent's branch to the caller's checkout.
 //!
 //! The merge runs host-side on objects only; the result is written through the `apply_patch`
-//! path, so approval, sandbox and patch events match any other file edit.
+//! path, so approval, sandbox, patch events and the file-edit hooks match any other file
+//! edit. The write is all or nothing: every file is checked before the write and again after
+//! the approval, and a write that fails halfway is rolled back.
 //! Spec: `specs/agent-worktree-isolation-2026-10-25.md`, UC11.
 
 use super::*;
 use crate::agent::worktree_isolation::AgentWorktreeBinding;
 use crate::agent::worktree_isolation::apply_refusal;
 use crate::agent::worktree_isolation::merge_for_parent;
+use crate::hook_runtime::PreToolUseHookResult;
+use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::run_post_tool_use_hooks;
+use crate::hook_runtime::run_pre_tool_use_hooks;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::ToolError;
+use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_apply_patch::MaybeApplyPatchVerified;
+use codex_protocol::ThreadId;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolSpec;
@@ -20,11 +30,17 @@ use codex_worktree::CleanMerge;
 use codex_worktree::MergeOutcome;
 use codex_worktree::MergedChange;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::Mutex as StdMutex;
+use std::sync::PoisonError;
 
 pub(crate) const TOOL_NAME: &str = "apply_agent_worktree";
 
-const DESCRIPTION: &str = "Apply an isolated agent's recorded changes (its codex/agents/* branch from the <agent_worktree> block) to your checkout as uncommitted edits, with a three-way merge over your current files. The write is approved and sandboxed like apply_patch. If the merge conflicts with your edits, nothing is written and the result lists the conflicting files and the git command from the block.";
+const DESCRIPTION: &str = "Apply an isolated agent's recorded changes (its codex/agents/* branch from the <agent_worktree> block) to your checkout as uncommitted edits, with a three-way merge over your current files. The write is approved, sandboxed and hooked like apply_patch, and it is all or nothing: if the merge conflicts with your edits or a file changes before the write, nothing is written and the result lists the files and the git command from the block.";
 
 pub(crate) struct Handler;
 
@@ -136,6 +152,9 @@ async fn handle_apply(invocation: ToolInvocation) -> Result<FunctionToolOutput, 
             binding.source_root.display()
         )));
     }
+    let refuse = |reason: &str, paths: &[String]| {
+        FunctionCallError::RespondToModel(apply_refusal(&binding, &args.target, reason, paths))
+    };
 
     let merge = match merge_for_parent(&binding).await.map_err(|err| {
         FunctionCallError::RespondToModel(format!("cannot apply agent {}: {err}", args.target))
@@ -166,70 +185,161 @@ async fn handle_apply(invocation: ToolInvocation) -> Result<FunctionToolOutput, 
             ));
         }
         MergeOutcome::Conflicts(paths) => {
-            return Err(FunctionCallError::RespondToModel(apply_refusal(
-                &binding,
-                &args.target,
-                "the merge conflicts with your checkout in",
-                &paths,
-            )));
+            return Err(refuse("the merge conflicts with your checkout in", &paths));
         }
         MergeOutcome::Unrepresentable { path, reason } => {
-            return Err(FunctionCallError::RespondToModel(apply_refusal(
-                &binding,
-                &args.target,
+            return Err(refuse(
                 &format!("apply_patch cannot write {reason} in"),
                 std::slice::from_ref(&path),
-            )));
+            ));
+        }
+        MergeOutcome::BaseNotAncestor { tip } => {
+            return Err(refuse(
+                &format!(
+                    "the recorded base is not an ancestor of the tip {} of",
+                    short(&tip)
+                ),
+                &[],
+            ));
         }
         MergeOutcome::Unsupported(detail) => {
-            return Err(FunctionCallError::RespondToModel(apply_refusal(
-                &binding,
-                &args.target,
+            return Err(refuse(
                 &format!(
                     "Git cannot merge without a working tree (Git 2.40 or later is required: {detail}) for"
                 ),
                 &[],
-            )));
+            ));
         }
     };
 
-    let action = verified_action(&binding, &environment, &args.target, &merge).await?;
+    // P2-4: the write is a file edit, so the hooks of `apply_patch` (`Write`, `Edit`) see it
+    // with the same input, and a PreToolUse hook can deny or rewrite it.
+    let environment_id = environment.selection.environment_id.clone();
+    let hook_environments = [environment_id.as_str()];
+    let merged_patch = patch_text(&merge.changes);
+    let patch = match run_pre_tool_use_hooks(
+        &session,
+        step_context.as_ref(),
+        call_id.clone(),
+        &HookToolName::apply_patch(),
+        &serde_json::json!({ "command": merged_patch }),
+        &hook_environments,
+    )
+    .await
+    {
+        // The hook's policy covers this write, so no way around it is offered.
+        PreToolUseHookResult::Blocked(message) => {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "cannot apply agent {}: a PreToolUse hook denied the write. Nothing was written.\n{message}",
+                args.target
+            )));
+        }
+        PreToolUseHookResult::Continue {
+            updated_input: Some(updated),
+        } => crate::tools::handlers::updated_hook_command(&updated)?.to_string(),
+        PreToolUseHookResult::Continue {
+            updated_input: None,
+        } => merged_patch.clone(),
+    };
+    let rewritten = patch != merged_patch;
+    let merged = (!rewritten).then_some(&merge);
+    let action = verified_action(&binding, &environment, &args.target, &patch, merged).await?;
+    let files = Arc::new(
+        expected_files(&action, binding.source_root.as_path())
+            .map_err(|(path, reason)| refuse(&reason, std::slice::from_ref(&path)))?,
+    );
+
     let tool_ctx = ToolCtx {
-        session,
-        step_context,
+        session: Arc::clone(&session),
+        step_context: Arc::clone(&step_context),
         cancellation_token,
-        call_id,
+        call_id: call_id.clone(),
         tool_name,
     };
-    let content = crate::tools::handlers::apply_patch::execute_verified_patch(
+    let pending = PendingWrite::register(session.thread_id, &call_id, Arc::clone(&files));
+    let written = crate::tools::handlers::apply_patch::execute_verified_patch(
         action,
         environment,
         Some(&tracker),
         tool_ctx,
     )
-    .await?;
+    .await;
+    drop(pending);
+    let content = match written {
+        Ok(content) => content,
+        Err(err) => {
+            let blocking_files = Arc::clone(&files);
+            let rollback = tokio::task::spawn_blocking(move || roll_back(&blocking_files))
+                .await
+                .unwrap_or_else(|err| RollBack {
+                    restored: Vec::new(),
+                    left: vec![(PathBuf::new(), format!("rollback task failed: {err}"))],
+                });
+            if !rollback.restored.is_empty() {
+                // The turn diff saw the rolled-back edits; it no longer matches the files.
+                tracker.lock().await.invalidate();
+            }
+            return Err(FunctionCallError::RespondToModel(failed_write_message(
+                &binding,
+                &args.target,
+                &err,
+                &rollback,
+            )));
+        }
+    };
+
+    let post = run_post_tool_use_hooks(
+        &session,
+        step_context.as_ref(),
+        call_id,
+        HookToolName::apply_patch().name().to_string(),
+        HookToolName::apply_patch().matcher_aliases().to_vec(),
+        serde_json::json!({ "command": patch }),
+        serde_json::Value::String(content.clone()),
+        &hook_environments,
+    )
+    .await;
+    record_additional_contexts(&session, &turn, post.additional_contexts).await;
+    if post.should_block {
+        // Like any PostToolUse block, this rejects the result, not the completed write.
+        return Err(FunctionCallError::RespondToModel(
+            post.feedback_message
+                .unwrap_or_else(|| "PostToolUse hook blocked the tool result".to_string()),
+        ));
+    }
+
     let metadata = binding.metadata();
     let mut text = format!(
-        "Applied {} at {} to {} as uncommitted edits.\n{content}",
+        "Applied {} at {} ({}) to {} as uncommitted edits.\n{content}",
         metadata.branch,
         short(&merge.tip),
+        merge.shortstat,
         binding.source_root.display()
     );
+    if rewritten {
+        text.push_str("\nA PreToolUse hook rewrote the patch; the files hold the hook's version.");
+    }
     if merge.pending_worktree_changes {
         text.push_str(
             "\nThe agent's worktree has newer changes that Codex records when its turn ends; they were not applied.",
         );
     }
+    if let Some(feedback) = post.feedback_message {
+        text.push('\n');
+        text.push_str(&feedback);
+    }
     Ok(FunctionToolOutput::from_text(text, Some(true)))
 }
 
-/// Builds the patch and checks that `apply_patch` reproduces every merged file exactly (R11.6).
+/// Builds the action of `patch` and, for the merge's own patch, checks that `apply_patch`
+/// reproduces every merged file exactly (R11.6).
 async fn verified_action(
     binding: &Arc<AgentWorktreeBinding>,
     environment: &crate::session::turn_context::TurnEnvironment,
     target: &str,
-    merge: &CleanMerge,
-) -> Result<codex_apply_patch::ApplyPatchAction, FunctionCallError> {
+    patch: &str,
+    merge: Option<&CleanMerge>,
+) -> Result<ApplyPatchAction, FunctionCallError> {
     let refuse = |path: &str, reason: &str| {
         FunctionCallError::RespondToModel(apply_refusal(
             binding,
@@ -238,7 +348,7 @@ async fn verified_action(
             &[path.to_string()],
         ))
     };
-    let args = codex_apply_patch::parse_patch(&patch_text(&merge.changes))
+    let args = codex_apply_patch::parse_patch(patch)
         .map_err(|err| refuse("the merged files", &format!("this change ({err})")))?;
     let cwd = PathUri::from_abs_path(&binding.source_root);
     let fs = environment.environment.get_filesystem();
@@ -259,6 +369,9 @@ async fn verified_action(
                 return Err(refuse("the merged files", "this change"));
             }
         };
+    let Some(merge) = merge else {
+        return Ok(action);
+    };
     for change in &merge.changes {
         let path = cwd
             .join(&change.path)
@@ -276,6 +389,24 @@ async fn verified_action(
                 &change.path,
                 "the exact content (line endings or final newline)",
             ));
+        }
+        // The current file must be exactly what the merge read: `apply_patch` would also
+        // match an edit that changed only whitespace and overwrite it.
+        if let Some(old) = change.old.as_deref()
+            && std::fs::read(
+                path.to_abs_path()
+                    .map_err(|_| refuse(&change.path, "this path"))?,
+            )
+            .ok()
+            .as_deref()
+                != Some(old.as_bytes())
+        {
+            return Err(FunctionCallError::RespondToModel(apply_refusal(
+                binding,
+                target,
+                "your file changed after the merge:",
+                std::slice::from_ref(&change.path),
+            )));
         }
     }
     Ok(action)
@@ -310,6 +441,283 @@ fn push_lines(patch: &mut String, marker: char, content: &str) {
         patch.push_str(line);
         patch.push('\n');
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// All or nothing (P2-3)
+// ---------------------------------------------------------------------------------------------
+
+/// What is on disk at a path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum FileState {
+    Absent,
+    File(Vec<u8>),
+    /// A directory, a symlink or something unreadable: never written through.
+    Other,
+}
+
+fn file_state(path: &Path) -> FileState {
+    match std::fs::symlink_metadata(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => FileState::Absent,
+        Ok(metadata) if metadata.file_type().is_file() => match std::fs::read(path) {
+            Ok(content) => FileState::File(content),
+            Err(_) => FileState::Other,
+        },
+        _ => FileState::Other,
+    }
+}
+
+/// One file of the write: what it is before and after it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ExpectedFile {
+    path: PathBuf,
+    before: FileState,
+    after: FileState,
+    /// Directories the write creates for an added file, outermost first.
+    created_dirs: Vec<PathBuf>,
+}
+
+/// Reads the state before the write of every file `action` touches and checks it: an added
+/// file and the directories on its way must be free, a changed or deleted file must be a
+/// regular file. Errors name the path relative to `source_root` and the reason.
+fn expected_files(
+    action: &ApplyPatchAction,
+    source_root: &Path,
+) -> Result<Vec<ExpectedFile>, (String, String)> {
+    let relative = |path: &Path| {
+        path.strip_prefix(source_root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned()
+    };
+    let mut files = Vec::with_capacity(action.changes().len());
+    for (uri, change) in action.changes() {
+        let path = uri
+            .to_abs_path()
+            .map_err(|_| {
+                (
+                    uri.to_string(),
+                    "a path outside the checkout in".to_string(),
+                )
+            })?
+            .to_path_buf();
+        let before = file_state(&path);
+        let (after, created_dirs) = match change {
+            ApplyPatchFileChange::Add { content } => {
+                if before != FileState::Absent {
+                    return Err((relative(&path), "a file already exists at".to_string()));
+                }
+                let mut created_dirs = Vec::new();
+                for ancestor in path.ancestors().skip(1) {
+                    if ancestor == source_root || !ancestor.starts_with(source_root) {
+                        break;
+                    }
+                    match std::fs::symlink_metadata(ancestor) {
+                        Ok(metadata) if metadata.file_type().is_dir() => break,
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                            created_dirs.push(ancestor.to_path_buf());
+                        }
+                        _ => {
+                            return Err((
+                                relative(&path),
+                                "a file or symlink of your checkout blocks the directory of"
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                }
+                created_dirs.reverse();
+                (FileState::File(content.clone().into_bytes()), created_dirs)
+            }
+            ApplyPatchFileChange::Delete { .. } => (FileState::Absent, Vec::new()),
+            ApplyPatchFileChange::Update {
+                move_path: Some(_), ..
+            } => {
+                return Err((
+                    relative(&path),
+                    "a PreToolUse hook rewrote the patch into a move, which apply_agent_worktree does not write, in"
+                        .to_string(),
+                ));
+            }
+            ApplyPatchFileChange::Update { new_content, .. } => (
+                FileState::File(new_content.clone().into_bytes()),
+                Vec::new(),
+            ),
+        };
+        if !matches!(change, ApplyPatchFileChange::Add { .. })
+            && !matches!(before, FileState::File(_))
+        {
+            return Err((relative(&path), "not a regular file in".to_string()));
+        }
+        files.push(ExpectedFile {
+            path,
+            before,
+            after,
+            created_dirs,
+        });
+    }
+    Ok(files)
+}
+
+/// Writes in flight, checked again by the `apply_patch` runtime after the approval.
+static PENDING_WRITES: LazyLock<StdMutex<HashMap<(ThreadId, String), PendingWrite>>> =
+    LazyLock::new(Default::default);
+
+struct PendingWrite {
+    files: Arc<Vec<ExpectedFile>>,
+    attempts: u32,
+}
+
+/// Unregisters a write when the call ends.
+struct PendingWriteGuard((ThreadId, String));
+
+impl PendingWrite {
+    fn register(
+        thread_id: ThreadId,
+        call_id: &str,
+        files: Arc<Vec<ExpectedFile>>,
+    ) -> PendingWriteGuard {
+        let key = (thread_id, call_id.to_string());
+        PENDING_WRITES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key.clone(), PendingWrite { files, attempts: 0 });
+        PendingWriteGuard(key)
+    }
+}
+
+impl Drop for PendingWriteGuard {
+    fn drop(&mut self) {
+        PENDING_WRITES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.0);
+    }
+}
+
+/// Fork hook of `ApplyPatchRuntime::run`, after the approval and right before the write: the
+/// files of an `apply_agent_worktree` write must still be what the merge read, so an edit made
+/// while the approval was pending is never overwritten (P2-3). A retry after a sandbox
+/// denial also accepts files the first attempt already wrote. Other patches pass.
+pub(crate) fn fork_check_before_write(ctx: &ToolCtx) -> Result<(), ToolError> {
+    let key = (ctx.session.thread_id, ctx.call_id.clone());
+    let (files, first_attempt) = {
+        let mut pending = PENDING_WRITES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let Some(write) = pending.get_mut(&key) else {
+            return Ok(());
+        };
+        write.attempts += 1;
+        (Arc::clone(&write.files), write.attempts == 1)
+    };
+    for file in files.iter() {
+        let now = file_state(&file.path);
+        if now != file.before && (first_attempt || now != file.after) {
+            return Err(ToolError::Rejected(format!(
+                "{} changed while the write waited, so nothing was written",
+                file.path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// What a rollback did.
+struct RollBack {
+    /// Files written before the failure that hold their earlier content again.
+    restored: Vec<PathBuf>,
+    /// Files that are neither as before nor as written, with the reason; left alone.
+    left: Vec<(PathBuf, String)>,
+}
+
+/// Puts back every file the failed write changed. A file is restored only while it holds
+/// exactly what the write put there, so nobody else's edit is undone; directories the write
+/// created are removed when empty.
+fn roll_back(files: &[ExpectedFile]) -> RollBack {
+    let mut rollback = RollBack {
+        restored: Vec::new(),
+        left: Vec::new(),
+    };
+    for file in files.iter().rev() {
+        let now = file_state(&file.path);
+        if now == file.before {
+            continue;
+        }
+        if now != file.after {
+            rollback.left.push((
+                file.path.clone(),
+                "it changed outside the write".to_string(),
+            ));
+            continue;
+        }
+        let restored = match &file.before {
+            FileState::Absent => std::fs::remove_file(&file.path),
+            FileState::File(content) => std::fs::write(&file.path, content),
+            FileState::Other => continue,
+        };
+        match restored {
+            Ok(()) => {
+                for directory in file.created_dirs.iter().rev() {
+                    let _ = std::fs::remove_dir(directory);
+                }
+                rollback.restored.push(file.path.clone());
+            }
+            Err(err) => rollback.left.push((file.path.clone(), err.to_string())),
+        }
+    }
+    rollback
+}
+
+/// The answer to a write that failed, after its rollback.
+fn failed_write_message(
+    binding: &AgentWorktreeBinding,
+    target: &str,
+    err: &FunctionCallError,
+    rollback: &RollBack,
+) -> String {
+    let (FunctionCallError::RespondToModel(error) | FunctionCallError::Fatal(error)) = err;
+    let error = error.trim();
+    let display = |path: &Path| {
+        path.strip_prefix(binding.source_root.as_path())
+            .unwrap_or(path)
+            .display()
+            .to_string()
+    };
+    let mut message = if rollback.left.is_empty() {
+        let restored = if rollback.restored.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " The files written before the failure were restored: {}.",
+                rollback
+                    .restored
+                    .iter()
+                    .map(|path| display(path))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        };
+        format!(
+            "cannot apply agent {target}: the write did not complete. Nothing was written.{restored}\n{error}"
+        )
+    } else {
+        format!(
+            "cannot apply agent {target}: the write did not complete, and these files could not be restored: {}. Check them before you retry.\n{error}",
+            rollback
+                .left
+                .iter()
+                .map(|(path, reason)| format!("{} ({reason})", display(path)))
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
+    };
+    let metadata = binding.metadata();
+    message.push_str(&format!(
+        "\napply: {}",
+        crate::agent::worktree_isolation::apply_command(&metadata.base_sha, &metadata.branch)
+    ));
+    message
 }
 
 fn lies_in(path: &std::path::Path, root: &std::path::Path) -> bool {

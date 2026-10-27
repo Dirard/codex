@@ -173,6 +173,8 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<ApplyPatchRuntimeOutput, ToolError> {
+        // Fork: re-check `apply_agent_worktree` files after the approval (worktree isolation).
+        crate::tools::handlers::multi_agents_v2::apply_agent_worktree_fork::fork_check_before_write(ctx)?;
         let started_at = Instant::now();
         let fs = req.turn_environment.environment.get_filesystem();
         let sandbox = Self::file_system_sandbox_context_for_attempt(req, attempt);

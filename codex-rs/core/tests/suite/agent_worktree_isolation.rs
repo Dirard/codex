@@ -2567,6 +2567,11 @@ async fn apply_agent_worktree_merges_two_workers_over_parent_edits() -> Result<(
         top_output.contains(&format!("Applied {}", worktree_field(&top, "branch"))),
         "{top_output}"
     );
+    // R11.5: the result names the size of the change.
+    assert!(
+        top_output.contains("(2 files changed, 2 insertions(+), 1 deletion(-))"),
+        "{top_output}"
+    );
     assert!(
         top_output.contains("Success. Updated the following files"),
         "{top_output}"
@@ -2785,5 +2790,385 @@ async fn apply_agent_worktree_rejects_a_non_isolated_agent() -> Result<()> {
         std::fs::read_to_string(test.config.cwd.join("a.txt"))?,
         PARENT_FILE
     );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review 2026-10-27 of the finished feature (docs/fork/reviews/2026-10-27-worktree-finish-review.md)
+// ---------------------------------------------------------------------------------------------
+
+/// A worker that deletes `.gitignore` and adds `0-first.txt` and `gen/x.txt`; the parent's
+/// ignore rule covers `gen`. Returns the parent checkout.
+async fn spawn_generator(server: &MockServer, test: &TestCodex) -> Result<PathBuf> {
+    let parent = test.config.cwd.to_path_buf();
+    std::fs::write(parent.join(".gitignore"), "target/\ngen\n")?;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    spawn_named_worker(
+        server,
+        test,
+        &mut created,
+        (ROOT_PROMPT, "spawn-generator"),
+        ("drop the ignore rule and generate", "gen", Some("worktree")),
+        &[(
+            "generate",
+            "rm .gitignore && mkdir gen && printf 'agent\\n' > gen/x.txt && printf 'first\\n' > 0-first.txt"
+                .to_string(),
+        )],
+    )
+    .await?;
+    Ok(parent)
+}
+
+async fn apply_generator(server: &MockServer, test: &TestCodex) -> Result<String> {
+    let apply = mount_root_call(
+        server,
+        "apply the generator",
+        "apply-generator",
+        "apply_agent_worktree",
+        apply_arguments("gen"),
+    )
+    .await;
+    test.submit_turn_with_permission_profile("apply the generator", workspace_only_profile())
+        .await?;
+    apply
+        .function_call_output_text("apply-generator")
+        .context("apply output")
+}
+
+/// P2-3, R11.4: an ignored file on the path of an added file stops the apply before anything
+/// is written (review probe E1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_refuses_an_ignored_file_on_an_added_path() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let parent = spawn_generator(&server, &test).await?;
+    // The parent's build writes the ignored file `gen` meanwhile.
+    std::fs::write(parent.join("gen"), "generated\n")?;
+
+    let output = apply_generator(&server, &test).await?;
+
+    assert!(
+        output.contains("conflicts with your checkout in gen/x.txt"),
+        "{output}"
+    );
+    assert!(output.contains("Nothing was written"), "{output}");
+    assert_eq!(
+        std::fs::read_to_string(parent.join(".gitignore"))?,
+        "target/\ngen\n"
+    );
+    assert!(!parent.join("0-first.txt").exists());
+    assert_eq!(std::fs::read_to_string(parent.join("gen"))?, "generated\n");
+    Ok(())
+}
+
+/// P2-3, R11.4: an ignored symlink on the path of an added file stops the apply before
+/// anything is written (review probe E2).
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_refuses_an_ignored_symlink_on_an_added_path() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let parent = spawn_generator(&server, &test).await?;
+    let outside = tempfile::tempdir()?;
+    std::os::unix::fs::symlink(outside.path(), parent.join("gen"))?;
+
+    let output = apply_generator(&server, &test).await?;
+
+    assert!(
+        output.contains("conflicts with your checkout in gen/x.txt"),
+        "{output}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(parent.join(".gitignore"))?,
+        "target/\ngen\n"
+    );
+    assert!(!parent.join("0-first.txt").exists());
+    assert!(!outside.path().join("x.txt").exists());
+    Ok(())
+}
+
+/// Starts a root turn under `untrusted` that calls `apply_agent_worktree` for `target` and
+/// returns the patch approval request it waits on.
+async fn apply_under_untrusted(
+    test: &TestCodex,
+    prompt: &str,
+) -> Result<codex_protocol::protocol::ApplyPatchApprovalRequestEvent> {
+    test.codex
+        .start_or_steer_turn(
+            codex_core::TurnInputRequest::user_input(vec![
+                codex_protocol::user_input::UserInput::Text {
+                    text: prompt.to_string(),
+                    text_elements: Vec::new(),
+                },
+            ])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approval_policy: Some(codex_protocol::protocol::AskForApproval::UnlessTrusted),
+                approvals_reviewer: Some(codex_protocol::config_types::ApprovalsReviewer::User),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    let EventMsg::ApplyPatchApprovalRequest(approval) = event else {
+        anyhow::bail!("expected a patch approval before completion");
+    };
+    Ok(approval)
+}
+
+/// P2-3: files that change while the write waits for approval are not overwritten; the
+/// files are checked again after the approval.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_rechecks_files_after_the_approval() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let parent = test.config.cwd.to_path_buf();
+    let mut created = test.thread_manager.subscribe_thread_created();
+    spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        (ROOT_PROMPT, "spawn-race"),
+        ("add and extend files", "racer", Some("worktree")),
+        &[(
+            "race-edit",
+            "printf 'agent\\n' > new.txt && printf 'agent\\n' >> a.txt".to_string(),
+        )],
+    )
+    .await?;
+    let apply = mount_root_call(
+        &server,
+        "apply while the user edits",
+        "apply-race",
+        "apply_agent_worktree",
+        apply_arguments("racer"),
+    )
+    .await;
+
+    let approval = apply_under_untrusted(&test, "apply while the user edits").await?;
+    // The user edits both files while the approval is pending.
+    std::fs::write(parent.join("new.txt"), "user\n")?;
+    std::fs::write(parent.join("a.txt"), format!("{PARENT_FILE}user\n"))?;
+    test.codex
+        .submit(codex_protocol::protocol::Op::PatchApproval {
+            id: approval.call_id,
+            decision: codex_protocol::protocol::ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let output = apply
+        .function_call_output_text("apply-race")
+        .context("apply output")?;
+    assert!(!output.contains("Applied"), "{output}");
+    assert!(output.contains("changed"), "{output}");
+    assert_eq!(std::fs::read_to_string(parent.join("new.txt"))?, "user\n");
+    assert_eq!(
+        std::fs::read_to_string(parent.join("a.txt"))?,
+        format!("{PARENT_FILE}user\n")
+    );
+    Ok(())
+}
+
+/// P2-3: a write that fails halfway is rolled back, so the checkout is all or nothing.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_rolls_back_a_failed_write() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let parent = test.config.cwd.to_path_buf();
+    std::fs::write(parent.join("z.txt"), "z\n")?;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        (ROOT_PROMPT, "spawn-partial"),
+        (
+            "add one file and extend another",
+            "partial",
+            Some("worktree"),
+        ),
+        &[(
+            "partial-edit",
+            "printf 'new\\n' > 0-new.txt && printf 'agent\\n' >> z.txt".to_string(),
+        )],
+    )
+    .await?;
+    // The second file of the patch cannot be written.
+    std::fs::set_permissions(parent.join("z.txt"), std::fs::Permissions::from_mode(0o444))?;
+    if std::fs::OpenOptions::new()
+        .append(true)
+        .open(parent.join("z.txt"))
+        .is_ok()
+    {
+        eprintln!("skipping: file permissions do not stop this user (root)");
+        return Ok(());
+    }
+    let apply = mount_root_call(
+        &server,
+        "apply the partial worker",
+        "apply-partial",
+        "apply_agent_worktree",
+        apply_arguments("partial"),
+    )
+    .await;
+    test.submit_turn_with_permission_profile(
+        "apply the partial worker",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let output = apply
+        .function_call_output_text("apply-partial")
+        .context("apply output")?;
+    assert!(!output.contains("Applied"), "{output}");
+    assert!(
+        output.contains(
+            "Nothing was written. The files written before the failure were restored: 0-new.txt."
+        ),
+        "{output}"
+    );
+    assert!(!parent.join("0-new.txt").exists(), "{output}");
+    assert_eq!(std::fs::read_to_string(parent.join("z.txt"))?, "z\n");
+    Ok(())
+}
+
+/// PreToolUse and PostToolUse hooks for file edits (`apply_patch`, `Write`, `Edit`): the
+/// pre hook denies or allows, the post hook logs its input; both log to the Codex home.
+fn write_edit_hooks(home: &Path, deny: bool) -> Result<()> {
+    let script = home.join("edit_hook.py");
+    let log = home.join("edit_hook_log.jsonl");
+    std::fs::write(
+        &script,
+        format!(
+            r#"import json
+import sys
+
+payload = json.load(sys.stdin)
+with open(r"{log}", "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+if payload["hook_event_name"] == "PreToolUse" and {deny}:
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "edits are frozen by policy"
+        }}
+    }}))
+"#,
+            log = log.display(),
+            deny = if deny { "True" } else { "False" },
+        ),
+    )?;
+    let group = |matcher: &str| {
+        json!({
+            "matcher": matcher,
+            "hooks": [{
+                "type": "command",
+                "command": format!("python3 {}", script.display()),
+            }]
+        })
+    };
+    std::fs::write(
+        home.join("hooks.json"),
+        json!({
+            "hooks": {
+                "PreToolUse": [group("^(Edit|Write)$")],
+                "PostToolUse": [group("^apply_patch$")],
+            }
+        })
+        .to_string(),
+    )?;
+    Ok(())
+}
+
+fn edit_hook_log(home: &Path) -> Vec<Value> {
+    std::fs::read_to_string(home.join("edit_hook_log.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
+}
+
+async fn hooked_apply(deny: bool) -> Result<(TestCodex, String)> {
+    let server = start_mock_server().await;
+    let test = isolation_builder(None, /*git_repository*/ true, |_| {})
+        .with_pre_build_hook(move |home| {
+            write_edit_hooks(home, deny).expect("write the edit hooks");
+        })
+        .with_config(core_test_support::hooks::trust_discovered_hooks)
+        .build_with_auto_env(&server)
+        .await?;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        (ROOT_PROMPT, "spawn-hooked"),
+        ("add a hooked file", "hooked", Some("worktree")),
+        &[("hooked-edit", "printf 'top\\n' > top.txt".to_string())],
+    )
+    .await?;
+    let apply = mount_root_call(
+        &server,
+        "apply the hooked worker",
+        "apply-hooked",
+        "apply_agent_worktree",
+        apply_arguments("hooked"),
+    )
+    .await;
+    test.submit_turn_with_permission_profile("apply the hooked worker", workspace_only_profile())
+        .await?;
+    let output = apply
+        .function_call_output_text("apply-hooked")
+        .context("apply output")?;
+    Ok((test, output))
+}
+
+/// P2-4: a PreToolUse hook on file edits sees the write of `apply_agent_worktree` as an
+/// `apply_patch` and can deny it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_runs_the_pre_tool_use_hook_of_file_edits() -> Result<()> {
+    let (test, output) = hooked_apply(/*deny*/ true).await?;
+
+    assert!(output.contains("edits are frozen by policy"), "{output}");
+    assert!(!test.config.cwd.join("top.txt").exists());
+    let pre = edit_hook_log(test.codex_home_path())
+        .into_iter()
+        .find(|entry| entry["hook_event_name"] == "PreToolUse")
+        .context("a PreToolUse hook input")?;
+    assert_eq!(pre["tool_name"], "apply_patch");
+    let command = pre["tool_input"]["command"].as_str().unwrap_or_default();
+    assert!(command.contains("*** Add File: top.txt"), "{command}");
+    Ok(())
+}
+
+/// P2-4: a PostToolUse hook on file edits runs after the write of `apply_agent_worktree`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_runs_the_post_tool_use_hook_of_file_edits() -> Result<()> {
+    let (test, output) = hooked_apply(/*deny*/ false).await?;
+
+    assert!(output.contains("Applied"), "{output}");
+    assert_eq!(
+        std::fs::read_to_string(test.config.cwd.join("top.txt"))?,
+        "top\n"
+    );
+    let post = edit_hook_log(test.codex_home_path())
+        .into_iter()
+        .find(|entry| entry["hook_event_name"] == "PostToolUse")
+        .context("a PostToolUse hook input")?;
+    assert_eq!(post["tool_name"], "apply_patch");
+    let command = post["tool_input"]["command"].as_str().unwrap_or_default();
+    assert!(command.contains("*** Add File: top.txt"), "{command}");
     Ok(())
 }

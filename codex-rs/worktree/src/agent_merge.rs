@@ -8,8 +8,11 @@
 
 use super::AgentWorktreeMetadata;
 use super::agent_branch_for_thread;
+use super::format_shortstat;
 use super::has_changes;
+use super::is_ancestor;
 use super::own_branch_tip;
+use super::parse_count;
 use super::snapshot_working_tree;
 use crate::git::GitOperation;
 use crate::git::git_command;
@@ -36,6 +39,8 @@ pub struct CleanMerge {
     /// The branch tip that was merged.
     pub tip: String,
     pub changes: Vec<MergedChange>,
+    /// Locale-independent `git diff --shortstat` equivalent of `changes` (R11.5).
+    pub shortstat: String,
     /// The agent's worktree has changes its branch does not record yet.
     pub pending_worktree_changes: bool,
 }
@@ -49,6 +54,11 @@ pub enum MergeOutcome {
     },
     /// Git cannot merge without a working tree (older than 2.40).
     Unsupported(String),
+    /// The recorded base is not an ancestor of the branch tip, so a three-way merge over it
+    /// would not apply the agent's changes.
+    BaseNotAncestor {
+        tip: String,
+    },
     /// Paths that conflict with the parent's edits or with files outside its snapshot.
     Conflicts(Vec<String>),
     /// A change that a text patch cannot reproduce exactly.
@@ -65,10 +75,13 @@ pub enum MergeOutcome {
 
 /// Merges the agent's own branch into the parent's working tree at `source_root` (R11.3).
 ///
-/// Nothing in the parent's checkout changes: the result lists the files to write. Conflicts,
-/// added files that already exist outside the snapshot (ignored files), and changes a text
-/// patch cannot express (binary or non-UTF-8 content, symlinks, submodules, executable modes)
-/// are reported instead of a result (R11.4, R11.6).
+/// Nothing in the parent's checkout changes: the result lists the files to write. Reported
+/// instead of a result (R11.4, R11.6, R11.9): conflicts; an added file that already exists
+/// outside the snapshot (an ignored file) or whose directory is an ignored file or symlink
+/// in the parent's checkout; paths Codex never writes (`..`, `.git`, `.codex`, `.agents` or
+/// `.aws` components); changes a text patch cannot express (binary or non-UTF-8 content,
+/// symlinks, submodules, executable modes); and a recorded base that is not an ancestor of
+/// the branch tip.
 pub fn merge_agent_branch(
     source_root: &Path,
     root: &Path,
@@ -87,6 +100,9 @@ pub fn merge_agent_branch(
             pending_worktree_changes,
         });
     };
+    if !is_ancestor(source_root, &metadata.base_sha, &tip)? {
+        return Ok(MergeOutcome::BaseNotAncestor { tip });
+    }
     let ours =
         snapshot_working_tree(source_root).context("cannot snapshot the parent working tree")?;
     let ours_tree = tree_of(source_root, &ours)?;
@@ -157,14 +173,19 @@ pub fn merge_agent_branch(
         if path.contains(['\n', '\r']) {
             return Ok(unrepresentable(path, "a file name with a line break"));
         }
+        if let Some(reason) = forbidden_path_reason(&path) {
+            return Ok(unrepresentable(path, reason));
+        }
+        // What the parent's checkout has on the path, ignored files and symlinks included:
+        // the snapshot does not show them, the write would trip over them.
+        if blocked_in_checkout(source_root, &path, *status == "A") {
+            conflicts.push(path);
+            continue;
+        }
         let change = match *status {
             "A" => {
                 if *new_mode != "100644" {
                     return Ok(unrepresentable(path, mode_reason(new_mode)));
-                }
-                if fs::symlink_metadata(source_root.join(&path)).is_ok() {
-                    conflicts.push(path);
-                    continue;
                 }
                 MergedChange {
                     new: Some(match blob_text(source_root, new_oid)? {
@@ -214,15 +235,108 @@ pub fn merge_agent_branch(
     if changes.is_empty() {
         return Ok(MergeOutcome::AlreadyApplied { tip });
     }
+    let shortstat = shortstat(source_root, &ours_tree, &merged_tree)?;
     Ok(MergeOutcome::Clean(CleanMerge {
         tip,
         changes,
+        shortstat,
         pending_worktree_changes,
     }))
 }
 
 fn unrepresentable(path: String, reason: &'static str) -> MergeOutcome {
     MergeOutcome::Unrepresentable { path, reason }
+}
+
+/// Directory names Codex never writes through a merge, at any depth: Git metadata, and the
+/// configuration and credential directories the sandbox keeps read-only in writable roots.
+const PROTECTED_NAMES: [&str; 4] = [".git", ".codex", ".agents", ".aws"];
+
+/// Why a merged path must not be written, if it must not (P3-1). Git's own `verify_path`
+/// rules are mirrored: names are compared case-insensitively, without trailing dots and
+/// spaces (NTFS) and without the code points HFS+ ignores, and `git~1` is the 8.3 name of
+/// `.git`.
+fn forbidden_path_reason(path: &str) -> Option<&'static str> {
+    if path.starts_with('/') || path.contains('\\') {
+        return Some("a path outside the checkout");
+    }
+    for component in path.split('/') {
+        if matches!(component, "" | "." | "..") {
+            return Some("a path outside the checkout");
+        }
+        let normalized = component
+            .chars()
+            .filter(|character| !is_hfs_ignorable(*character))
+            .collect::<String>()
+            .trim_end_matches(['.', ' '])
+            .to_lowercase();
+        if PROTECTED_NAMES.contains(&normalized.as_str()) || normalized == "git~1" {
+            return Some("a protected Git or Codex path");
+        }
+    }
+    None
+}
+
+/// Code points HFS+ drops when comparing names (Git's `is_hfs_dotgit` list).
+fn is_hfs_ignorable(character: char) -> bool {
+    matches!(
+        character,
+        '\u{200c}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{206a}'..='\u{206f}' | '\u{feff}'
+    )
+}
+
+/// Whether the parent's checkout blocks writing `path`: a directory on the way is a file or
+/// a symlink (ignored ones too), an added file already exists, or a changed file is not a
+/// regular file any more.
+fn blocked_in_checkout(source_root: &Path, path: &str, added: bool) -> bool {
+    let components = path.split('/').collect::<Vec<_>>();
+    let mut current = source_root.to_path_buf();
+    for (index, component) in components.iter().enumerate() {
+        current.push(component);
+        let last = index + 1 == components.len();
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if !last => {
+                if !metadata.file_type().is_dir() {
+                    return true;
+                }
+            }
+            Ok(metadata) => return added || !metadata.file_type().is_file(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return !added,
+            Err(_) => return true,
+        }
+    }
+    false
+}
+
+/// The size of the change from the parent snapshot to the merge result.
+fn shortstat(cwd: &Path, from_tree: &str, to_tree: &str) -> Result<String> {
+    let numstat = git_output(
+        cwd,
+        GitOperation::Metadata,
+        [
+            "diff-tree",
+            "-r",
+            "-z",
+            "--no-renames",
+            "--numstat",
+            from_tree,
+            to_tree,
+        ],
+    )?;
+    let mut files = 0;
+    let mut insertions = 0;
+    let mut deletions = 0;
+    for record in numstat.stdout.split(|byte| *byte == b'\0') {
+        let mut fields = record.splitn(3, |byte| *byte == b'\t');
+        let (Some(added), Some(removed), Some(_)) = (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        files += 1;
+        insertions += parse_count(added);
+        deletions += parse_count(removed);
+    }
+    Ok(format_shortstat(files, insertions, deletions))
 }
 
 fn binary(path: String) -> MergeOutcome {

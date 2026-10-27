@@ -1084,6 +1084,11 @@ fn merge_agent_branch_merges_over_parent_edits() {
             },
         ]
     );
+    // R11.5: the size of the change is reported like `git diff --shortstat`.
+    assert_eq!(
+        merge.shortstat,
+        "2 files changed, 2 insertions(+), 1 deletion(-)"
+    );
     assert_eq!(
         git(repository, &["status", "--porcelain=v1"]),
         status_before
@@ -1190,6 +1195,56 @@ fn registered_worktrees(repository: &Path) -> Vec<String> {
         .filter_map(|line| line.strip_prefix("worktree "))
         .map(str::to_owned)
         .collect()
+}
+
+/// Points `branch` at a new checkpoint commit of `tree` on top of `parent`, written with the
+/// host's identity as an agent with full access could forge it.
+fn commit_tree_on(repository: &Path, branch: &str, tree: &str, parent: &str) -> String {
+    let commit = git(
+        repository,
+        &[
+            "-c",
+            &format!("user.name={}", codex_worktree::AGENT_COMMIT_AUTHOR_NAME),
+            "-c",
+            &format!("user.email={}", codex_worktree::AGENT_COMMIT_AUTHOR_EMAIL),
+            "commit-tree",
+            "-p",
+            parent,
+            "-m",
+            &format!("codex agent {AGENT_PATH} checkpoint\n\nCodex-Thread-Id: {THREAD_ID}"),
+            tree,
+        ],
+    );
+    git(repository, &["branch", "--force", branch, &commit]);
+    commit
+}
+
+/// One `git mktree` input line.
+fn tree_entry(mode: &str, kind: &str, oid: &str, name: &str) -> String {
+    format!("{mode} {kind} {oid}\t{name}\n")
+}
+
+fn mktree(repository: &Path, entries: &str) -> String {
+    use std::io::Write as _;
+    let mut child = Command::new("git")
+        .current_dir(repository)
+        .arg("mktree")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("start git mktree");
+    child
+        .stdin
+        .take()
+        .expect("mktree stdin")
+        .write_all(entries.as_bytes())
+        .expect("write mktree input");
+    let output = child.wait_with_output().expect("run git mktree");
+    assert!(output.status.success(), "git mktree failed");
+    String::from_utf8(output.stdout)
+        .expect("UTF-8 tree id")
+        .trim()
+        .to_owned()
 }
 
 /// P2-1: a sweep never removes a worktree that another process holds, however idle it looks.
@@ -1397,6 +1452,89 @@ fn restore_requires_the_base_to_be_an_ancestor_of_the_branch() {
     assert!(!branched.root.exists());
 }
 
+/// P2-3, R11.4: an added file below an ignored file or an ignored symlink of the parent
+/// conflicts, so nothing is written halfway.
+#[cfg(unix)]
+#[test]
+fn merge_conflicts_with_an_ignored_file_or_symlink_on_an_added_path() {
+    let fixture = Fixture::new();
+    let repository = &fixture.repository;
+    fs::write(repository.join(".gitignore"), "target/\n*.log\ngen\n").expect("ignore gen");
+    let base = snapshot_working_tree(repository).expect("snapshot");
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    fs::create_dir_all(checkout.root.join("gen")).expect("agent directory");
+    fs::write(checkout.root.join("gen/x.txt"), "agent\n").expect("agent file");
+    fs::write(checkout.root.join("0-first.txt"), "first\n").expect("agent file");
+    git(&checkout.root, &["add", "--force", "gen/x.txt"]);
+    checkpoint_worktree(&checkout.root, &metadata);
+
+    // An ignored file where the agent added a directory.
+    fs::write(repository.join("gen"), "generated\n").expect("parent ignored file");
+    assert_eq!(
+        merge_agent_branch(repository, &checkout.root, &metadata).expect("merge"),
+        MergeOutcome::Conflicts(vec!["gen/x.txt".to_owned()])
+    );
+
+    // An ignored symlink to a directory outside the checkout.
+    fs::remove_file(repository.join("gen")).expect("remove the ignored file");
+    let outside = repository.parent().expect("temp root").join("outside");
+    fs::create_dir_all(&outside).expect("outside directory");
+    std::os::unix::fs::symlink(&outside, repository.join("gen")).expect("ignored symlink");
+    assert_eq!(
+        merge_agent_branch(repository, &checkout.root, &metadata).expect("merge"),
+        MergeOutcome::Conflicts(vec!["gen/x.txt".to_owned()])
+    );
+}
+
+/// P3-1: paths of the merge result are validated: no `..`, `.git` or nested Codex
+/// configuration reaches the patch, whatever tree the branch holds.
+#[test]
+fn merge_rejects_crafted_and_protected_paths() {
+    let fixture = Fixture::new();
+    let repository = &fixture.repository;
+    let base = snapshot_working_tree(repository).expect("snapshot");
+    let base_tree = git(repository, &["rev-parse", &format!("{base}^{{tree}}")]);
+    let blob = git(repository, &["hash-object", "-w", "--stdin"]);
+    let base_entries = git(repository, &["ls-tree", &base_tree]);
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    // Without its worktree the branch is found by the thread's checkpoint trailer, so any
+    // tree written to it reaches the merge.
+    fs::remove_dir_all(&checkout.root).expect("remove the agent checkout");
+    let with_entry = |entry: String| {
+        let mut entries = base_entries
+            .lines()
+            .map(|line| format!("{line}\n"))
+            .collect::<String>();
+        entries.push_str(&entry);
+        mktree(repository, &entries)
+    };
+    let nested = |name: &str| mktree(repository, &tree_entry("100644", "blob", &blob, name));
+    for (name, inner) in [
+        ("..", "escape.txt"),
+        (".git", "config.worktree"),
+        (".GIT", "hooks.txt"),
+    ] {
+        let tree = with_entry(tree_entry("040000", "tree", &nested(inner), name));
+        commit_tree_on(repository, BRANCH, &tree, &base);
+        let outcome = merge_agent_branch(repository, &checkout.root, &metadata).expect("merge");
+        assert!(
+            matches!(outcome, MergeOutcome::Unrepresentable { .. }),
+            "{name}/{inner}: {outcome:?}"
+        );
+    }
+    let sub_codex = mktree(
+        repository,
+        &tree_entry("040000", "tree", &nested("config.toml"), ".codex"),
+    );
+    let tree = with_entry(tree_entry("040000", "tree", &sub_codex, "sub"));
+    commit_tree_on(repository, BRANCH, &tree, &base);
+    let outcome = merge_agent_branch(repository, &checkout.root, &metadata).expect("merge");
+    assert!(
+        matches!(outcome, MergeOutcome::Unrepresentable { .. }),
+        "sub/.codex/config.toml: {outcome:?}"
+    );
+}
+
 /// P2-1: a hold of this process keeps the worktree from every removal until it is dropped.
 #[test]
 fn a_held_worktree_is_neither_swept_nor_removed() {
@@ -1420,6 +1558,35 @@ fn a_held_worktree_is_neither_swept_nor_removed() {
     assert_eq!(
         remove_if_unchanged(&fixture.repository, &held.root, &metadata).expect("remove"),
         RemoveOutcome::Removed
+    );
+}
+
+/// P3-7: the merge refuses a recorded base that is not an ancestor of the branch.
+#[test]
+fn merge_refuses_a_base_beside_the_branch() {
+    let fixture = Fixture::new();
+    let repository = &fixture.repository;
+    let base = snapshot_working_tree(repository).expect("snapshot");
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    fs::write(checkout.root.join("agent.txt"), "agent\n").expect("agent file");
+    checkpoint_worktree(&checkout.root, &metadata);
+    fs::write(repository.join("a.txt"), "elsewhere\n").expect("edit");
+    let elsewhere = snapshot_working_tree(repository).expect("unrelated snapshot");
+
+    let outcome = merge_agent_branch(
+        repository,
+        &checkout.root,
+        &AgentWorktreeMetadata {
+            base_sha: elsewhere,
+            ..metadata
+        },
+    )
+    .expect("merge");
+    assert_eq!(
+        outcome,
+        MergeOutcome::BaseNotAncestor {
+            tip: git(repository, &["rev-parse", BRANCH]),
+        }
     );
 }
 
