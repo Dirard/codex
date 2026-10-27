@@ -75,10 +75,10 @@ pub(crate) fn is_background_notification_item(item: &codex_protocol::models::Res
 }
 pub(crate) use base_instructions::BaseInstructionsFragment;
 pub(crate) use codex_context_fragments::AdditionalContextDeveloperFragment;
+pub(crate) use codex_context_fragments::AdditionalContextToolOutput;
 pub(crate) use codex_context_fragments::AdditionalContextUserFragment;
 pub use codex_context_fragments::AnsweredQuestion;
 pub use codex_context_fragments::ContextualUserFragment;
-pub(crate) use codex_guardian_context::GuardianToolDescriptions;
 pub(crate) use codex_guardian_context::PermissionContext as GuardianPermissionContext;
 pub(crate) use codex_prompts::MultiAgentRoleInstructions;
 pub use codex_prompts::PermissionsInstructions;
@@ -93,6 +93,7 @@ pub(crate) use current_time_reminder::CurrentTimeUnavailable;
 pub(crate) use developer_instructions::DeveloperInstructions;
 pub(crate) use environments_instructions::EnvironmentsInstructions;
 pub(crate) use guardian_approved_action::GuardianApprovedAction;
+pub(crate) use guardian_assistant_context::render_original_assistant_context;
 pub use guardian_assistant_context::render_retained_assistant_context;
 pub use guardian_context_mode::GuardianContextMode;
 pub(crate) use guardian_conversation_history::GuardianConversationHistory;

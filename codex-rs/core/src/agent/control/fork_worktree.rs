@@ -246,7 +246,7 @@ impl LocalAgentControl {
 
 /// A reused parent context does not carry the child's developer instructions, so an
 /// isolated child would never learn about its worktree. Appends the note once.
-pub(super) fn append_isolation_note(
+pub(in crate::agent) fn append_isolation_note(
     options: &crate::agent::types::SpawnAgentOptions,
     forked_rollout_items: &mut Vec<RolloutItem>,
 ) {

@@ -166,8 +166,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) thread_source: Option<ThreadSource>,
     /// Effective originator used for this thread's Responses requests and analytics events.
     pub(super) originator: String,
-    /// Fixed at thread startup and shared with turn snapshots.
-    pub(super) dynamic_tools: Arc<[DynamicToolSpec]>,
+    /// Active tools used to build the next model request.
+    pub(crate) dynamic_tools: Arc<[DynamicToolSpec]>,
     pub(super) user_shell_override: Option<shell::Shell>,
 }
 
@@ -711,12 +711,9 @@ impl Session {
         state.session_configuration.originator.clone()
     }
 
-    pub(crate) async fn dynamic_tools(&self) -> Vec<DynamicToolSpec> {
-        let dynamic_tools = {
-            let state = self.state.lock().await;
-            Arc::clone(&state.session_configuration.dynamic_tools)
-        };
-        dynamic_tools.to_vec()
+    pub(crate) async fn dynamic_tools(&self) -> Arc<[DynamicToolSpec]> {
+        let state = self.state.lock().await;
+        Arc::clone(&state.session_configuration.dynamic_tools)
     }
 
     pub(crate) async fn responses_metadata(
@@ -1585,6 +1582,16 @@ impl Session {
                     &config.features,
                 ),
             );
+            if matches!(initial_history, InitialHistory::Resumed(_)) {
+                state.persisted_dynamic_tools = initial_history
+                    .get_dynamic_tools()
+                    .unwrap_or_default()
+                    .into();
+                if state.session_configuration.dynamic_tools.is_empty() {
+                    state.session_configuration.dynamic_tools =
+                        Arc::clone(&state.persisted_dynamic_tools);
+                }
+            }
             state.base_instructions_provenance = base_instructions_provenance.clone();
             // Restore a provided effort baseline before startup prewarm can establish a new one.
             if let Some(pin) = thread_extension_data.remove::<ReasoningEffortPin>() {
@@ -1700,7 +1707,7 @@ impl Session {
                 analytics_events_client.unwrap_or_else(|| {
                     AnalyticsEventsClient::new(
                         Arc::clone(&auth_manager),
-                        config.chatgpt_base_url.trim_end_matches('/').to_string(),
+                        config.chatgpt_backend_url(),
                         config.analytics_enabled,
                     )
                 })
@@ -1720,7 +1727,8 @@ impl Session {
                         }
                     }
                     RolloutItem::EventMsg(event) => mcp_runtime.observe_event(event),
-                    RolloutItem::SessionMeta(_)
+                    RolloutItem::DynamicToolsUpdated { .. }
+                    | RolloutItem::SessionMeta(_)
                     | RolloutItem::ResponseItem(_)
                     | RolloutItem::InterAgentCommunication(_)
                     | RolloutItem::InterAgentCommunicationMetadata { .. }

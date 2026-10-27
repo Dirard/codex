@@ -14,11 +14,11 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::formatted_truncate_text_with_config;
 use codex_utils_output_truncation::truncate_text_with_config;
+use codex_utils_head_tail_buffer::format_output_omission_marker;
 use serde_json::Value as JsonValue;
 
 use super::ExecCommandToolOutput;
 use super::McpToolOutput;
-use super::format_output_omission_marker;
 use crate::unified_exec::OUTPUT_WATCH_MAX_ACTIVE;
 use crate::unified_exec::OutputWatchRefusal;
 use crate::unified_exec::OutputWatchState;
@@ -159,17 +159,19 @@ impl ExecCommandToolOutput {
         self.truncated_output_with_config(self.truncation.with_policy(policy))
     }
 
+    /// `CapturedStream::render` with the history line limits: a cut by lines alone is a
+    /// truncation too.
     fn truncated_output_with_config(&self, truncation: OutputTruncation) -> String {
-        let text = String::from_utf8_lossy(&self.raw_output).to_string();
-        let Some(omitted_bytes) = self.output_omitted_bytes else {
-            return formatted_truncate_text_with_config(&text, truncation);
-        };
+        let text = &self.raw_output.text;
+        if self.raw_output.omitted_bytes == 0 {
+            return formatted_truncate_text_with_config(text, truncation);
+        }
 
-        let marker = format_output_omission_marker(omitted_bytes.get());
-        let truncated = truncate_text_with_config(&text, truncation);
-        if truncated == text {
+        let marker = format_output_omission_marker(self.raw_output.omitted_bytes);
+        let truncated = truncate_text_with_config(text, truncation);
+        if truncated == *text {
             return if text.contains(&marker) {
-                text
+                text.clone()
             } else {
                 format!("{marker}\n{text}")
             };
@@ -177,7 +179,7 @@ impl ExecCommandToolOutput {
 
         let original_token_count = self
             .original_token_count
-            .unwrap_or_else(|| approx_token_count(&text));
+            .unwrap_or_else(|| approx_token_count(text));
         let omission_notice = if truncated.contains(&marker) {
             String::new()
         } else {

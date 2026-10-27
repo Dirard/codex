@@ -3,6 +3,7 @@ pub(crate) mod api;
 pub(crate) mod child_config;
 pub(crate) mod control;
 pub(crate) mod explorer_profile;
+mod history;
 mod registry;
 pub(crate) mod role;
 pub(crate) mod status;

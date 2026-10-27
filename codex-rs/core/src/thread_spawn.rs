@@ -2,8 +2,6 @@
 //!
 //! Callers supply captured step settings; the configured agent backend owns child lifetimes.
 
-use std::sync::Arc;
-
 use crate::agent::api::AgentInput;
 use crate::agent::api::SpawnRequest;
 use crate::agent::child_config::SpawnConfigOptions;
@@ -53,7 +51,7 @@ pub(crate) struct ThreadSpawnResult {
     pub config: ThreadConfigSnapshot,
     pub task_name: AgentPath,
     /// Fork: the child's managed worktree when it was spawned with worktree isolation.
-    pub worktree: Option<Arc<AgentWorktreeBinding>>,
+    pub worktree: Option<std::sync::Arc<AgentWorktreeBinding>>,
 }
 
 /// Fork: settings of a child started by a workflow run (dynamic workflow, UC3). The run counts
@@ -77,8 +75,8 @@ pub(crate) enum ThreadSpawnError {
 }
 
 pub(crate) async fn spawn(
-    session: &Arc<Session>,
-    step_context: &Arc<StepContext>,
+    session: &Session,
+    step_context: &StepContext,
     call_id: &str,
     request: ThreadSpawnRequest,
 ) -> Result<ThreadSpawnResult, ThreadSpawnError> {
@@ -95,8 +93,8 @@ pub(crate) async fn spawn(
 /// Fork: start a fresh child for a workflow run with collaboration tools disabled and the
 /// workflow agent instructions (dynamic workflow, UC3, R3.1, R3.4).
 pub(crate) async fn spawn_workflow_child(
-    session: &Arc<Session>,
-    step_context: &Arc<StepContext>,
+    session: &Session,
+    step_context: &StepContext,
     call_id: &str,
     request: ThreadSpawnRequest,
     workflow: WorkflowSpawnOptions,
@@ -104,13 +102,44 @@ pub(crate) async fn spawn_workflow_child(
     spawn_with(session, step_context, call_id, request, Some(workflow)).await
 }
 
+/// Fork: the upstream `spawn` body; a child's prepared worktree is discarded when the backend
+/// refuses the child.
 async fn spawn_with(
-    session: &Arc<Session>,
-    step_context: &Arc<StepContext>,
+    session: &Session,
+    step_context: &StepContext,
     call_id: &str,
     request: ThreadSpawnRequest,
     workflow: Option<WorkflowSpawnOptions>,
 ) -> Result<ThreadSpawnResult, ThreadSpawnError> {
+    let (request, task_name, prepared_worktree) =
+        prepare(session, step_context, call_id, request, workflow).await?;
+    let (agent, config) = match session.services.agent_control.spawn(request).await {
+        Ok(spawned) => spawned,
+        Err(err) => {
+            // The backend never registered the child, so its worktree holds no work (R2.7).
+            if let Some(prepared) = prepared_worktree {
+                prepared.discard().await;
+            }
+            return Err(err.into());
+        }
+    };
+    Ok(ThreadSpawnResult {
+        agent,
+        config,
+        task_name,
+        worktree: prepared_worktree.map(|prepared| prepared.binding),
+    })
+}
+
+/// Prepare the native child settings without choosing its coordination backend.
+/// Fork: also returns the child's prepared worktree, which the caller owns.
+pub(crate) async fn prepare(
+    session: &Session,
+    step_context: &StepContext,
+    call_id: &str,
+    request: ThreadSpawnRequest,
+    workflow: Option<WorkflowSpawnOptions>,
+) -> Result<(SpawnRequest, AgentPath, Option<PreparedAgentWorktree>), ThreadSpawnError> {
     let turn = &step_context.turn;
     let ThreadSpawnRequest {
         task_name,
@@ -234,10 +263,8 @@ async fn spawn_with(
     } else {
         None
     };
-    let spawned = session
-        .services
-        .agent_control
-        .spawn(SpawnRequest {
+    Ok((
+        SpawnRequest {
             caller: session.thread_id,
             config,
             input: AgentInput::Message {
@@ -263,22 +290,8 @@ async fn spawn_with(
                     final_output_json_schema: workflow.final_output_json_schema,
                 }),
             },
-        })
-        .await;
-    let (agent, config) = match spawned {
-        Ok(spawned) => spawned,
-        Err(err) => {
-            // The backend never registered the child, so its worktree holds no work (R2.7).
-            if let Some(prepared) = prepared_worktree {
-                prepared.discard().await;
-            }
-            return Err(err.into());
-        }
-    };
-    Ok(ThreadSpawnResult {
-        agent,
-        config,
+        },
         task_name,
-        worktree: prepared_worktree.map(|prepared| prepared.binding),
-    })
+        prepared_worktree,
+    ))
 }

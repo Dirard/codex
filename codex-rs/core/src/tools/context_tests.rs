@@ -1,4 +1,5 @@
 use super::*;
+use crate::unified_exec::output::CapturedStream;
 use crate::context_manager::ContextManager;
 use crate::tools::registry::AnyToolResult;
 use crate::unified_exec::ArmedNotifications;
@@ -8,6 +9,7 @@ use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
+use codex_utils_head_tail_buffer::format_output_omission_marker;
 use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -610,14 +612,14 @@ fn exec_command_tool_output_formats_truncated_response() {
         event_call_id: "call-42".to_string(),
         chunk_id: "abc123".to_string(),
         wall_time: std::time::Duration::from_millis(1250),
-        raw_output: b"token one token two token three token four token five".to_vec(),
+        raw_output: "token one token two token three token four token five".into(),
         truncation: truncation(TruncationPolicy::Tokens(10_000)),
         max_output_tokens: Some(4),
         process_id: None,
         exit_code: Some(0),
         original_token_count: Some(10),
-        output_omitted_bytes: None,
         hook_command: None,
+        tool_cwd: None,
         armed_notifications: Default::default(),
     };
     assert_eq!(
@@ -657,8 +659,7 @@ fn exec_command_tool_output_reserves_metadata_budget_and_preserves_policy_units(
     };
     let raw_output = (1..=150)
         .map(|line| format!("{line}\n"))
-        .collect::<String>()
-        .into_bytes();
+        .collect::<String>();
 
     for (policy, marker) in [
         (TruncationPolicy::Bytes(200), "chars truncated"),
@@ -668,14 +669,14 @@ fn exec_command_tool_output_reserves_metadata_budget_and_preserves_policy_units(
             event_call_id: "call-42".to_string(),
             chunk_id: "abc123".to_string(),
             wall_time: std::time::Duration::from_millis(/*millis*/ 1250),
-            raw_output: raw_output.clone(),
+            raw_output: raw_output.as_str().into(),
             truncation: truncation(policy),
             max_output_tokens: None,
             process_id: None,
             exit_code: Some(0),
             original_token_count: Some(123),
-            output_omitted_bytes: None,
             hook_command: None,
+            tool_cwd: None,
             armed_notifications: Default::default(),
         }
         .to_response_item("call-42", &payload);
@@ -707,34 +708,33 @@ fn exec_command_tool_output_preserves_omission_metadata_when_truncated() {
         "HEAD-{}\n{marker}\nTAIL-{}",
         "a".repeat(/*n*/ 100),
         "z".repeat(/*n*/ 100)
-    )
-    .into_bytes();
+    );
     let mut output = ExecCommandToolOutput {
         event_call_id: "call-omitted".to_string(),
         chunk_id: "abc123".to_string(),
         wall_time: std::time::Duration::from_millis(/*millis*/ 1250),
-        raw_output,
+        raw_output: CapturedStream {
+            text: raw_output.clone(),
+            omitted_bytes: 123_456,
+        },
         truncation: truncation(TruncationPolicy::Tokens(10_000)),
         max_output_tokens: Some(4),
         process_id: None,
         exit_code: Some(0),
         original_token_count: Some(42_000),
-        output_omitted_bytes: NonZeroUsize::new(/*n*/ 123_456),
         hook_command: None,
+        tool_cwd: None,
         armed_notifications: Default::default(),
     };
     let expected_header = "Chunk ID: abc123\nWall time: 1.2500 seconds\nProcess exited with code 0\nOriginal token count: 42000\nOutput:\n";
     assert_eq!(
         output.log_output(),
-        format!(
-            "{expected_header}{}",
-            String::from_utf8_lossy(&output.raw_output)
-        )
+        format!("{expected_header}{raw_output}")
     );
     let response = output.to_response_item("call-omitted", &payload);
 
     // Collection may report omitted bytes without including the marker in its text.
-    output.raw_output = b"remaining output".to_vec();
+    output.raw_output.text = "remaining output".to_string();
     assert_eq!(
         output.log_output(),
         format!("{expected_header}{marker}\nremaining output")
@@ -761,7 +761,7 @@ fn exec_command_tool_output_applies_line_limit_once_when_recorded() {
         event_call_id: "call-42".to_string(),
         chunk_id: String::new(),
         wall_time: std::time::Duration::from_millis(1250),
-        raw_output: b"line1\nline2\nline3\nline4\nline5\nline6\nline7".to_vec(),
+        raw_output: "line1\nline2\nline3\nline4\nline5\nline6\nline7".into(),
         truncation: OutputTruncation::new(
             TruncationPolicy::Bytes(100_000),
             /*max_lines*/ Some(5),
@@ -770,8 +770,8 @@ fn exec_command_tool_output_applies_line_limit_once_when_recorded() {
         process_id: None,
         exit_code: None,
         original_token_count: None,
-        output_omitted_bytes: None,
         hook_command: None,
+        tool_cwd: None,
         armed_notifications: Default::default(),
     }
     .to_response_item("call-42", &payload);
@@ -805,7 +805,7 @@ fn exec_command_code_mode_result_ignores_model_line_limit() {
         event_call_id: "call-42".to_string(),
         chunk_id: String::new(),
         wall_time: std::time::Duration::from_millis(1250),
-        raw_output: raw_text.clone().into_bytes(),
+        raw_output: raw_text.as_str().into(),
         truncation: OutputTruncation::new(
             TruncationPolicy::Bytes(100_000),
             /*max_lines*/ Some(5),
@@ -814,8 +814,8 @@ fn exec_command_code_mode_result_ignores_model_line_limit() {
         process_id: None,
         exit_code: Some(0),
         original_token_count: None,
-        output_omitted_bytes: None,
         hook_command: None,
+        tool_cwd: None,
         armed_notifications: Default::default(),
     };
 
@@ -873,14 +873,14 @@ fn armed_output(
         event_call_id: "call-43".to_string(),
         chunk_id: String::new(),
         wall_time: std::time::Duration::from_millis(250),
-        raw_output: b"started\n".to_vec(),
+        raw_output: "started\n".into(),
         truncation: OutputTruncation::new(TruncationPolicy::Bytes(10_000), /*max_lines*/ None),
         max_output_tokens: None,
         process_id,
         exit_code: process_id.is_none().then_some(0),
         original_token_count: None,
-        output_omitted_bytes: None,
         hook_command: None,
+        tool_cwd: None,
         armed_notifications,
     }
 }

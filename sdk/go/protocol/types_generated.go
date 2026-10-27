@@ -2163,6 +2163,20 @@ func (v ClientRequest) AccountBedrockSetupParams() (BedrockSetupParams, bool, er
 	return params, true, nil
 }
 
+func (v ClientRequest) AccountGcpSetupParams() (GcpSetupParams, bool, error) {
+	if v.Method != "account/gcp/setup" {
+		return GcpSetupParams{}, false, nil
+	}
+	var params GcpSetupParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
 func (v ClientRequest) AccountBedrockCheckGovCloudRequirementsParams() (BedrockCheckGovCloudRequirementsParams, bool, error) {
 	if v.Method != "account/bedrock/checkGovCloudRequirements" {
 		return BedrockCheckGovCloudRequirementsParams{}, false, nil
@@ -2182,6 +2196,34 @@ func (v ClientRequest) AccountLoginCancelParams() (CancelLoginAccountParams, boo
 		return CancelLoginAccountParams{}, false, nil
 	}
 	var params CancelLoginAccountParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) AccountSessionListParams() (AccountSessionsListParams, bool, error) {
+	if v.Method != "accountSession/list" {
+		return AccountSessionsListParams{}, false, nil
+	}
+	var params AccountSessionsListParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) AccountSessionSwitchParams() (AccountSessionsSwitchParams, bool, error) {
+	if v.Method != "accountSession/switch" {
+		return AccountSessionsSwitchParams{}, false, nil
+	}
+	var params AccountSessionsSwitchParams
 	if len(bytes.TrimSpace(v.Params)) == 0 {
 		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
 	}
@@ -6673,6 +6715,7 @@ type Account struct {
 	PlanType                    OptionalNonNull[PlanType] `json:"planType,omitzero"`
 	TypeValue                   string                    `json:"type"`
 	UsesCodexManagedCredentials OptionalNonNull[bool]     `json:"usesCodexManagedCredentials,omitzero"`
+	WorkspaceName               Optional[string]          `json:"workspaceName,omitzero"`
 	RawJSON                     json.RawMessage           `json:"-"`
 }
 
@@ -6682,6 +6725,7 @@ var accountSpec = objectSpec{
 		{name: "planType", flags: fieldNonNullOptional},
 		{name: "type", flags: fieldRequired | fieldRejectNull},
 		{name: "usesCodexManagedCredentials", flags: fieldNonNullOptional},
+		{name: "workspaceName"},
 	},
 	tag:  2,
 	tags: []string{"apiKey", "chatgpt", "amazonBedrock", "gcp"},
@@ -6799,6 +6843,143 @@ const (
 	AccountRoutingOverrideUsCr         AccountRoutingOverride = "us_cr"
 )
 
+type AccountSession struct {
+	DisplayName                Optional[string]          `json:"displayName,omitzero"`
+	Email                      Optional[string]          `json:"email,omitzero"`
+	ImageURL                   Optional[string]          `json:"imageUrl,omitzero"`
+	IsActive                   bool                      `json:"isActive"`
+	LastUsedAt                 int64                     `json:"lastUsedAt"`
+	SelectedWorkspaceAccountID Optional[string]          `json:"selectedWorkspaceAccountId,omitzero"`
+	SessionID                  string                    `json:"sessionId"`
+	UserID                     Optional[string]          `json:"userId,omitzero"`
+	Workspaces                 []AccountSessionWorkspace `json:"workspaces"`
+}
+
+var accountSessionSpec = objectSpec{
+	fields: []objectField{
+		{name: "displayName"},
+		{name: "email"},
+		{name: "imageUrl"},
+		{name: "isActive", flags: fieldRequired | fieldRejectNull},
+		{name: "lastUsedAt", flags: fieldRequired | fieldRejectNull},
+		{name: "selectedWorkspaceAccountId"},
+		{name: "sessionId", flags: fieldRequired | fieldRejectNull},
+		{name: "userId"},
+		{name: "workspaces", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v AccountSession) MarshalJSON() ([]byte, error) {
+	type wire AccountSession
+	return json.Marshal(wire(v))
+}
+
+func (v *AccountSession) UnmarshalJSON(data []byte) error {
+	type wire AccountSession
+	return decodeObject(data, &accountSessionSpec, (*wire)(v))
+}
+
+type AccountSessionWorkspace struct {
+	AccountID string                                `json:"accountId"`
+	ImageURL  Optional[string]                      `json:"imageUrl,omitzero"`
+	Kind      Optional[AccountSessionWorkspaceKind] `json:"kind,omitzero"`
+	Name      Optional[string]                      `json:"name,omitzero"`
+}
+
+var accountSessionWorkspaceSpec = objectSpec{
+	fields: []objectField{
+		{name: "accountId", flags: fieldRequired | fieldRejectNull},
+		{name: "imageUrl"},
+		{name: "kind"},
+		{name: "name"},
+	},
+}
+
+func (v AccountSessionWorkspace) MarshalJSON() ([]byte, error) {
+	type wire AccountSessionWorkspace
+	return json.Marshal(wire(v))
+}
+
+func (v *AccountSessionWorkspace) UnmarshalJSON(data []byte) error {
+	type wire AccountSessionWorkspace
+	return decodeObject(data, &accountSessionWorkspaceSpec, (*wire)(v))
+}
+
+type AccountSessionWorkspaceKind string
+
+const (
+	AccountSessionWorkspaceKindPersonal  AccountSessionWorkspaceKind = "personal"
+	AccountSessionWorkspaceKindWorkspace AccountSessionWorkspaceKind = "workspace"
+)
+
+type AccountSessionsListParams struct {
+	RefreshWorkspaceMetadata OptionalNonNull[bool] `json:"refreshWorkspaceMetadata,omitzero"`
+}
+
+var accountSessionsListParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "refreshWorkspaceMetadata", flags: fieldNonNullOptional},
+	},
+}
+
+func (v AccountSessionsListParams) MarshalJSON() ([]byte, error) {
+	type wire AccountSessionsListParams
+	return json.Marshal(wire(v))
+}
+
+func (v *AccountSessionsListParams) UnmarshalJSON(data []byte) error {
+	type wire AccountSessionsListParams
+	return decodeObject(data, &accountSessionsListParamsSpec, (*wire)(v))
+}
+
+type AccountSessionsResponse struct {
+	ActiveSessionID Optional[string] `json:"activeSessionId,omitzero"`
+	Sessions        []AccountSession `json:"sessions"`
+}
+
+var accountSessionsResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "activeSessionId"},
+		{name: "sessions", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v AccountSessionsResponse) MarshalJSON() ([]byte, error) {
+	type wire AccountSessionsResponse
+	return json.Marshal(wire(v))
+}
+
+func (v *AccountSessionsResponse) UnmarshalJSON(data []byte) error {
+	type wire AccountSessionsResponse
+	return decodeObject(data, &accountSessionsResponseSpec, (*wire)(v))
+}
+
+type AccountSessionsSwitchParams struct {
+	AccountID         string                `json:"accountId"`
+	AllowBrowserLogin OptionalNonNull[bool] `json:"allowBrowserLogin,omitzero"`
+	SessionID         string                `json:"sessionId"`
+}
+
+var accountSessionsSwitchParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "accountId", flags: fieldRequired | fieldRejectNull},
+		{name: "allowBrowserLogin", flags: fieldNonNullOptional},
+		{name: "sessionId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v AccountSessionsSwitchParams) MarshalJSON() ([]byte, error) {
+	type wire AccountSessionsSwitchParams
+	return json.Marshal(wire(v))
+}
+
+func (v *AccountSessionsSwitchParams) UnmarshalJSON(data []byte) error {
+	type wire AccountSessionsSwitchParams
+	return decodeObject(data, &accountSessionsSwitchParamsSpec, (*wire)(v))
+}
+
+type AccountSessionsSwitchResponse = json.RawMessage
+
 type AccountTokenUsageDailyBucket struct {
 	StartDate string `json:"startDate"`
 	Tokens    int64  `json:"tokens"`
@@ -6909,12 +7090,14 @@ const (
 
 type AdditionalContextEntry struct {
 	Kind  AdditionalContextKind `json:"kind"`
+	Name  Optional[string]      `json:"name,omitzero"`
 	Value string                `json:"value"`
 }
 
 var additionalContextEntrySpec = objectSpec{
 	fields: []objectField{
 		{name: "kind", flags: fieldRequired | fieldRejectNull},
+		{name: "name"},
 		{name: "value", flags: fieldRequired | fieldRejectNull},
 	},
 }
@@ -8646,6 +8829,7 @@ var (
 	CodexErrorInfoFlexUnavailable             = CodexErrorInfo{StringValue: "flexUnavailable"}
 	CodexErrorInfoServerOverloaded            = CodexErrorInfo{StringValue: "serverOverloaded"}
 	CodexErrorInfoModelNotFound               = CodexErrorInfo{StringValue: "modelNotFound"}
+	CodexErrorInfoPolicyCapacityUnavailable   = CodexErrorInfo{StringValue: "policyCapacityUnavailable"}
 	CodexErrorInfoCyberPolicy                 = CodexErrorInfo{StringValue: "cyberPolicy"}
 	CodexErrorInfoMisalignmentPolicyViolation = CodexErrorInfo{StringValue: "misalignmentPolicyViolation"}
 	CodexErrorInfoTooManyDenials              = CodexErrorInfo{StringValue: "tooManyDenials"}
@@ -8694,7 +8878,7 @@ func (v CodexErrorInfo) MarshalJSON() ([]byte, error) {
 			return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
 		}
 		switch v.StringValue {
-		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "rateLimitExceeded", "flexUnavailable", "serverOverloaded", "modelNotFound", "cyberPolicy", "misalignmentPolicyViolation", "tooManyDenials", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other":
+		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "rateLimitExceeded", "flexUnavailable", "serverOverloaded", "modelNotFound", "policyCapacityUnavailable", "cyberPolicy", "misalignmentPolicyViolation", "tooManyDenials", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other":
 			return json.Marshal(v.StringValue)
 		default:
 			return nil, DecodeError{Field: "", Reason: fmt.Sprintf("unsupported CodexErrorInfo string value %q", v.StringValue)}
@@ -8760,7 +8944,7 @@ func (v *CodexErrorInfo) UnmarshalJSON(data []byte) error {
 	var stringValue string
 	if err := json.Unmarshal(trimmed, &stringValue); err == nil {
 		switch stringValue {
-		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "rateLimitExceeded", "flexUnavailable", "serverOverloaded", "modelNotFound", "cyberPolicy", "misalignmentPolicyViolation", "tooManyDenials", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other":
+		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "rateLimitExceeded", "flexUnavailable", "serverOverloaded", "modelNotFound", "policyCapacityUnavailable", "cyberPolicy", "misalignmentPolicyViolation", "tooManyDenials", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other":
 			*v = CodexErrorInfo{StringValue: stringValue}
 		default:
 			*v = CodexErrorInfo{RawJSON: append(json.RawMessage(nil), data...)}
@@ -12982,6 +13166,51 @@ const (
 	GatewayOAuthStatusSucceeded GatewayOAuthStatus = "succeeded"
 	GatewayOAuthStatusFailed    GatewayOAuthStatus = "failed"
 )
+
+type GcpSetupParams struct {
+	CredentialFile Optional[string] `json:"credentialFile,omitzero"`
+	Location       Optional[string] `json:"location,omitzero"`
+	ProjectID      string           `json:"projectId"`
+}
+
+var gcpSetupParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "credentialFile"},
+		{name: "location"},
+		{name: "projectId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v GcpSetupParams) MarshalJSON() ([]byte, error) {
+	type wire GcpSetupParams
+	return json.Marshal(wire(v))
+}
+
+func (v *GcpSetupParams) UnmarshalJSON(data []byte) error {
+	type wire GcpSetupParams
+	return decodeObject(data, &gcpSetupParamsSpec, (*wire)(v))
+}
+
+type GcpSetupResponse map[string]json.RawMessage
+
+func (v GcpSetupResponse) MarshalJSON() ([]byte, error) {
+	if v == nil {
+		return []byte("{}"), nil
+	}
+	return json.Marshal(map[string]json.RawMessage(v))
+}
+
+func (v *GcpSetupResponse) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*v = GcpSetupResponse(raw)
+	return nil
+}
 
 type GetAccountParams struct {
 	RefreshToken OptionalNonNull[bool] `json:"refreshToken,omitzero"`
@@ -18111,17 +18340,19 @@ func (v *PluginsMigration) UnmarshalJSON(data []byte) error {
 }
 
 type ProcessExitedNotification struct {
-	ExitCode         int32  `json:"exitCode"`
-	ProcessHandle    string `json:"processHandle"`
-	Stderr           string `json:"stderr"`
-	StderrCapReached bool   `json:"stderrCapReached"`
-	Stdout           string `json:"stdout"`
-	StdoutCapReached bool   `json:"stdoutCapReached"`
+	ExitCode            int32          `json:"exitCode"`
+	OutputDrainTimedOut Optional[bool] `json:"outputDrainTimedOut,omitzero"`
+	ProcessHandle       string         `json:"processHandle"`
+	Stderr              string         `json:"stderr"`
+	StderrCapReached    bool           `json:"stderrCapReached"`
+	Stdout              string         `json:"stdout"`
+	StdoutCapReached    bool           `json:"stdoutCapReached"`
 }
 
 var processExitedNotificationSpec = objectSpec{
 	fields: []objectField{
 		{name: "exitCode", flags: fieldRequired | fieldRejectNull},
+		{name: "outputDrainTimedOut"},
 		{name: "processHandle", flags: fieldRequired | fieldRejectNull},
 		{name: "stderr", flags: fieldRequired | fieldRejectNull},
 		{name: "stderrCapReached", flags: fieldRequired | fieldRejectNull},
@@ -23244,6 +23475,7 @@ type ThreadItem struct {
 	ClientID              Optional[string]                             `json:"clientId,omitzero"`
 	Command               OptionalNonNull[string]                      `json:"command,omitzero"`
 	CommandActions        OptionalNonNull[[]CommandAction]             `json:"commandActions,omitzero"`
+	CompletedAtMs         Optional[int64]                              `json:"completedAtMs,omitzero"`
 	Content               json.RawMessage                              `json:"content,omitempty"`
 	ContentItems          Optional[[]DynamicToolCallOutputContentItem] `json:"contentItems,omitzero"`
 	Cwd                   OptionalNonNull[LegacyAppPathString]         `json:"cwd,omitzero"`
@@ -23254,6 +23486,7 @@ type ThreadItem struct {
 	Failure               Optional[ImageGenerationFailure]             `json:"failure,omitzero"`
 	FileID                OptionalNonNull[string]                      `json:"fileId,omitzero"`
 	Fragments             OptionalNonNull[[]HookPromptFragment]        `json:"fragments,omitzero"`
+	GenerationID          Optional[string]                             `json:"generationId,omitzero"`
 	ID                    OptionalNonNull[string]                      `json:"id,omitzero"`
 	InputImages           OptionalNonNull[[]ImageGenerationInputImage] `json:"inputImages,omitzero"`
 	Kind                  OptionalNonNull[SubAgentActivityKind]        `json:"kind,omitzero"`
@@ -23285,6 +23518,7 @@ type ThreadItem struct {
 	SenderThreadID        OptionalNonNull[string]                      `json:"senderThreadId,omitzero"`
 	Server                OptionalNonNull[string]                      `json:"server,omitzero"`
 	Source                OptionalNonNull[CommandExecutionSource]      `json:"source,omitzero"`
+	StartedAtMs           Optional[int64]                              `json:"startedAtMs,omitzero"`
 	Status                OptionalNonNull[CommandExecutionStatus]      `json:"status,omitzero"`
 	Success               Optional[bool]                               `json:"success,omitzero"`
 	Summary               OptionalNonNull[[]string]                    `json:"summary,omitzero"`
@@ -23308,6 +23542,7 @@ var threadItemSpec = objectSpec{
 		{name: "clientId"},
 		{name: "command", flags: fieldNonNullOptional},
 		{name: "commandActions", flags: fieldNonNullOptional},
+		{name: "completedAtMs"},
 		{name: "content", flags: fieldRejectNull},
 		{name: "contentItems"},
 		{name: "cwd", flags: fieldNonNullOptional},
@@ -23318,6 +23553,7 @@ var threadItemSpec = objectSpec{
 		{name: "failure"},
 		{name: "fileId", flags: fieldNonNullOptional, anyOfTags: []string{"\"imageGeneration\""}},
 		{name: "fragments", flags: fieldNonNullOptional},
+		{name: "generationId"},
 		{name: "id", flags: fieldNonNullOptional},
 		{name: "inputImages", flags: fieldNonNullOptional},
 		{name: "kind", flags: fieldNonNullOptional},
@@ -23349,6 +23585,7 @@ var threadItemSpec = objectSpec{
 		{name: "senderThreadId", flags: fieldNonNullOptional},
 		{name: "server", flags: fieldNonNullOptional},
 		{name: "source", flags: fieldNonNullOptional},
+		{name: "startedAtMs"},
 		{name: "status", flags: fieldNonNullOptional},
 		{name: "success"},
 		{name: "summary", flags: fieldNonNullOptional},
@@ -23357,7 +23594,7 @@ var threadItemSpec = objectSpec{
 		{name: "transparentBackground"},
 		{name: "type", flags: fieldRequired | fieldRejectNull},
 	},
-	tag:  58,
+	tag:  61,
 	tags: []string{"userMessage", "hookPrompt", "agentMessage", "functionCallOutput", "plan", "reasoning", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "subAgentActivity", "webSearch", "imageView", "sleep", "imageGeneration", "workflow", "enteredReviewMode", "exitedReviewMode", "contextCompaction"},
 }
 
@@ -27927,6 +28164,7 @@ type ThreadUsage struct {
 	EstimatedUsageCreditsMicros int64                       `json:"estimatedUsageCreditsMicros"`
 	EstimatedUsageUsdMicros     Optional[int64]             `json:"estimatedUsageUsdMicros,omitzero"`
 	Groups                      []ThreadUsageBreakdownGroup `json:"groups"`
+	NativeUsageUsdMicros        Optional[int64]             `json:"nativeUsageUsdMicros,omitzero"`
 	ThreadID                    string                      `json:"threadId"`
 }
 
@@ -27935,6 +28173,7 @@ var threadUsageSpec = objectSpec{
 		{name: "estimatedUsageCreditsMicros", flags: fieldRequired | fieldRejectNull},
 		{name: "estimatedUsageUsdMicros"},
 		{name: "groups", flags: fieldRequired | fieldRejectNull},
+		{name: "nativeUsageUsdMicros"},
 		{name: "threadId", flags: fieldRequired | fieldRejectNull},
 	},
 }

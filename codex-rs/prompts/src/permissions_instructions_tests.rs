@@ -426,6 +426,7 @@ fn catalog_approval_messages_select_reviewer_variant() {
         on_request_auto_review: Some("auto-review catalog approvals".to_string()),
         never: Some("never catalog approvals".to_string()),
         unless_trusted: Some("unless-trusted catalog approvals".to_string()),
+        granular: None,
     };
 
     for (approval_policy, reviewer, expected) in [
@@ -474,6 +475,7 @@ fn empty_catalog_approval_message_suppresses_legacy_approval_section() {
         on_request_auto_review: None,
         never: None,
         unless_trusted: None,
+        granular: None,
     };
     let approved_command_prefixes = vec![vec!["git".to_string(), "pull".to_string()]];
     let writable_root = "/tmp/repo".to_string();
@@ -514,6 +516,7 @@ fn missing_catalog_key_uses_legacy_approval_text() {
                 on_request_auto_review: Some("unused catalog approvals".to_string()),
                 never: None,
                 unless_trusted: None,
+                granular: None,
             },
         ),
         (
@@ -523,6 +526,7 @@ fn missing_catalog_key_uses_legacy_approval_text() {
                 on_request_auto_review: None,
                 never: None,
                 unless_trusted: None,
+                granular: None,
             },
         ),
     ] {
@@ -566,6 +570,7 @@ fn empty_catalog_non_on_request_approval_messages_suppress_legacy_approval_text(
         on_request_auto_review: None,
         never: Some(String::new()),
         unless_trusted: Some(String::new()),
+        granular: None,
     };
 
     for approval_policy in [AskForApproval::Never, AskForApproval::UnlessTrusted] {
@@ -734,6 +739,7 @@ fn preserves_supplied_path_spellings_and_order() {
         on_request_auto_review: None,
         never: None,
         unless_trusted: None,
+        granular: None,
     };
     let permission_messages = PermissionMessages {
         danger_full_access: None,
@@ -873,4 +879,167 @@ fn catalog_writable_roots_select_displayed_count_after_truncation() {
             .text
             .ends_with(&format!("{OMITTED_PERMISSION_PATHS}\n"))
     );
+}
+
+#[test]
+fn catalog_path_warnings_preserve_facts_selection_and_default_bytes() {
+    let messages = PermissionMessages {
+        denied_reads: Some("Catalog denials:\n{{ denied_reads }}\nEnd denials.".into()),
+        omitted_paths: Some("Catalog omission.".into()),
+        writable_root: Some("Catalog root: {{ roots }}.".into()),
+        ..Default::default()
+    };
+    // Fits the legacy budget with the short denials below, even after an oversized entry.
+    let roots = ["x".repeat(MAX_PERMISSION_PATH_BYTES), "r".repeat(32_500)];
+    let denied = ["/é/{{ denied_reads }}\n{literal}".to_string()];
+    let globs = [r"C:\private\**".to_string()];
+    let context = PermissionsRenderContext {
+        writable_roots: &roots,
+        denied_read_paths: &denied,
+        denied_read_globs: &globs,
+        ..WORKSPACE_CONTEXT
+    };
+    let catalog = ApprovalPromptContext {
+        permission_messages: ResolvedPermissionMessages::new(Some(&messages)),
+        ..user_approval_context()
+    };
+    let bundled = PermissionsInstructions::from_resolved(context, user_approval_context());
+    let original = PermissionsInstructions {
+        text: bundled
+            .text
+            .replace(" The writable root is ", "Catalog root: "),
+    };
+    let expected = PermissionsInstructions {
+        text: original
+            .text
+            .replace("## Denied filesystem reads", "Catalog denials:")
+            .replace(
+                OMITTED_PERMISSION_PATHS,
+                &format!("End denials.\nCatalog omission.\n{OMITTED_PERMISSION_PATHS}"),
+            ),
+    };
+    let actual = PermissionsInstructions::from_resolved(context, catalog);
+    assert_eq!(actual.render_fragment(), expected.render_fragment());
+}
+
+#[test]
+fn unusable_path_warning_copy_falls_back_independently() {
+    let roots = ["x".repeat(MAX_PERMISSION_PATH_BYTES)];
+    let denied = ["/private".to_string()];
+    let context = PermissionsRenderContext {
+        writable_roots: &roots,
+        denied_read_paths: &denied,
+        ..WORKSPACE_CONTEXT
+    };
+    let original = PermissionsInstructions::from_resolved(context, user_approval_context());
+    for invalid in [
+        "",
+        " ",
+        "{{ unknown }}",
+        "<permissions instructions>",
+        "</permissions instructions>",
+        "\t",
+        "\r",
+        "\0",
+        "\u{2028}",
+        "\u{2029}",
+        &"é".repeat(251),
+    ] {
+        for (omitted_paths, denied_reads, expected) in [
+            (
+                invalid.to_string(),
+                "Blocked:\n{{ denied_reads }}".into(),
+                original
+                    .text
+                    .replace("## Denied filesystem reads", "Blocked:"),
+            ),
+            (
+                "Omission:".into(),
+                format!("{invalid}{{{{ denied_reads }}}}"),
+                original.text.replace(
+                    OMITTED_PERMISSION_PATHS,
+                    &format!("Omission:\n{OMITTED_PERMISSION_PATHS}"),
+                ),
+            ),
+        ] {
+            // A marker on its own is valid: test an empty/whitespace template without adding it.
+            let denied_reads = if invalid.trim().is_empty() && omitted_paths == "Omission:" {
+                invalid.to_string()
+            } else {
+                denied_reads
+            };
+            let messages = PermissionMessages {
+                omitted_paths: Some(omitted_paths),
+                denied_reads: Some(denied_reads),
+                ..Default::default()
+            };
+            let actual = PermissionsInstructions::from_resolved(
+                context,
+                ApprovalPromptContext {
+                    permission_messages: ResolvedPermissionMessages::new(Some(&messages)),
+                    ..user_approval_context()
+                },
+            );
+            assert_eq!(actual.text, expected, "invalid={invalid:?}");
+        }
+    }
+    for denied_reads in [
+        "No placeholder",
+        "{{denied_reads}}",
+        "{{ denied_reads }} {{ denied_reads }}",
+        "{{{ denied_reads }}}",
+    ] {
+        let messages = PermissionMessages {
+            denied_reads: Some(denied_reads.into()),
+            ..Default::default()
+        };
+        let actual = PermissionsInstructions::from_resolved(
+            context,
+            ApprovalPromptContext {
+                permission_messages: ResolvedPermissionMessages::new(Some(&messages)),
+                ..user_approval_context()
+            },
+        );
+        assert_eq!(actual.text, original.text);
+    }
+}
+
+#[test]
+fn path_warning_copy_is_bounded_without_suppressing_omitted_denials() {
+    let denied = ["x".repeat(MAX_PERMISSION_PATH_BYTES), "/private".into()];
+    for bytes in [500, 501] {
+        let lead = "x".repeat(bytes);
+        let heading = "y".repeat(bytes - "\n{{ denied_reads }}".len());
+        let messages = PermissionMessages {
+            omitted_paths: Some(lead.clone()),
+            denied_reads: Some(format!("{heading}\n{{{{ denied_reads }}}}")),
+            ..Default::default()
+        };
+        for paths in [&denied[..], &denied[..1], &denied[..0]] {
+            let context = PermissionsRenderContext {
+                denied_read_paths: paths,
+                ..WORKSPACE_CONTEXT
+            };
+            let original = PermissionsInstructions::from_resolved(context, user_approval_context());
+            let expected = if bytes == 500 {
+                original
+                    .text
+                    .replace("## Denied filesystem reads", &heading)
+                    .replace(
+                        OMITTED_PERMISSION_PATHS,
+                        &format!("{lead}\n{OMITTED_PERMISSION_PATHS}"),
+                    )
+            } else {
+                original.text
+            };
+            let actual = PermissionsInstructions::from_resolved(
+                context,
+                ApprovalPromptContext {
+                    permission_messages: ResolvedPermissionMessages::new(Some(&messages)),
+                    ..user_approval_context()
+                },
+            );
+            assert_eq!(actual.text, expected);
+        }
+    }
 }

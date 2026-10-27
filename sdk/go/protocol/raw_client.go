@@ -900,6 +900,12 @@ func (c RawClient) AccountBedrockSetup(ctx context.Context, params BedrockSetupP
 	return result, err
 }
 
+func (c RawClient) AccountGcpSetup(ctx context.Context, params GcpSetupParams) (GcpSetupResponse, error) {
+	var result GcpSetupResponse
+	err := c.sender.Call(ctx, "account/gcp/setup", params, &result, MethodMetadataByMethod["account/gcp/setup"])
+	return result, err
+}
+
 func (c RawClient) AccountBedrockCheckGovCloudRequirements(ctx context.Context, params BedrockCheckGovCloudRequirementsParams) (BedrockCheckGovCloudRequirementsResponse, error) {
 	var result BedrockCheckGovCloudRequirementsResponse
 	err := c.sender.Call(ctx, "account/bedrock/checkGovCloudRequirements", params, &result, MethodMetadataByMethod["account/bedrock/checkGovCloudRequirements"])
@@ -909,6 +915,18 @@ func (c RawClient) AccountBedrockCheckGovCloudRequirements(ctx context.Context, 
 func (c RawClient) AccountLoginCancel(ctx context.Context, params CancelLoginAccountParams) (CancelLoginAccountResponse, error) {
 	var result CancelLoginAccountResponse
 	err := c.sender.Call(ctx, "account/login/cancel", params, &result, MethodMetadataByMethod["account/login/cancel"])
+	return result, err
+}
+
+func (c RawClient) AccountSessionList(ctx context.Context, params AccountSessionsListParams) (AccountSessionsResponse, error) {
+	var result AccountSessionsResponse
+	err := c.sender.Call(ctx, "accountSession/list", params, &result, MethodMetadataByMethod["accountSession/list"])
+	return result, err
+}
+
+func (c RawClient) AccountSessionSwitch(ctx context.Context, params AccountSessionsSwitchParams) (AccountSessionsSwitchResponse, error) {
+	var result AccountSessionsSwitchResponse
+	err := c.sender.Call(ctx, "accountSession/switch", params, &result, MethodMetadataByMethod["accountSession/switch"])
 	return result, err
 }
 

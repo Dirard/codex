@@ -4958,6 +4958,37 @@
         "exception": null,
         "experimental": {
           "fieldPaths": [],
+          "reason": "account/gcp/setup"
+        },
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": null,
+        "method": "account/gcp/setup",
+        "paramsSchemaRef": "#/definitions/GcpSetupParams",
+        "paramsType": "GcpSetupParams",
+        "requestSerializationScopes": [
+          {
+            "condition": "always",
+            "identityExtractors": [],
+            "kind": "global",
+            "precedence": 0,
+            "queueKey": "account-auth"
+          }
+        ],
+        "responseSchemaRef": "#/definitions/GcpSetupResponse",
+        "responseType": "GcpSetupResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "schemaSufficient",
+        "variant": "GcpSetup"
+      },
+      {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
+        "experimental": {
+          "fieldPaths": [],
           "reason": "account/bedrock/checkGovCloudRequirements"
         },
         "experimentalFields": [],
@@ -5010,6 +5041,68 @@
         "sdkVisibility": "public",
         "serdeShapeRequirement": "schemaSufficient",
         "variant": "CancelLoginAccount"
+      },
+      {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
+        "experimental": {
+          "fieldPaths": [],
+          "reason": "accountSession/list"
+        },
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": "manual response payload conversion",
+        "method": "accountSession/list",
+        "paramsSchemaRef": "#/definitions/AccountSessionsListParams",
+        "paramsType": "AccountSessionsListParams",
+        "requestSerializationScopes": [
+          {
+            "condition": "always",
+            "identityExtractors": [],
+            "kind": "global",
+            "precedence": 0,
+            "queueKey": "account-auth"
+          }
+        ],
+        "responseSchemaRef": "#/definitions/AccountSessionsResponse",
+        "responseType": "AccountSessionsResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "manualPayloadConversion",
+        "variant": "AccountSessionsList"
+      },
+      {
+        "boundedModelContextFields": [],
+        "direction": "clientToServer",
+        "exception": null,
+        "experimental": {
+          "fieldPaths": [],
+          "reason": "accountSession/switch"
+        },
+        "experimentalFields": [],
+        "inspectParams": false,
+        "manualPayloadConversion": "manual response payload conversion",
+        "method": "accountSession/switch",
+        "paramsSchemaRef": "#/definitions/AccountSessionsSwitchParams",
+        "paramsType": "AccountSessionsSwitchParams",
+        "requestSerializationScopes": [
+          {
+            "condition": "always",
+            "identityExtractors": [],
+            "kind": "global",
+            "precedence": 0,
+            "queueKey": "account-auth"
+          }
+        ],
+        "responseSchemaRef": "#/definitions/AccountSessionsSwitchResponse",
+        "responseType": "AccountSessionsSwitchResponse",
+        "retry": "neverRetryAfterWrite",
+        "schemaExcludedReason": null,
+        "sdkVisibility": "public",
+        "serdeShapeRequirement": "manualPayloadConversion",
+        "variant": "AccountSessionsSwitch"
       },
       {
         "boundedModelContextFields": [],
@@ -6038,9 +6131,9 @@
       }
     ],
     "digests": {
-      "manifestDigest": "41958b6a84d086603e833f95a7b1a205c93ee831635badd1c593d81b6c65ad46",
-      "protocolDigest": "b6396daa77bca8803eae5336d48feaccfb089d2ae99be811bb0f12681b8684e7",
-      "schemaDigest": "4714bd20f29869b7d75c9ad22fd3899225030fdf357107a1ce3927f580ebb385"
+      "manifestDigest": "8ca2923e67ebc02304aba9d4d2fdbd3db23e5de2ad4f3f2b61fade90761cd0a8",
+      "protocolDigest": "0af1bb5c65b57bae776e44a448d3e5627fb7e0b4f5b93bee1bdf67719b1de20e",
+      "schemaDigest": "4951368c0bccffe4a8e6ccf4da74ae30d7b68ced51aae8e15372a2133644ab31"
     },
     "protocolMode": "experimental",
     "routingLifecycle": [
@@ -6384,6 +6477,153 @@
         "metadataStatus": "schemaSufficient",
         "rustType": "AccountRoutingOverride",
         "schemaRef": "#/definitions/v2/AccountRoutingOverride",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "AccountSession",
+        "schemaRef": "#/definitions/v2/AccountSession",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "AccountSessionWorkspace",
+        "schemaRef": "#/definitions/v2/AccountSessionWorkspace",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "AccountSessionWorkspaceKind",
+        "schemaRef": "#/definitions/v2/AccountSessionWorkspaceKind",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "AccountSessionsListParams",
+        "schemaRef": "#/definitions/v2/AccountSessionsListParams",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "AccountSessionsResponse",
+        "schemaRef": "#/definitions/v2/AccountSessionsResponse",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "AccountSessionsSwitchParams",
+        "schemaRef": "#/definitions/v2/AccountSessionsSwitchParams",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "AccountSessionsSwitchResponse",
+        "schemaRef": "#/definitions/v2/AccountSessionsSwitchResponse",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -11894,6 +12134,48 @@
         "metadataStatus": "schemaSufficient",
         "rustType": "GatewayOAuthStatus",
         "schemaRef": "#/definitions/v2/GatewayOAuthStatus",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "GcpSetupParams",
+        "schemaRef": "#/definitions/v2/GcpSetupParams",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "GcpSetupResponse",
+        "schemaRef": "#/definitions/v2/GcpSetupResponse",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,
@@ -33412,8 +33694,8 @@
     ],
     "digests": {
       "manifestDigest": "e00463ae071d2d40587fe08f8cde82465122e663604fb8a5b22dd7e18c9feb2a",
-      "protocolDigest": "7574da0694af0c76a3195bee840c454ae4d0f150bc46dc217ebf5909f2955376",
-      "schemaDigest": "b672c54c2b3a32d43af2c7e34253164daa27ca9a91739729041899610ffb33fe"
+      "protocolDigest": "e3c69b55aa2077e5939c960ee79f421447abee020b81c8721e1fc31213a4b458",
+      "schemaDigest": "c81c5f8f9042501cb4b61250253b9d18d6197ee5f307af93893cbb4ce7ee8f9f"
     },
     "protocolMode": "stable",
     "routingLifecycle": [

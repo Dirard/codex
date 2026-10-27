@@ -191,8 +191,8 @@ pub struct GuardianAuthorizationVersion {
     pub retained_context_complete: bool,
 }
 
-/// Bounded root conversation and authorization state from one history snapshot.
-#[derive(Debug, Eq, PartialEq)]
+/// Root authorization state, selected messages and request-local originals from one snapshot.
+#[derive(Debug, PartialEq)]
 pub struct GuardianRootSnapshot {
     /// Authoritative root from which this evidence was captured.
     pub root_thread_id: ThreadId,
@@ -202,6 +202,8 @@ pub struct GuardianRootSnapshot {
     /// Confirmed assistant context is relevant to review but cannot authorize an action.
     pub review_context_revision: u64,
     pub messages: Vec<GuardianRootMessage>,
+    /// Request-local originals retained before the bounded compatibility projection.
+    pub(crate) request_candidates: Option<codex_guardian_context::RootConversationInput>,
     pub trusted_skill_paths: Vec<String>,
 }
 
@@ -290,6 +292,17 @@ impl CodexThread {
     /// Returns extension-owned data attached to this thread runtime.
     pub fn thread_extension_data(&self) -> &codex_extension_api::ExtensionData {
         &self.session.services.thread_extension_data
+    }
+
+    /// Returns tools from this thread’s ready, unshared Apps MCP client.
+    /// Returns an empty list if the client is absent, still starting, or uses
+    /// a shared catalog. Does not start or wait for discovery.
+    pub async fn apps_tools_from_mcp_client(&self) -> Vec<codex_mcp::ToolInfo> {
+        self.session
+            .services
+            .mcp_runtime
+            .apps_tools_from_mcp_client()
+            .await
     }
 
     /// Returns data captured by the named running turn, not newer thread settings.
@@ -717,6 +730,24 @@ impl CodexThread {
         self.session.update_settings(updates).await.map(|_| ())
     }
 
+    /// Replaces tools for subsequent model steps and future turns, preserving in-flight calls.
+    /// An empty list removes all dynamic tools. Persistent threads require host opt-in
+    /// so every reader can restore successful updates on resume.
+    ///
+    /// Once queued, stopping the caller does not cancel the update.
+    /// A persistence error can leave the durable result indeterminate; retry the same replacement
+    /// before continuing.
+    pub async fn replace_dynamic_tools(
+        &self,
+        tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+    ) -> CodexResult<()> {
+        let (reply, result) = oneshot::channel();
+        self.io
+            .submit(Op::ReplaceDynamicTools { tools, reply })
+            .await?;
+        result.await.unwrap_or(Err(CodexErr::InternalAgentDied))
+    }
+
     /// Persists current settings without emitting a live settings event.
     ///
     /// Serializes snapshot capture and persistence with accepted settings updates.
@@ -1087,11 +1118,15 @@ impl CodexThread {
 
     /// Returns bounded root conversation evidence and its authorization version atomically.
     pub async fn guardian_root_snapshot(&self) -> Option<GuardianRootSnapshot> {
-        self.session
+        let mut snapshot = self
+            .session
             .services
             .agent_control
             .get_guardian_package(self.session.thread_id)
-            .await
+            .await?;
+        // Async consumers need only the bounded projection, not the sync source snapshot.
+        snapshot.request_candidates = None;
+        Some(snapshot)
     }
 
     /// Refresh the thread's layer-backed user config state from a caller-supplied

@@ -5,6 +5,35 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AccountSessionsListParams": {
+      "properties": {
+        "refreshWorkspaceMetadata": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "AccountSessionsSwitchParams": {
+      "properties": {
+        "accountId": {
+          "description": "Workspace to select within that login; this is not a user identifier.",
+          "type": "string"
+        },
+        "allowBrowserLogin": {
+          "description": "Allow Core to start browser sign-in if this session needs SSO for the workspace.",
+          "type": "boolean"
+        },
+        "sessionId": {
+          "description": "Opaque active-login identifier returned by accountSession/list.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "accountId",
+        "sessionId"
+      ],
+      "type": "object"
+    },
     "AddCreditsNudgeCreditType": {
       "enum": [
         "credits",
@@ -16,6 +45,13 @@
       "properties": {
         "kind": {
           "$ref": "#/definitions/AdditionalContextKind"
+        },
+        "name": {
+          "description": "Optional name for untrusted context, used to label its tool output.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "value": {
           "type": "string"
@@ -1820,6 +1856,31 @@
       "required": [
         "query",
         "sessionId"
+      ],
+      "type": "object"
+    },
+    "GcpSetupParams": {
+      "properties": {
+        "credentialFile": {
+          "description": "Absolute path to a credential file on the app-server host. Omit or pass `null` to clear the active user configuration's override and use ADC. If another configuration layer would still supply a credential file, setup fails without saving changes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "description": "Vertex AI location. Omission or null selects `global`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "projectId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectId"
       ],
       "type": "object"
     },
@@ -5333,7 +5394,7 @@
           "description": "Override where approval requests are routed for review on this thread and subsequent turns."
         },
         "attachToSource": {
-          "description": "Persist the fork as an attached thread of its resolved source, hidden from ordinary lists. The source cannot be deleted while attached threads exist. Requires local storage; incompatible with ephemeral and deferGoalContinuation. Omitted or false creates an ordinary fork.",
+          "description": "Persist the fork as an attached thread of its resolved source, hidden from ordinary lists. The source cannot be deleted while attached threads exist. Requires a paginated source and local storage; incompatible with ephemeral and deferGoalContinuation. Omitted or false creates an ordinary fork.",
           "type": "boolean"
         },
         "baseInstructions": {
@@ -12003,6 +12064,30 @@
         },
         "method": {
           "enum": [
+            "account/gcp/setup"
+          ],
+          "title": "Account/gcp/setupRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/GcpSetupParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Account/gcp/setupRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "account/bedrock/checkGovCloudRequirements"
           ],
           "title": "Account/bedrock/checkGovCloudRequirementsRequestMethod",
@@ -12042,6 +12127,54 @@
         "params"
       ],
       "title": "Account/login/cancelRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "accountSession/list"
+          ],
+          "title": "AccountSession/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/AccountSessionsListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "AccountSession/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "accountSession/switch"
+          ],
+          "title": "AccountSession/switchRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/AccountSessionsSwitchParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "AccountSession/switchRequest",
       "type": "object"
     },
     {

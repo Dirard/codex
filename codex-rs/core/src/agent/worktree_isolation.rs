@@ -1576,7 +1576,7 @@ pub(crate) use ops::close_worktree;
 pub use ops::describe_agent_worktree;
 pub(crate) use ops::ensure_worktree_present;
 pub(crate) use ops::fork_add_unloaded;
-pub(crate) use ops::fork_guardian_action_json;
+pub(crate) use ops::fork_annotate_guardian_action;
 pub(crate) use ops::holder_worktree_use;
 pub(crate) use ops::listed_worktrees;
 pub(crate) use ops::merge_for_parent;

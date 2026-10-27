@@ -236,7 +236,6 @@ impl CommandPopup {
                 .to_string();
                 let unavailable = self.is_unavailable(&item);
                 GenericDisplayRow {
-                    category_tag: None,
                     name,
                     name_prefix_spans: vec![if self.state.selected_idx == Some(index)
                         && !unavailable
@@ -247,12 +246,11 @@ impl CommandPopup {
                     }],
                     selection_style: Some(selection_style()),
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
-                    display_shortcut: None,
                     description: Some(description),
-                    wrap_indent: None,
                     is_disabled: unavailable,
                     disabled_reason: unavailable
                         .then(|| "not available in a side conversation".to_string()),
+                    ..Default::default()
                 }
             })
             .collect()

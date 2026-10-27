@@ -1526,19 +1526,29 @@ const HOLDER_TURN_GRACE: Duration = Duration::from_secs(60);
 // ---------------------------------------------------------------------------------------------
 
 /// Fork hook of the Guardian prompt: the planned action JSON of an isolated child gets a
-/// host-written `agent_worktree` object (R3.8). Other sessions keep the JSON unchanged.
-pub(crate) fn fork_guardian_action_json(
+/// host-written `agent_worktree` object (R3.8). Other sessions keep the JSON unchanged, and so
+/// does a native tool call, which carries the model's call instead of action JSON.
+pub(crate) fn fork_annotate_guardian_action(
     session: &crate::session::session::Session,
-    action_json: String,
-) -> String {
-    match session
+    planned_action: &mut codex_guardian_context::PlannedAction,
+) {
+    use codex_guardian_context::PlannedActionKind;
+
+    let Some(binding) = session
         .services
         .local_agent_runtime
         .worktrees
         .get(session.thread_id)
-    {
-        Some(binding) => guardian_action_json(&binding, action_json),
-        None => action_json,
+    else {
+        return;
+    };
+    match &mut planned_action.kind {
+        PlannedActionKind::Command { json }
+        | PlannedActionKind::TerminalInput { json }
+        | PlannedActionKind::Network { json, .. } => {
+            *json = guardian_action_json(&binding, std::mem::take(json));
+        }
+        PlannedActionKind::ToolCall(_) => {}
     }
 }
 
