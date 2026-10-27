@@ -520,7 +520,8 @@ fn spawn_agent_tool_v2_exposes_isolation_only_when_enabled() {
         assert!(
             isolation["description"]
                 .as_str()
-                .is_some_and(|description| description.contains(&apply)),
+                .is_some_and(|description| description.contains(&apply)
+                    && description.contains("apply_agent_worktree")),
             "{isolation}"
         );
     }

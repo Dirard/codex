@@ -501,7 +501,8 @@ pub(crate) async fn intercept_apply_patch(
     }
 }
 
-async fn execute_verified_patch(
+// Fork: also the write path of `apply_agent_worktree` (agent-worktree-isolation, R11.5).
+pub(crate) async fn execute_verified_patch(
     action: ApplyPatchAction,
     turn_environment: TurnEnvironment,
     tracker: Option<&SharedTurnDiffTracker>,

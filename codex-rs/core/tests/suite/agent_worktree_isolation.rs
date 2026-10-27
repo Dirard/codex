@@ -1477,6 +1477,21 @@ async fn restart(
     builder.restart(server, previous).await
 }
 
+/// Restarts the process with the resumed root in the previous root's repository, as a user
+/// resumes a session in the checkout it ran in (R5.6).
+async fn restart_in_repository(
+    builder: TestCodexBuilder,
+    server: &MockServer,
+    previous: &TestCodex,
+) -> Result<TestCodex> {
+    let repository = previous.config.cwd.clone();
+    let builder = builder.with_config(move |config| {
+        config.cwd = repository.clone();
+        config.workspace_roots = vec![repository];
+    });
+    restart(builder, server, previous).await
+}
+
 fn followup_arguments(message: &str) -> Value {
     json!({ "target": "worker", "message": message })
 }
@@ -1591,8 +1606,9 @@ async fn a_reloaded_child_is_bounded_by_the_parents_narrowed_permissions() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_removed_worktree_fails_the_reload_without_falling_back() -> Result<()> {
+async fn a_removed_worktree_is_restored_on_reload() -> Result<()> {
     const TASK: &str = "work before removal";
+    const FOLLOWUP: &str = "continue in the restored worktree";
     let server = start_mock_server().await;
     let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
     let mut created = test.thread_manager.subscribe_thread_created();
@@ -1610,6 +1626,62 @@ async fn a_removed_worktree_fails_the_reload_without_falling_back() -> Result<()
     evict(&test, child).await?;
     std::fs::remove_dir_all(&root)?;
 
+    mount_root_call(
+        &server,
+        "follow up after removal",
+        "followup-removed",
+        "followup_task",
+        followup_arguments(FOLLOWUP),
+    )
+    .await;
+    let reloaded = mount_child(
+        &server,
+        FOLLOWUP,
+        &[(
+            "where",
+            "pwd; cat kept.txt; echo; git symbolic-ref HEAD".to_string(),
+        )],
+    )
+    .await;
+    test.submit_turn("follow up after removal").await?;
+    let child = next_child(&mut created, &test).await?;
+    wait_turn_complete(&child).await;
+
+    // R5.3: the worktree came back at its path from the agent branch, attached to it.
+    let check = output_of(&reloaded, "where");
+    assert!(check.contains(&root.display().to_string()), "{check}");
+    assert!(check.contains("kept"), "{check}");
+    assert!(check.contains(&format!("refs/heads/{branch}")), "{check}");
+    assert!(!test.config.cwd.join("kept.txt").exists());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_removed_worktree_fails_the_reload_without_falling_back() -> Result<()> {
+    const TASK: &str = "look without changing anything";
+    let server = start_mock_server().await;
+    let mut builder = isolation_builder(None, /*git_repository*/ true, |config| {
+        config.features.enable(Feature::Sqlite).expect("sqlite");
+    });
+    let initial = builder.build_with_auto_env(&server).await?;
+    let mut created = initial.thread_manager.subscribe_thread_created();
+    let (child, output) = spawn_isolated_worker(
+        &server,
+        &initial,
+        &mut created,
+        TASK,
+        &[("look", "cat a.txt".to_string())],
+        PermissionProfile::Disabled,
+    )
+    .await?;
+    let root = PathBuf::from(worktree_field(&output, "path"));
+    let branch = worktree_field(&output, "branch");
+    child.thread.shutdown_and_wait().await?;
+    initial.codex.flush_rollout().await?;
+
+    // The previous process's tree shutdown removed the unchanged worktree (R6.1).
+    let resumed = restart_in_repository(builder, &server, &initial).await?;
+    assert!(!root.exists());
     let followup = mount_root_call(
         &server,
         "follow up after removal",
@@ -1618,19 +1690,84 @@ async fn a_removed_worktree_fails_the_reload_without_falling_back() -> Result<()
         followup_arguments("this must not run"),
     )
     .await;
-    test.submit_turn("follow up after removal").await?;
+    resumed.submit_turn("follow up after removal").await?;
 
-    // R5.3: the error names the missing worktree and the branch with the earlier changes.
+    // R5.3, R5.6: without an agent branch nothing restores the worktree after a restart, and
+    // the error names the missing worktree and the branch.
     let error = followup
         .function_call_output_text("followup-removed")
         .context("followup output")?;
     assert!(error.contains(&root.display().to_string()), "{error}");
     assert!(error.contains(&branch), "{error}");
-    assert!(!test.config.cwd.join("kept.txt").exists());
-    assert_eq!(
-        test.thread_manager.list_thread_ids().await,
-        vec![test.session_configured.thread_id]
+    assert!(error.contains("no agent branch"), "{error}");
+    assert_eq!(resumed.thread_manager.list_thread_ids().await.len(), 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restarted_parent_restores_a_removed_worktree_from_the_branch() -> Result<()> {
+    const TASK: &str = "work before the restart and removal";
+    const FOLLOWUP: &str = "continue in the restored checkout";
+    let server = start_mock_server().await;
+    let mut builder = isolation_builder(None, /*git_repository*/ true, |config| {
+        config.features.enable(Feature::Sqlite).expect("sqlite");
+    });
+    let initial = builder.build_with_auto_env(&server).await?;
+    let mut created = initial.thread_manager.subscribe_thread_created();
+    let (child, output) = spawn_isolated_worker(
+        &server,
+        &initial,
+        &mut created,
+        TASK,
+        &[("edit", "printf restored > restored.txt".to_string())],
+        PermissionProfile::Disabled,
+    )
+    .await?;
+    let root = PathBuf::from(worktree_field(&output, "path"));
+    let branch = worktree_field(&output, "branch");
+    child.thread.shutdown_and_wait().await?;
+    initial.codex.flush_rollout().await?;
+
+    // The user deletes the changed worktree by hand before the restart, so after it nothing
+    // but the agent branch knows where the worktree came from.
+    git(
+        &initial.config.cwd,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            root.to_str().context("UTF-8 worktree path")?,
+        ],
     );
+    let resumed = restart_in_repository(builder, &server, &initial).await?;
+    assert!(!root.exists());
+    mount_root_call(
+        &server,
+        "follow up after the removal",
+        "followup-restored",
+        "followup_task",
+        followup_arguments(FOLLOWUP),
+    )
+    .await;
+    let reloaded = mount_child(
+        &server,
+        FOLLOWUP,
+        &[(
+            "where",
+            "pwd; cat restored.txt; echo; git symbolic-ref HEAD".to_string(),
+        )],
+    )
+    .await;
+    let mut created = resumed.thread_manager.subscribe_thread_created();
+    resumed.submit_turn("follow up after the removal").await?;
+    let child = next_child(&mut created, &resumed).await?;
+    wait_turn_complete(&child).await;
+
+    // R5.6: the branch's checkpoints named the child and its base, so the worktree came back.
+    let check = output_of(&reloaded, "where");
+    assert!(check.contains(&root.display().to_string()), "{check}");
+    assert!(check.contains("restored"), "{check}");
+    assert!(check.contains(&format!("refs/heads/{branch}")), "{check}");
     Ok(())
 }
 
@@ -2078,5 +2215,575 @@ async fn an_owner_configured_child_is_bounded_by_the_parent_after_reload() -> Re
     let after = output_of(&reloaded, "owner-after");
     assert!(after.contains("Read-only file system"), "{after}");
     assert!(!root.join("after.txt").exists());
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Amend 2026-10-27, UC9: worktrees in `list_agents`
+// ---------------------------------------------------------------------------------------------
+
+/// Spawns a worker named `name` that runs `steps` in a turn of its own.
+async fn spawn_named_worker(
+    server: &MockServer,
+    test: &TestCodex,
+    created: &mut broadcast::Receiver<ThreadId>,
+    (prompt, call_id): (&'static str, &'static str),
+    (task, name, isolation): (&'static str, &'static str, Option<&str>),
+    steps: &[(&'static str, String)],
+) -> Result<Value> {
+    let spawn = mount_root_call(
+        server,
+        prompt,
+        call_id,
+        "spawn_agent",
+        spawn_arguments(task, name, isolation),
+    )
+    .await;
+    mount_child(server, task, steps).await;
+    test.submit_turn(prompt).await?;
+    wait_turn_complete(&next_child(created, test).await?).await;
+    Ok(spawn_output(&spawn, call_id))
+}
+
+/// Calls `list_agents` from a root turn and returns its agents by name.
+async fn list_agents(
+    server: &MockServer,
+    test: &TestCodex,
+    prompt: &'static str,
+    call_id: &'static str,
+) -> Result<serde_json::Map<String, Value>> {
+    let list = mount_root_call(server, prompt, call_id, "list_agents", json!({})).await;
+    test.submit_turn(prompt).await?;
+    let output: Value = serde_json::from_str(
+        &list
+            .function_call_output_text(call_id)
+            .context("list_agents output")?,
+    )?;
+    Ok(output["agents"]
+        .as_array()
+        .context("agents")?
+        .iter()
+        .map(|agent| {
+            (
+                agent["agent_name"].as_str().unwrap_or_default().to_string(),
+                agent.clone(),
+            )
+        })
+        .collect())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_agents_reports_each_worktree() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    let changed = spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        (ROOT_PROMPT, "spawn-changed"),
+        ("change a file for the list", "changed", Some("worktree")),
+        &[("list-edit", "printf 'changed\\n' >> a.txt".to_string())],
+    )
+    .await?;
+    let clean = spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        ("spawn the clean worker", "spawn-clean"),
+        ("read only for the list", "clean", Some("worktree")),
+        &[("list-read", "cat a.txt".to_string())],
+    )
+    .await?;
+    let shared = spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        ("spawn the shared worker", "spawn-shared"),
+        ("work in the shared checkout", "shared", None),
+        &[("list-shared", "true".to_string())],
+    )
+    .await?;
+    assert_eq!(shared.get("worktree"), None);
+
+    let agents = list_agents(&server, &test, "list the workers", "list-first").await?;
+
+    // R9.1: path, own branch and status of each isolated agent; none for a shared checkout.
+    assert_eq!(
+        agents["/root/changed"]["worktree"],
+        json!({
+            "path": worktree_field(&changed, "path"),
+            "branch": worktree_field(&changed, "branch"),
+            "status": "changed",
+        })
+    );
+    assert_eq!(
+        agents["/root/clean"]["worktree"],
+        json!({ "path": worktree_field(&clean, "path"), "branch": null, "status": "clean" })
+    );
+    assert_eq!(agents["/root/shared"].get("worktree"), None);
+
+    std::fs::remove_dir_all(worktree_field(&clean, "path"))?;
+    let agents = list_agents(&server, &test, "list the workers again", "list-second").await?;
+    assert_eq!(agents["/root/clean"]["worktree"]["status"], "removed");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_agents_is_unchanged_without_the_feature() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |config| {
+        config
+            .features
+            .disable(Feature::AgentWorktreeIsolation)
+            .expect("disable isolation");
+    })
+    .await?;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        (ROOT_PROMPT, "spawn-plain"),
+        ("work without the feature", "plain", None),
+        &[("plain-step", "true".to_string())],
+    )
+    .await?;
+
+    let agents = list_agents(&server, &test, "list without the feature", "list-plain").await?;
+
+    // R9.2: no `worktree` field.
+    let plain = agents["/root/plain"].as_object().context("plain agent")?;
+    assert_eq!(
+        plain.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["agent_name", "agent_status"]
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Amend 2026-10-27, UC10: sweep forgotten agent worktrees
+// ---------------------------------------------------------------------------------------------
+
+/// A managed agent worktree of the test repository that no live binding holds, last active
+/// `hours` ago; `changed` leaves an uncommitted file in it.
+fn forgotten_agent_worktree(
+    test: &TestCodex,
+    name: &str,
+    hours: u64,
+    changed: bool,
+) -> Result<PathBuf> {
+    let manager = codex_worktree::WorktreeManager::new(codex_worktree::WorktreeSettings::for_cli(
+        test.codex_home_path(),
+        /*desktop*/ None,
+    )?);
+    let source = test.config.cwd.to_path_buf();
+    let base = codex_worktree::snapshot_working_tree(&source)?;
+    let checkout = manager.create(&codex_worktree::CreateWorktree {
+        source_cwd: source.clone(),
+        base: Some(base.clone()),
+    })?;
+    let thread_id = ThreadId::new().to_string();
+    manager.bind_thread(&checkout.root, &thread_id)?;
+    codex_worktree::write_agent_metadata(
+        &checkout.root,
+        &codex_worktree::AgentWorktreeMetadata {
+            thread_id,
+            base_sha: base,
+            base_kind: codex_worktree::AgentWorktreeBaseKind::WorkingTree,
+            branch: format!("codex/agents/{name}-0000000000000000"),
+            source_root: source.to_str().map(str::to_owned),
+        },
+    )?;
+    if changed {
+        std::fs::write(checkout.root.join("forgotten.txt"), "work\n")?;
+    }
+    let time = std::time::SystemTime::now() - Duration::from_secs(hours * 3600);
+    let git_dir = PathBuf::from(git(
+        &checkout.root,
+        &["rev-parse", "--path-format=absolute", "--git-dir"],
+    ));
+    let mut paths = vec![checkout.root.clone()];
+    for file in [
+        "HEAD",
+        "index",
+        "config.worktree",
+        "codex-thread.json",
+        "logs/HEAD",
+    ] {
+        paths.push(git_dir.join(file));
+    }
+    for path in paths.into_iter().filter(|path| path.exists()) {
+        std::fs::File::open(&path)?.set_modified(time)?;
+    }
+    Ok(checkout.root)
+}
+
+async fn wait_until_removed(path: &Path) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while path.exists() {
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    true
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_start_sweeps_forgotten_agent_worktrees() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let stale = forgotten_agent_worktree(&test, "stale", 48, /*changed*/ false)?;
+    let changed = forgotten_agent_worktree(&test, "changed", 48, /*changed*/ true)?;
+    let fresh = forgotten_agent_worktree(&test, "fresh", 0, /*changed*/ false)?;
+
+    // A second root session in the same repository starts the sweep (R10.1).
+    let mut options = test.start_thread_options().await;
+    options.config.agent_worktree_isolation.cleanup.enabled = false;
+    let without_cleanup = test.thread_manager.start_thread(options).await?;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(stale.exists(), "`cleanup = false` must not sweep (R10.5)");
+    without_cleanup.thread.shutdown_and_wait().await?;
+
+    let options = test.start_thread_options().await;
+    let with_cleanup = test.thread_manager.start_thread(options).await?;
+
+    // R10.3, R10.4: only the idle unchanged agent worktree goes.
+    assert!(
+        wait_until_removed(&stale).await,
+        "{} was not swept",
+        stale.display()
+    );
+    assert!(changed.join("forgotten.txt").exists());
+    assert!(fresh.exists());
+    with_cleanup.thread.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tree_shutdown_sweeps_after_finalize() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    let worker = spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        (ROOT_PROMPT, "spawn-sweep"),
+        ("change a file before the sweep", "worker", Some("worktree")),
+        &[("sweep-edit", "printf 'kept\\n' >> a.txt".to_string())],
+    )
+    .await?;
+    let stale = forgotten_agent_worktree(&test, "stale", 48, /*changed*/ false)?;
+
+    test.thread_manager
+        .shutdown_all_threads_bounded(Duration::from_secs(10))
+        .await;
+
+    // R10.2: after finalize the tree swept its repository; the child's changed worktree stays.
+    assert!(!stale.exists());
+    assert!(PathBuf::from(worktree_field(&worker, "path")).exists());
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Amend 2026-10-27, UC11: `apply_agent_worktree`
+// ---------------------------------------------------------------------------------------------
+
+const GEOMETRY: &str = "l1\nl2\nl3\nl4\nl5\nl6\nl7\n";
+
+fn apply_arguments(target: &str) -> Value {
+    json!({ "target": target })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_merges_two_workers_over_parent_edits() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let parent = test.config.cwd.to_path_buf();
+    std::fs::write(parent.join("geometry.txt"), GEOMETRY)?;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    let top = spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        (ROOT_PROMPT, "spawn-top"),
+        ("edit the top", "top", Some("worktree")),
+        &[(
+            "top-edit",
+            "sed -i 's/^l1$/top/' geometry.txt && printf 'top\\n' > top.txt".to_string(),
+        )],
+    )
+    .await?;
+    spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        ("spawn the bottom worker", "spawn-bottom"),
+        ("edit the bottom", "bottom", Some("worktree")),
+        &[(
+            "bottom-edit",
+            "sed -i 's/^l7$/bottom/' geometry.txt && printf 'bottom\\n' > bottom.txt".to_string(),
+        )],
+    )
+    .await?;
+    // The parent keeps editing the middle of the same file meanwhile.
+    std::fs::write(
+        parent.join("geometry.txt"),
+        GEOMETRY.replace("l4", "parent"),
+    )?;
+    let head = git(&parent, &["rev-parse", "HEAD"]);
+    let commits = git(&parent, &["rev-list", "--count", "--all"]);
+    let index = std::fs::read(parent.join(".git/index"))?;
+
+    let apply_top = mount_root_call(
+        &server,
+        "apply the top worker",
+        "apply-top",
+        "apply_agent_worktree",
+        apply_arguments("top"),
+    )
+    .await;
+    test.submit_turn_with_permission_profile("apply the top worker", workspace_only_profile())
+        .await?;
+    let apply_bottom = mount_root_call(
+        &server,
+        "apply the bottom worker",
+        "apply-bottom",
+        "apply_agent_worktree",
+        apply_arguments("bottom"),
+    )
+    .await;
+    test.submit_turn_with_permission_profile("apply the bottom worker", workspace_only_profile())
+        .await?;
+
+    // R11.3, R11.5: both branches merged over the parent's edit through apply_patch, without
+    // a commit and with the parent's index untouched.
+    let top_output = apply_top
+        .function_call_output_text("apply-top")
+        .context("apply-top output")?;
+    assert!(
+        top_output.contains(&format!("Applied {}", worktree_field(&top, "branch"))),
+        "{top_output}"
+    );
+    assert!(
+        top_output.contains("Success. Updated the following files"),
+        "{top_output}"
+    );
+    let bottom_output = apply_bottom
+        .function_call_output_text("apply-bottom")
+        .context("apply-bottom output")?;
+    assert!(
+        bottom_output.contains("Applied codex/agents/bottom-"),
+        "{bottom_output}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(parent.join("geometry.txt"))?,
+        "top\nl2\nl3\nparent\nl5\nl6\nbottom\n"
+    );
+    assert_eq!(std::fs::read_to_string(parent.join("top.txt"))?, "top\n");
+    assert_eq!(
+        std::fs::read_to_string(parent.join("bottom.txt"))?,
+        "bottom\n"
+    );
+    assert_eq!(git(&parent, &["rev-parse", "HEAD"]), head);
+    assert_eq!(git(&parent, &["rev-list", "--count", "--all"]), commits);
+    assert_eq!(std::fs::read(parent.join(".git/index"))?, index);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_refuses_a_conflict_without_writing() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let parent = test.config.cwd.to_path_buf();
+    std::fs::write(parent.join("geometry.txt"), GEOMETRY)?;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        (ROOT_PROMPT, "spawn-conflict"),
+        ("rewrite the first line", "top", Some("worktree")),
+        &[(
+            "conflict-edit",
+            "sed -i 's/^l1$/top/' geometry.txt".to_string(),
+        )],
+    )
+    .await?;
+    let edited = GEOMETRY.replace("l1", "parent");
+    std::fs::write(parent.join("geometry.txt"), &edited)?;
+
+    let apply = mount_root_call(
+        &server,
+        "apply the conflicting worker",
+        "apply-conflict",
+        "apply_agent_worktree",
+        apply_arguments("top"),
+    )
+    .await;
+    test.submit_turn_with_permission_profile(
+        "apply the conflicting worker",
+        workspace_only_profile(),
+    )
+    .await?;
+
+    // R11.4: a refusal with the file and the block's command; the parent's file is unchanged.
+    let output = apply
+        .function_call_output_text("apply-conflict")
+        .context("apply output")?;
+    assert!(
+        output.contains("conflicts with your checkout in geometry.txt"),
+        "{output}"
+    );
+    assert!(
+        output.contains("\napply: git diff-tree -p --binary "),
+        "{output}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(parent.join("geometry.txt"))?,
+        edited
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_asks_for_approval_under_untrusted() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let parent = test.config.cwd.to_path_buf();
+    let mut created = test.thread_manager.subscribe_thread_created();
+    spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        (ROOT_PROMPT, "spawn-approval"),
+        ("add a file for approval", "top", Some("worktree")),
+        &[("approval-edit", "printf 'top\\n' > top.txt".to_string())],
+    )
+    .await?;
+    let apply = mount_root_call(
+        &server,
+        "apply under untrusted",
+        "apply-untrusted",
+        "apply_agent_worktree",
+        apply_arguments("top"),
+    )
+    .await;
+
+    test.codex
+        .start_or_steer_turn(
+            codex_core::TurnInputRequest::user_input(vec![
+                codex_protocol::user_input::UserInput::Text {
+                    text: "apply under untrusted".to_string(),
+                    text_elements: Vec::new(),
+                },
+            ])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approval_policy: Some(codex_protocol::protocol::AskForApproval::UnlessTrusted),
+                approvals_reviewer: Some(codex_protocol::config_types::ApprovalsReviewer::User),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    let EventMsg::ApplyPatchApprovalRequest(approval) = event else {
+        panic!("expected a patch approval before completion");
+    };
+    // R11.5: the approval shows the merged change like any patch.
+    assert!(
+        approval.changes.contains_key(&parent.join("top.txt")),
+        "{:?}",
+        approval.changes.keys()
+    );
+    test.codex
+        .submit(codex_protocol::protocol::Op::PatchApproval {
+            id: approval.call_id,
+            decision: codex_protocol::protocol::ReviewDecision::Denied {
+                rejection: "denied by test".to_string(),
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let output = apply
+        .function_call_output_text("apply-untrusted")
+        .context("apply output")?;
+    assert!(!output.contains("Applied"), "{output}");
+    assert!(!parent.join("top.txt").exists());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_rejects_a_non_isolated_agent() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        (ROOT_PROMPT, "spawn-shared-apply"),
+        ("work in the shared checkout", "shared", None),
+        &[("shared-step", "true".to_string())],
+    )
+    .await?;
+    spawn_named_worker(
+        &server,
+        &test,
+        &mut created,
+        ("spawn the idle worker", "spawn-idle"),
+        ("change nothing", "idle", Some("worktree")),
+        &[("idle-step", "cat a.txt".to_string())],
+    )
+    .await?;
+    let shared = mount_root_call(
+        &server,
+        "apply the shared worker",
+        "apply-shared",
+        "apply_agent_worktree",
+        apply_arguments("shared"),
+    )
+    .await;
+    test.submit_turn("apply the shared worker").await?;
+    let idle = mount_root_call(
+        &server,
+        "apply the idle worker",
+        "apply-idle",
+        "apply_agent_worktree",
+        apply_arguments("idle"),
+    )
+    .await;
+    test.submit_turn("apply the idle worker").await?;
+
+    // R11.2: model-visible errors, nothing written.
+    let shared = shared
+        .function_call_output_text("apply-shared")
+        .context("shared output")?;
+    assert!(
+        shared.contains("does not work in its own worktree"),
+        "{shared}"
+    );
+    let idle = idle
+        .function_call_output_text("apply-idle")
+        .context("idle output")?;
+    assert!(
+        idle.contains("has no recorded changes (branch: none)"),
+        "{idle}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(test.config.cwd.join("a.txt"))?,
+        PARENT_FILE
+    );
     Ok(())
 }

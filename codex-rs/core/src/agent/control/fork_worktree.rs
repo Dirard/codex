@@ -5,8 +5,11 @@
 
 use super::*;
 use crate::agent::worktree_isolation::AgentWorktreeBinding;
-use crate::agent::worktree_isolation::discover_binding;
+use crate::agent::worktree_isolation::Discovery;
+use crate::agent::worktree_isolation::discover_binding_or_missing;
+use crate::agent::worktree_isolation::ensure_worktree_present;
 use crate::agent::worktree_isolation::prepare_reload;
+use crate::agent::worktree_isolation::restore_missing_binding;
 use crate::codex_thread::CodexThread;
 use crate::context::DeveloperInstructions;
 use crate::thread_manager::StartThreadOptions;
@@ -109,9 +112,10 @@ impl LocalAgentControl {
         let Some((Some(agent_path), cwd)) = restored else {
             return;
         };
-        match discover_binding(config, thread_id, agent_path, &cwd).await {
-            Ok(Some(binding)) => self.runtime.worktrees.insert(binding),
-            Ok(None) => {}
+        match discover_binding_or_missing(config, thread_id, agent_path, &cwd).await {
+            Ok(Discovery::Bound(binding)) => self.runtime.worktrees.insert(binding),
+            // A removed worktree is restored by the reload, which knows the caller's cwd (R5.6).
+            Ok(Discovery::NotIsolated | Discovery::Missing(_)) => {}
             Err(err) => {
                 warn!("failed to restore the worktree of V2 agent {thread_id}: {err}");
             }
@@ -131,6 +135,14 @@ impl LocalAgentControl {
         let worktree = self
             .worktree_binding_for_reload(config, thread_id, stored_cwd, session_source)
             .await?;
+        // R5.3: a removed worktree comes back from the agent branch or the base first.
+        if let Some(binding) = worktree.as_ref() {
+            ensure_worktree_present(binding).await.map_err(|err| {
+                CodexErr::InvalidRequest(format!(
+                    "cannot resume multi-agent v2 child {thread_id}: {err}"
+                ))
+            })?;
+        }
         // A reloaded explorer gets the read-only worktree note, also after a restart or
         // without its parent (explorer-and-questions spec, R9.3).
         let explorer = crate::agent::explorer_profile::applies_to_source(config, session_source);
@@ -185,16 +197,44 @@ impl LocalAgentControl {
         let Some(agent_path) = session_source.get_agent_path() else {
             return Ok(None);
         };
-        match discover_binding(config, thread_id, agent_path, stored_cwd).await {
-            Ok(Some(binding)) => {
-                self.runtime.worktrees.insert(Arc::clone(&binding));
-                Ok(Some(binding))
-            }
-            Ok(None) => Ok(None),
-            Err(err) => Err(CodexErr::InvalidRequest(format!(
+        let resume_error = |err: String| {
+            CodexErr::InvalidRequest(format!(
                 "cannot resume multi-agent v2 child {thread_id}: {err}"
-            ))),
-        }
+            ))
+        };
+        let binding =
+            match discover_binding_or_missing(config, thread_id, agent_path.clone(), stored_cwd)
+                .await
+                .map_err(resume_error)?
+            {
+                Discovery::NotIsolated => return Ok(None),
+                Discovery::Bound(binding) => binding,
+                // R5.6: the caller's cwd (`config.cwd` before the move onto the worktree) or the
+                // parent's stored cwd names the repository whose agent branch restores it.
+                Discovery::Missing(missing) => {
+                    let parent_cwd = self.parent_stored_cwd(session_source).await;
+                    restore_missing_binding(config, thread_id, agent_path, missing, parent_cwd)
+                        .await
+                        .map_err(resume_error)?
+                }
+            };
+        self.runtime.worktrees.insert(Arc::clone(&binding));
+        Ok(Some(binding))
+    }
+
+    /// The working directory the child's parent thread was created in, when it is stored.
+    async fn parent_stored_cwd(&self, session_source: &SessionSource) -> Option<PathBuf> {
+        let parent_thread_id = session_source.parent_thread_id()?;
+        let state = self.runtime.upgrade().ok()?;
+        state
+            .read_stored_thread(ReadThreadParams {
+                thread_id: parent_thread_id,
+                include_archived: true,
+                include_history: false,
+            })
+            .await
+            .ok()
+            .map(|stored| stored.cwd)
     }
 }
 

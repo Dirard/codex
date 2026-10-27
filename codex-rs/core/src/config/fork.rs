@@ -266,20 +266,61 @@ pub struct AgentWorktreeIsolationConfig {
     pub default_isolation: AgentIsolation,
     /// Commit an isolated child's worktree starts from.
     pub base: AgentWorktreeBase,
+    /// Removal of forgotten unchanged agent worktrees (agent-worktree-isolation, UC10).
+    pub cleanup: AgentWorktreeCleanup,
+}
+
+/// Fork: limits of the sweep of forgotten unchanged agent worktrees (R10.4, R10.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct AgentWorktreeCleanup {
+    pub enabled: bool,
+    /// Unchanged worktrees kept among the most recently active ones.
+    pub keep_count: u32,
+    /// Hours without activity after which an unchanged worktree is removed; at least 1.
+    pub max_idle_hours: u32,
+}
+
+impl Default for AgentWorktreeCleanup {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            keep_count: 15,
+            max_idle_hours: 24,
+        }
+    }
 }
 
 impl AgentWorktreeIsolationConfig {
     /// Resolves the settings from a features table, keeping defaults for omitted values.
-    pub(crate) fn from_features_toml(features: Option<&FeaturesToml>) -> Self {
+    pub(crate) fn from_features_toml(features: Option<&FeaturesToml>) -> std::io::Result<Self> {
         let configured = agent_worktree_isolation_toml_config(features);
-        Self {
+        let defaults = AgentWorktreeCleanup::default();
+        let cleanup = AgentWorktreeCleanup {
+            enabled: configured
+                .and_then(|config| config.cleanup)
+                .unwrap_or(defaults.enabled),
+            keep_count: configured
+                .and_then(|config| config.cleanup_keep_count)
+                .unwrap_or(defaults.keep_count),
+            max_idle_hours: configured
+                .and_then(|config| config.cleanup_max_idle_hours)
+                .unwrap_or(defaults.max_idle_hours),
+        };
+        if cleanup.max_idle_hours == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "features.agent_worktree_isolation.cleanup_max_idle_hours must be at least 1",
+            ));
+        }
+        Ok(Self {
             default_isolation: configured
                 .and_then(|config| config.default_isolation)
                 .unwrap_or_default(),
             base: configured
                 .and_then(|config| config.base)
                 .unwrap_or_default(),
-        }
+            cleanup,
+        })
     }
 }
 
@@ -374,7 +415,7 @@ pub(super) fn resolve_agent_profiles(
 ) -> std::io::Result<(ExplorerProfileConfig, AgentWorktreeIsolationConfig)> {
     let explorer_profile = resolve_explorer_profile_config(cfg)?;
     let agent_worktree_isolation =
-        AgentWorktreeIsolationConfig::from_features_toml(cfg.features.as_ref());
+        AgentWorktreeIsolationConfig::from_features_toml(cfg.features.as_ref())?;
     Ok((explorer_profile, agent_worktree_isolation))
 }
 

@@ -1,5 +1,6 @@
 //! Fork: explorer sessions stay read-only without escalation
-//! (specs/explorer-and-questions-2026-10-25.md).
+//! (specs/explorer-and-questions-2026-10-25.md); the session start hook also starts the
+//! agent worktree sweep (specs/agent-worktree-isolation-2026-10-25.md, R10.1).
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -16,12 +17,14 @@ use crate::agent::explorer_profile;
 use crate::config::Config;
 
 /// Fork: explorer sessions run read-only without escalation on every start path (spawn,
-/// reload, cold resume).
+/// reload, cold resume). A root session also sweeps forgotten agent worktrees of its
+/// repository in the background (agent-worktree-isolation, R10.1).
 pub(super) fn on_session_start(
     mut config: Config,
     session_source: &SessionSource,
     environment_selections: &mut [TurnEnvironmentSelection],
 ) -> CodexResult<Config> {
+    crate::agent::worktree_isolation::sweep_on_session_start(&config, session_source);
     if explorer_profile::applies_to_source(&config, session_source) {
         explorer_profile::enforce_read_only_session_config(&mut config)?;
         environment_selections

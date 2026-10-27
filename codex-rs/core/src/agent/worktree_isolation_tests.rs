@@ -23,6 +23,10 @@ fn binding(protected: bool) -> AgentWorktreeBinding {
         }),
         parent_checkout_protected: AtomicBool::new(protected),
         read_only_explorer: AtomicBool::new(false),
+        settings: WorktreeSettings::for_cli(Path::new("/home/u/.codex"), /*desktop*/ None)
+            .expect("worktree settings"),
+        sweep: None,
+        _live: LiveRoot::register(Path::new("/home/u/.codex/worktrees/6d88/demo")),
         state: Mutex::default(),
     }
 }
@@ -378,7 +382,7 @@ async fn isolation_table_survives_boolean_toggles() {
     let home = tempfile::TempDir::new().expect("create temp dir");
     std::fs::write(
         home.path().join("config.toml"),
-        "[features.agent_worktree_isolation]\nenabled = false\ndefault_isolation = \"worktree\"\nbase = \"head\"\n",
+        "[features.agent_worktree_isolation]\nenabled = false\ndefault_isolation = \"worktree\"\nbase = \"head\"\ncleanup = false\ncleanup_keep_count = 3\ncleanup_max_idle_hours = 6\n",
     )
     .expect("write config.toml");
     let config = ConfigBuilder::default()
@@ -396,5 +400,164 @@ async fn isolation_table_survives_boolean_toggles() {
         config.agent_worktree_isolation.default_isolation,
         AgentIsolation::Worktree
     );
-    assert_eq!(config.agent_worktree_isolation.base, AgentWorktreeBase::Head);
+    assert_eq!(
+        config.agent_worktree_isolation.base,
+        AgentWorktreeBase::Head
+    );
+    assert_eq!(
+        config.agent_worktree_isolation.cleanup,
+        crate::config::AgentWorktreeCleanup {
+            enabled: false,
+            keep_count: 3,
+            max_idle_hours: 6,
+        }
+    );
+}
+
+async fn load_config(
+    home: &tempfile::TempDir,
+    toml: &str,
+    cwd: Option<&Path>,
+) -> std::io::Result<Config> {
+    std::fs::write(home.path().join("config.toml"), toml)?;
+    crate::config::ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(
+            cwd.map_or_else(|| home.path().to_path_buf(), Path::to_path_buf),
+        ))
+        .build()
+        .await
+}
+
+/// R10.5: cleanup defaults, and an idle limit of zero is rejected.
+#[tokio::test]
+async fn cleanup_settings_default_and_reject_zero_idle() {
+    let home = tempfile::TempDir::new().expect("create temp dir");
+    let config = load_config(&home, "", None).await.expect("default config");
+    assert_eq!(
+        config.agent_worktree_isolation.cleanup,
+        crate::config::AgentWorktreeCleanup {
+            enabled: true,
+            keep_count: 15,
+            max_idle_hours: 24,
+        }
+    );
+    let error = load_config(
+        &home,
+        "[features.agent_worktree_isolation]\ncleanup_max_idle_hours = 0\n",
+        None,
+    )
+    .await
+    .expect_err("zero idle hours");
+    assert!(
+        error
+            .to_string()
+            .contains("features.agent_worktree_isolation.cleanup_max_idle_hours"),
+        "{error}"
+    );
+}
+
+fn git(cwd: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// R9.2, R9.3: the app-server view of a thread's agent worktree.
+#[tokio::test]
+async fn describe_agent_worktree_requires_the_feature_and_the_owner() {
+    let home = tempfile::TempDir::new().expect("create temp dir");
+    let home_path = dunce::canonicalize(home.path()).expect("canonical home");
+    let repository = home_path.join("project");
+    std::fs::create_dir_all(&repository).expect("create repository");
+    git(&repository, &["init", "--quiet", "-b", "main"]);
+    std::fs::write(repository.join("a.txt"), "a\n").expect("write file");
+    git(&repository, &["add", "."]);
+    git(
+        &repository,
+        &[
+            "-c",
+            "user.name=Codex Test",
+            "-c",
+            "user.email=codex@example.invalid",
+            "commit",
+            "--quiet",
+            "--no-gpg-sign",
+            "-m",
+            "initial",
+        ],
+    );
+    let manager = WorktreeManager::new(
+        WorktreeSettings::for_cli(&home_path, /*desktop*/ None).expect("settings"),
+    );
+    let base = codex_worktree::snapshot_working_tree(&repository).expect("snapshot");
+    let checkout = manager
+        .create(&CreateWorktree {
+            source_cwd: repository.clone(),
+            base: Some(base.clone()),
+        })
+        .expect("create worktree");
+    let thread_id = ThreadId::new();
+    manager
+        .bind_thread(&checkout.root, &thread_id.to_string())
+        .expect("bind owner");
+    codex_worktree::write_agent_metadata(
+        &checkout.root,
+        &AgentWorktreeMetadata {
+            thread_id: thread_id.to_string(),
+            base_sha: base,
+            base_kind: AgentWorktreeBaseKind::WorkingTree,
+            branch: "codex/agents/probe-0000000000000000".to_string(),
+            source_root: repository.to_str().map(str::to_owned),
+        },
+    )
+    .expect("write metadata");
+
+    let disabled = load_config(&home, "", Some(&repository))
+        .await
+        .expect("config without the feature");
+    assert_eq!(
+        describe_agent_worktree(&disabled, thread_id, &checkout.root).await,
+        None
+    );
+    let enabled = load_config(
+        &home,
+        "[features.agent_worktree_isolation]\nenabled = true\n",
+        Some(&repository),
+    )
+    .await
+    .expect("config with the feature");
+    assert_eq!(
+        describe_agent_worktree(&enabled, thread_id, &checkout.root).await,
+        Some(AgentWorktreeView {
+            path: checkout.root.clone(),
+            branch: None,
+            state: codex_worktree::AgentWorktreeState::Clean,
+        })
+    );
+    assert_eq!(
+        describe_agent_worktree(&enabled, ThreadId::new(), &checkout.root).await,
+        None
+    );
+    assert_eq!(
+        describe_agent_worktree(&enabled, thread_id, &repository).await,
+        None
+    );
+    std::fs::remove_dir_all(&checkout.root).expect("remove the checkout");
+    assert_eq!(
+        describe_agent_worktree(&enabled, thread_id, &checkout.root).await,
+        Some(AgentWorktreeView {
+            path: checkout.root,
+            branch: None,
+            state: codex_worktree::AgentWorktreeState::Removed,
+        })
+    );
 }

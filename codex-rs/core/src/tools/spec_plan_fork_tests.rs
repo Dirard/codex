@@ -272,3 +272,40 @@ async fn explorer_tool_router_hides_write_and_client_tools() {
         }
     }
 }
+
+/// Agent-worktree-isolation R11.1: `apply_agent_worktree` sits beside the MultiAgentV2 tools
+/// only while worktree isolation is enabled, and a read-only explorer does not get it.
+#[tokio::test]
+async fn apply_agent_worktree_is_offered_only_with_isolation() {
+    let apply = ToolName::namespaced("agents", "apply_agent_worktree").to_string();
+    for (isolation, explorer, offered) in [
+        (true, false, true),
+        (false, false, false),
+        (true, true, false),
+    ] {
+        let plan = probe(|turn| {
+            set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+            set_feature(turn, Feature::AgentWorktreeIsolation, isolation);
+            set_feature(turn, Feature::ExplorerProfile, explorer);
+            update_config(turn, |config| {
+                config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+            });
+            if explorer {
+                turn.session_source = explorer_source("explorer");
+            }
+        })
+        .await;
+        assert_eq!(
+            plan.registered_names.contains(&apply),
+            offered,
+            "isolation={isolation} explorer={explorer}: {:?}",
+            plan.registered_names
+        );
+        assert_eq!(
+            plan.namespace_function_names("agents")
+                .iter()
+                .any(|name| name == "apply_agent_worktree"),
+            offered
+        );
+    }
+}

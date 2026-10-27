@@ -71,6 +71,12 @@ pub struct AgentWorktreeBinding {
     /// The child is a read-only explorer, so its note gives no edit instructions
     /// (explorer-and-questions spec, R9.3).
     read_only_explorer: AtomicBool,
+    /// Managed worktree settings the worktree was created or found with.
+    settings: WorktreeSettings,
+    /// Repository and limits of the sweep after the tree stops (UC10); `None` keeps it out.
+    sweep: Option<SweepTarget>,
+    /// Keeps a sweep of this process away from the worktree while the binding lives.
+    _live: LiveRoot,
     /// Serializes checkpoint and finalize operations of this worktree.
     state: Mutex<BindingState>,
 }
@@ -210,6 +216,9 @@ impl AgentWorktrees {
         if is_tree_root || tree_cancelled {
             finalize_tree_worktrees(self.all()).await;
         }
+        if is_tree_root {
+            ops::sweep_tree_repositories(&self.all()).await;
+        }
     }
 }
 
@@ -296,9 +305,10 @@ pub(crate) async fn prepare_agent_worktree(
     let branch = agent_branch_name(agent_path, thread_id);
     let thread_id_text = thread_id.to_string();
     let blocking_source_cwd = source_cwd.clone();
+    let blocking_settings = settings.clone();
     let created = tokio::task::spawn_blocking(move || {
         create_worktree_blocking(
-            settings,
+            blocking_settings,
             blocking_source_cwd.as_path(),
             base_kind,
             thread_id_text,
@@ -315,16 +325,24 @@ pub(crate) async fn prepare_agent_worktree(
         base_duration,
         create_duration,
     } = created;
+    let sweep = Some(SweepTarget {
+        settings: settings.clone(),
+        source: source_root.to_path_buf(),
+        cleanup: config.agent_worktree_isolation.cleanup,
+    });
     let binding = Arc::new(AgentWorktreeBinding {
         thread_id,
         agent_path: agent_path.clone(),
         environment_id: environment_id.clone(),
+        _live: LiveRoot::register(root.as_path()),
         root,
         cwd,
         source_root,
         metadata: StdMutex::new(metadata),
         parent_checkout_protected: AtomicBool::new(false),
         read_only_explorer: AtomicBool::new(read_only_explorer),
+        settings,
+        sweep,
         state: Mutex::default(),
     });
     let rebased = inherited_environments
@@ -833,41 +851,63 @@ pub(crate) fn prepare_reload(
     Ok(environments)
 }
 
+/// What a child's stored cwd says about its isolation after a restart.
+pub(crate) enum Discovery {
+    NotIsolated,
+    Bound(Arc<AgentWorktreeBinding>),
+    /// The cwd lies in a managed worktree that no longer exists (R5.6).
+    Missing(MissingWorktree),
+}
+
 /// Recovers a binding from a child's stored cwd after a restart (R5.2).
 ///
 /// Paths outside the managed root, and worktrees whose agent metadata names another thread,
 /// are not this child's isolation. An agent worktree for this thread is accepted only when
-/// its owner record names the same thread.
-pub(crate) async fn discover_binding(
+/// its owner record names the same thread. A removed managed worktree is reported as
+/// `Missing`, so a reload can restore it (R5.6).
+pub(crate) async fn discover_binding_or_missing(
     config: &Config,
     thread_id: ThreadId,
     agent_path: AgentPath,
     stored_cwd: &Path,
-) -> Result<Option<Arc<AgentWorktreeBinding>>, String> {
+) -> Result<Discovery, String> {
     let settings = worktree_settings(config)?;
     let stored_cwd = stored_cwd.to_path_buf();
+    let blocking_settings = settings.clone();
     let discovered = tokio::task::spawn_blocking(move || {
-        discover_binding_blocking(settings, thread_id, &stored_cwd)
+        discover_binding_blocking(blocking_settings, thread_id, &stored_cwd)
     })
     .await
     .map_err(|err| format!("worktree discovery failed: {err}"))??;
-    Ok(discovered.map(|(root, cwd, source_root, metadata)| {
-        Arc::new(AgentWorktreeBinding {
-            thread_id,
-            agent_path,
-            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-            root,
-            cwd,
-            source_root,
-            metadata: StdMutex::new(metadata),
-            parent_checkout_protected: AtomicBool::new(false),
-            read_only_explorer: AtomicBool::new(false),
-            state: Mutex::new(BindingState {
-                stopped: true,
-                finalized: false,
-            }),
-        })
-    }))
+    Ok(match discovered {
+        DiscoveryResult::NotIsolated => Discovery::NotIsolated,
+        DiscoveryResult::Missing(missing) => Discovery::Missing(missing),
+        DiscoveryResult::Bound((root, cwd, source_root, metadata)) => {
+            let sweep = Some(SweepTarget {
+                settings: settings.clone(),
+                source: source_root.to_path_buf(),
+                cleanup: config.agent_worktree_isolation.cleanup,
+            });
+            Discovery::Bound(Arc::new(AgentWorktreeBinding {
+                thread_id,
+                agent_path,
+                environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                _live: LiveRoot::register(root.as_path()),
+                root,
+                cwd,
+                source_root,
+                metadata: StdMutex::new(metadata),
+                parent_checkout_protected: AtomicBool::new(false),
+                read_only_explorer: AtomicBool::new(false),
+                settings,
+                sweep,
+                state: Mutex::new(BindingState {
+                    stopped: true,
+                    finalized: false,
+                }),
+            }))
+        }
+    })
 }
 
 type DiscoveredBinding = (
@@ -877,26 +917,34 @@ type DiscoveredBinding = (
     AgentWorktreeMetadata,
 );
 
+enum DiscoveryResult {
+    NotIsolated,
+    Bound(DiscoveredBinding),
+    Missing(MissingWorktree),
+}
+
 fn discover_binding_blocking(
     settings: WorktreeSettings,
     thread_id: ThreadId,
     stored_cwd: &Path,
-) -> Result<Option<DiscoveredBinding>, String> {
+) -> Result<DiscoveryResult, String> {
     let manager = WorktreeManager::new(settings);
     let Some(root) = manager.managed_checkout_root(stored_cwd) else {
-        return Ok(None);
+        return Ok(DiscoveryResult::NotIsolated);
     };
     if !root.join(".git").exists() {
-        return Err(format!(
-            "its managed worktree {} no longer exists",
-            root.display()
-        ));
+        // The cwd no longer resolves, so it is matched against the root as stored.
+        let cwd = stored_cwd
+            .strip_prefix(&root)
+            .map(|relative| root.join(relative))
+            .unwrap_or_else(|_| root.clone());
+        return Ok(DiscoveryResult::Missing(MissingWorktree { root, cwd }));
     }
     let metadata = codex_worktree::read_agent_metadata(&root)
         .map_err(|err| format!("cannot read agent worktree metadata: {err:#}"))?;
     let Some(metadata) = metadata.filter(|metadata| metadata.thread_id == thread_id.to_string())
     else {
-        return Ok(None);
+        return Ok(DiscoveryResult::NotIsolated);
     };
     let owner = manager.owner(&root).map_err(|err| {
         format!(
@@ -931,7 +979,7 @@ fn discover_binding_blocking(
         .strip_prefix(&root)
         .map(Path::to_path_buf)
         .unwrap_or_default();
-    Ok(Some((
+    Ok(DiscoveryResult::Bound((
         absolute(&root)?,
         absolute(&root.join(relative))?,
         absolute(&source_root)?,
@@ -1216,6 +1264,22 @@ pub(crate) fn record_worktree_outcome(outcome: &'static str) {
 fn short_sha(sha: &str) -> &str {
     sha.get(..12).unwrap_or(sha)
 }
+
+#[path = "worktree_isolation_ops.rs"]
+mod ops;
+
+pub use ops::AgentWorktreeView;
+pub(crate) use ops::ListedWorktree;
+pub(crate) use ops::LiveRoot;
+pub(crate) use ops::MissingWorktree;
+pub(crate) use ops::SweepTarget;
+pub(crate) use ops::apply_refusal;
+pub use ops::describe_agent_worktree;
+pub(crate) use ops::ensure_worktree_present;
+pub(crate) use ops::listed_worktrees;
+pub(crate) use ops::merge_for_parent;
+pub(crate) use ops::restore_missing_binding;
+pub(crate) use ops::sweep_on_session_start;
 
 #[cfg(test)]
 #[path = "worktree_isolation_tests.rs"]

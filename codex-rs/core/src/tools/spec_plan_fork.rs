@@ -163,6 +163,31 @@ pub(super) fn spawn_agent_options(
     }
 }
 
+/// `apply_agent_worktree` beside the other MultiAgentV2 tools while worktree isolation is
+/// enabled; a read-only explorer does not get it (agent-worktree-isolation, R11.1).
+pub(super) fn add_apply_agent_worktree_tool(
+    turn_context: &TurnContext,
+    registry: &mut ToolRegistry,
+    exposure: ToolExposure,
+) {
+    let config = &turn_context.config;
+    if !config.features.enabled(Feature::AgentWorktreeIsolation)
+        || crate::agent::explorer_profile::applies_to_source(config, &turn_context.session_source)
+    {
+        return;
+    }
+    registry.register_trusted_with_exposure(
+        multi_agent_v2_handler(
+            crate::tools::handlers::multi_agents_v2::apply_agent_worktree_fork::Handler,
+            config.multi_agent_v2.tool_namespace.as_deref(),
+            /*description_override*/ None,
+            /*parameters_override*/ None,
+            config.multi_agent_v2.message_delivery,
+        ),
+        exposure,
+    );
+}
+
 /// Default mode is offered only to interactive root threads.
 pub(super) fn request_user_input_modes(
     modes: Vec<codex_protocol::config_types::ModeKind>,

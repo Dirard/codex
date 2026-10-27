@@ -81,6 +81,22 @@
           ],
           "description": "Commit an isolated child's worktree starts from."
         },
+        "cleanup": {
+          "description": "Remove forgotten unchanged agent worktrees of the repository when a session starts and when an agent tree stops (default `true`). Changed worktrees and agent branches are never removed.",
+          "type": "boolean"
+        },
+        "cleanup_keep_count": {
+          "description": "Unchanged agent worktrees of a repository kept among the most recently active ones (default 15); older ones beyond the count are removed after an hour without activity.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "cleanup_max_idle_hours": {
+          "description": "Hours without activity after which an unchanged agent worktree is removed (default 24, at least 1).",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "default_isolation": {
           "allOf": [
             {

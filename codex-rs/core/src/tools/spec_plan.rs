@@ -1597,6 +1597,8 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 ),
                 exposure,
             );
+            // Fork: agent worktree isolation (R11.1).
+            fork::add_apply_agent_worktree_tool(turn_context, registry, exposure);
         } else {
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);

@@ -103,6 +103,19 @@ pub struct AgentWorktreeIsolationConfigToml {
     /// Commit an isolated child's worktree starts from.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base: Option<AgentWorktreeBase>,
+    /// Remove forgotten unchanged agent worktrees of the repository when a session starts and
+    /// when an agent tree stops (default `true`). Changed worktrees and agent branches are
+    /// never removed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleanup: Option<bool>,
+    /// Unchanged agent worktrees of a repository kept among the most recently active ones
+    /// (default 15); older ones beyond the count are removed after an hour without activity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleanup_keep_count: Option<u32>,
+    /// Hours without activity after which an unchanged agent worktree is removed (default
+    /// 24, at least 1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleanup_max_idle_hours: Option<u32>,
 }
 
 impl FeatureConfig for AgentWorktreeIsolationConfigToml {

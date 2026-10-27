@@ -33,6 +33,8 @@ pub(crate) use spawn::Handler as SpawnAgentHandler;
 pub(crate) use wait::Handler as WaitAgentHandler;
 
 mod analytics;
+// Fork: apply an isolated agent's branch (specs/agent-worktree-isolation-2026-10-25.md, UC11).
+pub(crate) mod apply_agent_worktree_fork;
 mod followup_task;
 mod interrupt_agent;
 mod list_agents;

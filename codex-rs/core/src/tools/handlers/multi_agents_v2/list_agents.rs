@@ -57,11 +57,19 @@ impl Handler {
             .map_err(wait::fork::collab_list_error("list"))?;
 
         let workflow_children = session.services.local_agent_runtime.workflow_children();
+        // Fork: each isolated agent's worktree (specs/agent-worktree-isolation-2026-10-25.md, R9.1).
+        let mut worktrees = crate::agent::worktree_isolation::listed_worktrees(
+            &turn.config,
+            &session.services.local_agent_runtime.worktrees,
+            agents.iter().map(|agent| agent.thread_id),
+        )
+        .await;
         let agents = agents
             .into_iter()
             // Fork: workflow runs own their agents; finished ones are omitted (dynamic workflow).
             .filter_map(|agent| workflow_children.listed_owner(agent))
             .map(|(agent, owner)| ListedAgent {
+                worktree: worktrees.remove(&agent.thread_id),
                 agent_name: agent
                     .metadata
                     .agent_path
@@ -102,6 +110,9 @@ struct ListedAgent {
     /// Fork: `workflow:<run_id>` for agents of a workflow run.
     #[serde(skip_serializing_if = "Option::is_none")]
     owner: Option<String>,
+    /// Fork: the agent's worktree, while `agent_worktree_isolation` is enabled (R9.1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worktree: Option<crate::agent::worktree_isolation::ListedWorktree>,
 }
 
 #[derive(Debug, Serialize)]
