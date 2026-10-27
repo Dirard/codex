@@ -12,7 +12,9 @@ use super::DEFAULT_TURN_COMPACTION_TOKEN_LIMIT;
 use super::SamplingOutcome;
 use super::TurnCompactionLimit;
 use super::TurnLoop;
+use super::body_is_no_measure;
 use super::replaced_context_tokens;
+use super::replaced_history_estimate;
 
 const FORCED: bool = true;
 const OPTIONAL: bool = false;
@@ -348,12 +350,99 @@ fn a_body_after_prefix_compaction_counts_only_the_body() {
         token_limit_reached: true,
         turn_end_compaction_threshold_reached: false,
     };
+    assert!(!body_is_no_measure(
+        AutoCompactTokenLimitScope::BodyAfterPrefix,
+        &status
+    ));
     assert_eq!(
-        replaced_context_tokens(AutoCompactTokenLimitScope::BodyAfterPrefix, &status),
+        replaced_context_tokens(
+            AutoCompactTokenLimitScope::BodyAfterPrefix,
+            &status,
+            /*history_estimate*/ None
+        ),
         20_000
     );
     assert_eq!(
-        replaced_context_tokens(AutoCompactTokenLimitScope::Total, &status),
+        replaced_context_tokens(
+            AutoCompactTokenLimitScope::Total,
+            &status,
+            /*history_estimate*/ None
+        ),
         120_000
+    );
+}
+
+/// Review of the fixes 2, N-3: the body understates a `body_after_prefix` compaction that the
+/// full window forced (a large prefix filled it) or that no usage measured (no prefix, the
+/// body reads 0). Such a compaction counts at least the estimated history it replaces, so the
+/// turn's limit does not weaken by "window / body".
+#[test]
+fn a_compaction_the_body_does_not_measure_counts_the_replaced_history() {
+    let full_window = ContextWindowTokenStatus {
+        active_context_tokens: WINDOW_272K,
+        auto_compact_scope_tokens: 5_000,
+        auto_compact_scope_limit: Some(40_000),
+        full_context_window_limit: Some(WINDOW_272K),
+        base_window_tokens_remaining: Some(0),
+        auto_compact_window_prefill_tokens: Some(WINDOW_272K - 5_000),
+        full_context_window_limit_reached: true,
+        token_limit_reached: true,
+        turn_end_compaction_threshold_reached: false,
+    };
+    let scope = AutoCompactTokenLimitScope::BodyAfterPrefix;
+    assert!(body_is_no_measure(scope, &full_window));
+    assert_eq!(
+        replaced_context_tokens(scope, &full_window, Some(200_000)),
+        200_000
+    );
+    // The body counts when it is larger than the estimate.
+    assert_eq!(
+        replaced_context_tokens(scope, &full_window, Some(1_000)),
+        5_000
+    );
+
+    let no_usage = ContextWindowTokenStatus {
+        active_context_tokens: 90_000,
+        auto_compact_scope_tokens: 0,
+        auto_compact_window_prefill_tokens: None,
+        full_context_window_limit_reached: false,
+        ..full_window
+    };
+    assert!(body_is_no_measure(scope, &no_usage));
+    assert_eq!(
+        replaced_context_tokens(scope, &no_usage, Some(70_000)),
+        70_000
+    );
+    // Without an estimate, the whole context counts.
+    assert_eq!(replaced_context_tokens(scope, &no_usage, None), 90_000);
+}
+
+/// Review of the fixes 2, N-3: the estimate leaves out what the next window keeps, the base
+/// instructions and tool declarations, and counts the rest as the token accounting does.
+#[test]
+fn the_replaced_history_leaves_out_instructions_and_tools() {
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+    let message = |text: String| ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText { text }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let user = message("word ".repeat(400));
+    let summary = message("summary ".repeat(200));
+    let instructions = crate::context::ContextualUserFragment::into(
+        crate::context::BaseInstructionsFragment("You are Codex. ".repeat(100)),
+    );
+    assert!(crate::context::BaseInstructionsFragment::text_from_item(&instructions).is_some());
+    let expected = crate::context_manager::estimate_item_token_count(&user)
+        + crate::context_manager::estimate_item_token_count(&summary);
+    assert!(expected > 0);
+    assert_eq!(
+        replaced_history_estimate([&instructions, &summary, &user].into_iter()),
+        expected
     );
 }

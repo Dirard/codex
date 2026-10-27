@@ -160,17 +160,23 @@ impl TurnLoop {
 
     /// Fork hook of `run_turn` before a mid-turn compaction: whether it compacts now
     /// (`check_compaction_progress` with the turn's `TurnCompactionLimit`).
-    pub(super) fn before_compaction(
+    pub(super) async fn before_compaction(
         &mut self,
+        sess: &Session,
         turn_context: &TurnContext,
         token_status: &ContextWindowTokenStatus,
     ) -> CodexResult<bool> {
+        let scope = turn_context.config.model_auto_compact_token_limit_scope;
+        let history_estimate = if body_is_no_measure(scope, token_status) {
+            Some(replaced_history_estimate(
+                sess.clone_history().await.raw_items(),
+            ))
+        } else {
+            None
+        };
         self.check_compaction_progress(
             token_status.token_limit_reached,
-            replaced_context_tokens(
-                turn_context.config.model_auto_compact_token_limit_scope,
-                token_status,
-            ),
+            replaced_context_tokens(scope, token_status, history_estimate),
             TurnCompactionLimit::of_turn(&turn_context.config, token_status),
         )
     }
@@ -281,17 +287,58 @@ impl TurnLoop {
 }
 
 /// The context a compaction replaces, as the turn's `TurnCompactionLimit` counts it. With
-/// `model_auto_compact_token_limit_scope = "body_after_prefix"` a compaction keeps the prefix
-/// of its window and replaces only the body after it, so only the body counts; otherwise the
-/// whole active context (review of the fixes, P3-6).
+/// `model_auto_compact_token_limit_scope = "body_after_prefix"` the body after the window's
+/// prefix counts (review of the fixes, P3-6); otherwise the whole active context.
+///
+/// The body is no measure when the provider reported no usage for the window (no prefill, so
+/// the body reads 0), nor when the full window, not the body, forced the compaction: a large
+/// prefix filled it. Then the compaction counts at least `history_estimate`, the estimated
+/// history it replaces (`replaced_history_estimate`), so the limit does not weaken
+/// (review of the fixes 2, N-3).
 pub(super) fn replaced_context_tokens(
     scope: AutoCompactTokenLimitScope,
     token_status: &ContextWindowTokenStatus,
+    history_estimate: Option<i64>,
 ) -> i64 {
     match scope {
         AutoCompactTokenLimitScope::Total => token_status.active_context_tokens,
-        AutoCompactTokenLimitScope::BodyAfterPrefix => token_status.auto_compact_scope_tokens,
+        AutoCompactTokenLimitScope::BodyAfterPrefix => {
+            let body = token_status.auto_compact_scope_tokens;
+            if body_is_no_measure(scope, token_status) {
+                body.max(history_estimate.unwrap_or(token_status.active_context_tokens))
+            } else {
+                body
+            }
+        }
     }
+}
+
+/// Whether the body of a `body_after_prefix` window understates what a compaction replaces
+/// (review of the fixes 2, N-3): no usage set its prefix, or the full window forced it.
+pub(super) fn body_is_no_measure(
+    scope: AutoCompactTokenLimitScope,
+    token_status: &ContextWindowTokenStatus,
+) -> bool {
+    matches!(scope, AutoCompactTokenLimitScope::BodyAfterPrefix)
+        && (token_status.auto_compact_window_prefill_tokens.is_none()
+            || token_status.full_context_window_limit_reached)
+}
+
+/// The estimated history a compaction replaces: every history item but the base instructions
+/// and tool declarations, which the next window keeps. Same estimate as the rest of the token
+/// accounting (`estimate_item_token_count`).
+pub(super) fn replaced_history_estimate<'a>(
+    items: impl Iterator<Item = &'a codex_protocol::models::ResponseItem>,
+) -> i64 {
+    items
+        .filter(|item| {
+            !matches!(
+                item,
+                codex_protocol::models::ResponseItem::AdditionalTools { .. }
+            ) && crate::context::BaseInstructionsFragment::text_from_item(item).is_none()
+        })
+        .map(crate::context_manager::estimate_item_token_count)
+        .fold(0, i64::saturating_add)
 }
 
 /// The turn error when a turn reached its `TurnCompactionLimit`.
