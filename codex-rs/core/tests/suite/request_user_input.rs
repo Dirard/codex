@@ -633,9 +633,11 @@ async fn default_mode_questions_point_the_model_at_the_blocking_tool() -> anyhow
     let blocking = description("request_user_input").expect("request_user_input");
     assert!(
         blocking.contains(
-            "To ask in Default mode, use this tool, not an asynchronous question tool such as request_user_input_async"
+            "To ask in Default mode, use this tool rather than an asynchronous question tool"
         ),
         "{blocking}"
     );
+    // Only some catalogs list the async tool, so the shared guidance names none (P3-11).
+    assert!(!blocking.contains("request_user_input_async"), "{blocking}");
     Ok(())
 }

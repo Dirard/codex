@@ -224,6 +224,23 @@ fn default_mode_texts_keep_irreversible_actions_with_the_user() {
     );
 }
 
+// Tails review 2026-10-27, P3-11: the guidance is added whether or not the model catalog lists
+// the async question tool, so it names no such tool; it still steers Default-mode questions
+// to this one.
+#[test]
+fn default_mode_guidance_names_no_tool_the_catalog_may_lack() {
+    assert!(
+        !DEFAULT_MODE_GUIDANCE.contains("request_user_input_async"),
+        "{DEFAULT_MODE_GUIDANCE}"
+    );
+    assert!(
+        DEFAULT_MODE_GUIDANCE.contains(
+            "To ask in Default mode, use this tool rather than an asynchronous question tool"
+        ),
+        "{DEFAULT_MODE_GUIDANCE}"
+    );
+}
+
 // Review P6: the description is shared by every mode, so the guidance names Default mode and
 // leaves Plan mode's own question rules untouched.
 #[test]
