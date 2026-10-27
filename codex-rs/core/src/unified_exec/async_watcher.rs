@@ -176,6 +176,9 @@ pub(crate) fn spawn_exit_watcher(
     let exit_token = process.cancellation_token();
     let output_drained = process.output_drained_notify();
     let interaction_lock = process.interaction_lock();
+    // Fork: the exit notification needs the session and output after they move below, and a
+    // shutdown waits for this watcher from now on.
+    let exit_watch = super::ExitWatch::new(exit_notifier, &session_ref, &output_buffer);
 
     tokio::spawn(async move {
         exit_token.cancelled().await;
@@ -192,8 +195,6 @@ pub(crate) fn spawn_exit_watcher(
         let plugin_metrics_sidecar = plugin_metrics_sidecar
             .as_ref()
             .and_then(take_plugin_metrics_sidecar);
-        // Fork: the exit notification needs the session and output after they move below.
-        let exit_watch = super::ExitWatch::new(exit_notifier, &session_ref, &output_buffer);
         if let Some(message) = process.failure_message() {
             drop(plugin_metrics_sidecar);
             emit_failed_exec_end_for_unified_exec(

@@ -362,7 +362,10 @@ impl ExitNotifier {
         }
     }
 
-    /// Settle the promise because the session shuts down (R2.5).
+    /// Settle the promise because the session shuts down (R2.5). Every armed process the
+    /// shutdown stops gets its notice, also when the model turned `notify_on_exit` off or
+    /// stopped its watch: Codex stops the process, and a resumed thread must learn that it
+    /// no longer runs (live recheck 3 R10).
     pub(crate) fn settle_for_shutdown(&self) -> ShutdownSettle {
         let mut state = self.lock();
         if let Some(watch) = state.output_watch.take() {
@@ -374,7 +377,7 @@ impl ExitNotifier {
         if state.delivering {
             return ShutdownSettle::DeliveryInFlight;
         }
-        if !self.reports_exit(&state) || state.settled {
+        if !state.armed || state.settled {
             state.settled = true;
             return ShutdownSettle::Nothing;
         }
@@ -893,9 +896,69 @@ pub(crate) fn last_bytes<const MAX_BYTES: usize>(
 
 type SharedOutputBuffers = Arc<tokio::sync::Mutex<super::process::OutputBuffers>>;
 
+/// How long a shutdown waits for the exit watchers of the processes it stopped, so the end
+/// of each command reaches the thread's rollout before the rollout closes (live recheck 3
+/// R10). A watcher waits at most `TRAILING_OUTPUT_GRACE` (100 ms) for trailing output.
+pub(crate) const SHUTDOWN_EXIT_WATCHER_WAIT: Duration = Duration::from_secs(2);
+
+/// The exit watchers of a session that have not finished (live recheck 3 R10). A watcher
+/// records the end of its command; when the shutdown stops a process, its watcher runs only
+/// after the stop, so the shutdown waits for it before the thread's rollout closes. Without
+/// that wait the end event of a process that still printed came after the close: an ERROR
+/// "failed to record rollout items" on stderr and a command that looks unfinished on resume.
+#[derive(Default)]
+pub(crate) struct ExitWatchers {
+    running: Mutex<usize>,
+    done: Notify,
+}
+
+impl ExitWatchers {
+    fn lock(&self) -> std::sync::MutexGuard<'_, usize> {
+        self.running.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Counts a watcher until the guard drops.
+    fn start(self: &Arc<Self>) -> ExitWatcherGuard {
+        *self.lock() += 1;
+        ExitWatcherGuard(Arc::clone(self))
+    }
+
+    /// Waits until every watcher finished, or `deadline`.
+    pub(crate) async fn wait_until_done(&self, deadline: Instant) {
+        loop {
+            let notified = self.done.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if *self.lock() == 0 {
+                return;
+            }
+            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+/// One running exit watcher of [`ExitWatchers`].
+struct ExitWatcherGuard(Arc<ExitWatchers>);
+
+impl Drop for ExitWatcherGuard {
+    fn drop(&mut self) {
+        let mut running = self.0.lock();
+        *running = running.saturating_sub(1);
+        if *running == 0 {
+            self.0.done.notify_waiters();
+        }
+    }
+}
+
 /// What the exit watcher needs to report the exit of an armed process. It is captured
-/// before the session and the output buffer move into the end event.
-pub(crate) struct ExitWatch(Option<(Arc<ExitNotifier>, Arc<Session>, SharedOutputBuffers)>);
+/// before the session and the output buffer move into the end event, when the watcher is
+/// spawned, so a shutdown waits for the watcher from then on.
+pub(crate) struct ExitWatch {
+    notification: Option<(Arc<ExitNotifier>, Arc<Session>, SharedOutputBuffers)>,
+    _watcher: ExitWatcherGuard,
+}
 
 impl ExitWatch {
     pub(crate) fn new(
@@ -903,10 +966,15 @@ impl ExitWatch {
         session: &Arc<Session>,
         output_buffer: &SharedOutputBuffers,
     ) -> Self {
-        Self(
-            exit_notifier
+        Self {
+            notification: exit_notifier
                 .map(|notifier| (notifier, Arc::clone(session), Arc::clone(output_buffer))),
-        )
+            _watcher: session
+                .services
+                .session_extension_data
+                .get_or_init(ExitWatchers::default)
+                .start(),
+        }
     }
 
     /// Settle the notification of the stopped process. The exit watcher calls this under the
@@ -918,7 +986,12 @@ impl ExitWatch {
     /// right before the exit notification, or are dropped when no exit notification
     /// follows (R6.9).
     pub(crate) async fn report(self, process: &super::UnifiedExecProcess, duration: Duration) {
-        let Some((exit_notifier, session, output_buffer)) = self.0 else {
+        // The watcher counts until the report is done (live recheck 3 R10).
+        let Self {
+            notification,
+            _watcher,
+        } = self;
+        let Some((exit_notifier, session, output_buffer)) = notification else {
             return;
         };
         if exit_notifier.wants_report() {

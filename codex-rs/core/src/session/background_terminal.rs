@@ -14,9 +14,11 @@ use crate::context::ContextualUserFragment;
 use crate::session::input_queue::QueuedBackgroundNotification;
 use crate::session::input_queue::SampledCallback;
 use crate::unified_exec::ExitNotifier;
+use crate::unified_exec::ExitWatchers;
 use crate::unified_exec::OutputWatch;
 use crate::unified_exec::PendingExitNotification;
 use crate::unified_exec::PendingTerminal;
+use crate::unified_exec::SHUTDOWN_EXIT_WATCHER_WAIT;
 use crate::unified_exec::TerminatedProcesses;
 use crate::unified_exec::WatchWait;
 use codex_utils_string::untrusted::UntrustedBoundary;
@@ -199,11 +201,19 @@ impl Session {
     /// Record what a shutdown owes the model before persistence closes (R2.5): every queued
     /// notification and a notice for each armed process that the shutdown stopped.
     ///
-    /// Without exit notifications both are empty and nothing is recorded.
+    /// First the exit watchers of the stopped processes record the end of their commands, so
+    /// it reaches the rollout before the rollout closes; this holds without exit
+    /// notifications too (live recheck 3 R10). Without exit notifications nothing else is
+    /// recorded.
     pub(crate) async fn record_background_terminals_at_shutdown(
         &self,
         terminated: TerminatedProcesses,
     ) {
+        if let Some(watchers) = self.services.session_extension_data.get::<ExitWatchers>() {
+            watchers
+                .wait_until_done(tokio::time::Instant::now() + SHUTDOWN_EXIT_WATCHER_WAIT)
+                .await;
+        }
         let deadline = tokio::time::Instant::now() + SHUTDOWN_DELIVERY_WAIT;
         for exit_notifier in &terminated.deliveries_in_flight {
             exit_notifier.wait_for_delivery(deadline).await;

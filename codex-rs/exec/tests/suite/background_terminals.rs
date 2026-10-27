@@ -103,6 +103,28 @@ struct ExecRun {
     elapsed: Duration,
     served: Vec<&'static str>,
     bodies: Vec<Value>,
+    /// The thread's rollout files under `$CODEX_HOME/sessions`, joined.
+    rollout: String,
+}
+
+/// The text of every rollout file under `home`.
+fn rollouts(home: &std::path::Path) -> String {
+    fn collect(dir: &std::path::Path, texts: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect(&path, texts);
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension == "jsonl")
+            {
+                texts.push(std::fs::read_to_string(&path).unwrap_or_default());
+            }
+        }
+    }
+    let mut texts = Vec::new();
+    collect(&home.join("sessions"), &mut texts);
+    texts.join("\n")
 }
 
 async fn run_exec(command: &str, overrides: &[&str]) -> anyhow::Result<ExecRun> {
@@ -154,6 +176,7 @@ async fn run_exec_routed(
         elapsed: started.elapsed(),
         served,
         bodies,
+        rollout: rollouts(test.home_path()),
     })
 }
 
@@ -586,6 +609,7 @@ async fn run_dev_server(responder: DevServer, overrides: &[&str]) -> anyhow::Res
         elapsed: started.elapsed(),
         served,
         bodies,
+        rollout: rollouts(test.home_path()),
     })
 }
 
@@ -746,5 +770,91 @@ async fn exec_waits_for_a_rearmed_watch_only_while_it_would_keep_matching() -> a
         "stderr: {}",
         run.stderr
     );
+    Ok(())
+}
+
+/// A server that keeps printing, as a dev server logs its health checks.
+const PRINTING_SERVER: &str = "while :; do echo 'GET /api/health 200'; sleep 0.05; done";
+
+/// The shutdown notice of a background terminal that Codex stopped with its session.
+const STOPPED_NOTICE: &str = "was stopped when the Codex session ended";
+
+/// Live recheck 3 R10: codex exec stops a background command that still prints when it exits.
+/// The end of the command reaches the thread's rollout before the rollout closes, so stderr has
+/// no "failed to record rollout items"; with or without exit notifications.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exec_records_the_end_of_a_printing_terminal_it_stops() -> anyhow::Result<()> {
+    for overrides in [
+        &[][..],
+        &["features.exec_exit_notifications.enabled=true"][..],
+    ] {
+        let run = run_exec_with(
+            json!({
+                "cmd": PRINTING_SERVER,
+                "yield_time_ms": 250,
+                "login": false,
+            }),
+            overrides,
+        )
+        .await?;
+        assert_eq!(
+            run.code,
+            Some(0),
+            "{overrides:?}\nstdout: {}\nstderr: {}",
+            run.stdout,
+            run.stderr
+        );
+        assert_eq!(run.served, vec!["start", "after_tool"], "{overrides:?}");
+        assert!(
+            !run.stderr.contains("failed to record rollout items"),
+            "{overrides:?}\nstderr: {}",
+            run.stderr
+        );
+    }
+    Ok(())
+}
+
+/// Live recheck 3 R10: a server whose exit the model turned off, with its watch on or
+/// stopped, is stopped when codex exec exits, and the rollout notes it, as for a server whose
+/// exit is still awaited: a resumed thread knows the server no longer runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exec_notes_the_stop_of_a_server_whose_exit_was_turned_off() -> anyhow::Result<()> {
+    for follow_up in [
+        json!({ "notify_on_exit": false }),
+        json!({ "notify_on_exit": false, "stop_output_watch": true }),
+    ] {
+        let run = run_dev_server(
+            DevServer::new(/*notify_on_exit*/ true, Some(follow_up.clone())),
+            &[
+                "features.exec_exit_notifications.enabled=true",
+                "features.exec_exit_notifications.exec_wait_timeout_ms=40000",
+                "features.exec_exit_notifications.output_watch_quiet_ms=1000",
+            ],
+        )
+        .await?;
+        assert_eq!(
+            run.code,
+            Some(0),
+            "{follow_up}\nstdout: {}\nstderr: {}",
+            run.stdout,
+            run.stderr
+        );
+        assert_eq!(
+            run.served,
+            vec!["start", "after_tool", "notified", "after_disarm"],
+            "{follow_up}"
+        );
+        assert_eq!(
+            run.rollout.matches(STOPPED_NOTICE).count(),
+            1,
+            "{follow_up}\nrollout: {}",
+            run.rollout
+        );
+        assert!(
+            !run.stderr.contains("failed to record rollout items"),
+            "{follow_up}\nstderr: {}",
+            run.stderr
+        );
+    }
     Ok(())
 }

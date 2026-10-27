@@ -331,7 +331,8 @@ fn failed_termination_clears_only_its_own_cause() {
     );
 }
 
-/// Fork (R2.5): a shutdown owes a notice only for a promise the model still waits for.
+/// Fork (R2.5): a shutdown owes a notice for each armed process it stops, nothing for one
+/// that exited, was observed or was never armed.
 #[test]
 fn shutdown_settles_armed_notifiers_with_a_notice() {
     let armed = notifier(1000, "sleep 25; echo build-ok");
@@ -367,6 +368,35 @@ fn shutdown_settles_armed_notifiers_with_a_notice() {
     observed.arm();
     observed.observe();
     assert_eq!(observed.settle_for_shutdown(), ShutdownSettle::Nothing);
+}
+
+/// Live recheck 3 R10: a shutdown that stops a server whose exit the model turned off, with
+/// its watch on or stopped, still notes the stop, so a resumed thread knows the server no
+/// longer runs instead of writing to its dead session.
+#[test]
+fn shutdown_notes_a_stopped_process_whose_exit_was_turned_off() {
+    for watching in [true, false] {
+        let server = notifier(1000, "npm run dev");
+        let watch = OutputWatch::new(
+            1000,
+            "npm run dev".to_string(),
+            OutputPattern::parse("(?i)error").expect("valid"),
+        );
+        server.set_output_watch(Some(watch));
+        assert!(server.arm().is_none());
+        server.disarm_exit();
+        if !watching {
+            server.set_output_watch(None);
+        }
+        let ShutdownSettle::Notice(notice) = server.settle_for_shutdown() else {
+            panic!("the stop is noted, watching: {watching}");
+        };
+        assert_eq!(
+            (notice.process_id, notice.command.as_str()),
+            (1000, "npm run dev")
+        );
+        assert!(server.on_exit(report(exited(143), b"")).is_none());
+    }
 }
 
 #[test]
