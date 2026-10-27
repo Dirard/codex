@@ -923,8 +923,9 @@ fn all_commits_present(cwd: &Path, objects: &[String]) -> Result<bool> {
 
 /// Live processes whose working directory lies in the worktree, as `pid N: <command>`;
 /// removing the checkout under one would let it recreate the path as a plain directory and
-/// lose what it writes (F1). Read from `/proc`, so empty on other systems. Git commands this
-/// process runs in the worktree, such as a concurrent status, do not count.
+/// lose what it writes (F1). Read from `/proc`, so empty on other systems. The Git children
+/// this process spawned are skipped by pid (K5), so a concurrent status of the crate's own
+/// does not count while a foreign Git does.
 pub fn processes_in(root: &Path) -> Vec<String> {
     #[cfg(target_os = "linux")]
     {
@@ -956,6 +957,12 @@ fn linux_processes_in(root: &Path) -> Vec<String> {
         if pid == own {
             continue;
         }
+        // K5: skip exactly the Git children this process spawned (by pid, not by name or
+        // parent), so a long-lived own Git child does not block a removal and a foreign Git,
+        // whatever its name or parent, still does.
+        if crate::git::fork::is_own_git_child(pid) {
+            continue;
+        }
         let proc_dir = entry.path();
         let Ok(cwd) = fs::read_link(proc_dir.join("cwd")) else {
             continue;
@@ -968,13 +975,7 @@ fn linux_processes_in(root: &Path) -> Vec<String> {
         let comm = stat
             .split_once(" (")
             .and_then(|(_, rest)| rest.rsplit_once(") "))
-            .map(|(comm, rest)| (comm.to_string(), rest.split(' ').nth(1).map(str::to_owned)));
-        if let Some((comm, Some(ppid))) = &comm
-            && comm == "git"
-            && ppid.parse::<u32>().ok() == Some(own)
-        {
-            continue;
-        }
+            .map(|(comm, _)| comm.to_string());
         let command = fs::read(proc_dir.join("cmdline"))
             .map(|bytes| {
                 String::from_utf8_lossy(&bytes)
@@ -985,7 +986,7 @@ fn linux_processes_in(root: &Path) -> Vec<String> {
             })
             .unwrap_or_default();
         let command = if command.is_empty() {
-            comm.map(|(comm, _)| comm).unwrap_or_default()
+            comm.unwrap_or_default()
         } else {
             command
         };
@@ -1078,6 +1079,9 @@ fn run_git_with_input(command: &mut Command, input: Vec<u8>) -> Result<std::proc
         .stderr(std::process::Stdio::piped())
         .spawn()
         .context("failed to start git")?;
+    // K5: record the child in the fork registry while it runs, so the `/proc` scan does not
+    // mistake this process's own Git for one that holds the worktree.
+    let _tracked = crate::git::fork::GitChild::new(child.id());
     let mut stdin = child.stdin.take().context("git has no standard input")?;
     // Written from another thread, so a full output pipe cannot block the input.
     let writer = std::thread::spawn(move || stdin.write_all(&input));

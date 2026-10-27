@@ -49,9 +49,23 @@ pub(crate) fn git_output(
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
 ) -> Result<Output> {
     let mut command = git_command(cwd, operation)?;
-    let output = command.args(args).output().context("failed to start git")?;
+    let output = tracked_output(command.args(args)).context("failed to start git")?;
     ensure_git_success(&output)?;
     Ok(output)
+}
+
+/// Runs a prepared Git command with stdin closed and its output captured, recording the child
+/// in the fork registry while it runs (K5), so the worktree `/proc` scan never counts the
+/// crate's own Git as a process that holds a worktree. Equivalent to [`Command::output`].
+pub(crate) fn tracked_output(command: &mut Command) -> std::io::Result<Output> {
+    use std::process::Stdio;
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let _tracked = fork::GitChild::new(child.id());
+    child.wait_with_output()
 }
 
 /// Builds an isolated Git command for callers that add their own arguments and environment.
@@ -77,7 +91,7 @@ pub(crate) fn git_command(cwd: &Path, operation: GitOperation) -> Result<Command
 
 /// Runs a prepared command and accepts the listed non-zero exit codes as successful results.
 pub(crate) fn run_git_command(command: &mut Command, accepted_codes: &[i32]) -> Result<Output> {
-    let output = command.output().context("failed to start git")?;
+    let output = tracked_output(command).context("failed to start git")?;
     if output
         .status
         .code()
@@ -227,16 +241,15 @@ fn base_git_command(cwd: &Path) -> Command {
 }
 
 fn configured_filters(cwd: &Path) -> Result<BTreeSet<String>> {
-    let output = base_git_command(cwd)
-        .args([
-            "config",
-            "--null",
-            "--name-only",
-            "--get-regexp",
-            "^filter\\.",
-        ])
-        .output()
-        .context("failed to inspect Git filter configuration")?;
+    let mut command = base_git_command(cwd);
+    command.args([
+        "config",
+        "--null",
+        "--name-only",
+        "--get-regexp",
+        "^filter\\.",
+    ]);
+    let output = tracked_output(&mut command).context("failed to inspect Git filter configuration")?;
 
     if !output.status.success() {
         if output.status.code() == Some(1) {
@@ -267,6 +280,9 @@ fn ensure_git_success(output: &Output) -> Result<()> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     bail!("git command failed: {}", stderr.trim())
 }
+
+#[path = "git_fork.rs"]
+pub(crate) mod fork;
 
 #[cfg(test)]
 #[path = "git_tests.rs"]
