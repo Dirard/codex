@@ -44,6 +44,11 @@ pub struct AgentWorktreeRecord {
     /// branch a restore starts from it, and a record with it never restores the base silently.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_checkpoint: Option<String>,
+    /// `apply_agent_worktree` closed the worktree after recording all its work (R6 of the
+    /// second live recheck, 2026-10-27): the restore that follows says that nothing recorded
+    /// was lost, and clears the mark.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
 }
 
 impl AgentWorktreeRecord {
@@ -57,6 +62,7 @@ impl AgentWorktreeRecord {
             branch: metadata.branch.clone(),
             applied_tip: None,
             last_checkpoint: None,
+            closed: false,
         }
     }
 
@@ -191,7 +197,9 @@ pub fn prune_agent_records(directory: &Path, now: SystemTime, min_age: Duration)
 /// branch and drops its retired commit on the way when that is safe (P3-2). Errors keep it.
 fn useless_record(record: &AgentWorktreeRecord) -> bool {
     if !record.source_root.is_dir() {
-        return true;
+        // F9: a record with an applied tip may own a retired commit ref in a repository that
+        // can no longer be found from it; it stays, so the ref never loses its record.
+        return record.applied_tip.is_none();
     }
     let Some(metadata) = record.metadata() else {
         return false;
@@ -240,6 +248,60 @@ fn drop_retired_commit(record: &AgentWorktreeRecord) -> Result<bool> {
         ],
     )?;
     Ok(true)
+}
+
+/// F9: deletes the retired commit refs of the repository at `source_root` that no record in
+/// `directory` names any more (an older version pruned it, or it was deleted by hand) once
+/// the checkout's HEAD contains their changes over the base their checkpoint commit names
+/// (`Codex-Agent-Base`); others stay, since they may hold the only copy of an agent's work.
+/// Returns how many it deleted; a repository that cannot be read deletes nothing.
+pub fn prune_orphan_applied_refs(source_root: &Path, directory: &Path) -> Result<usize> {
+    let refs = git_output(
+        source_root,
+        GitOperation::Metadata,
+        [
+            "for-each-ref",
+            "--format=%(refname)%00%(objectname)%00%(trailers:key=Codex-Agent-Base,valueonly,separator=%x2C)",
+            "refs/codex/agents/applied/",
+        ],
+    )?;
+    let mut pruned = 0;
+    for line in String::from_utf8_lossy(&refs.stdout).lines() {
+        let [reference, tip, base] = line.split('\0').collect::<Vec<_>>()[..] else {
+            continue;
+        };
+        let Some(thread_id) = reference.strip_prefix("refs/codex/agents/applied/") else {
+            continue;
+        };
+        let Ok(path) = record_path(directory, thread_id) else {
+            continue;
+        };
+        let base = base.split(',').next().unwrap_or_default().trim();
+        if path.exists()
+            || !matches!(base.len(), 40 | 64)
+            || !base.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !super::maintenance::head_contains(source_root, base, tip).unwrap_or(false)
+        {
+            continue;
+        }
+        if git_output(
+            source_root,
+            GitOperation::Metadata,
+            [
+                "update-ref",
+                "-m",
+                "codex agent work committed",
+                "-d",
+                reference,
+                tip,
+            ],
+        )
+        .is_ok()
+        {
+            pruned += 1;
+        }
+    }
+    Ok(pruned)
 }
 
 /// Whether the parent checkout still has the recorded branch or one of its free names.

@@ -18,7 +18,7 @@ use super::optional_commit;
 use super::own_branch_tip;
 use super::read_agent_metadata;
 use super::remove_if_unchanged;
-use super::unpopulated_submodule_files;
+use super::unrecorded_work;
 use super::write_agent_metadata;
 use crate::WorktreeManager;
 use crate::git::GitOperation;
@@ -360,9 +360,16 @@ pub fn retire_applied_branch(
         super::MergeOutcome::AlreadyApplied { tip: merged } if merged == tip => {}
         _ => return Ok(false),
     }
+    // F9: an earlier retired commit of the thread is replaced only by its descendant, and the
+    // transaction compares and swaps it, so no work loses its last ref.
+    let applied = applied_ref(&metadata.thread_id)?;
+    let keep = match optional_commit(source_root, &applied)? {
+        Some(old) if !is_ancestor(source_root, &old, tip)? => return Ok(false),
+        Some(old) => format!("update {applied} {tip} {old}"),
+        None => format!("create {applied} {tip}"),
+    };
     let transaction = format!(
-        "start\nupdate {applied} {tip}\ndelete {branch} {tip}\ncommit\n",
-        applied = applied_ref(&metadata.thread_id)?,
+        "start\n{keep}\ndelete {branch} {tip}\ncommit\n",
         branch = branch_ref(&branch.branch)?,
     );
     let mut command = super::git_command(source_root, GitOperation::Metadata)?;
@@ -609,8 +616,8 @@ fn remove_if_parked(
     if has_changes(root)? {
         return Ok(RemoveOutcome::Kept(KeptReason::Changes));
     }
-    if !unpopulated_submodule_files(root)?.is_empty() {
-        return Ok(RemoveOutcome::Kept(KeptReason::SubmoduleFiles));
+    if let Some(reason) = unrecorded_work(root, /*discard_unrecorded*/ false)? {
+        return Ok(RemoveOutcome::Kept(reason));
     }
     git_output(
         source_root,
@@ -629,16 +636,17 @@ fn remove_if_parked(
 
 /// Removes the checkout of an agent that is done (UC12, R12.5): one at the tip of its own
 /// branch, or at its base without a branch, and without uncommitted changes. The branch is
-/// never touched, so a reload restores the worktree from it (R5.3). Files the agent put into
-/// submodule directories, which Codex never records, keep the worktree unless
-/// `discard_submodule_files` confirms they may go (P3-3). Like [`remove_if_unchanged`], it
+/// never touched, so a reload restores the worktree from it (R5.3). Work Codex never records
+/// (files in submodule directories, nested repositories with their own work) keeps the
+/// worktree unless `discard_unrecorded` confirms it may go, and a live process in the
+/// worktree always keeps it (P3-3, F1, F3). Like [`remove_if_unchanged`], it
 /// waits for no live binding: one that holds the worktree keeps it (`InUse`), and the checks
 /// run under the exclusive lock that the removal keeps.
 pub fn remove_agent_checkout(
     source_root: &Path,
     root: &Path,
     metadata: &AgentWorktreeMetadata,
-    discard_submodule_files: bool,
+    discard_unrecorded: bool,
 ) -> Result<RemoveOutcome> {
     if !root.join(".git").exists() {
         super::drop_missing_registration(source_root, root);
@@ -655,8 +663,8 @@ pub fn remove_agent_checkout(
     if optional_commit(root, "HEAD")?.as_deref() != Some(recorded.as_str()) {
         return Ok(RemoveOutcome::Kept(KeptReason::Commits));
     }
-    if !discard_submodule_files && !unpopulated_submodule_files(root)?.is_empty() {
-        return Ok(RemoveOutcome::Kept(KeptReason::SubmoduleFiles));
+    if let Some(reason) = unrecorded_work(root, discard_unrecorded)? {
+        return Ok(RemoveOutcome::Kept(reason));
     }
     let cwd = if source_root.is_dir() {
         source_root

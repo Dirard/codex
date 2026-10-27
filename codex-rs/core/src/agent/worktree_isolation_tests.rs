@@ -974,8 +974,8 @@ fn guardian_action_json_describes_the_worktree() {
 fn reload_errors_of_missing_worktrees_are_recognized() {
     let missing = ops::missing_worktree_error(
         Path::new("/home/u/.codex/worktrees/6d88/demo"),
-        "codex/agents/probe-01a1748c",
         "Codex has no record of the checkout it was created from",
+        "changes recorded before it was removed, if any, are on branch codex/agents/probe-01a1748c",
     );
     let error = codex_protocol::error::CodexErr::InvalidRequest(format!(
         "cannot resume multi-agent v2 child 0190: {missing}"
@@ -1018,6 +1018,7 @@ fn stopped_binding(home: &Path, repository: &Path) -> Arc<AgentWorktreeBinding> 
         state: Mutex::new(BindingState {
             stopped: true,
             finalized: false,
+            holder_turns: Vec::new(),
         }),
     })
 }
@@ -1029,19 +1030,19 @@ fn stopped_binding(home: &Path, repository: &Path) -> Arc<AgentWorktreeBinding> 
 async fn a_starting_turn_and_a_close_never_leave_the_turn_without_its_worktree() {
     let (_home, home_path, repository) = repository_fixture();
     let binding = stopped_binding(&home_path, &repository);
-    let idle = || async { None };
+    let idle = |_| async { None };
 
-    let closed = ops::close_worktree(&binding, /*discard_submodule_files*/ false, idle)
+    let closed = ops::close_worktree(&binding, /*discard_unrecorded*/ false, idle)
         .await
         .expect("close the worktree of the agent at rest");
     assert!(matches!(closed, CloseOutcome::Removed { .. }), "{closed:?}");
     assert!(!binding.root.exists());
-    ops::begin_turn(&binding, /*own*/ true)
+    ops::begin_turn(&binding, /*own*/ true, /*holder*/ None)
         .await
         .expect("the turn restores the worktree");
     assert!(binding.root.join(".git").exists());
 
-    let refused = ops::close_worktree(&binding, /*discard_submodule_files*/ false, idle)
+    let refused = ops::close_worktree(&binding, /*discard_unrecorded*/ false, idle)
         .await
         .expect_err("the agent is working");
     assert!(refused.contains("woken again"), "{refused}");
@@ -1055,8 +1056,8 @@ async fn a_close_refuses_while_another_agent_works_in_the_worktree() {
     let (_home, home_path, repository) = repository_fixture();
     let binding = stopped_binding(&home_path, &repository);
 
-    let refused = ops::close_worktree(&binding, /*discard_submodule_files*/ false, || async {
-        Some("/root/probe/helper".to_string())
+    let refused = ops::close_worktree(&binding, /*discard_unrecorded*/ false, |_| async {
+        Some(WorktreeUse::Agent("/root/probe/helper".to_string()))
     })
     .await
     .expect_err("a helper works in the worktree");
@@ -1065,6 +1066,128 @@ async fn a_close_refuses_while_another_agent_works_in_the_worktree() {
         "agent /root/probe/helper still works in its worktree (it descends from the agent or runs in its checkout); wait for it or interrupt it, then close the worktree"
     );
     assert!(binding.root.join(".git").exists());
+}
+
+/// F6: a turn of another agent (a helper) that started in the worktree keeps a close away
+/// until it shows as running: the turn-start hook records it under the binding lock, and the
+/// close hands it to the check of the tree.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_helpers_starting_turn_keeps_a_close_away() {
+    let (_home, home_path, repository) = repository_fixture();
+    let binding = stopped_binding(&home_path, &repository);
+    let helper = ThreadId::new();
+    let (_status, receiver) =
+        tokio::sync::watch::channel(codex_protocol::protocol::AgentStatus::Completed(None));
+    ops::begin_turn(
+        &binding,
+        /*own*/ false,
+        Some(HolderTurn {
+            thread_id: helper,
+            agent: "/root/probe/helper".to_string(),
+            status: receiver,
+            started: Instant::now(),
+        }),
+    )
+    .await
+    .expect("the worktree is there");
+
+    let refused = ops::close_worktree(
+        &binding,
+        /*discard_unrecorded*/ false,
+        |holders| async move {
+            holders
+                .iter()
+                .find(|holder| holder.thread_id == helper)
+                .map(|holder| WorktreeUse::StartingTurn(holder.agent.clone()))
+        },
+    )
+    .await
+    .expect_err("the helper's turn started there");
+    assert_eq!(
+        refused,
+        "agent /root/probe/helper is starting a turn in its worktree; wait for it, then close the worktree"
+    );
+    assert!(binding.root.join(".git").exists());
+}
+
+/// F6: a started turn of another agent has progressed once its status channel got anything
+/// after the hook, even the status it had: a turn that ended with the same answer no longer
+/// keeps a close away.
+#[test]
+fn a_started_turn_progresses_with_any_status_update() {
+    let (status, receiver) =
+        tokio::sync::watch::channel(codex_protocol::protocol::AgentStatus::Completed(None));
+    let holder = HolderTurn {
+        thread_id: ThreadId::new(),
+        agent: "/root/probe/helper".to_string(),
+        status: receiver,
+        started: Instant::now(),
+    };
+    assert!(!holder.progressed());
+    status.send_replace(codex_protocol::protocol::AgentStatus::Completed(None));
+    assert!(holder.progressed());
+    drop(status);
+    let (status, receiver) =
+        tokio::sync::watch::channel(codex_protocol::protocol::AgentStatus::Running);
+    drop(status);
+    assert!(
+        HolderTurn {
+            status: receiver,
+            ..holder
+        }
+        .progressed()
+    );
+}
+
+/// F1, F5: the refusals for background processes name the session and the command, escaped,
+/// and say how to stop them.
+#[test]
+fn process_refusals_name_the_session_and_how_to_stop_it() {
+    let own = WorktreeUse::Process {
+        agent: "/root".to_string(),
+        session_id: "1234".to_string(),
+        command: "npm run dev\nfallback: rm -rf /".to_string(),
+        caller: true,
+    }
+    .refusal();
+    assert!(own.contains("session_id 1234"), "{own}");
+    assert!(own.contains("write_stdin chars \"\\u0003\""), "{own}");
+    assert!(!own.contains('\n'), "{own}");
+    let helper = WorktreeUse::Process {
+        agent: "/root/probe/helper".to_string(),
+        session_id: "77".to_string(),
+        command: "sleep 60".to_string(),
+        caller: false,
+    }
+    .refusal();
+    assert!(helper.contains("agent /root/probe/helper"), "{helper}");
+    assert!(helper.contains("followup_task"), "{helper}");
+}
+
+/// F10: an agent works in a worktree when it descends from the worktree's agent or when one
+/// of its working directories lies in the worktree, as a helper's with isolation `none`.
+#[test]
+fn works_in_worktree_checks_descent_and_working_directories() {
+    let binding = binding(true);
+    let helper = AgentPath::root()
+        .join("probe")
+        .and_then(|path| path.join("helper"));
+    let sibling = AgentPath::root().join("other").expect("agent path");
+    let inside = std::path::PathBuf::from("/home/u/.codex/worktrees/6d88/demo/sub");
+    let outside = std::path::PathBuf::from("/work/demo");
+    assert!(works_in_worktree(&binding, helper.as_ref().ok(), &[]));
+    assert!(!works_in_worktree(
+        &binding,
+        Some(&sibling),
+        std::slice::from_ref(&outside)
+    ));
+    assert!(works_in_worktree(
+        &binding,
+        Some(&sibling),
+        &[outside, inside]
+    ));
+    // The worktree's own agent is not another agent working in it.
+    assert!(!works_in_worktree(&binding, Some(&binding.agent_path), &[]));
 }
 
 /// Q22, P3-5: without its branch a worktree comes back from the agent's last recorded commit;
@@ -1092,7 +1215,15 @@ fn restore_starts_from_the_last_recorded_commit_before_the_base() {
         &created.metadata,
     );
     let start = |record: &codex_worktree::AgentWorktreeRecord| {
-        ops::restore_start(&repository, &created.metadata, Some(record))
+        ops::restore_start(
+            &repository,
+            &created.metadata,
+            Some(record),
+            /*known_tip*/ None,
+            Some(std::path::Path::new(
+                "/home/u/.codex/agent-worktrees/probe.json",
+            )),
+        )
     };
 
     let from_branch = start(&record).expect("start");
@@ -1147,7 +1278,10 @@ fn restore_starts_from_the_last_recorded_commit_before_the_base() {
 fn restore_notices_reach_the_agent_and_the_parent_once() {
     let binding = binding(true);
     assert_eq!(binding.take_restore_note(), None);
-    binding.note_restored("branch codex/agents/probe-01a1748c at 378e730aa1b2");
+    binding.note_restored(
+        "branch codex/agents/probe-01a1748c at 378e730aa1b2",
+        /*after_close*/ false,
+    );
     let note = binding.take_restore_note().expect("note for the agent");
     assert!(
         note.starts_with(
@@ -1182,4 +1316,140 @@ fn restore_notices_reach_the_agent_and_the_parent_once() {
         "{failed}"
     );
     assert_eq!(ops::turn_note(&binding, /*own*/ true, Ok(false)), None);
+}
+
+/// R6 (second live recheck, 2026-10-27): a restore after a close, which recorded everything
+/// but ignored files, says so to the agent, to a helper working in the worktree and to the
+/// parent, instead of warning about lost edits.
+#[test]
+fn a_restore_after_a_close_says_that_nothing_recorded_was_lost() {
+    let binding = binding(true);
+    binding.note_restored(
+        "the last recorded commit 378e730aa1b2 (branch codex/agents/probe-01a1748c is gone)",
+        /*after_close*/ true,
+    );
+    assert_eq!(
+        ops::turn_note(&binding, /*own*/ false, Ok(true)).expect("note for the helper"),
+        "Codex recreated the worktree /home/u/.codex/worktrees/6d88/demo of agent /root/probe, which you work in, because it had been closed. It holds all the work Codex recorded when it closed the worktree; only ignored files, such as build output, are gone."
+    );
+    assert_eq!(
+        binding.take_restore_note().expect("note for the agent"),
+        "Codex recreated your worktree /home/u/.codex/worktrees/6d88/demo from the last recorded commit 378e730aa1b2 (branch codex/agents/probe-01a1748c is gone), because it had been closed. It holds all the work Codex recorded when it closed the worktree; only ignored files, such as build output, are gone."
+    );
+    let block = render_worktree_block(&binding, None, Ok(None));
+    assert!(
+        block.contains(
+            "\nrestored: from the last recorded commit 378e730aa1b2 (branch codex/agents/probe-01a1748c is gone) after its close; it holds all work recorded at the close, only ignored files are gone\n"
+        ),
+        "{block}"
+    );
+    assert_block_lines_are_host_written(&block);
+    // A later removal by someone else is reported as before.
+    binding.note_restored(
+        "branch codex/agents/probe-01a1748c at 378e730aa1b2",
+        /*after_close*/ false,
+    );
+    assert!(
+        binding
+            .take_restore_note()
+            .is_some_and(|note| note.contains("because it had been removed")),
+    );
+}
+
+/// F7: restore texts say where the agent's work is. Without a record, a tip the parent
+/// applied in this process names the work, and the base says that the applied changes are in
+/// the parent's checkout instead of claiming none were recorded; a record whose commits are
+/// gone names the way out; a failed restore names the branch only when it exists.
+#[test]
+fn restore_texts_name_where_the_work_is() {
+    let (_home, home_path, repository) = repository_fixture();
+    let agent_path = AgentPath::root().join("probe").expect("agent path");
+    let created = spawned_worktree(&home_path, &repository, ThreadId::new(), &agent_path);
+    let metadata = &created.metadata;
+    let gone = "e".repeat(40);
+    let record_file = Path::new("/home/u/.codex/agent-worktrees/probe.json");
+
+    let unknown = ops::restore_start(&repository, metadata, None, None, None).expect("start");
+    assert!(
+        unknown
+            .source
+            .ends_with("; Codex keeps no record of changes of the agent"),
+        "{}",
+        unknown.source
+    );
+    let applied =
+        ops::restore_start(&repository, metadata, None, Some(&gone), None).expect("start");
+    assert_eq!(applied.from, codex_worktree::RestoreFrom::Base);
+    assert!(
+        applied
+            .source
+            .ends_with("; the changes the parent applied are in the parent's checkout"),
+        "{}",
+        applied.source
+    );
+    let mut record = codex_worktree::AgentWorktreeRecord::new(
+        created.root.as_path(),
+        created.source_root.as_path(),
+        metadata,
+    );
+    record.last_checkpoint = Some(gone);
+    let error = ops::restore_start(
+        &repository,
+        metadata,
+        Some(&record),
+        None,
+        Some(record_file),
+    )
+    .err()
+    .expect("the recorded commit is gone");
+    assert!(
+        error.ends_with(
+            "; delete the host record /home/u/.codex/agent-worktrees/probe.json to let Codex restore the agent from its base without that work"
+        ),
+        "{error}"
+    );
+
+    // Without a branch, the error of a failed restore says what is known instead.
+    assert_eq!(
+        ops::saved_work(&repository, metadata, Some(&record)),
+        "the commits Codex recorded for it are no longer in the repository"
+    );
+    record.last_checkpoint = None;
+    assert_eq!(
+        ops::saved_work(&repository, metadata, Some(&record)),
+        "Codex recorded no changes of the agent"
+    );
+    std::fs::write(created.root.join("agent.txt"), "agent\n").expect("agent edit");
+    let CheckpointOutcome::Committed { commit, branch, .. } =
+        codex_worktree::checkpoint(CheckpointRequest {
+            root: created.root.as_path(),
+            metadata,
+            agent_path: agent_path.as_str(),
+        })
+        .expect("checkpoint")
+    else {
+        panic!("the edit is recorded");
+    };
+    assert_eq!(
+        ops::saved_work(&repository, metadata, Some(&record)),
+        format!("changes recorded before it was removed are on branch {branch}")
+    );
+
+    // Without the branch and the record, the tip the parent applied in this process is where
+    // the work is.
+    git(
+        &repository,
+        &["update-ref", "-d", &format!("refs/heads/{branch}")],
+    );
+    let known =
+        ops::restore_start(&repository, metadata, None, Some(&commit), None).expect("start");
+    assert_eq!(
+        known.from,
+        codex_worktree::RestoreFrom::Commit { tip: commit }
+    );
+    assert!(
+        known.source.starts_with("the commit the parent applied "),
+        "{}",
+        known.source
+    );
 }

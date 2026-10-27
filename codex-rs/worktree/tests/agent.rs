@@ -2509,3 +2509,314 @@ fn a_sweep_retires_the_branches_the_parent_applied() {
     );
     assert!(record_file.exists());
 }
+
+// ---------------------------------------------------------------------------------------------
+// Review 2026-10-27 of the deferred fixes (docs/fork/reviews/2026-10-27-deferred-fixes-review.md)
+// ---------------------------------------------------------------------------------------------
+
+/// F2, F10: a gitlink that `.gitmodules` does not register (here its path moved) is still a
+/// submodule: removing its empty directory is not a change, and files the agent put into it,
+/// which Git never shows, keep the worktree from a close, a finalize and a sweep.
+#[test]
+fn files_in_an_unregistered_gitlink_directory_keep_the_worktree() {
+    let fixture = Fixture::new();
+    add_submodule(&fixture);
+    git(
+        &fixture.repository,
+        &[
+            "config",
+            "--file",
+            ".gitmodules",
+            "submodule.sub.path",
+            "old-sub",
+        ],
+    );
+    git(&fixture.repository, &["add", ".gitmodules"]);
+    commit_all(&fixture.repository, "stale .gitmodules");
+    let base = snapshot_working_tree(&fixture.repository).expect("snapshot");
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    let sub = checkout.root.join("sub");
+
+    // R2.11 holds for it: its emptied directory is not the agent's change.
+    fs::remove_dir(&sub).expect("remove the empty directory");
+    assert_eq!(
+        agent_worktree_status(&checkout.root, &metadata)
+            .expect("state")
+            .state,
+        AgentWorktreeState::Clean
+    );
+    fs::create_dir(&sub).expect("recreate it");
+    let notes = sub.join("notes.txt");
+    fs::write(&notes, "notes\n").expect("write into the gitlink directory");
+    assert_eq!(
+        checkpoint_worktree(&checkout.root, &metadata),
+        CheckpointOutcome::Unchanged
+    );
+    assert_eq!(
+        codex_worktree::unpopulated_submodule_files(&checkout.root).expect("submodule files"),
+        vec![PathBuf::from("sub")]
+    );
+    assert_eq!(
+        codex_worktree::remove_agent_checkout(
+            &fixture.repository,
+            &checkout.root,
+            &metadata,
+            /*discard_unrecorded*/ false,
+        )
+        .expect("close"),
+        RemoveOutcome::Kept(KeptReason::SubmoduleFiles)
+    );
+    assert_eq!(
+        remove_if_unchanged(&fixture.repository, &checkout.root, &metadata).expect("finalize"),
+        RemoveOutcome::Kept(KeptReason::SubmoduleFiles)
+    );
+    assert!(notes.exists());
+}
+
+/// F3: a repository the agent created in its worktree with commits of its own is recorded by
+/// a checkpoint only as a gitlink, so its commits exist nowhere else; a close, a finalize and
+/// a parked sweep keep the worktree, and only `discard_unrecorded` removes it.
+#[test]
+fn a_nested_repository_with_its_own_commits_keeps_the_worktree() {
+    let fixture = Fixture::new();
+    let base = snapshot_working_tree(&fixture.repository).expect("snapshot");
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    let tool = checkout.root.join("tool");
+    fs::create_dir_all(&tool).expect("create the nested repository");
+    git(&tool, &["init", "--quiet", "-b", "main"]);
+    fs::write(tool.join("x.txt"), "x\n").expect("nested file");
+    git(&tool, &["add", "."]);
+    commit_all(&tool, "nested");
+    let nested_commit = git(&tool, &["rev-parse", "HEAD"]);
+    assert!(matches!(
+        checkpoint_worktree(&checkout.root, &metadata),
+        CheckpointOutcome::Committed { .. }
+    ));
+    assert_eq!(
+        git(&fixture.repository, &["ls-tree", BRANCH, "tool"]),
+        format!("160000 commit {nested_commit}\ttool")
+    );
+    assert!(git_fails(
+        &fixture.repository,
+        &["cat-file", "-e", &format!("{nested_commit}^{{commit}}")]
+    ));
+    assert_eq!(
+        codex_worktree::nested_repositories(&checkout.root).expect("nested repositories"),
+        vec!["tool (commits that the repository does not have)".to_string()]
+    );
+
+    let close = |discard| {
+        codex_worktree::remove_agent_checkout(
+            &fixture.repository,
+            &checkout.root,
+            &metadata,
+            discard,
+        )
+        .expect("close")
+    };
+    assert_eq!(
+        close(/*discard*/ false),
+        RemoveOutcome::Kept(KeptReason::NestedRepository)
+    );
+    age(&checkout.root, 48);
+    let report = sweep_agent_worktrees(
+        &fixture.manager(),
+        &fixture.repository,
+        &DAY_POLICY,
+        &|_| false,
+        &|_| true,
+        SystemTime::now(),
+    )
+    .expect("sweep");
+    assert_eq!(report.removed, Vec::<PathBuf>::new());
+    // Uncommitted files in it count too.
+    fs::write(tool.join("draft.txt"), "draft\n").expect("nested draft");
+    assert_eq!(
+        codex_worktree::nested_repositories(&checkout.root).expect("nested repositories"),
+        vec!["tool (uncommitted files and commits that the repository does not have)".to_string()]
+    );
+    fs::remove_file(tool.join("draft.txt")).expect("drop the draft");
+    assert_eq!(close(/*discard*/ true), RemoveOutcome::Removed);
+    assert!(!checkout.root.exists());
+}
+
+/// F1: a live process in the worktree keeps it from every removal, a close with
+/// `discard_unrecorded` included; it would otherwise recreate the path as a plain
+/// directory and lose what it writes.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_live_process_keeps_the_worktree() {
+    let fixture = Fixture::new();
+    let base = snapshot_working_tree(&fixture.repository).expect("snapshot");
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    let mut process = Command::new("sleep")
+        .arg("30")
+        .current_dir(checkout.root.join("."))
+        .spawn()
+        .expect("start a process in the worktree");
+    let processes = codex_worktree::processes_in(&checkout.root);
+    assert!(
+        processes
+            .iter()
+            .any(|process_line| process_line.ends_with(": sleep 30")),
+        "{processes:?}"
+    );
+    assert_eq!(
+        codex_worktree::remove_agent_checkout(
+            &fixture.repository,
+            &checkout.root,
+            &metadata,
+            /*discard_unrecorded*/ true,
+        )
+        .expect("close"),
+        RemoveOutcome::Kept(KeptReason::Process)
+    );
+    assert_eq!(
+        remove_if_unchanged(&fixture.repository, &checkout.root, &metadata).expect("finalize"),
+        RemoveOutcome::Kept(KeptReason::Process)
+    );
+    process.kill().expect("stop the process");
+    process.wait().expect("reap the process");
+    assert_eq!(
+        remove_if_unchanged(&fixture.repository, &checkout.root, &metadata).expect("finalize"),
+        RemoveOutcome::Removed
+    );
+}
+
+/// F10: a worktree parked on its branch with files in an unpopulated submodule directory
+/// stays through a sweep that would otherwise remove it.
+#[test]
+fn a_parked_worktree_with_submodule_files_survives_the_sweep() {
+    let fixture = Fixture::new();
+    add_submodule(&fixture);
+    let base = snapshot_working_tree(&fixture.repository).expect("snapshot");
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    fs::write(checkout.root.join("work.txt"), "work\n").expect("agent change");
+    checkpoint_worktree(&checkout.root, &metadata);
+    let notes = checkout.root.join("sub").join("notes.txt");
+    fs::write(&notes, "notes\n").expect("write into the submodule directory");
+    age(&checkout.root, 48);
+    let sweep = || {
+        sweep_agent_worktrees(
+            &fixture.manager(),
+            &fixture.repository,
+            &DAY_POLICY,
+            &|_| false,
+            &|_| true,
+            SystemTime::now(),
+        )
+        .expect("sweep")
+    };
+    assert_eq!(sweep().removed, Vec::<PathBuf>::new());
+    assert!(notes.exists());
+    fs::remove_file(&notes).expect("move the notes out");
+    assert_eq!(sweep().removed, vec![checkout.root]);
+}
+
+/// F9: a retired commit of the thread is replaced only by its descendant: a branch applied
+/// at an unrelated tip stays rather than overwrite the ref that keeps the earlier work.
+#[test]
+fn retiring_never_overwrites_an_unrelated_retired_commit() {
+    let fixture = Fixture::new();
+    let repository = &fixture.repository;
+    let base = snapshot_working_tree(repository).expect("snapshot");
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    fs::write(checkout.root.join("work.txt"), "work\n").expect("agent change");
+    checkpoint_worktree(&checkout.root, &metadata);
+    let tip = git(repository, &["rev-parse", BRANCH]);
+    fs::write(repository.join("work.txt"), "work\n").expect("parent applies");
+    assert_eq!(
+        codex_worktree::remove_agent_checkout(
+            repository,
+            &checkout.root,
+            &metadata,
+            /*discard_unrecorded*/ false
+        )
+        .expect("close"),
+        RemoveOutcome::Removed
+    );
+    // An earlier retired commit that the tip does not descend from.
+    let blob = git(repository, &["hash-object", "-w", "--stdin"]);
+    let tree = mktree(
+        repository,
+        &tree_entry("100644", "blob", &blob, "other.txt"),
+    );
+    let unrelated = commit_tree_on(repository, "codex/agents/scratch", &tree, &base);
+    git(repository, &["branch", "-D", "codex/agents/scratch"]);
+    let applied = codex_worktree::applied_ref(THREAD_ID).expect("applied ref");
+    git(repository, &["update-ref", &applied, &unrelated]);
+
+    assert!(
+        !codex_worktree::retire_applied_branch(repository, &checkout.root, &metadata, &tip)
+            .expect("retire")
+    );
+    assert_eq!(git(repository, &["rev-parse", &applied]), unrelated);
+    assert_eq!(git(repository, &["rev-parse", BRANCH]), tip);
+    // A descendant replaces it, compared and swapped.
+    git(repository, &["update-ref", &applied, &base]);
+    assert!(
+        codex_worktree::retire_applied_branch(repository, &checkout.root, &metadata, &tip)
+            .expect("retire")
+    );
+    assert_eq!(git(repository, &["rev-parse", &applied]), tip);
+}
+
+/// F9: a record whose parent checkout is gone keeps living while it may own a retired
+/// commit; a retired commit without a record goes once the checkout's HEAD holds its changes,
+/// and stays while it is the only copy.
+#[test]
+fn retired_commits_never_lose_their_record_and_orphans_go_once_committed() {
+    let fixture = Fixture::new();
+    let repository = &fixture.repository;
+    let records = fixture.codex_home.join("agent-worktrees");
+    let base = snapshot_working_tree(repository).expect("snapshot");
+    let (checkout, metadata) = agent_worktree(&fixture, &base, THREAD_ID, BRANCH);
+    fs::write(checkout.root.join("work.txt"), "work\n").expect("agent change");
+    checkpoint_worktree(&checkout.root, &metadata);
+    let tip = git(repository, &["rev-parse", BRANCH]);
+    fs::write(repository.join("work.txt"), "work\n").expect("parent applies");
+    assert_eq!(
+        codex_worktree::remove_agent_checkout(
+            repository,
+            &checkout.root,
+            &metadata,
+            /*discard_unrecorded*/ false
+        )
+        .expect("close"),
+        RemoveOutcome::Removed
+    );
+    assert!(
+        codex_worktree::retire_applied_branch(repository, &checkout.root, &metadata, &tip)
+            .expect("retire")
+    );
+    let later = SystemTime::now() + Duration::from_secs(48 * 3600);
+    let prune = || {
+        codex_worktree::prune_agent_records(&records, later, Duration::from_secs(24 * 3600))
+            .expect("prune records")
+    };
+
+    // A record whose parent checkout is gone, with an applied tip: kept.
+    let mut orphaned = codex_worktree::AgentWorktreeRecord::new(
+        &checkout.root,
+        &repository.join("gone"),
+        &metadata,
+    );
+    orphaned.applied_tip = Some(tip.clone());
+    codex_worktree::write_agent_record(&records, &orphaned).expect("write record");
+    assert_eq!(prune(), 0);
+    fs::remove_file(records.join(format!("{THREAD_ID}.json"))).expect("drop the record");
+
+    // Without a record: the ref stays while the parent holds the work only uncommitted.
+    let orphans =
+        || codex_worktree::prune_orphan_applied_refs(repository, &records).expect("prune orphans");
+    let applied = codex_worktree::applied_ref(THREAD_ID).expect("applied ref");
+    assert_eq!(orphans(), 0);
+    assert_eq!(git(repository, &["rev-parse", &applied]), tip);
+    git(repository, &["add", "work.txt"]);
+    git(
+        repository,
+        &["commit", "--quiet", "--no-gpg-sign", "-m", "take the work"],
+    );
+    assert_eq!(orphans(), 1);
+    assert!(git_fails(repository, &["rev-parse", "--verify", &applied]));
+}

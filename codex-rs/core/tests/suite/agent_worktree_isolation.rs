@@ -3695,6 +3695,15 @@ async fn apply_agent_worktree_close_applies_then_removes_the_checkout() -> Resul
             .path(),
     )?)?;
     assert_eq!(record["applied_tip"], tip);
+    // R6 (second live recheck): the record says that a close removed the worktree.
+    assert_eq!(record["closed"], true);
+    let record_path = test
+        .codex_home_path()
+        .join("agent-worktrees")
+        .read_dir()?
+        .next()
+        .context("host record")??
+        .path();
     let agents = list_agents(&server, &test, "list after the close", "list-closed").await?;
     assert_eq!(agents["/root/worker"]["agent_status"], "shutdown");
     assert_eq!(agents["/root/worker"]["worktree"]["status"], "removed");
@@ -3723,6 +3732,24 @@ async fn apply_agent_worktree_close_applies_then_removes_the_checkout() -> Resul
     assert!(check.contains(&root.display().to_string()), "{check}");
     assert!(check.contains("worker"), "{check}");
     assert!(check.contains(&tip), "{check}");
+    // R6: the restore after a close tells the agent that its recorded work is all there, and
+    // takes the mark of the close along.
+    let note = restore_note(&reloaded[0].single_request());
+    assert!(
+        note.starts_with(&format!(
+            "Codex recreated your worktree {} from ",
+            root.display()
+        )) && note.contains(&tip[..12]),
+        "{note}"
+    );
+    assert!(
+        note.ends_with(
+            "because it had been closed. It holds all the work Codex recorded when it closed the worktree; only ignored files, such as build output, are gone."
+        ),
+        "{note}"
+    );
+    let record: Value = serde_json::from_str(&std::fs::read_to_string(&record_path)?)?;
+    assert_eq!(record.get("closed"), None, "{record}");
     Ok(())
 }
 
@@ -3874,6 +3901,38 @@ async fn apply_agent_worktree_close_refuses_a_running_agent() -> Result<()> {
         matches!(event, EventMsg::TurnAborted(_))
     })
     .await;
+    // F1: the interrupt leaves the command running as a background process, which keeps the
+    // worktree until it is stopped.
+    let processes = child.thread.list_background_terminals().await;
+    let [process] = processes.as_slice() else {
+        panic!("the interrupted command still runs: {processes:?}");
+    };
+    let waiting = mount_root_call(
+        &server,
+        "close while the command runs",
+        "close-command",
+        "apply_agent_worktree",
+        close_arguments("runner", /*discard_changes*/ false),
+    )
+    .await;
+    test.submit_turn("close while the command runs").await?;
+    let output = waiting
+        .function_call_output_text("close-command")
+        .context("refused close output")?;
+    assert!(
+        output.contains(&format!(
+            "a background process of agent /root/runner (session_id {}, ",
+            process.process_id
+        )),
+        "{output}"
+    );
+    assert!(root.exists());
+    assert!(
+        child
+            .thread
+            .terminate_background_terminal(process.process_id.parse()?)
+            .await
+    );
     let closed = mount_root_call(
         &server,
         "close the interrupted worker",
@@ -4349,5 +4408,374 @@ async fn apply_after_a_restart_names_the_way_to_a_removed_worktree() -> Result<(
         "{output}"
     );
     assert!(!resumed.config.cwd.join("work.txt").exists());
+    Ok(())
+}
+
+/// F1 (review 2026-10-27 of the deferred fixes): a close waits for a background process a
+/// helper left running in the agent's worktree, although the helper rests. The refusal names
+/// the session and how to stop it; nothing is killed. Once the process is gone, the close
+/// records what it wrote, applies it and removes the checkout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_close_waits_for_a_background_process_in_the_worktree() -> Result<()> {
+    const CHILD_TASK: &str = "delegate the dev server to a helper";
+    const HELPER_TASK: &str = "start the dev server in the shared worktree";
+    let server = start_mock_server().await;
+    let test = isolation_codex_with_model(
+        &server,
+        Some(NESTING_MODEL),
+        /*git_repository*/ true,
+        |config| {
+            config.agent_max_depth = 2;
+        },
+    )
+    .await?;
+    let parent = test.config.cwd.to_path_buf();
+    let spawn = mount_root_call(
+        &server,
+        ROOT_PROMPT,
+        "spawn-child",
+        "spawn_agent",
+        spawn_arguments(CHILD_TASK, "child", Some("worktree")),
+    )
+    .await;
+    mount_agent(
+        &server,
+        CHILD_TASK,
+        &[],
+        vec![(
+            "spawn-helper",
+            spawn_arguments(HELPER_TASK, "helper", Some("none")),
+        )],
+    )
+    .await;
+    // The helper backgrounds a process (short yield) and ends its turn while it runs.
+    let server_args = json!({
+        "cmd": "d=\"$PWD\"; sleep 6; mkdir -p \"$d/out\" && printf 'late\\n' > \"$d/out/server.log\"",
+        "shell": "bash",
+        "login": false,
+        "yield_time_ms": 300,
+    });
+    mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            let text = body_text(request);
+            text.contains(HELPER_TASK)
+                && !text.contains(ROOT_PROMPT)
+                && !text.contains(CHILD_TASK)
+                && !has_output(request, "helper-server")
+        },
+        sse(vec![
+            ev_response_created("resp-helper-0"),
+            ev_exec_command_call_with_args("helper-server", &server_args),
+            ev_completed("resp-helper-0"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            let text = body_text(request);
+            text.contains(HELPER_TASK)
+                && !text.contains(ROOT_PROMPT)
+                && !text.contains(CHILD_TASK)
+                && has_output(request, "helper-server")
+        },
+        sse(vec![
+            ev_response_created("resp-helper-1"),
+            final_answer("resp-helper-1", "the server runs"),
+            ev_completed("resp-helper-1"),
+        ]),
+    )
+    .await;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    test.submit_turn(ROOT_PROMPT).await?;
+    let child = next_child(&mut created, &test).await?;
+    let helper = next_child(&mut created, &test).await?;
+    wait_turn_complete(&child).await;
+    wait_turn_complete(&helper).await;
+    let root = PathBuf::from(worktree_field(&spawn_output(&spawn, "spawn-child"), "path"));
+    assert!(root.join(".git").exists());
+    let processes = helper.thread.list_background_terminals().await;
+    let [process] = processes.as_slice() else {
+        panic!("the helper's process runs: {processes:?}");
+    };
+
+    let refused = mount_root_call(
+        &server,
+        "close while the server runs",
+        "close-server",
+        "apply_agent_worktree",
+        close_arguments("child", /*discard_changes*/ false),
+    )
+    .await;
+    test.submit_turn_with_permission_profile(
+        "close while the server runs",
+        workspace_only_profile(),
+    )
+    .await?;
+    let output = refused
+        .function_call_output_text("close-server")
+        .context("refused close output")?;
+    assert!(
+        output.contains(&format!(
+            "a background process of agent /root/child/helper (session_id {}, `",
+            process.process_id
+        )),
+        "{output}"
+    );
+    assert!(
+        output.contains("write_stdin chars \"\\u0003\" on that session_id"),
+        "{output}"
+    );
+    assert!(
+        output.contains("Nothing was applied or removed"),
+        "{output}"
+    );
+    assert!(root.join(".git").exists());
+    assert_eq!(helper.thread.list_background_terminals().await.len(), 1);
+
+    // The process ends on its own and writes into the worktree it still has.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while !helper.thread.list_background_terminals().await.is_empty()
+        && tokio::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        std::fs::read_to_string(root.join("out").join("server.log"))?,
+        "late\n"
+    );
+    let closed = mount_root_call(
+        &server,
+        "close after the server",
+        "close-done",
+        "apply_agent_worktree",
+        close_arguments("child", /*discard_changes*/ false),
+    )
+    .await;
+    test.submit_turn_with_permission_profile("close after the server", workspace_only_profile())
+        .await?;
+    let output = closed
+        .function_call_output_text("close-done")
+        .context("close output")?;
+    assert!(
+        output.contains("Closed the worktree of agent child"),
+        "{output}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(parent.join("out").join("server.log"))?,
+        "late\n"
+    );
+    assert!(!root.exists());
+    Ok(())
+}
+
+/// F10 (review 2026-10-27 of the deferred fixes), P2-1: a helper the agent spawned with
+/// isolation `none` works in the agent's worktree, so its next turn brings back the worktree
+/// a close removed and tells the helper so before it runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_helpers_turn_restores_the_closed_worktree_it_works_in() -> Result<()> {
+    const CHILD_TASK: &str = "delegate the work to a helper";
+    const HELPER_TASK: &str = "work in the shared worktree";
+    const HELPER_FOLLOWUP: &str = "continue in the shared worktree";
+    let server = start_mock_server().await;
+    let test = isolation_codex_with_model(
+        &server,
+        Some(NESTING_MODEL),
+        /*git_repository*/ true,
+        |config| {
+            config.agent_max_depth = 2;
+        },
+    )
+    .await?;
+    let spawn = mount_root_call(
+        &server,
+        ROOT_PROMPT,
+        "spawn-child",
+        "spawn_agent",
+        spawn_arguments(CHILD_TASK, "child", Some("worktree")),
+    )
+    .await;
+    mount_agent(
+        &server,
+        CHILD_TASK,
+        &[],
+        vec![(
+            "spawn-helper",
+            spawn_arguments(HELPER_TASK, "helper", Some("none")),
+        )],
+    )
+    .await;
+    mount_agent(
+        &server,
+        HELPER_TASK,
+        &[CHILD_TASK, HELPER_FOLLOWUP],
+        Vec::new(),
+    )
+    .await;
+    let followup = mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            let text = body_text(request);
+            text.contains(HELPER_FOLLOWUP) && !text.contains(ROOT_PROMPT)
+        },
+        sse(vec![
+            ev_response_created("resp-helper-followup"),
+            final_answer("resp-helper-followup", "helper continued"),
+            ev_completed("resp-helper-followup"),
+        ]),
+    )
+    .await;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    test.submit_turn(ROOT_PROMPT).await?;
+    let child = next_child(&mut created, &test).await?;
+    let helper = next_child(&mut created, &test).await?;
+    wait_turn_complete(&child).await;
+    wait_turn_complete(&helper).await;
+    let root = PathBuf::from(worktree_field(&spawn_output(&spawn, "spawn-child"), "path"));
+
+    let closed = mount_root_call(
+        &server,
+        "close the child",
+        "close-child",
+        "apply_agent_worktree",
+        close_arguments("child", /*discard_changes*/ false),
+    )
+    .await;
+    test.submit_turn_with_permission_profile("close the child", workspace_only_profile())
+        .await?;
+    let output = closed
+        .function_call_output_text("close-child")
+        .context("close output")?;
+    assert!(
+        output.contains("Closed the worktree of agent child"),
+        "{output}"
+    );
+    assert!(!root.exists());
+
+    let woken = mount_root_call(
+        &server,
+        "wake the helper",
+        "wake-helper",
+        "followup_task",
+        json!({ "target": "/root/child/helper", "message": HELPER_FOLLOWUP }),
+    )
+    .await;
+    test.submit_turn("wake the helper").await?;
+    let output = woken
+        .function_call_output_text("wake-helper")
+        .context("followup output")?;
+    let helper = Child {
+        id: helper.id,
+        thread: test.thread_manager.get_thread(helper.id).await?,
+    };
+    wait_turn_complete(&helper).await;
+    assert!(root.join(".git").exists(), "{output}");
+    let request = followup.single_request();
+    let notes = request
+        .message_input_texts("developer")
+        .into_iter()
+        .filter(|text| text.contains("which you work in"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes,
+        vec![format!(
+            "Codex recreated the worktree {} of agent /root/child, which you work in, because it had been closed. It holds all the work Codex recorded when it closed the worktree; only ignored files, such as build output, are gone.",
+            root.display()
+        )]
+    );
+    Ok(())
+}
+
+/// F1: the agent's own background process keeps its worktree too, although the agent rests:
+/// the close does not unload the agent, which would stop the process, and names the session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_agent_worktree_close_keeps_the_agents_own_background_process() -> Result<()> {
+    const TASK: &str = "start a watcher and return";
+    let server = start_mock_server().await;
+    let test = isolation_codex(&server, /*git_repository*/ true, |_| {}).await?;
+    let spawn = mount_root_call(
+        &server,
+        ROOT_PROMPT,
+        "spawn-watcher",
+        "spawn_agent",
+        spawn_arguments(TASK, "watcher", Some("worktree")),
+    )
+    .await;
+    let watcher_args = json!({
+        "cmd": "sleep 30",
+        "shell": "bash",
+        "login": false,
+        "yield_time_ms": 300,
+    });
+    mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            let text = body_text(request);
+            text.contains(TASK) && !text.contains(ROOT_PROMPT) && !has_output(request, "watch")
+        },
+        sse(vec![
+            ev_response_created("resp-watcher-0"),
+            ev_exec_command_call_with_args("watch", &watcher_args),
+            ev_completed("resp-watcher-0"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            let text = body_text(request);
+            text.contains(TASK) && !text.contains(ROOT_PROMPT) && has_output(request, "watch")
+        },
+        sse(vec![
+            ev_response_created("resp-watcher-1"),
+            final_answer("resp-watcher-1", "the watcher runs"),
+            ev_completed("resp-watcher-1"),
+        ]),
+    )
+    .await;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    test.submit_turn(ROOT_PROMPT).await?;
+    let child = next_child(&mut created, &test).await?;
+    wait_turn_complete(&child).await;
+    let root = PathBuf::from(worktree_field(
+        &spawn_output(&spawn, "spawn-watcher"),
+        "path",
+    ));
+    let processes = child.thread.list_background_terminals().await;
+    let [process] = processes.as_slice() else {
+        panic!("the watcher runs: {processes:?}");
+    };
+
+    let refused = mount_root_call(
+        &server,
+        "close while the watcher runs",
+        "close-watcher",
+        "apply_agent_worktree",
+        close_arguments("watcher", /*discard_changes*/ false),
+    )
+    .await;
+    test.submit_turn_with_permission_profile(
+        "close while the watcher runs",
+        workspace_only_profile(),
+    )
+    .await?;
+    let output = refused
+        .function_call_output_text("close-watcher")
+        .context("refused close output")?;
+    assert!(
+        output.contains(&format!(
+            "a background process of agent /root/watcher (session_id {}, `sleep 30`) runs in its worktree",
+            process.process_id
+        )),
+        "{output}"
+    );
+    assert!(
+        output.contains("Nothing was applied or removed"),
+        "{output}"
+    );
+    assert!(root.join(".git").exists());
+    assert!(test.thread_manager.get_thread(child.id).await.is_ok());
+    assert_eq!(child.thread.list_background_terminals().await.len(), 1);
     Ok(())
 }

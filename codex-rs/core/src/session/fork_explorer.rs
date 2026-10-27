@@ -43,6 +43,16 @@ pub(super) fn clamp_environment_update(
     }
 }
 
+impl super::session::Session {
+    /// Fork (agent worktree isolation, F6): the agent status channel of this session, which
+    /// the turn-start hook of a worktree records, marked as seen.
+    pub(crate) fn fork_agent_status_watch(
+        &self,
+    ) -> tokio::sync::watch::Receiver<codex_protocol::protocol::AgentStatus> {
+        self.agent_status.subscribe()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use codex_features::Feature;

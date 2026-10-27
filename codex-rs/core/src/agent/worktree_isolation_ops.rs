@@ -351,6 +351,10 @@ fn sweep_blocking(target: &SweepTarget) -> anyhow::Result<Option<codex_worktree:
     if let Err(err) = codex_worktree::prune_agent_records(&target.records, now, max_idle) {
         warn!("cannot prune agent worktree records: {err:#}");
     }
+    // F9: retired commits whose record is gone go once the checkout's HEAD holds them.
+    if let Err(err) = codex_worktree::prune_orphan_applied_refs(&target.source, &target.records) {
+        warn!("cannot prune retired agent commits: {err:#}");
+    }
     let fingerprint = codex_worktree::worktree_list_fingerprint(&target.source)?;
     RECENT_SWEEPS
         .lock()
@@ -395,38 +399,118 @@ async fn restore_if_missing(binding: &Arc<AgentWorktreeBinding>) -> Result<bool,
                 .ok()
                 .flatten()
         });
-        let start = restore_start(source_root, &metadata, record.as_ref())?;
-        let manager = WorktreeManager::new(blocking.settings.clone());
-        codex_worktree::restore_agent_worktree(
-            &manager,
+        let record_file = blocking
+            .sweep
+            .as_ref()
+            .map(|target| target.records.join(format!("{}.json", metadata.thread_id)));
+        let known_tip = blocking.applied_tip();
+        let restored = restore_start(
             source_root,
-            blocking.root.as_path(),
             &metadata,
-            &start.from,
+            record.as_ref(),
+            known_tip.as_deref(),
+            record_file.as_deref(),
         )
-        .map_err(|err| format!("{err:#}"))?;
-        if let RestoreFrom::Branch { name, .. } = &start.from {
-            blocking.record_branch(name);
+        .and_then(|start| {
+            let manager = WorktreeManager::new(blocking.settings.clone());
+            codex_worktree::restore_agent_worktree(
+                &manager,
+                source_root,
+                blocking.root.as_path(),
+                &metadata,
+                &start.from,
+            )
+            .map_err(|err| format!("{err:#}"))?;
+            Ok(start)
+        });
+        match restored {
+            Ok(start) => {
+                if let RestoreFrom::Branch { name, .. } = &start.from {
+                    blocking.record_branch(name);
+                }
+                blocking
+                    .live
+                    .replace_hold(hold_worktree(blocking.root.as_path()));
+                let after_close = blocking.sweep.as_ref().is_some_and(|target| {
+                    record
+                        .as_ref()
+                        .is_some_and(|record| take_close_mark(&target.records, record))
+                });
+                Ok((start.source, after_close))
+            }
+            Err(reason) => Err(missing_worktree_error(
+                blocking.root.as_path(),
+                &reason,
+                &saved_work(source_root, &metadata, record.as_ref()),
+            )),
         }
-        blocking
-            .live
-            .replace_hold(hold_worktree(blocking.root.as_path()));
-        Ok::<_, String>(start.source)
     })
     .await
     .map_err(|err| format!("worktree restore task failed: {err}"))
     .and_then(|restored| restored);
-    match restored {
-        Ok(source) => {
-            record_worktree_outcome("restored");
-            binding.note_restored(&source);
-            Ok(true)
+    let (source, after_close) = restored?;
+    record_worktree_outcome("restored");
+    binding.note_restored(&source, after_close);
+    Ok(true)
+}
+
+/// R6 (second live recheck, 2026-10-27): whether `record` says that a close removed the
+/// worktree just restored; the mark goes with this restore (blocking).
+fn take_close_mark(records: &Path, record: &codex_worktree::AgentWorktreeRecord) -> bool {
+    if !record.closed {
+        return false;
+    }
+    let cleared = codex_worktree::AgentWorktreeRecord {
+        closed: false,
+        ..record.clone()
+    };
+    if let Err(err) = codex_worktree::write_agent_record(records, &cleared) {
+        warn!(
+            "cannot update the record of agent {}: {err:#}",
+            record.thread_id
+        );
+    }
+    true
+}
+
+/// F7: where the work of an agent whose worktree is gone is, for the error of a restore that
+/// failed (blocking): its branch, the last commit its host record names, or that Codex
+/// recorded none.
+pub(super) fn saved_work(
+    source_root: &Path,
+    metadata: &AgentWorktreeMetadata,
+    record: Option<&codex_worktree::AgentWorktreeRecord>,
+) -> String {
+    if let Ok(Some(branch)) =
+        codex_worktree::agent_branch_for_thread(source_root, &metadata.branch, &metadata.thread_id)
+    {
+        return format!(
+            "changes recorded before it was removed are on branch {}",
+            branch.branch
+        );
+    }
+    let Some(record) = record else {
+        return format!(
+            "changes recorded before it was removed, if any, are on branch {}",
+            metadata.branch
+        );
+    };
+    let recorded = [&record.last_checkpoint, &record.applied_tip]
+        .into_iter()
+        .flatten()
+        .find(|tip| {
+            codex_worktree::usable_commit(source_root, &metadata.base_sha, tip).unwrap_or(false)
+        });
+    match recorded {
+        Some(tip) => format!(
+            "its last recorded changes are in commit {} (branch {} is gone)",
+            short_sha(tip),
+            metadata.branch
+        ),
+        None if record.last_checkpoint.is_some() || record.applied_tip.is_some() => {
+            "the commits Codex recorded for it are no longer in the repository".to_string()
         }
-        Err(reason) => Err(missing_worktree_error(
-            &binding.root,
-            &binding.metadata().branch,
-            &reason,
-        )),
+        None => "Codex recorded no changes of the agent".to_string(),
     }
 }
 
@@ -444,6 +528,8 @@ pub(super) fn restore_start(
     source_root: &Path,
     metadata: &AgentWorktreeMetadata,
     record: Option<&codex_worktree::AgentWorktreeRecord>,
+    known_tip: Option<&str>,
+    record_file: Option<&Path>,
 ) -> Result<RestoreStart, String> {
     let error = |err: anyhow::Error| format!("{err:#}");
     if let Some(branch) =
@@ -475,7 +561,12 @@ pub(super) fn restore_start(
         .flatten()
         .filter_map(|(tip, kind)| tip.map(|tip| (tip, kind)))
         .collect::<Vec<_>>();
-    for (tip, kind) in &recorded {
+    // F7: a tip the parent applied in this process still names the work when the sweep
+    // dropped the record because the parent's HEAD holds it.
+    let known = known_tip
+        .filter(|tip| !recorded.iter().any(|(recorded, _)| recorded == tip))
+        .map(|tip| (tip, "the commit the parent applied"));
+    for (tip, kind) in recorded.iter().chain(known.iter()) {
         if codex_worktree::usable_commit(source_root, &metadata.base_sha, tip).map_err(error)? {
             return Ok(RestoreStart {
                 source: format!(
@@ -490,14 +581,26 @@ pub(super) fn restore_start(
         }
     }
     if let Some((tip, _)) = recorded.first() {
+        // F7: say how to get past it, for example after the branch was deleted on purpose.
+        let way_out = record_file.map_or_else(String::new, |file| {
+            format!(
+                "; delete the host record {} to let Codex restore the agent from its base without that work",
+                file.display()
+            )
+        });
         return Err(format!(
-            "no agent branch holds its checkpoints, and its last recorded commit {} is no longer in the repository",
+            "no agent branch holds its checkpoints, and its last recorded commit {} is no longer in the repository{way_out}",
             short_sha(tip)
         ));
     }
+    let why = match (record, known_tip) {
+        (_, Some(_)) => "the changes the parent applied are in the parent's checkout",
+        (Some(_), None) => "no changes of the agent were recorded",
+        (None, None) => "Codex keeps no record of changes of the agent",
+    };
     Ok(RestoreStart {
         source: format!(
-            "the base {} ({}); no changes of the agent were recorded",
+            "the base {} ({}); {why}",
             short_sha(&metadata.base_sha),
             metadata.base_kind.description()
         ),
@@ -534,7 +637,7 @@ pub(crate) async fn restore_missing_binding(
         )
     })
     .await
-    .map_err(|err| format!("worktree restore task failed: {err}"))
+    .map_err(|err| (format!("worktree restore task failed: {err}"), None))
     .and_then(|restored| restored);
     let (
         DiscoveredBinding {
@@ -546,7 +649,14 @@ pub(crate) async fn restore_missing_binding(
             submodules,
         },
         source,
-    ) = restored.map_err(|reason| missing_worktree_error(&error_root, &branch, &reason))?;
+        after_close,
+    ) = restored.map_err(|(reason, saved)| {
+        // F7: without a verified record only the name of the branch is known.
+        let saved = saved.unwrap_or_else(|| {
+            format!("changes recorded before it was removed, if any, are on branch {branch}")
+        });
+        missing_worktree_error(&error_root, &reason, &saved)
+    })?;
     record_worktree_outcome("restored");
     let sweep = Some(SweepTarget {
         settings: settings.clone(),
@@ -573,9 +683,10 @@ pub(crate) async fn restore_missing_binding(
         state: Mutex::new(BindingState {
             stopped: true,
             finalized: false,
+            holder_turns: Vec::new(),
         }),
     });
-    binding.note_restored(&source);
+    binding.note_restored(&source, after_close);
     Ok(binding)
 }
 
@@ -592,20 +703,24 @@ fn restore_missing_blocking(
     thread_id: ThreadId,
     parent_thread_id: Option<ThreadId>,
     missing: &MissingWorktree,
-) -> Result<(DiscoveredBinding, String), String> {
+) -> Result<(DiscoveredBinding, String, bool), (String, Option<String>)> {
+    let unsaved = |reason: String| (reason, None);
     let record = codex_worktree::read_agent_record(records, &thread_id.to_string())
-        .map_err(|err| format!("{err:#}"))?
-        .ok_or_else(|| "Codex has no record of the checkout it was created from".to_string())?;
+        .map_err(|err| unsaved(format!("{err:#}")))?
+        .ok_or_else(|| {
+            unsaved("Codex has no record of the checkout it was created from".to_string())
+        })?;
     if live_key(&record.root) != live_key(&missing.root) {
-        return Err(format!(
+        return Err(unsaved(format!(
             "the record of its worktree names {} instead",
             record.root.display()
-        ));
+        )));
     }
-    let source_root = verified_parent_checkout(&settings, &record.source_root, parent_thread_id)?;
+    let source_root = verified_parent_checkout(&settings, &record.source_root, parent_thread_id)
+        .map_err(unsaved)?;
     let base_kind = record
         .base_kind()
-        .ok_or_else(|| "its record has an unknown base kind".to_string())?;
+        .ok_or_else(|| unsaved("its record has an unknown base kind".to_string()))?;
     let mut metadata = AgentWorktreeMetadata {
         thread_id: thread_id.to_string(),
         base_sha: record.base_sha.clone(),
@@ -615,19 +730,39 @@ fn restore_missing_blocking(
     };
     // Q22, P3-5: the branch, else the agent's last recorded commit, else the base of an agent
     // that never recorded a change; the notices say which one.
-    let start = restore_start(&source_root, &metadata, Some(&record))?;
-    if let RestoreFrom::Branch { name, .. } = &start.from {
-        metadata.branch.clone_from(name);
-    }
+    let saved = |reason: String| {
+        (
+            reason,
+            Some(saved_work(&source_root, &metadata, Some(&record))),
+        )
+    };
+    let record_file = records.join(format!("{thread_id}.json"));
+    let start = restore_start(
+        &source_root,
+        &metadata,
+        Some(&record),
+        /*known_tip*/ None,
+        Some(&record_file),
+    )
+    .map_err(saved)?;
     let manager = WorktreeManager::new(settings);
+    let restored_metadata = AgentWorktreeMetadata {
+        branch: match &start.from {
+            RestoreFrom::Branch { name, .. } => name.clone(),
+            RestoreFrom::Commit { .. } | RestoreFrom::Base => metadata.branch.clone(),
+        },
+        ..metadata.clone()
+    };
     codex_worktree::restore_agent_worktree(
         &manager,
         &source_root,
         &missing.root,
-        &metadata,
+        &restored_metadata,
         &start.from,
     )
-    .map_err(|err| format!("{err:#}"))?;
+    .map_err(|err| saved(format!("{err:#}")))?;
+    metadata = restored_metadata;
+    let after_close = take_close_mark(records, &record);
     let cwd = if missing.cwd.is_dir() {
         missing.cwd.clone()
     } else {
@@ -635,14 +770,15 @@ fn restore_missing_blocking(
     };
     Ok((
         DiscoveredBinding {
-            root: absolute(&missing.root)?,
-            cwd: absolute(&cwd)?,
-            source_root: absolute(&source_root)?,
+            root: absolute(&missing.root).map_err(unsaved)?,
+            cwd: absolute(&cwd).map_err(unsaved)?,
+            source_root: absolute(&source_root).map_err(unsaved)?,
             metadata,
             hold: hold_worktree(&missing.root),
             submodules: unpopulated_submodules(&missing.root),
         },
         start.source,
+        after_close,
     ))
 }
 
@@ -682,9 +818,10 @@ fn verified_parent_checkout(
 }
 
 /// R5.3: the reload error names the missing path, the agent branch and the reason.
-pub(crate) fn missing_worktree_error(root: &Path, branch: &str, reason: &str) -> String {
+/// F7: `saved` says where the agent's work is ([`saved_work`]), not always a branch.
+pub(crate) fn missing_worktree_error(root: &Path, reason: &str, saved: &str) -> String {
     format!(
-        "its worktree {} no longer exists and cannot be restored ({reason}); changes recorded before it was removed are on branch {branch}",
+        "its worktree {} no longer exists and cannot be restored ({reason}); {saved}",
         root.display()
     )
 }
@@ -758,11 +895,12 @@ pub(crate) enum CloseOutcome {
         /// Ignored files that went with the checkout (P3-3).
         ignored: IgnoredEntries,
     },
-    /// The checkout stays for this reason; `submodule_files` names the submodule
-    /// directories that hold files of the agent (P3-3).
+    /// The checkout stays for this reason; `details` names what keeps it: the submodule
+    /// directories with files of the agent, the nested repositories with their own work, or
+    /// the live processes (P3-3, F1, F3).
     Kept {
         reason: codex_worktree::KeptReason,
-        submodule_files: Vec<String>,
+        details: Vec<String>,
     },
 }
 
@@ -836,18 +974,21 @@ pub(crate) async fn checkpoint_for_close(
 )]
 pub(crate) async fn close_worktree<Busy>(
     binding: &Arc<AgentWorktreeBinding>,
-    discard_submodule_files: bool,
-    busy_agent: impl FnOnce() -> Busy,
+    discard_unrecorded: bool,
+    in_use: impl FnOnce(Vec<HolderTurn>) -> Busy,
 ) -> Result<CloseOutcome, String>
 where
-    Busy: std::future::Future<Output = Option<String>>,
+    Busy: std::future::Future<Output = Option<WorktreeUse>>,
 {
-    let state = binding.state.lock().await;
+    let mut state = binding.state.lock().await;
     if !state.stopped {
         return Err(WOKEN_AGAIN.to_string());
     }
-    if let Some(agent) = busy_agent().await {
-        return Err(working_in_worktree(&agent));
+    state
+        .holder_turns
+        .retain(|turn| turn.started.elapsed() < HOLDER_TURN_GRACE);
+    if let Some(user) = in_use(state.holder_turns.clone()).await {
+        return Err(user.refusal());
     }
     let blocking = Arc::clone(binding);
     let closed = tokio::task::spawn_blocking(move || {
@@ -867,7 +1008,7 @@ where
             blocking.source_root.as_path(),
             root,
             &metadata,
-            discard_submodule_files,
+            discard_unrecorded,
         )
         .map_err(|err| format!("{err:#}"));
         let removed = matches!(
@@ -877,7 +1018,12 @@ where
         if !removed {
             blocking.live.replace_hold(hold_worktree(root));
         }
-        Ok::<_, String>(match outcome? {
+        let outcome = outcome?;
+        if outcome == RemoveOutcome::Removed {
+            // R6: the restore that follows says that this close lost nothing recorded.
+            update_record(&blocking, "close", |record| record.closed = true);
+        }
+        Ok::<_, String>(match outcome {
             RemoveOutcome::Removed | RemoveOutcome::AlreadyMissing => {
                 // R12.7: a branch the parent applied goes with its checkout.
                 let applied = retire_applied_branch(&blocking, &metadata);
@@ -897,11 +1043,7 @@ where
             }
             RemoveOutcome::Kept(reason) => CloseOutcome::Kept {
                 reason,
-                submodule_files: codex_worktree::unpopulated_submodule_files(root)
-                    .unwrap_or_default()
-                    .iter()
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .collect(),
+                details: kept_details(root, reason),
             },
         })
     })
@@ -914,9 +1056,40 @@ where
     Ok(closed)
 }
 
+/// P3-3, F1, F3: what keeps a worktree, by name: the submodule directories with files, the
+/// nested repositories with their own work, or the live processes (blocking).
+fn kept_details(root: &Path, reason: codex_worktree::KeptReason) -> Vec<String> {
+    match reason {
+        codex_worktree::KeptReason::SubmoduleFiles => {
+            codex_worktree::unpopulated_submodule_files(root)
+                .unwrap_or_default()
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect()
+        }
+        codex_worktree::KeptReason::NestedRepository => {
+            codex_worktree::nested_repositories(root).unwrap_or_default()
+        }
+        codex_worktree::KeptReason::Process => codex_worktree::processes_in(root),
+        _ => Vec::new(),
+    }
+}
+
 /// Q22, P3-5: records `commit` as the agent's last checkpoint in its host record (blocking),
 /// so a restore without the branch starts from it rather than from the base.
 pub(super) fn record_checkpoint(binding: &AgentWorktreeBinding, commit: &str) {
+    update_record(binding, "checkpoint", |record| {
+        record.last_checkpoint = Some(commit.to_string());
+    });
+}
+
+/// Changes the host record of `binding`'s agent, written anew when it is missing (blocking);
+/// a failure is logged with `what` was recorded.
+fn update_record(
+    binding: &AgentWorktreeBinding,
+    what: &str,
+    change: impl FnOnce(&mut codex_worktree::AgentWorktreeRecord),
+) {
     let Some(target) = binding.sweep.as_ref() else {
         return;
     };
@@ -930,12 +1103,12 @@ pub(super) fn record_checkpoint(binding: &AgentWorktreeBinding, commit: &str) {
                     &metadata,
                 )
             });
-            record.last_checkpoint = Some(commit.to_string());
+            change(&mut record);
             codex_worktree::write_agent_record(&target.records, &record)
         });
     if let Err(err) = recorded {
         warn!(
-            "cannot record the checkpoint of agent {}: {err:#}",
+            "cannot record the {what} of agent {}: {err:#}",
             binding.agent_path.as_str()
         );
     }
@@ -1042,11 +1215,81 @@ fn retire_applied_branch(
     }
 }
 
-/// P2-1: why a worktree another agent still works in is not closed.
-pub(crate) fn working_in_worktree(agent: &str) -> String {
-    format!(
-        "agent {agent} still works in its worktree (it descends from the agent or runs in its checkout); wait for it or interrupt it, then close the worktree"
-    )
+/// P2-1, F10: whether an agent works in `binding`'s worktree: it descends from the
+/// worktree's agent (an isolated descendant included), or one of its working directories
+/// (`cwds`, of its config and its environments) lies in the worktree, as for a helper spawned
+/// there with isolation `none`.
+pub(crate) fn works_in_worktree(
+    binding: &AgentWorktreeBinding,
+    agent_path: Option<&AgentPath>,
+    cwds: &[PathBuf],
+) -> bool {
+    let root = live_key(&binding.root);
+    let descendant = agent_path.is_some_and(|path| {
+        path != &binding.agent_path
+            && path
+                .as_str()
+                .strip_prefix(binding.agent_path.as_str())
+                .is_some_and(|rest| rest.starts_with('/'))
+    });
+    descendant
+        || cwds
+            .iter()
+            .any(|cwd| cwd.starts_with(binding.root.as_path()) || live_key(cwd).starts_with(&root))
+}
+
+/// What keeps a worktree from being closed besides its own agent (P2-1, F1, F6).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum WorktreeUse {
+    /// A loaded agent that works in the worktree and is not at rest.
+    Agent(String),
+    /// An agent whose turn started in the worktree and does not show as running yet.
+    StartingTurn(String),
+    /// A live background process of a session of the tree whose cwd lies in the worktree;
+    /// `caller` when it belongs to the session that closes.
+    Process {
+        agent: String,
+        session_id: String,
+        command: String,
+        caller: bool,
+    },
+}
+
+impl WorktreeUse {
+    /// The refusal of a close, with the way past it.
+    pub(crate) fn refusal(&self) -> String {
+        match self {
+            Self::Agent(agent) => format!(
+                "agent {} still works in its worktree (it descends from the agent or runs in its checkout); wait for it or interrupt it, then close the worktree",
+                block_text(agent)
+            ),
+            Self::StartingTurn(agent) => format!(
+                "agent {} is starting a turn in its worktree; wait for it, then close the worktree",
+                block_text(agent)
+            ),
+            Self::Process {
+                session_id,
+                command,
+                caller: true,
+                ..
+            } => format!(
+                "your background process session_id {} (`{}`) runs in its worktree; stop it first with write_stdin chars \"\\u0003\" on that session_id, then close the worktree",
+                block_text(session_id),
+                block_text(command)
+            ),
+            Self::Process {
+                agent,
+                session_id,
+                command,
+                caller: false,
+            } => format!(
+                "a background process of agent {} (session_id {}, `{}`) runs in its worktree; it must be stopped first: that agent stops it with write_stdin chars \"\\u0003\" on that session_id, so ask it with followup_task, then close the worktree",
+                block_text(agent),
+                block_text(session_id),
+                block_text(command)
+            ),
+        }
+    }
 }
 
 impl AgentWorktrees {
@@ -1088,7 +1331,20 @@ impl crate::session::session::Session {
                 None => return,
             },
         };
-        let note = turn_note(&binding, own, begin_turn(&binding, own).await);
+        let holder = if own {
+            None
+        } else {
+            Some(HolderTurn {
+                thread_id: self.thread_id,
+                agent: turn_context.session_source.get_agent_path().map_or_else(
+                    || self.thread_id.to_string(),
+                    |path| path.as_str().to_string(),
+                ),
+                status: self.fork_agent_status_watch(),
+                started: Instant::now(),
+            })
+        };
+        let note = turn_note(&binding, own, begin_turn(&binding, own, holder).await);
         if let Some(note) = note {
             // P3-5: the turn learns what happened to its working directory before it runs.
             let item = crate::context::ContextualUserFragment::into(
@@ -1110,6 +1366,13 @@ pub(super) fn turn_note(
 ) -> Option<String> {
     match begun {
         Ok(_) if own => binding.take_restore_note(),
+        // R6: a close recorded everything first, so only ignored files are gone.
+        Ok(true) if binding.restored_after_close() => Some(format!(
+            "Codex recreated the worktree {} of agent {}, which you work in, because it had been closed. {}",
+            binding.root.display(),
+            binding.agent_path.as_str(),
+            super::CLOSED_RESTORE
+        )),
         Ok(true) => Some(format!(
             "Codex recreated the worktree {} of agent {}, which you work in, because it had been removed. Edits made in it after that agent's last turn ended, and ignored files, are gone. Check the files you rely on before you continue.",
             binding.root.display(),
@@ -1139,14 +1402,47 @@ pub(super) fn turn_note(
 pub(crate) async fn begin_turn(
     binding: &Arc<AgentWorktreeBinding>,
     own: bool,
+    holder: Option<HolderTurn>,
 ) -> Result<bool, String> {
     let mut state = binding.state.lock().await;
     let restored = restore_if_missing(binding).await;
     if own {
         state.stopped = false;
     }
+    // F6: another agent's turn shows as running only once it is registered, after this hook;
+    // until then a close sees it here.
+    if let Some(holder) = holder {
+        state
+            .holder_turns
+            .retain(|turn| turn.thread_id != holder.thread_id);
+        state.holder_turns.push(holder);
+    }
     restored
 }
+
+/// F6: a turn of another agent that started in a worktree, as its turn-start hook saw it.
+#[derive(Clone, Debug)]
+pub(crate) struct HolderTurn {
+    pub(crate) thread_id: ThreadId,
+    pub(crate) agent: String,
+    /// The agent's status channel as the hook saw it: the turn has progressed once anything
+    /// was sent on it, even an equal status (the turn's start sends `Running`).
+    pub(crate) status: tokio::sync::watch::Receiver<codex_protocol::protocol::AgentStatus>,
+    pub(crate) started: Instant,
+}
+
+impl HolderTurn {
+    /// Whether the agent's status changed since the hook, so the turn registered or ended; a
+    /// session that is gone counts as changed.
+    pub(crate) fn progressed(&self) -> bool {
+        self.status.has_changed().unwrap_or(true)
+    }
+}
+
+/// How long a started turn of another agent keeps a close away while it has not shown as
+/// running yet; registering a turn takes milliseconds, so this only bounds a turn that never
+/// registered.
+const HOLDER_TURN_GRACE: Duration = Duration::from_secs(60);
 
 // ---------------------------------------------------------------------------------------------
 // R3.8: Guardian learns that the reviewed agent works in an isolated worktree

@@ -14,7 +14,6 @@ use crate::agent::worktree_isolation::checkpoint_for_close;
 use crate::agent::worktree_isolation::close_worktree;
 use crate::agent::worktree_isolation::merge_for_parent;
 use crate::agent::worktree_isolation::record_applied;
-use crate::agent::worktree_isolation::working_in_worktree;
 use crate::hook_runtime::PreToolUseHookResult;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::run_post_tool_use_hooks;
@@ -66,7 +65,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
             (
                 "close".to_string(),
                 JsonSchema::boolean(Some(
-                    "After applying, unload the finished agent and remove its worktree checkout; the result says whether its branch stays or was retired because your checkout holds it. Refused while the agent, or an agent working in its worktree, is still running, and when the apply fails."
+                    "After applying, unload the finished agent and remove its worktree checkout; the result says whether its branch stays or was retired because your checkout holds it. Refused while the agent, or an agent working in its worktree, is still running, while a background process runs in the worktree, and when the apply fails."
                         .to_string(),
                 )),
             ),
@@ -207,13 +206,14 @@ async fn handle_apply(invocation: ToolInvocation) -> Result<FunctionToolOutput, 
             ))
         };
         let runtime = &session.services.local_agent_runtime;
-        // P2-1: a helper or descendant that works in the worktree keeps it, as the agent
-        // itself does; it is checked again right before the removal.
-        if let Some(agent) = runtime
-            .fork_worktree_busy_agent(&binding, session.thread_id)
+        // P2-1, F1: a helper or descendant that works in the worktree, or a background
+        // process there, keeps it, as the agent itself does; unloading the agent would stop
+        // its own processes. It is checked again right before the removal.
+        if let Some(user) = runtime
+            .fork_worktree_use(&binding, session.thread_id, Vec::new())
             .await
         {
-            return Err(not_closed(working_in_worktree(&agent)));
+            return Err(not_closed(user.refusal()));
         }
         runtime
             .fork_unload_for_close(agent_id)
@@ -516,8 +516,8 @@ async fn close_message(
     let root = binding.root.display();
     let (branch, applied, ignored) = match close_worktree(
         binding,
-        /*discard_submodule_files*/ args.discard_changes,
-        || runtime.fork_worktree_busy_agent(binding, caller),
+        /*discard_unrecorded*/ args.discard_changes,
+        |holders| runtime.fork_worktree_use(binding, caller, holders),
     )
     .await
     {
@@ -526,13 +526,10 @@ async fn close_message(
             applied,
             ignored,
         }) => (branch, applied, ignored),
-        Ok(CloseOutcome::Kept {
-            reason,
-            submodule_files,
-        }) => {
+        Ok(CloseOutcome::Kept { reason, details }) => {
             return format!(
                 "The worktree {root} of agent {target} was kept: {}.",
-                kept_reason(reason, &submodule_files)
+                kept_reason(reason, &details)
             );
         }
         Err(reason) => return format!("The worktree {root} of agent {target} was kept: {reason}."),
@@ -558,29 +555,45 @@ async fn close_message(
             " It recorded no changes; a later task for the agent restores the worktree.",
         ),
     }
-    // P3-3: ignored files are not recorded, so the answer names what went with the checkout.
-    if ignored.total > 0 {
-        let more = ignored.total.saturating_sub(ignored.listed.len());
-        text.push_str(&format!(
-            " The removal also dropped {} ignored {} that Codex never records ({}{}).",
-            ignored.total,
-            if ignored.total == 1 {
-                "entry"
-            } else {
-                "entries"
-            },
-            ignored.listed.join(", "),
-            if more > 0 {
-                format!(" and {more} more")
-            } else {
-                String::new()
-            }
-        ));
-    }
+    text.push_str(&ignored_sentence(&ignored));
     text
 }
 
-fn kept_reason(reason: codex_worktree::KeptReason, submodule_files: &[String]) -> String {
+/// P3-3, F5: the sentence of a close answer that names the ignored entries the removal
+/// dropped, empty without them. The names come from the worktree, so they are escaped like
+/// the paths of the `<agent_worktree>` block: none can start a line of the answer.
+fn ignored_sentence(ignored: &crate::agent::worktree_isolation::IgnoredEntries) -> String {
+    if ignored.total == 0 {
+        return String::new();
+    }
+    let more = ignored.total.saturating_sub(ignored.listed.len());
+    format!(
+        " The removal also dropped {} ignored {} that Codex never records ({}{}).",
+        ignored.total,
+        if ignored.total == 1 {
+            "entry"
+        } else {
+            "entries"
+        },
+        quoted_names(&ignored.listed),
+        if more > 0 {
+            format!(" and {more} more")
+        } else {
+            String::new()
+        }
+    )
+}
+
+/// F5: names from the worktree, escaped like the paths of the block and joined.
+fn quoted_names(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|name| crate::agent::worktree_isolation::quote_block_path(name).into_owned())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn kept_reason(reason: codex_worktree::KeptReason, details: &[String]) -> String {
     match reason {
         codex_worktree::KeptReason::InUse => "another Codex process works in it".to_string(),
         codex_worktree::KeptReason::Changes => {
@@ -588,10 +601,20 @@ fn kept_reason(reason: codex_worktree::KeptReason, submodule_files: &[String]) -
         }
         codex_worktree::KeptReason::Commits => "its HEAD has commits beyond its branch".to_string(),
         codex_worktree::KeptReason::Branch => "it has its own branch".to_string(),
-        // P3-3: files Codex never records are not removed without the confirmation.
+        // P3-3, F2: files Codex never records are not removed without the confirmation.
         codex_worktree::KeptReason::SubmoduleFiles => format!(
             "the agent put files into the directories of submodules this worktree does not check out ({}), and Codex does not record them; move them out first, or close with discard_changes to remove them",
-            submodule_files.join(", ")
+            quoted_names(details)
+        ),
+        // F3: a checkpoint records only the gitlink of a nested repository.
+        codex_worktree::KeptReason::NestedRepository => format!(
+            "repositories nested in it hold work that Codex records only as a submodule pointer ({}); push or move that work first, or close with discard_changes to remove it",
+            quoted_names(details)
+        ),
+        // F1: never removed under a running process, whatever the confirmation.
+        codex_worktree::KeptReason::Process => format!(
+            "processes still run in it ({}); stop them first (a background terminal with write_stdin chars \"\\u0003\" on its session_id), then close the worktree",
+            quoted_names(details)
         ),
     }
 }

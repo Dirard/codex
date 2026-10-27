@@ -89,12 +89,19 @@ pub struct AgentWorktreeBinding {
     state: Mutex<BindingState>,
 }
 
+/// R6 (second live recheck, 2026-10-27): what a restore after a close tells the agent working
+/// in the worktree.
+const CLOSED_RESTORE: &str = "It holds all the work Codex recorded when it closed the worktree; only ignored files, such as build output, are gone.";
+
 /// P3-5: the source of a restore, not yet told to the agent (its next turn) and to its
 /// parent (the next `<agent_worktree>` block).
 #[derive(Debug, Default)]
 struct RestoreNotices {
     agent: Option<String>,
     parent: Option<String>,
+    /// R6 (second live recheck, 2026-10-27): the worktree came back after a close, which had
+    /// recorded everything but ignored files, rather than after a removal by someone else.
+    after_close: bool,
 }
 
 #[derive(Debug, Default)]
@@ -102,6 +109,9 @@ struct BindingState {
     /// No runtime of the child is loaded, so its worktree is quiescent.
     stopped: bool,
     finalized: bool,
+    /// Turns of other agents that started in this worktree, such as a helper's (F6); a close
+    /// waits for each until it shows as a running turn or another status.
+    holder_turns: Vec<ops::HolderTurn>,
 }
 
 impl AgentWorktreeBinding {
@@ -133,40 +143,55 @@ impl AgentWorktreeBinding {
     }
 
     /// P3-5: the worktree was recreated from `source`; the agent's next turn and the parent's
-    /// next block say so.
-    fn note_restored(&self, source: &str) {
+    /// next block say so, and whether it had been closed (`after_close`, R6).
+    fn note_restored(&self, source: &str, after_close: bool) {
         let mut restored = self.restored.lock().unwrap_or_else(PoisonError::into_inner);
         restored.agent = Some(source.to_string());
         restored.parent = Some(source.to_string());
+        restored.after_close = after_close;
+    }
+
+    /// R6: whether the last restore followed a close.
+    fn restored_after_close(&self) -> bool {
+        self.restored
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .after_close
     }
 
     /// P3-5: the note for the agent's next turn about the last restore, once.
     fn take_restore_note(&self) -> Option<String> {
-        let source = self
-            .restored
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .agent
-            .take()?;
-        Some(format!(
-            "Codex recreated your worktree {} from {source}, because it had been removed. Only what that commit recorded is in it: edits made after your last turn ended, and ignored files, are gone. Check the files you rely on before you continue.",
-            self.root.display()
-        ))
+        let mut restored = self.restored.lock().unwrap_or_else(PoisonError::into_inner);
+        let source = restored.agent.take()?;
+        // R6: a close recorded everything first, so only ignored files are gone.
+        Some(if restored.after_close {
+            format!(
+                "Codex recreated your worktree {} from {source}, because it had been closed. {CLOSED_RESTORE}",
+                self.root.display()
+            )
+        } else {
+            format!(
+                "Codex recreated your worktree {} from {source}, because it had been removed. Only what that commit recorded is in it: edits made after your last turn ended, and ignored files, are gone. Check the files you rely on before you continue.",
+                self.root.display()
+            )
+        })
     }
 
     /// P3-5: the block line for the parent about the last restore, once.
     fn take_restore_line(&self) -> Option<String> {
-        self.restored
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .parent
-            .take()
-            .map(|source| {
-                format!(
-                    "restored: from {}; edits not recorded before the removal are lost",
-                    block_text(&source)
-                )
-            })
+        let mut restored = self.restored.lock().unwrap_or_else(PoisonError::into_inner);
+        let source = restored.parent.take()?;
+        Some(if restored.after_close {
+            format!(
+                "restored: from {} after its close; it holds all work recorded at the close, only ignored files are gone",
+                block_text(&source)
+            )
+        } else {
+            format!(
+                "restored: from {}; edits not recorded before the removal are lost",
+                block_text(&source)
+            )
+        })
     }
 
     fn applied_tip(&self) -> Option<String> {
@@ -1018,10 +1043,11 @@ pub(crate) fn prepare_reload(
     environments: Option<TurnEnvironmentSnapshot>,
 ) -> Result<Option<TurnEnvironmentSnapshot>, String> {
     if !binding.root.join(".git").exists() {
+        // F7: it was restored a moment ago, so it was removed during this reload; the next
+        // reload or turn restores it again.
         return Err(format!(
-            "its worktree {} no longer exists; changes recorded before it was removed are on branch {}",
-            binding.root.display(),
-            binding.metadata().branch
+            "its worktree {} was removed while the agent was being loaded; send the task again to restore it",
+            binding.root.display()
         ));
     }
     rebase_child_config(config, binding)?;
@@ -1112,6 +1138,7 @@ pub(crate) async fn discover_binding_or_missing(
                 state: Mutex::new(BindingState {
                     stopped: true,
                     finalized: false,
+                    holder_turns: Vec::new(),
                 }),
             }))
         }
@@ -1407,7 +1434,7 @@ fn push_escaped(out: &mut String, character: char) {
 /// A path of plain characters other than `"`, `\` and `;` stays as is. Any other path is
 /// quoted like Git's `core.quotePath` output, with `<` and `>` escaped too, so `; ` always
 /// separates entries and a file name never starts a line or closes the block.
-fn quote_block_path(path: &str) -> Cow<'_, str> {
+pub(crate) fn quote_block_path(path: &str) -> Cow<'_, str> {
     if path
         .chars()
         .all(|character| is_plain_block_char(character) && !matches!(character, '"' | '\\' | ';'))
@@ -1535,10 +1562,13 @@ mod ops;
 
 pub use ops::AgentWorktreeView;
 pub(crate) use ops::CloseOutcome;
+pub(crate) use ops::HolderTurn;
+pub(crate) use ops::IgnoredEntries;
 pub(crate) use ops::ListedWorktree;
 pub(crate) use ops::LiveRoot;
 pub(crate) use ops::MissingWorktree;
 pub(crate) use ops::SweepTarget;
+pub(crate) use ops::WorktreeUse;
 pub use ops::agent_worktree_reload_error;
 pub(crate) use ops::apply_refusal;
 pub(crate) use ops::checkpoint_for_close;
@@ -1552,7 +1582,7 @@ pub(crate) use ops::merge_for_parent;
 pub(crate) use ops::record_applied;
 pub(crate) use ops::restore_missing_binding;
 pub(crate) use ops::sweep_on_session_start;
-pub(crate) use ops::working_in_worktree;
+pub(crate) use ops::works_in_worktree;
 
 #[cfg(test)]
 #[path = "worktree_isolation_tests.rs"]

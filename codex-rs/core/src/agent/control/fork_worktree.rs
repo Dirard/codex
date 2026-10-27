@@ -6,6 +6,7 @@
 use super::*;
 use crate::agent::worktree_isolation::AgentWorktreeBinding;
 use crate::agent::worktree_isolation::Discovery;
+use crate::agent::worktree_isolation::WorktreeUse;
 use crate::agent::worktree_isolation::discover_binding_or_missing;
 use crate::agent::worktree_isolation::ensure_worktree_present;
 use crate::agent::worktree_isolation::prepare_reload;
@@ -288,17 +289,24 @@ impl LocalAgentRuntime {
 }
 
 impl LocalAgentRuntime {
-    /// P2-1, P3-1: a loaded agent of this tree, other than the worktree's own agent and
-    /// `caller`, that still works in `binding`'s worktree: a descendant of its agent (an
-    /// isolated one included, whose worktree was created from it) or any agent whose working
-    /// directory lies in the worktree, such as a helper spawned with isolation `none`. Its
-    /// path is returned while it is not at rest; an agent at rest or not loaded does not work
-    /// there, and a later turn of it restores the worktree first (R5.8).
-    pub(crate) async fn fork_worktree_busy_agent(
+    /// P2-1, P3-1, F1, F6: what of this tree still uses `binding`'s worktree, so a close must
+    /// wait, in this order:
+    /// - a turn of another agent that started there and does not show as running yet
+    ///   (`holders`, recorded by the turn-start hook);
+    /// - a loaded agent other than the worktree's own and `caller` that works there
+    ///   ([`crate::agent::worktree_isolation::works_in_worktree`]) and is not at rest;
+    /// - a live background process (unified exec) of any loaded session of the tree, the
+    ///   worktree's own agent (at rest; a turn of it is refused by the unload) and `caller`
+    ///   included, whose working directory lies in it.
+    ///
+    /// An agent at rest or not loaded does not work there, and a later turn of it restores
+    /// the worktree first (R5.8). The processes are not stopped: the refusal names them.
+    pub(crate) async fn fork_worktree_use(
         &self,
         binding: &AgentWorktreeBinding,
         caller: ThreadId,
-    ) -> Option<String> {
+        holders: Vec<crate::agent::worktree_isolation::HolderTurn>,
+    ) -> Option<WorktreeUse> {
         let state = self.upgrade().ok()?;
         let root =
             dunce::canonicalize(&binding.root).unwrap_or_else(|_| binding.root.to_path_buf());
@@ -306,35 +314,80 @@ impl LocalAgentRuntime {
             path.starts_with(binding.root.as_path())
                 || dunce::canonicalize(path).is_ok_and(|path| path.starts_with(&root))
         };
-        for metadata in self.registry.live_agents() {
-            let Some(thread_id) = metadata.agent_id else {
-                continue;
-            };
-            if thread_id == binding.thread_id || thread_id == caller {
+        let mut sessions = self
+            .registry
+            .live_agents()
+            .into_iter()
+            .filter_map(|metadata| Some((metadata.agent_id?, metadata.agent_path)))
+            .collect::<Vec<_>>();
+        if !sessions.iter().any(|(thread_id, _)| *thread_id == caller) {
+            sessions.push((caller, None));
+        }
+        let name = |thread_id: ThreadId, path: &Option<AgentPath>| {
+            path.as_ref()
+                .map_or_else(|| thread_id.to_string(), |path| path.as_str().to_string())
+        };
+        let mut loaded = Vec::new();
+        for (thread_id, path) in sessions {
+            if let Ok(thread) = state.get_thread(thread_id).await {
+                loaded.push((thread_id, path, thread));
+            }
+        }
+        for holder in holders {
+            if holder.thread_id == caller {
                 continue;
             }
-            let Ok(thread) = state.get_thread(thread_id).await else {
+            let Some((_, _, thread)) = loaded
+                .iter()
+                .find(|(thread_id, _, _)| *thread_id == holder.thread_id)
+            else {
                 continue;
             };
-            let descendant = metadata.agent_path.as_ref().is_some_and(|path| {
-                path != &binding.agent_path
-                    && super::agent_matches_prefix(Some(path), &binding.agent_path)
-            });
-            let works_there = descendant
-                || in_worktree(thread.config_snapshot().await.cwd().as_path())
-                || thread
+            if thread.session.active_turn.lock().await.is_some() {
+                return Some(WorktreeUse::Agent(holder.agent));
+            }
+            if !holder.progressed() {
+                return Some(WorktreeUse::StartingTurn(holder.agent));
+            }
+        }
+        for (thread_id, path, thread) in &loaded {
+            if *thread_id == binding.thread_id || *thread_id == caller {
+                continue;
+            }
+            let mut cwds = vec![thread.config_snapshot().await.cwd().to_path_buf()];
+            cwds.extend(
+                thread
                     .environment_selections()
                     .await
                     .iter()
                     .filter_map(|selection| selection.cwd.to_abs_path().ok())
-                    .any(|cwd| in_worktree(cwd.as_path()));
-            if works_there && !thread.fork_at_rest().await {
-                return Some(
-                    metadata
-                        .agent_path
-                        .as_ref()
-                        .map_or_else(|| thread_id.to_string(), |path| path.as_str().to_string()),
-                );
+                    .map(|cwd| cwd.to_path_buf()),
+            );
+            if crate::agent::worktree_isolation::works_in_worktree(binding, path.as_ref(), &cwds)
+                && !thread.fork_at_rest().await
+            {
+                return Some(WorktreeUse::Agent(name(*thread_id, path)));
+            }
+        }
+        for (thread_id, path, thread) in &loaded {
+            // The worktree's own agent in a turn is refused as running by the unload that
+            // follows (R12.2): its process is part of that turn.
+            if *thread_id == binding.thread_id && !thread.fork_at_rest().await {
+                continue;
+            }
+            for process in thread.list_background_terminals().await {
+                if process
+                    .cwd
+                    .to_abs_path()
+                    .is_ok_and(|cwd| in_worktree(cwd.as_path()))
+                {
+                    return Some(WorktreeUse::Process {
+                        agent: name(*thread_id, path),
+                        session_id: process.process_id,
+                        command: process.command,
+                        caller: *thread_id == caller,
+                    });
+                }
             }
         }
         None
