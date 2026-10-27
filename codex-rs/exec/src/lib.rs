@@ -14,6 +14,7 @@ pub(crate) mod exec_events;
 // Fork: exec-only feature overrides and the wait for workflow runs.
 mod fork_overrides;
 use fork_overrides::exec_cli_kv_overrides;
+mod fork_startup_warnings;
 mod workflow_wait;
 // Fork end
 mod worktree;
@@ -1385,6 +1386,9 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     &notification,
                     &primary_thread_id_for_requests,
                     &task_id,
+                ) && !fork_startup_warnings::repeats_startup_warning(
+                    &notification,
+                    &config.startup_warnings,
                 ) {
                     maybe_backfill_turn_completed_items(
                         config.ephemeral,

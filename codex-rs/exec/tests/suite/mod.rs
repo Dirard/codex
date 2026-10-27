@@ -22,6 +22,8 @@ mod sandbox;
 #[cfg(target_os = "macos")]
 mod seatbelt;
 mod server_error_exit;
+// Fork: a startup warning is reported once (live recheck 2026-10-27, R4).
+mod startup_warnings;
 // Fork: exec waits for workflow runs.
 mod workflow;
 // Fork: exec waits for background terminal notifications.
