@@ -30,6 +30,9 @@ pub use mcp_ema_cancellation::McpEmaCancellation;
 mod mcp_requirements;
 mod mcp_types;
 mod merge;
+// Fork: turning off a fork feature keeps its settings table (explorer-and-questions, R1.6).
+mod feature_toggle_fork;
+pub use feature_toggle_fork::fork_feature_clear_keeps_table;
 mod model_provider_defaults;
 mod model_provider_requirements;
 mod overrides;

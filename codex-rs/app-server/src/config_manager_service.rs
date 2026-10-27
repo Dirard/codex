@@ -315,6 +315,14 @@ impl ConfigManager {
                         || !has_broker_settings(&user_layer.config)
                             && has_broker_settings(&layers.effective_config())
                 };
+            // Fork: a fork feature table keeps its settings when turned off (explorer R1.6).
+            let preserves_network_proxy_settings = preserves_network_proxy_settings
+                || value.is_null()
+                    && value_at_path(&user_config, &segments)
+                        .and_then(TomlValue::as_table)
+                        .is_some_and(|table| {
+                            codex_config::fork_feature_clear_keeps_table(&segments, table.keys())
+                        });
             let parsed_value = if preserves_network_proxy_settings {
                 Some(TomlValue::Boolean(false))
             } else {

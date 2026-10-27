@@ -358,6 +358,9 @@ impl ConfigDocument {
                             feature.contains_key("credential_broker")
                                 || feature.contains_key("credentials")
                         });
+                // Fork: a fork feature table keeps its settings when turned off (R1.6).
+                let preserves_broker_settings = preserves_broker_settings
+                    || super::fork::clear_keeps_feature_table(self.doc.as_item(), segments);
                 if preserves_broker_settings {
                     let mut enabled_segments = segments.clone();
                     enabled_segments.push("enabled".to_string());

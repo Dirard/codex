@@ -775,6 +775,45 @@ async fn clear_missing_nested_config_is_noop() -> Result<()> {
     Ok(())
 }
 
+/// Fork (explorer-and-questions R1.6, review 2026-10-27 item 3): `/experimental` turns a
+/// default-off feature off by clearing its key; for a fork feature table with settings that
+/// writes `enabled = false` and keeps the settings.
+#[tokio::test]
+async fn clearing_a_fork_feature_table_keeps_its_settings() -> Result<()> {
+    let tmp = tempdir()?;
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    for (initial, expected) in [
+        (
+            "[features.explorer_profile]\nenabled = true\nmodel = \"cheap-model\"\n",
+            Some("enabled = false\nmodel = \"cheap-model\"\n"),
+        ),
+        ("[features.explorer_profile]\nenabled = true\n", None),
+    ] {
+        std::fs::write(&path, initial)?;
+        let response = service
+            .write_value(ConfigValueWriteParams {
+                file_path: Some(path.display().to_string()),
+                key_path: "features.explorer_profile".to_string(),
+                value: serde_json::Value::Null,
+                merge_strategy: MergeStrategy::Replace,
+                expected_version: None,
+            })
+            .await?;
+        assert_eq!(response.status, WriteStatus::Ok);
+        let written: TomlValue = toml::from_str(&std::fs::read_to_string(&path)?)?;
+        assert_eq!(
+            written
+                .get("features")
+                .and_then(|features| features.get("explorer_profile"))
+                .cloned(),
+            expected.map(|table| toml::from_str::<TomlValue>(table).expect("expected table")),
+            "{initial}"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn clearing_user_setting_falls_back_to_packaged_default_without_override() -> Result<()> {
     let tmp = tempdir()?;

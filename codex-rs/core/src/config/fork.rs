@@ -456,6 +456,19 @@ pub(super) fn validate_tool_namespace(
     )
 }
 
+/// Fork: whether `ConfigEdit::ClearPath { segments }` of a fork feature should write
+/// `enabled = false` instead, because the feature's table in `root` holds settings besides
+/// `enabled` (explorer-and-questions spec, R1.6).
+pub(crate) fn clear_keeps_feature_table(root: &toml_edit::Item, segments: &[String]) -> bool {
+    segments
+        .iter()
+        .try_fold(root, |item, segment| item.as_table_like()?.get(segment))
+        .and_then(toml_edit::Item::as_table_like)
+        .is_some_and(|table| {
+            codex_config::fork_feature_clear_keeps_table(segments, table.iter().map(|(key, _)| key))
+        })
+}
+
 #[cfg(test)]
 #[path = "fork_tests.rs"]
 mod tests;

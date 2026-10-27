@@ -137,6 +137,41 @@ async fn profile_table_survives_boolean_toggles() {
     );
 }
 
+/// R1.6 (review 2026-10-27, item 3): turning the profile off (`codex features disable`, a
+/// clear of `features.explorer_profile`) writes `enabled = false` and keeps the settings; a
+/// table with only `enabled` is still cleared, as upstream does.
+#[test]
+fn disabling_the_profile_keeps_its_settings() {
+    for (initial, disabled) in [
+        (
+            "[features.explorer_profile]\nenabled = true\nmodel = \"cheap-model\"\nmax_result_tokens = 500\n",
+            "[features.explorer_profile]\nenabled = false\nmodel = \"cheap-model\"\nmax_result_tokens = 500\n",
+        ),
+        ("[features.explorer_profile]\nenabled = true\n", ""),
+        ("[features]\nexplorer_profile = true\n", ""),
+    ] {
+        let home = TempDir::new().expect("create temp dir");
+        let config_path = home.path().join("config.toml");
+        std::fs::write(&config_path, initial).expect("write config.toml");
+        crate::config::edit::ConfigEditsBuilder::new(home.path())
+            .set_feature_enabled("explorer_profile", /*enabled*/ false)
+            .apply_blocking()
+            .expect("disable explorer_profile");
+        let profile_table = |text: &str| {
+            toml::from_str::<TomlValue>(text)
+                .expect("parse config.toml")
+                .get("features")
+                .and_then(|features| features.get("explorer_profile"))
+                .cloned()
+        };
+        assert_eq!(
+            profile_table(&std::fs::read_to_string(&config_path).expect("read config.toml")),
+            profile_table(disabled),
+            "{initial}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn profile_applies_only_to_explorer_role_when_enabled() {
     let (_home, disabled) = config_with(&[]).await;
