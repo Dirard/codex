@@ -835,6 +835,7 @@ fn exec_command_output_reports_armed_exit_notification() {
         ArmedNotifications {
             exit: true,
             exit_off: None,
+            output_watch_ascii: false,
             output_watch: OutputWatchState::Unchanged,
         },
     );
@@ -896,6 +897,7 @@ fn exec_command_output_reports_the_output_watch() {
         ArmedNotifications {
             exit: true,
             exit_off: None,
+            output_watch_ascii: false,
             output_watch: OutputWatchState::On("ready|ERROR".to_string()),
         },
     );
@@ -910,12 +912,31 @@ fn exec_command_output_reports_the_output_watch() {
         watching.code_mode_result(&payload)["output_watch"],
         serde_json::json!("ready|ERROR")
     );
+    // Review of the fixes P3-4: a pattern matched with ASCII classes says so.
+    let ascii = armed_output(
+        Some(1000),
+        ArmedNotifications {
+            exit: true,
+            exit_off: None,
+            output_watch_ascii: true,
+            output_watch: OutputWatchState::On(".{0,255}Z".to_string()),
+        },
+    );
+    let text = ascii.response_text();
+    assert!(
+        text.contains(&format!(
+            "Output watch: on for lines matching \".{{0,255}}Z\" (Codex reports new matching lines while this Codex session is running; do not poll for them){OUTPUT_WATCH_ASCII_NOTE}\n"
+        )),
+        "{text}"
+    );
+    assert!(text.contains("matched with ASCII classes"), "{text}");
 
     let stopped = armed_output(
         Some(1000),
         ArmedNotifications {
             exit: true,
             exit_off: None,
+            output_watch_ascii: false,
             output_watch: OutputWatchState::Off,
         },
     );
@@ -932,6 +953,7 @@ fn exec_command_output_reports_the_output_watch() {
         ArmedNotifications {
             exit: false,
             exit_off: None,
+            output_watch_ascii: false,
             output_watch: OutputWatchState::NotStarted(OutputWatchRefusal::Limit),
         },
     );
@@ -958,6 +980,7 @@ fn exec_command_output_reports_the_output_watch() {
             ArmedNotifications {
                 exit: false,
                 exit_off: None,
+                output_watch_ascii: false,
                 output_watch: OutputWatchState::NotStarted(refusal),
             },
         )
@@ -971,6 +994,7 @@ fn exec_command_output_reports_the_output_watch() {
         ArmedNotifications {
             exit: true,
             exit_off: None,
+            output_watch_ascii: false,
             output_watch: OutputWatchState::On("ready".to_string()),
         },
     );

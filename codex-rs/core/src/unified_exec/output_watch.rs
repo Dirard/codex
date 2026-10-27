@@ -16,7 +16,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
 use std::sync::Weak;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -29,6 +28,7 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use super::ExitPreference;
 use super::NOTIFICATION_COMMAND_MAX_BYTES;
 use crate::session::session::Session;
 
@@ -78,6 +78,31 @@ impl OutputWatchWindows {
     }
 }
 
+/// How much longer an output watch keeps its process awaited without news (R6.14).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WatchWait {
+    /// No match yet, and the turn that started the watch still runs: the wait for the first
+    /// match lasts this long after that turn ends.
+    FirstMatchAfterTurn(Duration),
+    /// No match yet: this much of the wait for the first match is left.
+    FirstMatch(Duration),
+    /// After a match: this much is left until the watch counts as quiet.
+    Quiet(Duration),
+}
+
+/// A remaining wait as the model reads it: "about 3 minutes", "about a minute", "40 seconds".
+pub(crate) fn describe_remaining(left: Duration) -> String {
+    let seconds = left.as_secs();
+    if seconds >= 90 {
+        format!("about {} minutes", (seconds + 30) / 60)
+    } else if seconds >= 60 {
+        "about a minute".to_string()
+    } else {
+        let seconds = seconds.max(1);
+        format!("{seconds} second{}", if seconds == 1 { "" } else { "s" })
+    }
+}
+
 /// A wait as the model reads it: "5 minutes", "90 seconds", "1.5 seconds".
 pub(crate) fn describe_wait(wait: Duration) -> String {
     let seconds = wait.as_secs();
@@ -109,6 +134,9 @@ const OUTPUT_WATCH_REGEX_DFA_SIZE_LIMIT: usize = 512 * 1024;
 const OUTPUT_WATCH_REGEX_NEST_LIMIT: u32 = 64;
 /// The error for a pattern over `OUTPUT_WATCH_REGEX_SIZE_LIMIT` even with ASCII classes.
 const OUTPUT_PATTERN_TOO_COSTLY: &str = r"notify_on_output is too costly to match on every output line, even with ASCII classes; use a simpler pattern: + or * instead of large or nested counted repetitions such as (?:[ -~]?){1000} or (?:(?:.?){20}){20}";
+/// The error for a pattern with non-ASCII text over `OUTPUT_WATCH_REGEX_SIZE_LIMIT`: ASCII
+/// classes would change what it matches (review of the fixes, P3-4).
+const OUTPUT_PATTERN_TOO_COSTLY_NON_ASCII: &str = r"notify_on_output is too costly to match on every output line with Unicode classes, and it has non-ASCII text, which ASCII classes would not match the same way; use + or * instead of large counted repetitions such as .{0,255}, and fewer Unicode classes such as \w or \b";
 /// Label of the boundary lines around matching lines.
 const MATCHES_LABEL: &str = "matches";
 const LINE_TRUNCATION_MARKER: &str = "…";
@@ -158,7 +186,11 @@ impl OutputPattern {
     /// over `OUTPUT_WATCH_REGEX_SIZE_LIMIT` with them, such as `\w+@\w+\.\w+` or `.{0,255}Z`
     /// that `regex-lite` used to accept, is compiled again with ASCII classes (`unicode(false)`
     /// over the line's bytes, the semantics of `regex-lite`), under the same limits, so its
-    /// cost per line stays bounded the same way. Only a pattern too large even then is refused.
+    /// cost per line stays bounded the same way, and the tool output says so. Only a pattern
+    /// written entirely in ASCII gets that second chance: with non-ASCII text, ASCII classes
+    /// change what it matches (`(?i)` no longer folds Cyrillic case, `\b` no longer sees
+    /// Cyrillic word boundaries), so it is refused with advice instead (review of the fixes,
+    /// P3-4).
     pub(crate) fn parse(source: &str) -> Result<Arc<Self>, String> {
         if source.len() > OUTPUT_WATCH_PATTERN_MAX_BYTES {
             return Err(format!(
@@ -173,6 +205,9 @@ impl OutputPattern {
             .build()
         {
             Ok(regex) => PatternRegex::Unicode(regex),
+            Err(regex::Error::CompiledTooBig(_)) if !source.is_ascii() => {
+                return Err(OUTPUT_PATTERN_TOO_COSTLY_NON_ASCII.to_string());
+            }
             Err(regex::Error::CompiledTooBig(_)) => regex::bytes::RegexBuilder::new(source)
                 .unicode(false)
                 .size_limit(OUTPUT_WATCH_REGEX_SIZE_LIMIT)
@@ -196,6 +231,11 @@ impl OutputPattern {
     pub(crate) fn source(&self) -> &str {
         self.source.as_str()
     }
+
+    /// The pattern was too large with Unicode classes and is matched with ASCII classes.
+    pub(crate) fn ascii_classes(&self) -> bool {
+        matches!(self.regex, PatternRegex::Ascii(_))
+    }
 }
 
 /// What a `write_stdin` call asks of the session's notifications.
@@ -214,6 +254,7 @@ impl NotificationChange {
     pub(crate) fn for_write_stdin(
         session: &Session,
         notify_on_output: Option<&str>,
+        stop_output_watch: bool,
         notify_on_exit: Option<bool>,
     ) -> Result<Self, String> {
         if !session
@@ -223,7 +264,7 @@ impl NotificationChange {
             return Ok(Self::default());
         }
         Ok(Self {
-            output_watch: OutputWatchChange::parse(notify_on_output)?,
+            output_watch: OutputWatchChange::parse(notify_on_output, stop_output_watch)?,
             notify_on_exit,
         })
     }
@@ -234,17 +275,26 @@ impl NotificationChange {
 pub(crate) enum OutputWatchChange {
     /// Watch the session's new output with this pattern, replacing a previous watch.
     Watch(Arc<OutputPattern>),
-    /// Stop the session's watch (an empty `notify_on_output`).
+    /// Stop the session's watch (`stop_output_watch: true`).
     Stop,
 }
 
 impl OutputWatchChange {
-    /// Parses `notify_on_output` of `write_stdin` (R6.2, R6.4).
-    pub(crate) fn parse(value: Option<&str>) -> Result<Option<Self>, String> {
-        match value {
-            None => Ok(None),
-            Some("") => Ok(Some(Self::Stop)),
-            Some(source) => OutputPattern::parse(source).map(|pattern| Some(Self::Watch(pattern))),
+    /// Parses `notify_on_output` and `stop_output_watch` of `write_stdin` (R6.2, R6.4). An empty
+    /// `notify_on_output` changes nothing: a model that turned `notify_on_exit` off passed it
+    /// along and lost its error watch, so stopping a watch takes the explicit
+    /// `stop_output_watch` (live recheck 2 R5).
+    pub(crate) fn parse(value: Option<&str>, stop: bool) -> Result<Option<Self>, String> {
+        match (value, stop) {
+            (Some(source), true) if !source.is_empty() => Err(
+                "notify_on_output starts a watch and stop_output_watch stops it; pass only one"
+                    .to_string(),
+            ),
+            (_, true) => Ok(Some(Self::Stop)),
+            (None | Some(""), false) => Ok(None),
+            (Some(source), false) => {
+                OutputPattern::parse(source).map(|pattern| Some(Self::Watch(pattern)))
+            }
         }
     }
 }
@@ -279,10 +329,12 @@ pub enum OutputWatchState {
 pub struct ArmedNotifications {
     /// The exit of the running process will be reported.
     pub exit: bool,
-    /// `write_stdin` turned `notify_on_exit` off; `Some(true)` when the output watch still
-    /// reports the exit (live recheck 2026-10-27, N1).
+    /// `notify_on_exit` is off because the model turned it off; `Some(true)` when the output
+    /// watch still reports the exit (live recheck 2026-10-27, N1).
     pub exit_off: Option<bool>,
     pub output_watch: OutputWatchState,
+    /// The watch the call started matches with ASCII classes (review of the fixes, P3-4).
+    pub output_watch_ascii: bool,
 }
 
 /// Fork state of a process output buffer: when output last arrived (R4.5) and the watch
@@ -554,9 +606,11 @@ pub(crate) struct OutputWatch {
     turn_id: String,
     /// How long the watch stays fresh without a matching line (P2-3).
     windows: OutputWatchWindows,
-    /// `notify_on_exit` of the process (`ExitNotifier::exit_requested_flag`): while it is on,
-    /// the notification says what waits for the exit and how to turn that off (N1).
-    exit_requested: Arc<AtomicBool>,
+    /// `notify_on_exit` of the process (`ExitNotifier::exit_preference`): while it is on, the
+    /// notification says what waits for the exit and how to turn that off (N1); once the model
+    /// turned it off, the last notification does not promise the exit (review of the fixes,
+    /// P3-5).
+    exit: Arc<ExitPreference>,
 }
 
 impl std::fmt::Debug for OutputWatch {
@@ -578,7 +632,7 @@ impl OutputWatch {
             pattern,
             "turn".to_string(),
             OutputWatchWindows::default(),
-            Arc::new(AtomicBool::new(false)),
+            Arc::default(),
         )
     }
 
@@ -588,7 +642,7 @@ impl OutputWatch {
         pattern: Arc<OutputPattern>,
         turn_id: String,
         windows: OutputWatchWindows,
-        exit_requested: Arc<AtomicBool>,
+        exit: Arc<ExitPreference>,
     ) -> Arc<Self> {
         Arc::new(Self {
             key: super::next_notification_key(),
@@ -602,7 +656,7 @@ impl OutputWatch {
             started_at: Instant::now(),
             turn_id,
             windows,
-            exit_requested,
+            exit,
         })
     }
 
@@ -652,9 +706,40 @@ impl OutputWatch {
         }
     }
 
-    /// Whether the watch found a matching line yet.
+    /// Whether the watch found a matching line yet, or took over from a watch of the same
+    /// process that had (`continue_after_match`).
     pub(crate) fn has_matched(&self) -> bool {
         self.lock().last_match_at.is_some()
+    }
+
+    /// The watch replaces one that already matched, such as a server's "ready" watch turned
+    /// into an error watch: the process is up, so the watch is waited for only within the
+    /// quiet window, as after a match, not for a first match (live recheck 2 R3).
+    pub(crate) fn continue_after_match(&self, now: Instant) {
+        self.lock().last_match_at.get_or_insert(now);
+    }
+
+    /// How much longer the watch keeps its process awaited without news (`is_fresh`), or
+    /// `None` when it no longer does (review of the fixes P3-7, live recheck 2 R2).
+    pub(crate) fn wait_left(&self, now: Instant) -> Option<WatchWait> {
+        let state = self.lock();
+        if state.stopped {
+            return None;
+        }
+        if state.first_event_at.is_some() {
+            return Some(WatchWait::Quiet(self.windows.quiet));
+        }
+        let left = |deadline: Instant| {
+            deadline
+                .checked_duration_since(now)
+                .filter(|left| !left.is_zero())
+        };
+        match (state.last_match_at, state.turn_ended_at) {
+            (Some(last), _) => left(last + self.windows.quiet).map(WatchWait::Quiet),
+            (None, None) => Some(WatchWait::FirstMatchAfterTurn(self.windows.first_match)),
+            (None, Some(ended)) => left(ended.max(self.started_at) + self.windows.first_match)
+                .map(WatchWait::FirstMatch),
+        }
     }
 
     /// Whether the watch reported or still holds matching lines.
@@ -787,7 +872,7 @@ impl OutputWatch {
 
     /// Matches the waiting lines on the calling thread (tests).
     #[cfg(test)]
-    fn match_now(&self, final_batch: bool, now: Instant) {
+    pub(crate) fn match_now(&self, final_batch: bool, now: Instant) {
         while let Some(job) = self.take_job(now, final_batch) {
             let result = job.run(&self.pattern);
             self.apply(result, now);
@@ -894,10 +979,8 @@ impl OutputWatch {
                 exited,
                 last,
                 unchecked,
-                exit_wait: self
-                    .exit_requested
-                    .load(Ordering::Acquire)
-                    .then_some(self.windows.exec_wait),
+                exit_wait: self.exit.requested().then_some(self.windows.exec_wait),
+                exit_reported: !self.exit.turned_off(),
             },
             boundary,
         );
@@ -958,6 +1041,8 @@ struct RenderInput<'a> {
     unchecked: usize,
     /// `notify_on_exit` is on: `codex exec` waits this long for the exit.
     exit_wait: Option<Duration>,
+    /// The exit will be reported: the model did not turn `notify_on_exit` off.
+    exit_reported: bool,
 }
 
 /// The notification body; program output stays inside the untrusted boundary (R6.6, R6.11).
@@ -972,6 +1057,7 @@ fn render(input: &RenderInput<'_>, boundary: &UntrustedBoundary) -> String {
         last,
         unchecked,
         exit_wait,
+        exit_reported,
     } = input;
     let count = lines.total;
     let noun = if count == 1 { "line" } else { "lines" };
@@ -1015,7 +1101,12 @@ fn render(input: &RenderInput<'_>, boundary: &UntrustedBoundary) -> String {
     }
     if *last && !*exited {
         text.push(format!(
-            "This was the last notification of this output watch; call write_stdin with session_id {id} and notify_on_output to watch again. The exit is still reported."
+            "This was the last notification of this output watch; call write_stdin with session_id {id} and notify_on_output to watch again. {}",
+            if *exit_reported {
+                "The exit is still reported."
+            } else {
+                "Its exit is not reported: notify_on_exit is off."
+            }
         ));
     }
     if !*exited {
@@ -1024,7 +1115,7 @@ fn render(input: &RenderInput<'_>, boundary: &UntrustedBoundary) -> String {
         // another session's server (live recheck 2026-10-27, N1, N3).
         if let Some(exit_wait) = exit_wait {
             text.push(format!(
-                "Its exit notification is on (notify_on_exit), so codex exec and wait_agent wait for it to exit (codex exec for up to {}). If it is meant to keep running, turn that off with write_stdin {{\"session_id\": {id}, \"notify_on_exit\": false}}.",
+                "Its exit notification is on (notify_on_exit), so codex exec and wait_agent wait for it to exit (codex exec for up to {}). If it is meant to keep running while this Codex session runs, turn that off with write_stdin {{\"session_id\": {id}, \"notify_on_exit\": false}} and leave notify_on_output as it is, so the watch still reports errors and the exit; codex exec still stops the process when it exits.",
                 describe_wait(*exit_wait)
             ));
         }

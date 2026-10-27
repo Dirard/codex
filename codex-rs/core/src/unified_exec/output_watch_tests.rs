@@ -334,15 +334,23 @@ fn patterns_are_validated() {
         );
     }
     assert!(OUTPUT_PATTERN_TOO_COSTLY.contains("(?:[ -~]?){1000}"));
+    // Live recheck 2 R5: an empty pattern changes nothing; stop_output_watch stops the watch.
     assert!(matches!(
-        OutputWatchChange::parse(Some("")),
-        Ok(Some(OutputWatchChange::Stop))
+        OutputWatchChange::parse(Some(""), false),
+        Ok(None)
     ));
-    assert!(matches!(OutputWatchChange::parse(None), Ok(None)));
+    assert!(matches!(OutputWatchChange::parse(None, false), Ok(None)));
     assert!(matches!(
-        OutputWatchChange::parse(Some("ready")),
+        OutputWatchChange::parse(Some("ready"), false),
         Ok(Some(OutputWatchChange::Watch(_)))
     ));
+    for stop in [None, Some("")] {
+        assert!(matches!(
+            OutputWatchChange::parse(stop, true),
+            Ok(Some(OutputWatchChange::Stop))
+        ));
+    }
+    assert!(OutputWatchChange::parse(Some("ready"), true).is_err());
 }
 
 /// Tails 2026-10-27: patterns are `regex` syntax, so `(?i)` ignores case beyond ASCII and
@@ -373,8 +381,13 @@ fn patterns_too_large_for_unicode_classes_match_with_ascii_classes() {
         (r"\w{0,100}Z", "build_42Z"),
         (".{0,255}Z", "anything at all, then Z"),
         ("(?i)(?:[a-z]{0,40}){25}q#", "AB q#"),
-        (r"(?i)ошибка.{0,255}Z", "ошибка: диск Z"),
     ] {
+        assert!(
+            OutputPattern::parse(pattern)
+                .expect("an ASCII pattern")
+                .ascii_classes(),
+            "{pattern}"
+        );
         let watch = watch(pattern);
         watch.observe_chunk(format!("no match here\n{line}\n").as_bytes());
         watch.match_now(/*final_batch*/ false, Instant::now());
@@ -391,6 +404,38 @@ fn patterns_too_large_for_unicode_classes_match_with_ascii_classes() {
         .take_for_queue(false, due(), false, &boundary())
         .expect("the ASCII line matches");
     assert_eq!(quoted_lines(&text), vec!["abcZ".to_string()]);
+    assert!(
+        !OutputPattern::parse("ready")
+            .expect("small")
+            .ascii_classes()
+    );
+}
+
+/// Review of the fixes P3-4: with non-ASCII text, ASCII classes change what a pattern matches
+/// (`(?i)` no longer folds Cyrillic case, `\b` no longer sees Cyrillic word boundaries), so
+/// such a pattern too large for Unicode classes is refused with advice, not watched silently
+/// with another meaning.
+#[test]
+fn a_large_pattern_with_non_ascii_text_is_refused() {
+    for pattern in [
+        r"(?i)готов.{0,255}",
+        r"\bОШИБКА\b.{0,255}",
+        r"(?i)ошибка.{0,255}Z",
+    ] {
+        assert_eq!(
+            OutputPattern::parse(pattern).map(|_| ()),
+            Err(OUTPUT_PATTERN_TOO_COSTLY_NON_ASCII.to_string()),
+            "{pattern}"
+        );
+    }
+    // Within the limit, Unicode classes do the job.
+    let watch = watch(r"(?i)готов|\bОШИБКА\b");
+    watch.observe_chunk("Сервер ГОТОВ к работе\nОШИБКА: порт занят\n".as_bytes());
+    watch.match_now(/*final_batch*/ false, Instant::now());
+    let text = watch
+        .take_for_queue(false, due(), false, &boundary())
+        .expect("matching lines");
+    assert_eq!(quoted_lines(&text).len(), 2, "{text}");
 }
 
 /// Tails review 2026-10-27, P3-9 and P3-12: the description says how a large pattern is
@@ -412,7 +457,7 @@ fn the_notify_on_output_description_names_no_configurable_wait() {
 /// waits for its exit and how to turn that off.
 #[test]
 fn a_running_process_notification_says_how_to_stop_it_and_what_waits_for_its_exit() {
-    let exit_requested = Arc::new(AtomicBool::new(true));
+    let exit_requested = Arc::new(ExitPreference::new(/*requested*/ true));
     let watch = OutputWatch::with_windows(
         7572,
         "./dev.sh".to_string(),
@@ -433,12 +478,12 @@ fn a_running_process_notification_says_how_to_stop_it_and_what_waits_for_its_exi
         .expect("due");
     assert!(
         text.ends_with(&format!(
-            "Its exit notification is on (notify_on_exit), so codex exec and wait_agent wait for it to exit (codex exec for up to 30 minutes). If it is meant to keep running, turn that off with write_stdin {{\"session_id\": 7572, \"notify_on_exit\": false}}.\n{stop}"
+            "Its exit notification is on (notify_on_exit), so codex exec and wait_agent wait for it to exit (codex exec for up to 30 minutes). If it is meant to keep running while this Codex session runs, turn that off with write_stdin {{\"session_id\": 7572, \"notify_on_exit\": false}} and leave notify_on_output as it is, so the watch still reports errors and the exit; codex exec still stops the process when it exits.\n{stop}"
         )),
         "{text}"
     );
 
-    exit_requested.store(false, Ordering::Release);
+    exit_requested.set(false);
     let later = Instant::now() + Duration::from_secs(10);
     watch.observe_chunk(b"ERROR: port in use\n");
     watch.match_now(/*final_batch*/ false, later);
@@ -474,10 +519,100 @@ fn the_descriptions_say_how_to_stop_a_process_and_its_exit_wait() {
         NOTIFY_ON_EXIT_DESCRIPTION.contains("turn it off with write_stdin notify_on_exit false"),
         "{NOTIFY_ON_EXIT_DESCRIPTION}"
     );
+    // Review of the fixes P3-9 (c), live recheck 2 R5: what turning the exit wait off keeps,
+    // and that the server still stops with codex exec or an unloaded sub-agent.
+    for expected in [
+        "Use false for a server or watcher that should keep running while this Codex session runs",
+        "codex exec still stops it when it exits",
+        "unloading a sub-agent",
+        "pass notify_on_exit alone and keep the watch",
+    ] {
+        assert!(
+            WRITE_STDIN_NOTIFY_ON_EXIT_DESCRIPTION.contains(expected),
+            "{expected}: {WRITE_STDIN_NOTIFY_ON_EXIT_DESCRIPTION}"
+        );
+    }
     assert!(
-        WRITE_STDIN_NOTIFY_ON_EXIT_DESCRIPTION
-            .contains("use false for a server or watcher that should keep running"),
-        "{WRITE_STDIN_NOTIFY_ON_EXIT_DESCRIPTION}"
+        crate::tools::handlers::shell_spec::WRITE_STDIN_NOTIFY_ON_OUTPUT_DESCRIPTION
+            .contains("An empty string changes nothing; to stop the watch, set stop_output_watch")
+    );
+}
+
+/// Review of the fixes P3-7, live recheck 2 R2, R3: how long a watch still keeps its process
+/// awaited. Before the end of its turn, the first-match window lies ahead; after it, what is
+/// left of it; after a match, what is left of the quiet window. A watch that takes over after a
+/// match starts in the quiet window.
+#[test]
+fn a_watch_says_how_long_it_is_still_awaited() {
+    let windows = OutputWatchWindows {
+        first_match: Duration::from_secs(300),
+        quiet: Duration::from_secs(60),
+        exec_wait: Duration::from_secs(1800),
+    };
+    let new_watch = || {
+        OutputWatch::with_windows(
+            1000,
+            "npm run dev".to_string(),
+            OutputPattern::parse("ready").expect("valid pattern"),
+            "turn-1".to_string(),
+            windows,
+            Arc::default(),
+        )
+    };
+    let watch = new_watch();
+    let start = Instant::now();
+    assert_eq!(
+        watch.wait_left(start + Duration::from_secs(600)),
+        Some(WatchWait::FirstMatchAfterTurn(windows.first_match))
+    );
+    let turn_end = start + Duration::from_secs(10);
+    watch.note_turn_finished("turn-1", turn_end);
+    assert_eq!(
+        watch.wait_left(turn_end + Duration::from_secs(100)),
+        Some(WatchWait::FirstMatch(Duration::from_secs(200)))
+    );
+    assert_eq!(watch.wait_left(turn_end + windows.first_match), None);
+
+    let rearmed = new_watch();
+    let rearmed_at = Instant::now();
+    rearmed.continue_after_match(rearmed_at);
+    assert!(rearmed.has_matched());
+    assert_eq!(
+        rearmed.wait_left(rearmed_at + Duration::from_secs(20)),
+        Some(WatchWait::Quiet(Duration::from_secs(40)))
+    );
+    assert!(!rearmed.is_fresh(rearmed_at + windows.quiet + Duration::from_secs(1)));
+    rearmed.stop();
+    assert_eq!(rearmed.wait_left(rearmed_at), None);
+}
+
+/// Review of the fixes P3-5: once the model turned `notify_on_exit` off, the last notification
+/// of a watch does not promise the exit: without the watch it is not reported.
+#[test]
+fn the_last_notification_says_whether_the_exit_is_reported() {
+    let exit = Arc::new(ExitPreference::new(/*requested*/ false));
+    exit.set(false);
+    let watch = OutputWatch::with_windows(
+        1000,
+        "npm run dev".to_string(),
+        OutputPattern::parse("tick").expect("valid pattern"),
+        "turn".to_string(),
+        OutputWatchWindows::default(),
+        exit,
+    );
+    let mut now = Instant::now() + Duration::from_secs(1);
+    let mut last = String::new();
+    for _ in 1..=OUTPUT_WATCH_MAX_NOTIFICATIONS {
+        watch.observe_chunk(b"tick\n");
+        watch.match_now(false, now);
+        last = watch
+            .take_for_queue(false, now + OUTPUT_WATCH_BATCH_WINDOW, false, &boundary())
+            .expect("due");
+        now += OUTPUT_WATCH_MIN_INTERVAL + OUTPUT_WATCH_BATCH_WINDOW;
+    }
+    assert!(
+        last.contains("to watch again. Its exit is not reported: notify_on_exit is off."),
+        "{last}"
     );
 }
 
@@ -649,7 +784,7 @@ fn a_watch_waits_for_its_first_match_from_the_end_of_its_turn() {
         OutputPattern::parse("ready").expect("valid pattern"),
         "turn-1".to_string(),
         windows,
-        Arc::new(AtomicBool::new(false)),
+        Arc::default(),
     );
     let start = Instant::now();
     assert!(watch.is_fresh(start + windows.quiet + Duration::from_secs(1)));
@@ -678,7 +813,7 @@ fn a_later_turn_does_not_extend_the_wait_for_the_first_match() {
         OutputPattern::parse("ready").expect("valid pattern"),
         "turn-1".to_string(),
         windows,
-        Arc::new(AtomicBool::new(false)),
+        Arc::default(),
     );
     let start = Instant::now();
     let later_turn_end = start + Duration::from_secs(1200);

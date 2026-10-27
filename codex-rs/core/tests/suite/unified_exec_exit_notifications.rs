@@ -1635,7 +1635,7 @@ async fn write_stdin_starts_and_stops_an_output_watch() -> Result<()> {
     let unsubscribe = json!({
         "session_id": 1000,
         "chars": " ",
-        "notify_on_output": "",
+        "stop_output_watch": true,
     })
     .to_string();
     let mock = mount_sse_sequence(
@@ -2177,6 +2177,127 @@ async fn an_interrupted_turn_starts_the_wait_for_its_watch() -> Result<()> {
     let pending = test.codex.pending_background_terminals().await;
     assert_eq!(pending.terminals, Vec::new(), "{pending:?}");
 
+    test.codex.submit(Op::CleanBackgroundTerminals).await?;
+    Ok(())
+}
+
+/// Review of the fixes P3-8, R6.17: `write_stdin` `notify_on_exit: true` arms the exit
+/// notification of a running process that was started without one, and its exit is reported.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn write_stdin_turns_on_the_exit_notification_of_a_running_process() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_target_windows!(Ok(()), "uses POSIX shell commands");
+
+    let server = start_mock_server().await;
+    let arm = json!({
+        "session_id": 1000,
+        "chars": "",
+        "yield_time_ms": 250,
+        "notify_on_exit": true,
+    })
+    .to_string();
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            tool_call(
+                "resp-1",
+                "bg-call",
+                "exec_command",
+                &exec_args(
+                    "sleep 8; echo late-exit",
+                    /*yield_time_ms*/ 250,
+                    /*notify_on_exit*/ false,
+                ),
+            ),
+            tool_call("resp-2", "arm-call", "write_stdin", &arm),
+            message("resp-3", "It will report its exit."),
+            message("resp-4", "It exited."),
+        ],
+    )
+    .await;
+    let test = build(&server, /*exit_notifications*/ true).await?;
+
+    test.submit_turn("start the job, then ask for its exit")
+        .await?;
+    let requests = mock.requests();
+    let start_output = requests[1]
+        .function_call_output_text("bg-call")
+        .expect("exec_command output");
+    assert!(!start_output.contains(ARMED_LINE), "{start_output}");
+    let arm_output = requests[2]
+        .function_call_output_text("arm-call")
+        .expect("write_stdin output");
+    assert!(arm_output.contains(ARMED_LINE), "{arm_output}");
+
+    wait_for_requests(&mock, 4).await;
+    let delivered = notifications(&mock.requests()[3]);
+    assert!(
+        delivered
+            .iter()
+            .any(|text| text.contains("exited with code 0") && text.contains("late-exit")),
+        "{delivered:?}"
+    );
+    Ok(())
+}
+
+/// Live recheck 2 R5, review of the fixes P3-5: a model that turns `notify_on_exit` off and
+/// passes an empty `notify_on_output` along keeps its error watch: an empty pattern changes
+/// nothing, and the watch still reports its lines while the exit is no longer waited for.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turning_the_exit_wait_off_keeps_the_watch() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_target_windows!(Ok(()), "uses POSIX shell commands");
+
+    let server = start_mock_server().await;
+    let start = json!({
+        "cmd": "sleep 7; echo 'ERROR boom'; sleep 30",
+        "yield_time_ms": 250,
+        "login": false,
+        "notify_on_output": "ERROR",
+        "notify_on_exit": true,
+    })
+    .to_string();
+    let off = json!({
+        "session_id": 1000,
+        "chars": "",
+        "yield_time_ms": 250,
+        "notify_on_exit": false,
+        "notify_on_output": "",
+    })
+    .to_string();
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            tool_call("resp-1", "start-call", "exec_command", &start),
+            tool_call("resp-2", "off-call", "write_stdin", &off),
+            message("resp-3", "Left it running; errors are watched."),
+            message("resp-4", "It reported an error."),
+        ],
+    )
+    .await;
+    let test = build(&server, /*exit_notifications*/ true).await?;
+
+    test.submit_turn("start the server and keep watching errors")
+        .await?;
+    let off_output = mock.requests()[2]
+        .function_call_output_text("off-call")
+        .expect("write_stdin output");
+    assert!(
+        off_output.contains(
+            "Exit notification: off (codex exec and wait_agent no longer wait for this process to exit; its output watch still reports matching lines and the exit)"
+        ),
+        "{off_output}"
+    );
+    assert!(!off_output.contains("Output watch: off"), "{off_output}");
+
+    wait_for_requests(&mock, 4).await;
+    let errors = watch_notifications(&mock.requests()[3]);
+    assert!(
+        errors.iter().any(|text| text.contains("ERROR boom")),
+        "{errors:?}"
+    );
     test.codex.submit(Op::CleanBackgroundTerminals).await?;
     Ok(())
 }

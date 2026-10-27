@@ -25,6 +25,9 @@ use crate::unified_exec::OutputWatchState;
 
 /// Header line telling the model that the exit will be reported without polling.
 pub(super) const EXIT_NOTIFICATION_ARMED_LINE: &str = "Exit notification: on (Codex will report when this process exits while this Codex session is running; do not poll for completion)";
+/// Added to the output watch line when the pattern was too large with Unicode classes and is
+/// matched with ASCII classes (review of the fixes, P3-4).
+pub(super) const OUTPUT_WATCH_ASCII_NOTE: &str = ". The pattern was too large with Unicode classes, so it is matched with ASCII classes: \\w, \\d, \\s, \\b and (?i) see ASCII letters and digits only, and . matches one byte.";
 
 impl McpToolOutput {
     /// With `mcp_max_lines` configured, a text-only result becomes one text so the history
@@ -92,11 +95,17 @@ impl ExecCommandToolOutput {
         match &self.armed_notifications.output_watch {
             OutputWatchState::Unchanged => {}
             OutputWatchState::On(pattern) => lines.push(format!(
-                "Output watch: on for lines matching \"{pattern}\" (Codex reports new matching lines while this Codex session is running; do not poll for them)"
+                "Output watch: on for lines matching \"{pattern}\" (Codex reports new matching lines while this Codex session is running; do not poll for them){}",
+                if self.armed_notifications.output_watch_ascii {
+                    // Review of the fixes P3-4: the model learns that its pattern changed.
+                    OUTPUT_WATCH_ASCII_NOTE
+                } else {
+                    ""
+                }
             )),
             OutputWatchState::Off => lines.push("Output watch: off".to_string()),
             OutputWatchState::NotStarted(OutputWatchRefusal::Limit) => lines.push(format!(
-                "Output watch: not started (at most {OUTPUT_WATCH_MAX_ACTIVE} terminals can watch their output at a time; stop a watch with write_stdin notify_on_output \"\")"
+                "Output watch: not started (at most {OUTPUT_WATCH_MAX_ACTIVE} terminals can watch their output at a time; stop a watch with write_stdin stop_output_watch true)"
             )),
             OutputWatchState::NotStarted(OutputWatchRefusal::NoNotifications) => lines.push(
                 "Output watch: not started (this session started before background notifications were enabled; run the command again with exec_command notify_on_output to watch it)".to_string(),

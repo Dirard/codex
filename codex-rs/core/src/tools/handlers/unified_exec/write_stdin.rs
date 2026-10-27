@@ -35,6 +35,9 @@ struct WriteStdinArgs {
     /// Fork: wait for the exit of the session again, or no longer (R6.15).
     #[serde(default)]
     notify_on_exit: Option<bool>,
+    /// Fork: stop the output watch of the session (live recheck 2 R5).
+    #[serde(default)]
+    stop_output_watch: bool,
 }
 
 impl WriteStdinArgs {
@@ -101,6 +104,7 @@ impl WriteStdinHandler {
         let notifications = crate::unified_exec::NotificationChange::for_write_stdin(
             &session,
             args.notify_on_output.as_deref(),
+            args.stop_output_watch,
             args.notify_on_exit,
         )
         .map_err(FunctionCallError::RespondToModel)?;

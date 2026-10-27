@@ -19,9 +19,11 @@ pub(crate) const WRITE_STDIN_EXIT_NOTIFICATION_GUIDANCE: &str = " Sessions start
 /// Fork: `exec_command` parameter description for output watches (UC6).
 pub(crate) const NOTIFY_ON_OUTPUT_DESCRIPTION: &str = "Regular expression in Rust regex syntax (at most 256 bytes; Unicode-aware: (?i) ignores case in any script and \\p{..} classes work; a pattern too large with Unicode classes, such as .{0,255}Z, is matched with ASCII classes instead, where \\w, \\d, \\s, . and (?i) cover ASCII only; prefer + or * to large or nested counted repetitions, which can be refused as too costly). While the command keeps running after this call returns, Codex notifies you of new output lines that match it, even after your turn has ended, and also reports the exit as notify_on_exit does. Matches within 0.5 s arrive together, a new notification follows at most every 5 s, and a watch stops after 10 notifications. Use it for servers, watchers and long jobs, e.g. \"(?i)ready|listening|error|fail\" (include failure patterns; start with (?i) to ignore case), instead of polling write_stdin. Once you no longer need the process, stop it with write_stdin chars \"\\u0003\" (Ctrl-C) on its session_id, not by killing it by name (pkill, killall), which can stop processes of other sessions. A watch alone keeps codex exec and wait_agent waiting for its first matching line for a few minutes after your turn ends, and after that only while matching lines keep coming; also set notify_on_exit for a job whose exit you need, but not for a server that should keep running.";
 /// Fork: `write_stdin` parameter description for output watches (UC6).
-pub(crate) const WRITE_STDIN_NOTIFY_ON_OUTPUT_DESCRIPTION: &str = "Regular expression that starts watching this session's new output lines as exec_command notify_on_output does, replacing its previous watch and arming its exit notification. An empty string stops the watch.";
+pub(crate) const WRITE_STDIN_NOTIFY_ON_OUTPUT_DESCRIPTION: &str = "Regular expression that starts watching this session's new output lines as exec_command notify_on_output does, replacing its previous watch and arming its exit notification. An empty string changes nothing; to stop the watch, set stop_output_watch.";
+/// Fork: `write_stdin` parameter description for stopping an output watch (live recheck 2 R5).
+pub(crate) const WRITE_STDIN_STOP_OUTPUT_WATCH_DESCRIPTION: &str = "true stops this session's output watch. Its exit is still reported unless you turned notify_on_exit off.";
 /// Fork: `write_stdin` parameter description for exit notifications (R6.15).
-pub(crate) const WRITE_STDIN_NOTIFY_ON_EXIT_DESCRIPTION: &str = "true: Codex reports this session's exit as exec_command notify_on_exit does, and codex exec and wait_agent wait for it. false: they no longer wait for the exit (an output watch still reports it); use false for a server or watcher that should keep running.";
+pub(crate) const WRITE_STDIN_NOTIFY_ON_EXIT_DESCRIPTION: &str = "true: Codex reports this session's exit as exec_command notify_on_exit does, and codex exec and wait_agent wait for it. false: they no longer wait for the exit, until you set it to true again; an output watch that is on still reports the exit, so pass notify_on_exit alone and keep the watch. Use false for a server or watcher that should keep running while this Codex session runs: codex exec still stops it when it exits, and so does unloading a sub-agent that nothing waits for.";
 
 #[cfg(test)]
 pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
@@ -165,6 +167,10 @@ pub fn create_write_stdin_tool(exit_notifications: bool) -> ToolSpec {
         properties.insert(
             "notify_on_exit".to_string(),
             JsonSchema::boolean(Some(WRITE_STDIN_NOTIFY_ON_EXIT_DESCRIPTION.to_string())),
+        );
+        properties.insert(
+            "stop_output_watch".to_string(),
+            JsonSchema::boolean(Some(WRITE_STDIN_STOP_OUTPUT_WATCH_DESCRIPTION.to_string())),
         );
     }
 

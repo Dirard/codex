@@ -70,7 +70,8 @@ fn timeout_snapshot_describes_each_terminal() {
 
 /// Live recheck 2026-10-27, N4: a model waited for a server's "ready" with seven short waits
 /// in its turn. When a terminal has only an output watch that has not matched, the timeout
-/// says how long after the turn its first match is awaited, from the configured window.
+/// says how long its first match is still awaited: after the turn that started the watch, or,
+/// for a watch of an earlier turn, what is left (review of the fixes, P3-7).
 #[test]
 fn timeout_snapshot_says_how_long_a_first_match_is_awaited() {
     let terminal = |session_id, first_match_wait| WaitingTerminal {
@@ -80,23 +81,70 @@ fn timeout_snapshot_says_how_long_a_first_match_is_awaited() {
         first_match_wait,
     };
     assert_eq!(
-        describe_background_terminals(&[terminal(1000, Some(Duration::from_secs(300)))]),
-        "Background terminals that will report their exit: 1 (session 1000: running for 12.0s, no output yet). Their exits are reported even after this turn ends, so you can end the turn instead of waiting again. Session 1000 has only an output watch that has not matched yet: its first matching line is awaited for up to 5 minutes after your turn ends, and the match starts a new turn, so end your turn now rather than wait again with a short timeout."
+        describe_background_terminals(&[terminal(
+            1000,
+            Some(FirstMatchWait::AfterTurn(Duration::from_secs(300)))
+        )]),
+        "Background terminals that will report their exit: 1 (session 1000: running for 12.0s, no output yet). Their exits are reported even after this turn ends, so you can end the turn instead of waiting again. Session 1000 has only an output watch that has not matched yet: its first matching line is awaited for up to 5 minutes after your turn ends. A match starts a new turn, so end your turn now rather than wait again with a short timeout."
     );
     let text = describe_background_terminals(&[
-        terminal(1000, Some(Duration::from_secs(90))),
+        terminal(
+            1000,
+            Some(FirstMatchWait::AfterTurn(Duration::from_secs(90))),
+        ),
         terminal(1001, None),
-        terminal(1002, Some(Duration::from_secs(90))),
+        terminal(1002, Some(FirstMatchWait::Left(Duration::from_secs(52)))),
     ]);
     assert!(
         text.ends_with(
-            " Sessions 1000, 1002 have only an output watch that has not matched yet: its first matching line is awaited for up to 90 seconds after your turn ends, and the match starts a new turn, so end your turn now rather than wait again with a short timeout."
+            " Session 1000 has only an output watch that has not matched yet: its first matching line is awaited for up to 90 seconds after your turn ends. Session 1002 has only an output watch that has not matched yet: its first matching line is awaited for 52 seconds more (it started in an earlier turn, so the end of this one does not extend it). A match starts a new turn, so end your turn now rather than wait again with a short timeout."
         ),
         "{text}"
     );
     assert!(
         !describe_background_terminals(&[terminal(1001, None)]).contains("first matching line")
     );
+}
+
+/// Review of the fixes P3-7, P3-8: the first-match sentence takes the watch's own window, and
+/// only a terminal that waits for nothing else gets it: with `notify_on_exit` it is awaited
+/// until it exits, and after a match only while matches keep coming.
+#[test]
+fn only_a_watch_only_terminal_before_its_first_match_gets_the_sentence() {
+    use crate::unified_exec::PendingTerminal;
+    use crate::unified_exec::WatchWait;
+    let now = Instant::now();
+    let pending = |notify_on_exit, watch_wait| PendingTerminal {
+        process_id: 1000,
+        command: "./dev.sh".to_string(),
+        started_at: now,
+        last_output_at: None,
+        output_watch: Some("ready".to_string()),
+        notify_on_exit,
+        watch_wait,
+    };
+    let after_turn = Some(WatchWait::FirstMatchAfterTurn(Duration::from_secs(300)));
+    let left = Some(WatchWait::FirstMatch(Duration::from_secs(100)));
+    assert_eq!(
+        waiting_terminal(pending(false, after_turn), now).first_match_wait,
+        Some(FirstMatchWait::AfterTurn(Duration::from_secs(300)))
+    );
+    assert_eq!(
+        waiting_terminal(pending(false, left), now).first_match_wait,
+        Some(FirstMatchWait::Left(Duration::from_secs(100)))
+    );
+    for (notify_on_exit, watch_wait) in [
+        (true, after_turn),
+        (true, left),
+        (false, Some(WatchWait::Quiet(Duration::from_secs(60)))),
+        (false, None),
+    ] {
+        assert_eq!(
+            waiting_terminal(pending(notify_on_exit, watch_wait), now).first_match_wait,
+            None,
+            "{notify_on_exit} {watch_wait:?}"
+        );
+    }
 }
 
 /// Dynamic workflow, D9 of the combined live run: a timeout names the thread's active

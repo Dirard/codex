@@ -190,6 +190,77 @@ fn turning_the_exit_notification_off_ends_the_wait_for_the_exit() {
     assert!(again.on_exit(report(exited(0), b"")).is_some());
 }
 
+/// Review of the fixes P3-5: turning `notify_on_exit` off and stopping the output watch give
+/// the same result in either order: no watch, no exit report. The off stays until the model
+/// turns it on again: a watch started later reports the exit while it is on.
+#[test]
+fn turning_the_exit_off_and_stopping_the_watch_agree_in_either_order() {
+    let now = Instant::now();
+    for off_first in [true, false] {
+        let notifier = notifier(1000, "./dev.sh");
+        let watch = OutputWatch::new(
+            1000,
+            "./dev.sh".to_string(),
+            OutputPattern::parse("ready").expect("valid"),
+        );
+        notifier.set_output_watch(Some(watch));
+        assert!(notifier.arm().is_none());
+        if off_first {
+            notifier.disarm_exit();
+            notifier.set_output_watch(None);
+        } else {
+            notifier.set_output_watch(None);
+            notifier.disarm_exit();
+        }
+        assert!(!notifier.is_armed(), "off first: {off_first}");
+        assert!(!notifier.wants_report(), "off first: {off_first}");
+        assert!(!notifier.is_pending(), "off first: {off_first}");
+        assert!(!notifier.is_awaited(now), "off first: {off_first}");
+        assert!(
+            notifier.on_exit(report(exited(0), b"")).is_none(),
+            "off first: {off_first}"
+        );
+        assert_eq!(notifier.settle_for_shutdown(), ShutdownSettle::Nothing);
+    }
+
+    let notifier = notifier(1001, "./dev.sh");
+    notifier.arm();
+    notifier.disarm_exit();
+    let watch = OutputWatch::new(
+        1001,
+        "./dev.sh".to_string(),
+        OutputPattern::parse("error").expect("valid"),
+    );
+    notifier.set_output_watch(Some(Arc::clone(&watch)));
+    assert!(notifier.is_armed(), "a watch reports the exit");
+    watch.stop();
+    assert!(!notifier.is_armed(), "the off stays");
+    notifier.request_exit();
+    assert!(notifier.is_armed() && notifier.wants_report());
+}
+
+/// Live recheck 2 R3: once a watch of the process matched, the notifier remembers it, so a
+/// watch started later, such as an error watch after "ready", takes over after a match.
+#[test]
+fn a_notifier_remembers_that_a_watch_matched() {
+    let notifier = notifier(1000, "./dev.sh");
+    let ready = OutputWatch::new(
+        1000,
+        "./dev.sh".to_string(),
+        OutputPattern::parse("ready").expect("valid"),
+    );
+    notifier.set_output_watch(Some(Arc::clone(&ready)));
+    assert!(!notifier.watch_matched());
+    ready.observe_chunk(b"server ready\n");
+    ready.match_now(/*final_batch*/ false, Instant::now());
+    assert!(notifier.watch_matched());
+    notifier.set_output_watch(None);
+    assert!(
+        notifier.watch_matched(),
+        "remembered after the watch is gone"
+    );
+}
+
 #[test]
 fn shutdown_suppresses_and_codex_causes_replace_exit_codes() {
     let notifier1 = notifier(1000, "sleep 100");

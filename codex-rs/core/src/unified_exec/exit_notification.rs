@@ -78,11 +78,43 @@ pub(crate) struct ExitReport {
     pub(crate) sandbox_denied: bool,
 }
 
+/// What the model asked of the exit of a process with `notify_on_exit`, shared by its
+/// notifier and its output watch (live recheck 2026-10-27 N1; review of the fixes P3-5).
+#[derive(Debug, Default)]
+pub(crate) struct ExitPreference {
+    /// `notify_on_exit` is on: what waits for the process waits for its exit.
+    requested: AtomicBool,
+    /// The model turned `notify_on_exit` off with `write_stdin`, and it stays off until the
+    /// model turns it on again: an output watch still reports the exit while it is on, and
+    /// without one the exit is not reported, whatever the order of the two changes.
+    turned_off: AtomicBool,
+}
+
+impl ExitPreference {
+    fn new(requested: bool) -> Self {
+        Self {
+            requested: AtomicBool::new(requested),
+            turned_off: AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) fn requested(&self) -> bool {
+        self.requested.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn turned_off(&self) -> bool {
+        self.turned_off.load(Ordering::Acquire)
+    }
+
+    fn set(&self, requested: bool) {
+        self.requested.store(requested, Ordering::Release);
+        self.turned_off.store(!requested, Ordering::Release);
+    }
+}
+
 #[derive(Default)]
 struct NotifierState {
     armed: bool,
-    /// The model turned the notification off with `write_stdin` (N1).
-    disarmed: bool,
     settled: bool,
     /// Handed off for delivery but not yet in the thread queue.
     delivering: bool,
@@ -95,6 +127,17 @@ struct NotifierState {
     /// The output watch whose final batch went to the queue right before the exit
     /// notification; a poll that shows the exit withdraws it too (R6.9, review P3-1).
     final_watch_key: Option<u64>,
+    /// An output watch of the process matched, so a watch started later takes over after a
+    /// match (`OutputWatch::continue_after_match`, live recheck 2 R3).
+    watch_matched: bool,
+}
+
+impl NotifierState {
+    fn watching(&self) -> bool {
+        self.output_watch
+            .as_ref()
+            .is_some_and(|watch| !watch.is_stopped())
+    }
 }
 
 /// What a shutdown found for one notifier.
@@ -121,10 +164,9 @@ pub(crate) struct ExitNotifier {
     started_at: Instant,
     /// The starting call asked for a report; otherwise only a later subscription arms it.
     requested: bool,
-    /// `notify_on_exit` is on: the model waits for the exit itself, not only for matching
-    /// output (review 2026-10-27, P2-3). The starting call sets it; `write_stdin` turns it on
-    /// or off (live recheck 2026-10-27, N1). The output watch reads it for its notification.
-    exit_requested: Arc<AtomicBool>,
+    /// `notify_on_exit`: the starting call sets it; `write_stdin` turns it on or off (live
+    /// recheck 2026-10-27, N1). The output watch reads it for its notification.
+    exit: Arc<ExitPreference>,
     state: Mutex<NotifierState>,
     delivery_done: Notify,
 }
@@ -160,7 +202,7 @@ impl ExitNotifier {
             command,
             started_at,
             requested,
-            exit_requested: Arc::new(AtomicBool::new(exit_requested)),
+            exit: Arc::new(ExitPreference::new(exit_requested)),
             state: Mutex::new(NotifierState::default()),
             delivery_done: Notify::new(),
         })
@@ -182,52 +224,63 @@ impl ExitNotifier {
         &self.command
     }
 
+    /// Whether the exit will be reported: the notification is armed, and the model did not
+    /// turn `notify_on_exit` off while no output watch is on (review of the fixes P3-5).
     pub(crate) fn is_armed(&self) -> bool {
-        self.lock().armed
+        self.reports_exit(&self.lock())
     }
 
-    /// Whether the exit watcher must build the exit report: the notification is armed, or
-    /// the starting call asked for it and may arm it once it returns (R6.3), unless the model
+    fn reports_exit(&self, state: &NotifierState) -> bool {
+        state.armed && !(self.exit.turned_off() && !state.watching())
+    }
+
+    /// Whether the exit watcher must build the exit report: the exit will be reported, or the
+    /// starting call asked for it and may arm it once it returns (R6.3), unless the model
     /// turned it off since (N1).
     pub(crate) fn wants_report(&self) -> bool {
         let state = self.lock();
-        (self.requested && !state.disarmed) || state.armed
+        (self.requested && !self.exit.turned_off()) || self.reports_exit(&state)
     }
 
     /// Whether `notify_on_exit` is on.
     pub(crate) fn exit_requested(&self) -> bool {
-        self.exit_requested.load(Ordering::Acquire)
+        self.exit.requested()
+    }
+
+    /// Whether the model turned `notify_on_exit` off and has not turned it on again.
+    pub(crate) fn exit_turned_off(&self) -> bool {
+        self.exit.turned_off()
     }
 
     /// `notify_on_exit` of the process, which its output watch names in its notification.
-    pub(crate) fn exit_requested_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.exit_requested)
+    pub(crate) fn exit_preference(&self) -> Arc<ExitPreference> {
+        Arc::clone(&self.exit)
     }
 
     /// `write_stdin` `notify_on_exit: true`: the model waits for the exit again. The caller
     /// arms the notification, which reports an exit that already happened.
     pub(crate) fn request_exit(&self) {
-        self.exit_requested.store(true, Ordering::Release);
-        self.lock().disarmed = false;
+        self.exit.set(true);
     }
 
     /// `write_stdin` `notify_on_exit: false` (live recheck 2026-10-27, N1): nothing waits for
     /// the exit any more, so `codex exec`, `wait_agent` and residency stop waiting for a server
-    /// that is meant to keep running. An output watch that is on still reports the exit with
-    /// its final lines; without one the notification is off, and the exit is not reported.
+    /// that is meant to keep running. It stays off until the model turns it on again: while
+    /// an output watch is on, the watch still reports the exit with its final lines; without
+    /// one, now or after the watch stops, the exit is not reported (review of the fixes P3-5).
     /// A notification already on its way stays.
     pub(crate) fn disarm_exit(&self) {
-        self.exit_requested.store(false, Ordering::Release);
-        let mut state = self.lock();
-        let watching = state
-            .output_watch
-            .as_ref()
-            .is_some_and(|watch| !watch.is_stopped());
-        if watching || state.settled || state.delivering {
-            return;
-        }
-        state.armed = false;
-        state.disarmed = true;
+        self.exit.set(false);
+    }
+
+    /// The output watch of the process matched at some point, or the one that is on did.
+    pub(crate) fn watch_matched(&self) -> bool {
+        let state = self.lock();
+        state.watch_matched
+            || state
+                .output_watch
+                .as_ref()
+                .is_some_and(|watch| watch.has_matched())
     }
 
     /// The exit report waits for `arm`: the process exited before its `exec_command` call
@@ -248,7 +301,14 @@ impl ExitNotifier {
 
     /// Replace the output watch of the process and stop the previous one.
     pub(crate) fn set_output_watch(&self, watch: Option<Arc<OutputWatch>>) {
-        let previous = std::mem::replace(&mut self.lock().output_watch, watch);
+        let previous = {
+            let mut state = self.lock();
+            let previous = std::mem::replace(&mut state.output_watch, watch);
+            if previous.as_ref().is_some_and(|watch| watch.has_matched()) {
+                state.watch_matched = true;
+            }
+            previous
+        };
         if let Some(previous) = previous {
             previous.stop();
         }
@@ -314,7 +374,7 @@ impl ExitNotifier {
         if state.delivering {
             return ShutdownSettle::DeliveryInFlight;
         }
-        if !state.armed || state.settled {
+        if !self.reports_exit(&state) || state.settled {
             state.settled = true;
             return ShutdownSettle::Nothing;
         }
@@ -343,6 +403,11 @@ impl ExitNotifier {
         }
         if !state.armed {
             state.report = Some(report);
+            return None;
+        }
+        if !self.reports_exit(&state) {
+            // The model turned the exit off, and no watch reports it (P3-5).
+            state.settled = true;
             return None;
         }
         Some(self.hand_off(&mut state, report))
@@ -387,7 +452,7 @@ impl ExitNotifier {
     /// journal (D6).
     pub(crate) fn is_pending(&self) -> bool {
         let state = self.lock();
-        state.armed && (!state.settled || state.delivering)
+        state.delivering || (self.reports_exit(&state) && !state.settled)
     }
 
     /// Whether the thread waits for this process (`codex exec`, `wait_agent`, residency): a
@@ -399,14 +464,14 @@ impl ExitNotifier {
     /// longer (review 2026-10-27, P2-3).
     pub(crate) fn is_awaited(&self, now: Instant) -> bool {
         let state = self.lock();
-        if !state.armed {
-            return false;
-        }
         if state.delivering {
             return true;
         }
+        if !self.reports_exit(&state) {
+            return false;
+        }
         !state.settled
-            && (self.exit_requested.load(Ordering::Acquire)
+            && (self.exit.requested()
                 || state
                     .output_watch
                     .as_ref()
@@ -666,8 +731,9 @@ pub(crate) struct PendingTerminal {
     pub(crate) output_watch: Option<String>,
     /// `notify_on_exit` is on: the wait lasts until the exit (N1).
     pub(crate) notify_on_exit: bool,
-    /// The output watch has not matched yet (R6.14, N4).
-    pub(crate) awaits_first_match: bool,
+    /// How much longer the output watch keeps the terminal awaited without news (R6.14, N4;
+    /// review of the fixes P3-7, live recheck 2 R2).
+    pub(crate) watch_wait: Option<WatchWait>,
 }
 
 /// What `exec_command` asks of the notifications of its process (R1.2, R6.3).
@@ -962,6 +1028,11 @@ impl super::UnifiedExecContext {
             exit: notify.exit || watching,
             exit_off: None,
             output_watch,
+            output_watch_ascii: watching
+                && notify
+                    .output
+                    .as_ref()
+                    .is_some_and(|pattern| pattern.ascii_classes()),
         }
     }
 
@@ -1002,6 +1073,10 @@ impl super::UnifiedExecContext {
         if change.output_watch.is_none() && change.notify_on_exit.is_none() {
             return ArmedNotifications::default();
         }
+        let ascii = matches!(
+            &change.output_watch,
+            Some(OutputWatchChange::Watch(pattern)) if pattern.ascii_classes()
+        );
         let output_watch = match change.output_watch {
             Some(output_watch) => {
                 self.change_output_watch(process, exit_notifier, output_watch)
@@ -1009,23 +1084,28 @@ impl super::UnifiedExecContext {
             }
             None => OutputWatchState::Unchanged,
         };
-        let exit_off = match (change.notify_on_exit, exit_notifier) {
+        match (change.notify_on_exit, exit_notifier) {
             (Some(true), Some(exit_notifier)) => {
                 exit_notifier.request_exit();
                 self.arm(exit_notifier, process).await;
-                self.session.fork_sync_terminal_journal().await;
-                None
             }
-            (Some(false), Some(exit_notifier)) => {
-                exit_notifier.disarm_exit();
-                self.session.fork_sync_terminal_journal().await;
-                Some(exit_notifier.output_watch().is_some())
+            (Some(false), Some(exit_notifier)) => exit_notifier.disarm_exit(),
+            _ => {}
+        }
+        self.session.fork_sync_terminal_journal().await;
+        // The answer is the same whatever the order of the changes: once the model turned
+        // `notify_on_exit` off, only an output watch that is on reports the exit (P3-5).
+        let (exit, exit_off) = match exit_notifier {
+            Some(notifier) if notifier.exit_turned_off() => {
+                (false, Some(notifier.output_watch().is_some()))
             }
-            _ => None,
+            Some(notifier) => (notifier.is_armed(), None),
+            None => (false, None),
         };
         ArmedNotifications {
-            exit: exit_off.is_none() && exit_notifier.is_some_and(|notifier| notifier.is_armed()),
+            exit,
             exit_off,
+            output_watch_ascii: ascii && matches!(output_watch, OutputWatchState::On(_)),
             output_watch,
         }
     }
@@ -1114,8 +1194,13 @@ impl super::UnifiedExecContext {
             Arc::clone(pattern),
             self.step_context.turn.sub_id.clone(),
             OutputWatchWindows::from_config(&self.step_context.turn.config.exec_exit_notifications),
-            exit_notifier.exit_requested_flag(),
+            exit_notifier.exit_preference(),
         );
+        // A watch that replaces one that matched, such as an error watch after "ready", is
+        // waited for as after a match (live recheck 2 R3).
+        if exit_notifier.watch_matched() {
+            watch.continue_after_match(Instant::now());
+        }
         {
             let mut output = process.output_handles().output_buffer.lock().await;
             if let Some(previous) = output.fork.watch.replace(Arc::clone(&watch)) {
@@ -1213,9 +1298,9 @@ impl super::UnifiedExecProcessManager {
                     .output_watch()
                     .map(|watch| watch.pattern().to_string()),
                 notify_on_exit: notifier.exit_requested(),
-                awaits_first_match: notifier
+                watch_wait: notifier
                     .output_watch()
-                    .is_some_and(|watch| !watch.has_matched()),
+                    .and_then(|watch| watch.wait_left(now)),
             });
         }
         terminals.sort_by_key(|terminal| terminal.process_id);

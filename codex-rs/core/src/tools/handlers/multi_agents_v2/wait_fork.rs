@@ -42,35 +42,56 @@ pub(super) struct WaitingTerminal {
     pub(super) running_for: Duration,
     /// `None` while the process printed nothing.
     pub(super) quiet_for: Option<Duration>,
-    /// It has only an output watch that has not matched yet, so the wait for its first
-    /// matching line lasts until this long after the turn ends (R6.14, live recheck N4).
-    pub(super) first_match_wait: Option<Duration>,
+    /// It has only an output watch that has not matched yet: how long its first matching
+    /// line is still awaited (R6.14, live recheck N4, review of the fixes P3-7).
+    pub(super) first_match_wait: Option<FirstMatchWait>,
+}
+
+/// How long the first matching line of a watch-only terminal is still awaited.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum FirstMatchWait {
+    /// The turn that started the watch still runs: this long after it ends.
+    AfterTurn(Duration),
+    /// The turn that started the watch ended: this much is left, and the end of the current
+    /// turn does not extend it.
+    Left(Duration),
+}
+
+impl FirstMatchWait {
+    fn describe(self) -> String {
+        match self {
+            Self::AfterTurn(wait) => format!(
+                "for up to {} after your turn ends",
+                crate::unified_exec::describe_wait(wait)
+            ),
+            Self::Left(left) => format!(
+                "for {} more (it started in an earlier turn, so the end of this one does not extend it)",
+                crate::unified_exec::describe_remaining(left)
+            ),
+        }
+    }
 }
 
 pub(super) fn describe_background_terminals(terminals: &[WaitingTerminal]) -> String {
     let mut text = describe_terminal_list(terminals);
     // A model that waited for a server's "ready" with short waits inside its turn ignored the
     // hint to end it (live recheck 2026-10-27, N4): say how long the match is awaited.
-    let first_match: Vec<(i32, Duration)> = terminals
+    let mut waits = terminals
         .iter()
         .filter_map(|terminal| Some((terminal.session_id, terminal.first_match_wait?)))
-        .collect();
-    if let Some(&(_, wait)) = first_match.first() {
-        let sessions = first_match
-            .iter()
-            .map(|(session_id, _)| session_id.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let (noun, has) = if first_match.len() == 1 {
-            ("Session", "has")
-        } else {
-            ("Sessions", "have")
-        };
+        .peekable();
+    if waits.peek().is_none() {
+        return text;
+    }
+    for (session_id, wait) in waits {
         text.push_str(&format!(
-            " {noun} {sessions} {has} only an output watch that has not matched yet: its first matching line is awaited for up to {} after your turn ends, and the match starts a new turn, so end your turn now rather than wait again with a short timeout.",
-            crate::unified_exec::describe_wait(wait)
+            " Session {session_id} has only an output watch that has not matched yet: its first matching line is awaited {}.",
+            wait.describe()
         ));
     }
+    text.push_str(
+        " A match starts a new turn, so end your turn now rather than wait again with a short timeout.",
+    );
     text
 }
 
@@ -264,27 +285,36 @@ pub(super) fn describe_pending_work(pending: &PendingWork) -> String {
 /// The terminals whose exit will still be reported, as a timeout snapshot shows them.
 async fn waiting_terminals(session: &crate::session::session::Session) -> Vec<WaitingTerminal> {
     let now = Instant::now();
-    let first_match = Duration::from_millis(
-        session
-            .get_config()
-            .await
-            .exec_exit_notifications
-            .output_watch_first_match_ms,
-    );
     session
         .services
         .unified_exec_manager
         .pending_exit_notifications()
         .await
         .into_iter()
-        .map(|terminal| WaitingTerminal {
-            session_id: terminal.process_id,
-            running_for: now.saturating_duration_since(terminal.started_at),
-            quiet_for: terminal
-                .last_output_at
-                .map(|last_output_at| now.saturating_duration_since(last_output_at)),
-            first_match_wait: (!terminal.notify_on_exit && terminal.awaits_first_match)
-                .then_some(first_match),
-        })
+        .map(|terminal| waiting_terminal(terminal, now))
         .collect()
+}
+
+/// A terminal as the timeout snapshot shows it. The first-match sentence is only for a
+/// terminal that waits for nothing but its watch's first match: with `notify_on_exit` it is
+/// awaited until it exits (R4.7).
+pub(super) fn waiting_terminal(
+    terminal: crate::unified_exec::PendingTerminal,
+    now: Instant,
+) -> WaitingTerminal {
+    use crate::unified_exec::WatchWait;
+    let first_match_wait = match terminal.watch_wait {
+        _ if terminal.notify_on_exit => None,
+        Some(WatchWait::FirstMatchAfterTurn(wait)) => Some(FirstMatchWait::AfterTurn(wait)),
+        Some(WatchWait::FirstMatch(left)) => Some(FirstMatchWait::Left(left)),
+        Some(WatchWait::Quiet(_)) | None => None,
+    };
+    WaitingTerminal {
+        session_id: terminal.process_id,
+        running_for: now.saturating_duration_since(terminal.started_at),
+        quiet_for: terminal
+            .last_output_at
+            .map(|last_output_at| now.saturating_duration_since(last_output_at)),
+        first_match_wait,
+    }
 }
