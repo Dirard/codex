@@ -4,6 +4,7 @@
 //! the Code Mode cell that runs them, checks and validates JSON schemas of `agent()` calls,
 //! keys and journals calls, tracks run snapshots and renders the completion notification.
 
+mod index;
 mod journal;
 mod key;
 mod literal;
@@ -16,6 +17,10 @@ mod scan;
 mod schema;
 mod snapshot;
 
+pub use index::INDEX_FILE;
+pub use index::append_index;
+pub use index::index_entry;
+pub use index::read_index;
 pub use journal::ARGS_FILE;
 pub use journal::JOURNAL_FILE;
 pub use journal::Journal;

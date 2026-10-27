@@ -83,7 +83,8 @@ impl ThreadWorkflowRequestProcessor {
     ) -> Result<ThreadWorkflowReadResponse, JSONRPCErrorError> {
         let thread = self.loaded_thread(&params.thread_id).await?;
         let (snapshot, result) = thread
-            .workflow_run(&params.run_id, params.include_result)
+            .read_workflow_run(&params.run_id, params.include_result)
+            .await
             .ok_or_else(|| run_not_found(&params.run_id))?;
         Ok(ThreadWorkflowReadResponse {
             run: WorkflowRun::from_snapshot(snapshot, /*include_agents*/ true),

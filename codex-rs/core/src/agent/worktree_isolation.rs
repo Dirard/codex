@@ -1040,11 +1040,28 @@ fn discover_binding_blocking(
 }
 
 /// Checkpoints the worktree and renders the completion-mail block (spec UC4).
+pub(crate) async fn checkpoint_report(binding: &Arc<AgentWorktreeBinding>) -> String {
+    let WorktreeCheckpoint {
+        checkpoint_error,
+        changes,
+    } = checkpoint_changes(binding).await;
+    render_worktree_block(binding, checkpoint_error.as_ref(), changes)
+}
+
+/// What one checkpoint of an agent worktree found: the failure of the checkpoint itself, if
+/// any, and the agent branch's changes against its base (`None` without a branch).
+pub(crate) struct WorktreeCheckpoint {
+    pub(crate) checkpoint_error: Option<String>,
+    pub(crate) changes: Result<Option<BranchChanges>, String>,
+}
+
+/// Records the worktree's changes on the agent branch and summarizes that branch (spec UC4);
+/// [`checkpoint_report`] renders the result as the completion-mail block.
 #[expect(
     clippy::await_holding_invalid_type,
     reason = "the binding lock serializes checkpoint and finalize of one worktree (R4.6)"
 )]
-pub(crate) async fn checkpoint_report(binding: &Arc<AgentWorktreeBinding>) -> String {
+pub(crate) async fn checkpoint_changes(binding: &Arc<AgentWorktreeBinding>) -> WorktreeCheckpoint {
     let _state = binding.state.lock().await;
     let blocking = Arc::clone(binding);
     let result = tokio::task::spawn_blocking(move || {
@@ -1078,7 +1095,10 @@ pub(crate) async fn checkpoint_report(binding: &Arc<AgentWorktreeBinding>) -> St
             warn!("agent worktree index refresh failed after checkpoint: {error}");
         }
     }
-    render_worktree_block(binding, checkpoint.as_ref().err(), changes)
+    WorktreeCheckpoint {
+        checkpoint_error: checkpoint.err(),
+        changes,
+    }
 }
 
 /// The default command that applies an agent branch to the parent's checkout (R7.2).

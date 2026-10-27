@@ -875,6 +875,15 @@ async fn finish_run(
     {
         warn!(run_id = %run.id, %error, "failed to persist the workflow result");
     }
+    // R6.8: index the finished run, so a later process lists it without reading its journal.
+    if let Some(thread_dir) = run
+        .journal_dir()
+        .as_deref()
+        .and_then(std::path::Path::parent)
+        && let Err(error) = codex_workflow::append_index(thread_dir, &snapshot)
+    {
+        warn!(run_id = %run.id, %error, "failed to index the finished workflow run");
+    }
     run.release_finished_state();
     // R8.5: runs by status, duration and charged tokens.
     if let Some(metrics) = codex_otel::global() {

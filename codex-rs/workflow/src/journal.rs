@@ -113,6 +113,10 @@ pub enum JournalEvent {
         /// answer can report them (R6.3).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         worktree: Option<String>,
+        /// The same checkpoint as structured worktree details, which a call with
+        /// `details: true` returns to the script (R3.13).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worktree_details: Option<Value>,
     },
     /// A nested `workflow(name)` started (UC12).
     WorkflowStarted {

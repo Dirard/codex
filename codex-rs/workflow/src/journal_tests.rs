@@ -73,6 +73,7 @@ fn file_journal_persists_script_args_and_records() {
         },
         cached: false,
         worktree: None,
+        worktree_details: None,
     };
     assert_eq!(
         journal
@@ -148,6 +149,7 @@ fn existing_journals_read_and_continue() {
             },
             cached: false,
             worktree: None,
+            worktree_details: None,
         }
     );
     let (first, last) = journal_bounds(&run_dir.join(JOURNAL_FILE)).expect("bounds");

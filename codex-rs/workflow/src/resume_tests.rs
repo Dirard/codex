@@ -24,6 +24,7 @@ fn finished(
             tokens: TokenCharge::default(),
             cached,
             worktree: None,
+            worktree_details: None,
         },
     }
 }
@@ -84,6 +85,7 @@ fn cached_answers_keep_the_worktree_report() {
         Some(CachedAnswer {
             value: json!("isolated"),
             worktree: Some(report),
+            worktree_details: None,
         })
     );
     assert_eq!(
@@ -91,6 +93,36 @@ fn cached_answers_keep_the_worktree_report() {
         Some(CachedAnswer {
             value: json!("older"),
             worktree: None,
+            worktree_details: None,
         })
+    );
+}
+
+/// R6.3, R3.13: the structured worktree details travel with the cached answer, so a resumed
+/// call with `details: true` returns them; a record without them gives `None`.
+#[test]
+fn cached_answers_keep_the_worktree_details() {
+    let details = json!({ "agent": "/root/wf_1_1", "branch": "codex/agents/x", "changed": true });
+    let mut reported = finished(1, "w", 0, Some(json!("isolated")), false);
+    if let JournalEvent::AgentFinished {
+        worktree,
+        worktree_details,
+        ..
+    } = &mut reported.event
+    {
+        *worktree = Some("<agent_worktree>\n</agent_worktree>".to_string());
+        *worktree_details = Some(details.clone());
+    }
+    let records = vec![reported, finished(2, "w", 1, Some(json!("older")), false)];
+    let mut cache = JournalCache::from_records("wf-00000001", &records);
+    assert_eq!(
+        cache
+            .take("w", 0)
+            .and_then(|answer| answer.worktree_details),
+        Some(details)
+    );
+    assert_eq!(
+        cache.take("w", 1).map(|answer| answer.worktree_details),
+        Some(None)
     );
 }

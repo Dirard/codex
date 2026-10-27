@@ -16,6 +16,9 @@ pub struct CachedAnswer {
     /// Where the source's isolated agent left its changes (R3.8); `None` when the agent was
     /// not isolated or the journal predates this field.
     pub worktree: Option<String>,
+    /// The structured details of that worktree (R3.13); `None` like `worktree`, or for a
+    /// journal that records only the report.
+    pub worktree_details: Option<Value>,
 }
 
 /// UC6: successful agent results of a source journal by call key and ordinal.
@@ -40,6 +43,7 @@ impl JournalCache {
                 ok: true,
                 value: Some(value),
                 worktree,
+                worktree_details,
                 ..
             } = &record.event
             {
@@ -48,6 +52,7 @@ impl JournalCache {
                     CachedAnswer {
                         value: value.clone(),
                         worktree: worktree.clone(),
+                        worktree_details: worktree_details.clone(),
                     },
                 );
             }

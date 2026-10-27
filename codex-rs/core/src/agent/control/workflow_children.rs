@@ -35,6 +35,56 @@ pub(crate) struct WorkflowChildOutcome {
 /// Charges one model response of a workflow child to the call that waits for it (R5.1).
 pub(crate) type WorkflowUsageSink = Arc<dyn Fn(&TokenUsage) + Send + Sync>;
 
+/// Where an isolated workflow child left its changes, from one checkpoint (R3.8, R3.13).
+pub(crate) struct WorkflowWorktreeReport {
+    /// The `<agent_worktree>` block, as in the completion mail of `spawn_agent`.
+    pub(crate) text: String,
+    /// `WorktreeDetails` of the spec: what `agent(prompt, {details: true})` returns as
+    /// `worktree`.
+    pub(crate) details: serde_json::Value,
+}
+
+/// R3.13: the worktree details of a checkpoint. `agent` is the canonical task name
+/// `apply_agent_worktree` accepts; `branch` is null when the branch records no changes, as in
+/// the `<agent_worktree>` block. The raw `git apply` command of the block is left out: the
+/// changes come in through `apply_agent_worktree` (D1 of the combined live run).
+fn worktree_details(
+    binding: &crate::agent::worktree_isolation::AgentWorktreeBinding,
+    checkpoint_error: Option<&String>,
+    changes: Result<&Option<codex_worktree::BranchChanges>, &String>,
+) -> serde_json::Value {
+    let metadata = binding.metadata();
+    let (changes, summary_error) = match changes {
+        Ok(changes) => (changes.as_ref(), None),
+        Err(error) => (None, Some(error)),
+    };
+    let error = [
+        checkpoint_error.map(|error| format!("checkpoint failed: {error}")),
+        summary_error.map(|error| format!("summary failed: {error}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let changed = changes.is_some_and(|changes| changes.total_files > 0);
+    serde_json::json!({
+        "agent": binding.agent_path.as_str(),
+        "branch": changes.map(|_| metadata.branch.clone()),
+        "base": metadata.base_sha,
+        "changed": changed,
+        "stat": changes.map(|changes| changes.shortstat.clone()),
+        "files": changes.map_or_else(Vec::new, |changes| {
+            changes
+                .files
+                .iter()
+                .map(|file| serde_json::json!({ "status": file.status, "path": file.path }))
+                .collect()
+        }),
+        "files_total": changes.map_or(0, |changes| changes.total_files),
+        "checkout": binding.root.to_string_lossy(),
+        "error": (!error.is_empty()).then(|| error.join("; ")),
+    })
+}
+
 #[derive(Default)]
 pub(crate) struct WorkflowChildren {
     state: Mutex<WorkflowChildrenState>,
@@ -194,13 +244,26 @@ impl LocalAgentRuntime {
         &self.workflow_children
     }
 
-    /// Checkpoint an isolated workflow child's worktree and describe how to apply its changes.
+    /// Checkpoint an isolated workflow child's worktree and describe how to apply its changes:
+    /// the `<agent_worktree>` block for the run log and, from the same checkpoint, the
+    /// details a script asks for with `details: true` (UC3, R3.8, R3.13).
     pub(crate) async fn workflow_child_worktree_report(
         &self,
         thread_id: ThreadId,
-    ) -> Option<String> {
+    ) -> Option<WorkflowWorktreeReport> {
+        use crate::agent::worktree_isolation::WorktreeCheckpoint;
         let binding = self.worktrees.get(thread_id)?;
-        Some(crate::agent::worktree_isolation::checkpoint_report(&binding).await)
+        let WorktreeCheckpoint {
+            checkpoint_error,
+            changes,
+        } = crate::agent::worktree_isolation::checkpoint_changes(&binding).await;
+        let details = worktree_details(&binding, checkpoint_error.as_ref(), changes.as_ref());
+        let text = crate::agent::worktree_isolation::render_worktree_block(
+            &binding,
+            checkpoint_error.as_ref(),
+            changes,
+        );
+        Some(WorkflowWorktreeReport { text, details })
     }
 
     /// The loaded runtime of a workflow child.

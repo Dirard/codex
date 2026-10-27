@@ -1,6 +1,8 @@
-//! Runs of earlier processes: `interrupted` marking when a thread loads, runs rebuilt from
-//! their journals and the source of `resume_from` (UC6, R6.3, R6.4, R6.7).
+//! Runs of earlier processes: `interrupted` marking when a thread loads, the run index of
+//! the thread, runs rebuilt from their journals and the source of `resume_from` (UC6, R6.3,
+//! R6.4, R6.7, R6.8).
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -15,14 +17,18 @@ use codex_workflow::Journal;
 use codex_workflow::JournalCache;
 use codex_workflow::JournalEvent;
 use codex_workflow::JournalRecord;
+use codex_workflow::RunSnapshot;
 use codex_workflow::RunStatus;
 use codex_workflow::RunTracker;
 use codex_workflow::SCRIPT_FILE;
 use codex_workflow::TokenCharge;
 use codex_workflow::WorkflowMeta;
+use codex_workflow::append_index;
+use codex_workflow::index_entry;
 use codex_workflow::is_valid_run_id;
 use codex_workflow::journal_bounds;
 use codex_workflow::parse_script;
+use codex_workflow::read_index;
 use codex_workflow::read_records;
 use codex_workflow::read_result;
 use tracing::warn;
@@ -49,10 +55,12 @@ pub(super) fn thread_runs_dir(config: &Config, thread_id: ThreadId) -> PathBuf {
         .join(thread_id.to_string())
 }
 
-/// Fork: hook of `Session::record_initial_history` for a resumed thread (R6.4). Journals of
-/// the thread's runs that a stopped process left without `run_finished` get an
+/// Fork: hook of `Session::record_initial_history` for a resumed thread (R6.4, R6.8).
+/// Journals of the thread's runs that a stopped process left without `run_finished` get an
 /// `interrupted` record; interrupted runs that no later run resumed are registered as
-/// terminal runs, so `workflow_status` lists them. No run restarts and no turn starts.
+/// terminal runs, and the index entries of every finished run are kept as the thread's past
+/// runs, so `workflow_status` and `thread/workflow/list` list them. No run restarts and no
+/// turn starts.
 pub(crate) async fn fork_restore_runs(session: &Session, turn_context: &TurnContext) {
     let config = &turn_context.config;
     if !config.features.enabled(Feature::Workflows) || config.ephemeral {
@@ -62,18 +70,20 @@ pub(crate) async fn fork_restore_runs(session: &Session, turn_context: &TurnCont
     if !tokio::fs::try_exists(&dir).await.unwrap_or(false) {
         return;
     }
-    let restored = match tokio::task::spawn_blocking(move || restore_interrupted_runs(&dir)).await {
-        Ok(restored) => restored,
-        Err(error) => {
-            warn!(%error, "failed to restore workflow runs");
-            return;
-        }
-    };
-    if restored.is_empty() {
+    let RestoredRuns { interrupted, past } =
+        match tokio::task::spawn_blocking(move || restore_runs(&dir)).await {
+            Ok(restored) => restored,
+            Err(error) => {
+                warn!(%error, "failed to restore workflow runs");
+                return;
+            }
+        };
+    if interrupted.is_empty() && past.is_empty() {
         return;
     }
     let registry = WorkflowRegistry::for_session(session);
-    for run in restored {
+    registry.set_past(past);
+    for run in interrupted {
         registry.insert_restored(Arc::new(WorkflowRun::restored(
             run,
             registry.update_sender(),
@@ -81,17 +91,44 @@ pub(crate) async fn fork_restore_runs(session: &Session, turn_context: &TurnCont
     }
 }
 
-/// R6.4: mark stopped runs of the thread directory `dir` as interrupted and rebuild the
-/// interrupted runs that no other run resumed.
-fn restore_interrupted_runs(dir: &Path) -> Vec<RestoredRun> {
+/// What the load of a thread finds in its workflow directory (R6.4, R6.8).
+struct RestoredRuns {
+    /// Interrupted runs that no other run resumed, rebuilt to be registered.
+    interrupted: Vec<RestoredRun>,
+    /// Index entries of the finished runs whose directories exist.
+    past: Vec<RunSnapshot>,
+}
+
+/// R6.4, R6.8: read the thread directory `dir`. Runs its index lists are finished, and their
+/// journals are not read. For other runs only the first and last journal records are read:
+/// a stopped run is marked interrupted, and every run found finished or marked is rebuilt
+/// once to add its index entry. Interrupted runs that no other run resumed are rebuilt to
+/// be registered.
+fn restore_runs(dir: &Path) -> RestoredRuns {
+    let mut index = read_index(dir).unwrap_or_else(|error| {
+        warn!(%error, "failed to read the workflow run index");
+        Vec::new()
+    });
+    let indexed: HashSet<String> = index.iter().map(|entry| entry.run_id.clone()).collect();
+    let mut resumed: HashSet<String> = index
+        .iter()
+        .filter_map(|entry| entry.resume.as_ref().map(|resume| resume.from.clone()))
+        .collect();
+    let mut present = HashSet::new();
+    let mut loaded: HashMap<String, RestoredRun> = HashMap::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
+        return RestoredRuns {
+            interrupted: Vec::new(),
+            past: Vec::new(),
+        };
     };
-    let mut interrupted = Vec::new();
-    let mut resumed = HashSet::new();
     for entry in entries.flatten() {
         let run_id = entry.file_name().to_string_lossy().to_string();
         if !is_valid_run_id(&run_id) {
+            continue;
+        }
+        present.insert(run_id.clone());
+        if indexed.contains(&run_id) {
             continue;
         }
         let run_dir = entry.path();
@@ -109,33 +146,55 @@ fn restore_interrupted_runs(dir: &Path) -> Vec<RestoredRun> {
         {
             resumed.insert(source.clone());
         }
-        let ended_interrupted = match last.map(|record| record.event) {
-            Some(JournalEvent::RunFinished { status, .. }) => {
-                status == RunStatus::Interrupted.as_str()
-            }
+        let finished = match last.map(|record| record.event) {
+            Some(JournalEvent::RunFinished { .. }) => true,
             _ => match mark_interrupted(&run_dir) {
-                Ok(()) => true,
+                Ok(_) => true,
                 Err(error) => {
                     warn!(%run_id, %error, "failed to mark a stopped workflow run as interrupted");
                     false
                 }
             },
         };
-        if ended_interrupted {
-            interrupted.push((run_id, run_dir));
+        if !finished {
+            continue;
         }
-    }
-    interrupted
-        .into_iter()
-        .filter(|(run_id, _)| !resumed.contains(run_id))
-        .filter_map(|(run_id, run_dir)| match load_run(&run_id, &run_dir) {
-            Ok(run) => Some(run),
+        // A journal of a version before the index, or of a process that stopped between
+        // `run_finished` and the index line, is indexed now.
+        match load_run(&run_id, &run_dir) {
+            Ok(run) => {
+                let snapshot = run.tracker.snapshot(/*include_agents*/ false);
+                if let Err(error) = append_index(dir, &snapshot) {
+                    warn!(%run_id, %error, "failed to index a workflow run");
+                }
+                index.push(index_entry(&snapshot));
+                loaded.insert(run_id, run);
+            }
             Err(error) => {
                 warn!(%run_id, %error, "failed to rebuild a workflow run from its journal");
-                None
+            }
+        }
+    }
+    index.retain(|entry| present.contains(&entry.run_id));
+    let interrupted = index
+        .iter()
+        .filter(|entry| entry.status == RunStatus::Interrupted && !resumed.contains(&entry.run_id))
+        .filter_map(|entry| {
+            let run_id = entry.run_id.as_str();
+            match loaded.remove(run_id) {
+                Some(run) => Some(run),
+                None => load_run(run_id, &dir.join(run_id))
+                    .map_err(|error| {
+                        warn!(%run_id, %error, "failed to rebuild a workflow run from its journal");
+                    })
+                    .ok(),
             }
         })
-        .collect()
+        .collect();
+    RestoredRuns {
+        interrupted,
+        past: index,
+    }
 }
 
 /// Serializes the marking of stopped runs in this process: two lookups of one run, such as
@@ -146,8 +205,9 @@ static MARKING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// R6.4: append `run_finished` with status `interrupted` to the journal of a run whose
 /// process stopped, with the tokens its calls were charged. A journal that already ends with
-/// `run_finished` is left as it is, so concurrent lookups mark a run once.
-fn mark_interrupted(run_dir: &Path) -> std::io::Result<()> {
+/// `run_finished` is left as it is, so concurrent lookups mark a run once. Returns whether
+/// this call appended the record.
+fn mark_interrupted(run_dir: &Path) -> std::io::Result<bool> {
     let _marking = MARKING
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -156,7 +216,7 @@ fn mark_interrupted(run_dir: &Path) -> std::io::Result<()> {
         records.last().map(|record| &record.event),
         Some(JournalEvent::RunFinished { .. })
     ) {
-        return Ok(());
+        return Ok(false);
     }
     let mut tokens = TokenCharge::default();
     for record in &records {
@@ -172,7 +232,7 @@ fn mark_interrupted(run_dir: &Path) -> std::io::Result<()> {
             error: Some(STOPPED_ERROR.to_string()),
             finished_at_ms: Some(now_ms()),
         })
-        .map(|_| ())
+        .map(|_| true)
 }
 
 /// R6.7: rebuild a run of an earlier process from its directory. Its meta comes from
@@ -227,7 +287,8 @@ fn load_run(run_id: &str, run_dir: &Path) -> std::io::Result<RestoredRun> {
 
 /// R6.7: the run `run_id` of this thread: a run of this process, or one of an earlier
 /// process rebuilt from its journal and registered. A journal without `run_finished` belongs
-/// to a process that stopped (R6.4) and is marked interrupted first.
+/// to a process that stopped (R6.4) and is marked interrupted first; the run then gets its
+/// index entry (R6.8).
 pub(super) async fn find_or_restore_run(
     session: &Session,
     config: &Config,
@@ -251,14 +312,19 @@ pub(super) async fn find_or_restore_run(
     let owned_id = run_id.to_string();
     let restored = tokio::task::spawn_blocking(move || {
         let (_, last) = journal_bounds(&run_dir.join(JOURNAL_FILE))?;
-        if !matches!(
+        // A second lookup of the same run that raced this one finds it marked.
+        let marked = !matches!(
             last.map(|record| record.event),
             Some(JournalEvent::RunFinished { .. })
-        ) {
-            // A second lookup of the same run that raced this one finds it marked.
-            mark_interrupted(&run_dir)?;
+        ) && mark_interrupted(&run_dir)?;
+        let run = load_run(&owned_id, &run_dir)?;
+        if marked
+            && let Some(thread_dir) = run_dir.parent()
+            && let Err(error) = append_index(thread_dir, &run.tracker.snapshot(false))
+        {
+            warn!(run_id = %owned_id, %error, "failed to index a workflow run");
         }
-        load_run(&owned_id, &run_dir)
+        Ok::<_, std::io::Error>(run)
     })
     .await
     .map_err(|error| format!("failed to read workflow run `{run_id}`: {error}"))?

@@ -47,6 +47,7 @@ use crate::agent::api::SendRequest;
 use crate::agent::child_config::build_agent_resume_config;
 use crate::agent::control::workflow_children::WorkflowChildOutcome;
 use crate::agent::control::workflow_children::WorkflowUsageSink;
+use crate::agent::control::workflow_children::WorkflowWorktreeReport;
 use crate::agent::types::AgentMessage;
 use crate::agent::types::MessageDeliveryMode;
 use crate::codex_thread::CodexThread;
@@ -64,7 +65,7 @@ const CAPACITY_RETRY: Duration = Duration::from_millis(500);
 const APPROVAL_POLL: Duration = Duration::from_secs(1);
 
 const ALLOWED_OPTIONS: &str =
-    "schema, model, effort, agent_type, label, phase, isolation, timeout_ms";
+    "schema, model, effort, agent_type, label, phase, isolation, timeout_ms, details";
 
 #[derive(Deserialize)]
 struct AgentCallInput {
@@ -87,6 +88,8 @@ struct AgentOptions {
     phase: Option<String>,
     isolation: Option<AgentIsolation>,
     timeout_ms: Option<u64>,
+    /// R3.13: resolve to `{answer, worktree}` instead of the bare answer.
+    details: Option<bool>,
 }
 
 /// How a call ended, before it is recorded.
@@ -161,6 +164,7 @@ pub(super) async fn run_agent_call(
                 label: options.label,
                 phase,
                 isolated: options.isolation == Some(AgentIsolation::Worktree),
+                details: options.details == Some(true),
             },
             answer,
             &from,
@@ -193,11 +197,14 @@ struct CachedCall {
     phase: Option<String>,
     /// The call asked for `isolation: "worktree"`.
     isolated: bool,
+    /// The call asked for `details: true` (R3.13).
+    details: bool,
 }
 
 /// R6.3, R6.5: settle a call from the journal of run `from`. An isolated agent's answer
 /// carries the report of where its changes are (R3.8): the resumed run logs it and keeps it
-/// in its own journal, and says explicitly when the source journal does not record it.
+/// in its own journal, and says explicitly when the source journal does not record it. A
+/// call with `details: true` gets the journaled worktree details with the answer (R3.13).
 fn record_cached(
     run: &WorkflowRun,
     call: CachedCall,
@@ -211,6 +218,7 @@ fn record_cached(
         label,
         phase,
         isolated,
+        details,
     } = call;
     if let Some(metrics) = codex_otel::global() {
         let _ = metrics.counter(
@@ -222,14 +230,20 @@ fn record_cached(
     if isolated {
         match &answer.worktree {
             Some(report) => run.log_line(&format!(
-                "agent {seq} answered from the journal of {from}; its worktree:\n{report}"
+                "agent {seq} answered from the journal of {from}; its worktree{}:\n{report}",
+                apply_hint(answer.worktree_details.as_ref())
             )),
             None => run.log_line(&format!(
                 "agent {seq} answered from the journal of {from}, which does not record that isolated agent's worktree; look for its branch in the log of {from}"
             )),
         }
     }
-    let CachedAnswer { value, worktree } = answer;
+    let CachedAnswer {
+        value,
+        worktree,
+        worktree_details,
+    } = answer;
+    let script_value = script_value(details, &value, worktree_details.as_ref());
     run.journal(JournalEvent::AgentFinished {
         call: Some(seq),
         key,
@@ -237,14 +251,36 @@ fn record_cached(
         label: label.clone(),
         phase: phase.clone(),
         ok: true,
-        value: Some(value.clone()),
+        value: Some(value),
         reason: None,
         tokens: TokenCharge::default(),
         cached: true,
         worktree,
+        worktree_details,
     });
     run.update(|tracker| tracker.agent_cached(seq, label, phase));
-    json!({ "ok": true, "value": value })
+    json!({ "ok": true, "value": script_value })
+}
+
+/// R3.8 (D1 of the combined live run): how the parent brings an isolated agent's changes
+/// into its checkout, ` (apply it with `apply_agent_worktree` target `<agent>`)`, for the run
+/// log line in front of the `<agent_worktree>` block; empty without the agent's name.
+fn apply_hint(details: Option<&JsonValue>) -> String {
+    details
+        .and_then(|details| details["agent"].as_str())
+        .map(|agent| format!(" (apply it with `apply_agent_worktree` target `{agent}`)"))
+        .unwrap_or_default()
+}
+
+/// R3.13: what a successful call resolves to in the script: the bare answer, or with
+/// `details: true` the answer and the worktree details of an isolated agent (null for a call
+/// without isolation or a journal that does not record them).
+fn script_value(details: bool, answer: &JsonValue, worktree: Option<&JsonValue>) -> JsonValue {
+    if details {
+        json!({ "answer": answer, "worktree": worktree })
+    } else {
+        answer.clone()
+    }
 }
 
 struct AgentCall<'a> {
@@ -260,8 +296,9 @@ struct AgentCall<'a> {
     /// R3.12: this call carries its schema in the task instead of `final_output_json_schema`.
     schema_in_prompt: AtomicBool,
     /// R3.8: the last report of where the isolated agent left its changes; journaled with
-    /// the answer, so a resume that reuses it can report them (R6.3).
-    worktree_report: std::sync::Mutex<Option<String>>,
+    /// the answer, so a resume that reuses it can report them (R6.3), and returned to a call
+    /// with `details: true` (R3.13).
+    worktree_report: std::sync::Mutex<Option<WorkflowWorktreeReport>>,
 }
 
 struct SpawnedChild {
@@ -731,8 +768,12 @@ impl AgentCall<'_> {
         else {
             return;
         };
-        self.run
-            .log_line(&format!("agent {} worktree:\n{report}", self.seq));
+        self.run.log_line(&format!(
+            "agent {} worktree{}:\n{}",
+            self.seq,
+            apply_hint(Some(&report.details)),
+            report.text
+        ));
         *self
             .worktree_report
             .lock()
@@ -805,11 +846,20 @@ impl AgentCall<'_> {
         }
         match outcome {
             CallOutcome::Value(value) => {
-                let worktree = self
+                let report = self
                     .worktree_report
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .take();
+                let (worktree, worktree_details) = match report {
+                    Some(report) => (Some(report.text), Some(report.details)),
+                    None => (None, None),
+                };
+                let script_value = script_value(
+                    self.options.details == Some(true),
+                    &value,
+                    worktree_details.as_ref(),
+                );
                 self.run.journal(JournalEvent::AgentFinished {
                     call: Some(self.seq),
                     key: self.key.clone(),
@@ -817,15 +867,16 @@ impl AgentCall<'_> {
                     label: self.options.label.clone(),
                     phase: self.phase.clone(),
                     ok: true,
-                    value: Some(value.clone()),
+                    value: Some(value),
                     reason: None,
                     tokens,
                     cached: false,
                     worktree,
+                    worktree_details,
                 });
                 self.run
                     .update(|tracker| tracker.agent_finished(self.seq, true, None, tokens));
-                json!({ "ok": true, "value": value })
+                json!({ "ok": true, "value": script_value })
             }
             CallOutcome::Null { reason, detail } => {
                 if let Some(detail) = detail {
@@ -852,6 +903,7 @@ impl AgentCall<'_> {
                     tokens,
                     cached: false,
                     worktree: None,
+                    worktree_details: None,
                 });
                 self.run.update(|tracker| {
                     tracker.agent_finished(self.seq, false, Some(reason), tokens);

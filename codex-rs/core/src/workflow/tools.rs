@@ -20,6 +20,7 @@ use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
+use codex_utils_string::approx_token_count;
 use codex_workflow::RunSnapshot;
 use codex_workflow::check_args_size;
 use codex_workflow::parse_script;
@@ -50,6 +51,10 @@ const STATUS_TOOL: &str = "workflow_status";
 const CANCEL_TOOL: &str = "workflow_cancel";
 /// Longest `workflow_status` wait (R7.3).
 const MAX_STATUS_WAIT_MS: u64 = 300_000;
+/// Most runs of earlier processes listed by `workflow_status` without `run_id` (R6.8).
+const MAX_LISTED_PAST_RUNS: usize = 20;
+/// Largest log tail of one run in `workflow_status`, in tokens (D4).
+const STATUS_LOG_MAX_TOKENS: usize = 1_000;
 /// Default token limit of `include_result` (R7.4).
 const DEFAULT_RESULT_MAX_TOKENS: usize = 10_000;
 /// How long `workflow_cancel` waits for the run to settle.
@@ -130,20 +135,22 @@ fn any_json(description: &str) -> JsonSchema {
     }
 }
 
-/// R1.7: the `workflow` tool description, within 1500 tokens. It names the `isolation`
-/// option of `agent()` only when agent worktree isolation is enabled.
+/// R1.7: the `workflow` tool description, within 1500 tokens. It opens with when to start a
+/// workflow without being asked (Q8), and names the `isolation` and `details` options of
+/// `agent()` only when agent worktree isolation is enabled (R3.13).
 fn workflow_description(
     max_concurrent_agents: usize,
     max_agents_per_run: usize,
     worktree_isolation: bool,
 ) -> String {
     let isolation_option = if worktree_isolation {
-        ", `isolation: \"worktree\"` (the agent works in its own git worktree; the run log reports its changes)"
+        ", `isolation: \"worktree\"` (the agent works in its own git worktree; to bring its changes into your checkout call `apply_agent_worktree` with the target the run log names for it, not a raw `git apply`; `details: true` resolves to `{answer, worktree: {agent, branch, changed, files}}`, whose `agent` is that target)"
     } else {
         ""
     };
     format!(
-        r#"Run a JavaScript workflow script in the background: it orchestrates many sub-agents deterministically while you keep working, and agent answers go to the script instead of your context. Use it for large fan-out work (many files, many findings to verify) or when the user asks for a workflow; delegate small tasks directly.
+        r#"Run a JavaScript workflow script in the background: it orchestrates many sub-agents deterministically while you keep working, and agent answers go to the script instead of your context.
+When to use it: start one yourself, without being asked, when a task splits into many independent pieces: auditing, reviewing or searching across many files, modules or items (about five or more), independent checks of each finding, or a multi-stage find/verify/report pipeline whose intermediate results would flood your context. Also when the user asks for a workflow. Not for work that one agent or a few of your own tool calls can do.
 
 The script starts with `export const meta = {{ name, description, phases }};` (name: letters, digits, `_`, `-`), followed by a body that may use `await` and `return`. The returned JSON value is the run result.
 
@@ -212,10 +219,13 @@ struct ScriptSource {
     script: String,
     args_json: String,
     resume: Option<codex_workflow::JournalCache>,
+    /// The token budget of the call, or without one that of the `resume_from` source (D3).
+    budget_tokens: Option<u64>,
 }
 
-/// UC1, R1.8, R6.3, R12.3: resolve the script, its args and the resume cache of a call.
-/// Explicit `script`, `name` or `args` replace those of the `resume_from` source. Errors of
+/// UC1, R1.8, R6.3, R12.3: resolve the script, its args, the budget and the resume cache of
+/// a call. Explicit `script`, `name`, `args` or `budget_tokens` replace those of the
+/// `resume_from` source. Errors of
 /// the arguments themselves and of the saved-script lookup come first: looking up
 /// `resume_from` may mark a stopped run interrupted and register it (R6.4, R6.7), and a call
 /// that fails anyway must not do that.
@@ -229,7 +239,7 @@ async fn resolve_script_source(
         name,
         args,
         resume_from,
-        ..
+        budget_tokens,
     } = args;
     let explicit_script = match (script, name, &resume_from) {
         (Some(_), Some(_), _) => {
@@ -256,6 +266,7 @@ async fn resolve_script_source(
             script: explicit_script.unwrap_or_default(),
             args_json: explicit_args.unwrap_or_else(|| "null".to_string()),
             resume: None,
+            budget_tokens,
         });
     };
     let source = super::resume::resume_source(session, &turn.config, &run_id).await?;
@@ -273,6 +284,8 @@ async fn resolve_script_source(
         script,
         args_json,
         resume: Some(source.cache),
+        budget_tokens: budget_tokens
+            .or(source.run.snapshot(/*include_agents*/ false).budget_tokens),
     })
 }
 
@@ -314,7 +327,7 @@ impl ToolExecutor<ToolInvocation> for WorkflowStartHandler {
             (
                 "resume_from".to_string(),
                 JsonSchema::string(Some(
-                    "Id of a finished, failed, cancelled or interrupted run of this thread. Agent calls with the same prompt and options reuse its successful answers instead of starting agents; the rest run live. Without `script`, `name` or `args`, its script and args are used.".to_string(),
+                    "Id of a finished, failed, cancelled or interrupted run of this thread. Agent calls with the same prompt and options reuse its successful answers instead of starting agents; the rest run live. Without `script`, `name`, `args` or `budget_tokens`, its script, args and token budget are used.".to_string(),
                 )),
             ),
             (
@@ -362,11 +375,11 @@ impl ToolExecutor<ToolInvocation> for WorkflowStartHandler {
             } = invocation;
             let arguments = function_arguments(payload, WORKFLOW_TOOL)?;
             let args: WorkflowArgs = parse_arguments(&arguments)?;
-            let budget_tokens = args.budget_tokens;
             let ScriptSource {
                 script,
                 args_json,
                 resume,
+                budget_tokens,
             } = resolve_script_source(&session, &turn, args)
                 .await
                 .map_err(|error| {
@@ -563,7 +576,10 @@ struct StatusArgs {
 }
 
 /// A snapshot as shown to the model: without the per-call list and with a duration.
-fn snapshot_json(snapshot: &RunSnapshot) -> JsonValue {
+/// The log tail keeps its newest lines within `log_tokens` (D4 of the combined live run):
+/// scripts log agent answers, and 20 lines of up to 2000 characters would otherwise reach the
+/// model with every status; `logs_omitted` counts the lines left out.
+fn snapshot_json(snapshot: &RunSnapshot, log_tokens: usize) -> JsonValue {
     let mut value = serde_json::to_value(snapshot).unwrap_or(JsonValue::Null);
     if let JsonValue::Object(object) = &mut value {
         object.insert(
@@ -572,8 +588,50 @@ fn snapshot_json(snapshot: &RunSnapshot) -> JsonValue {
                 snapshot.duration_ms(super::now_ms()),
             )),
         );
+        let (logs, omitted) = newest_logs(&snapshot.logs_tail, log_tokens);
+        object.insert("logs_tail".to_string(), json!(logs));
+        if omitted > 0 {
+            object.insert("logs_omitted".to_string(), json!(omitted));
+        }
     }
     value
+}
+
+/// D4: the newest log lines whose tokens fit `max_tokens`, and how many older lines were
+/// left out. A newest line that alone exceeds the limit is kept truncated.
+fn newest_logs(logs: &[String], max_tokens: usize) -> (Vec<String>, usize) {
+    let mut kept = Vec::new();
+    let mut left = max_tokens;
+    for line in logs.iter().rev() {
+        let tokens = approx_token_count(line);
+        if tokens <= left {
+            left -= tokens;
+            kept.push(line.clone());
+        } else {
+            if kept.is_empty() && left > 0 {
+                kept.push(truncate_text(line, TruncationPolicy::Tokens(left)));
+            }
+            break;
+        }
+    }
+    kept.reverse();
+    let omitted = logs.len() - kept.len();
+    (kept, omitted)
+}
+
+/// R7.4, D4: the `workflow_status` output for one run: its log tail within the smaller of
+/// [`STATUS_LOG_MAX_TOKENS`] and half of `max_tokens`, and on request the full result within
+/// the rest of `max_tokens`.
+fn status_output(snapshot: &RunSnapshot, result: Option<String>, max_tokens: usize) -> JsonValue {
+    let log_tokens = STATUS_LOG_MAX_TOKENS.min(max_tokens / 2);
+    let mut output = json!({ "run": snapshot_json(snapshot, log_tokens) });
+    if let Some(result) = result {
+        output["result"] = JsonValue::String(truncate_text(
+            &result,
+            TruncationPolicy::Tokens(max_tokens.saturating_sub(log_tokens)),
+        ));
+    }
+    output
 }
 
 impl ToolExecutor<ToolInvocation> for WorkflowStatusHandler {
@@ -611,7 +669,7 @@ impl ToolExecutor<ToolInvocation> for WorkflowStatusHandler {
             (
                 "max_tokens".to_string(),
                 JsonSchema::integer(Some(format!(
-                    "Token limit of the included result (default {DEFAULT_RESULT_MAX_TOKENS})."
+                    "Token limit of the run's log tail and included result together (default {DEFAULT_RESULT_MAX_TOKENS}); the log tail keeps its newest lines within {STATUS_LOG_MAX_TOKENS} tokens or half the limit."
                 ))),
             ),
         ]);
@@ -641,14 +699,21 @@ impl ToolExecutor<ToolInvocation> for WorkflowStatusHandler {
             let arguments = function_arguments(payload, STATUS_TOOL)?;
             let args: StatusArgs = parse_arguments(&arguments)?;
             let Some(run_id) = args.run_id else {
-                let runs = WorkflowRegistry::existing(&session)
-                    .map(|registry| registry.all())
+                // R6.8: runs of earlier processes come from the run index, the most recent
+                // of them only, since the list goes into the model's context.
+                let (runs, omitted) = WorkflowRegistry::existing(&session)
+                    .map(|registry| registry.summaries(MAX_LISTED_PAST_RUNS))
                     .unwrap_or_default();
+                // D4: summaries without log tails; `run_id` shows one run's logs.
                 let runs: Vec<JsonValue> = runs
                     .iter()
-                    .map(|run| snapshot_json(&run.snapshot(/*include_agents*/ false)))
+                    .map(|run| snapshot_json(run, /*log_tokens*/ 0))
                     .collect();
-                return Ok(json_output(&json!({ "runs": runs })));
+                let mut output = json!({ "runs": runs });
+                if omitted > 0 {
+                    output["earlier_runs_omitted"] = json!(omitted);
+                }
+                return Ok(json_output(&output));
             };
             // R6.7: runs of an earlier process are rebuilt from their journals.
             let run = super::resume::find_or_restore_run(&session, &turn.config, &run_id)
@@ -675,17 +740,12 @@ impl ToolExecutor<ToolInvocation> for WorkflowStatusHandler {
                     _ = cancellation_token.cancelled() => {}
                 }
             }
-            let snapshot = run.snapshot(/*include_agents*/ false);
-            let mut output = json!({ "run": snapshot_json(&snapshot) });
-            // R7.4: the full result within max_tokens.
-            if args.include_result
-                && let Some(result) = run.result_json()
-            {
-                let max_tokens = args.max_tokens.unwrap_or(DEFAULT_RESULT_MAX_TOKENS);
-                output["result"] =
-                    JsonValue::String(truncate_text(&result, TruncationPolicy::Tokens(max_tokens)));
-            }
-            Ok(json_output(&output))
+            // R7.4, D4: the log tail and the full result within max_tokens.
+            Ok(json_output(&status_output(
+                &run.snapshot(/*include_agents*/ false),
+                args.include_result.then(|| run.result_json()).flatten(),
+                args.max_tokens.unwrap_or(DEFAULT_RESULT_MAX_TOKENS),
+            )))
         })
     }
 }
@@ -741,8 +801,11 @@ impl ToolExecutor<ToolInvocation> for WorkflowCancelHandler {
             let run = super::resume::find_or_restore_run(&session, &turn.config, &args.run_id)
                 .await
                 .map_err(FunctionCallError::RespondToModel)?;
+            // D4: a compact snapshot; `workflow_status` shows the logs.
             let snapshot = cancel_run(&run).await;
-            Ok(json_output(&json!({ "run": snapshot_json(&snapshot) })))
+            Ok(json_output(
+                &json!({ "run": snapshot_json(&snapshot, /*log_tokens*/ 0) }),
+            ))
         })
     }
 }
@@ -796,6 +859,87 @@ mod tests {
                 approx_token_count(description)
             );
         }
+    }
+
+    /// R1.7 (Q8), R3.13: both variants open with when a workflow fits without being asked
+    /// and when it does not; only the isolation variant names `details` and its fields.
+    #[test]
+    fn description_says_when_a_workflow_fits() {
+        let without = workflow_description(
+            /*max_concurrent_agents*/ 16, /*max_agents_per_run*/ 1000,
+            /*worktree_isolation*/ false,
+        );
+        let with = workflow_description(
+            /*max_concurrent_agents*/ 16, /*max_agents_per_run*/ 1000,
+            /*worktree_isolation*/ true,
+        );
+        for description in [&without, &with] {
+            let opening = description
+                .split("\n\n")
+                .next()
+                .expect("the description has an opening paragraph");
+            for hint in [
+                "When to use it: start one yourself, without being asked",
+                "auditing, reviewing or searching across many files",
+                "independent checks of each finding",
+                "Not for work that one agent or a few of your own tool calls can do.",
+            ] {
+                assert!(opening.contains(hint), "{hint:?} missing from {opening}");
+            }
+        }
+        assert!(!without.contains("details"), "{without}");
+        assert!(!without.contains("apply_agent_worktree"), "{without}");
+        assert!(
+            with.contains(
+                "`details: true` resolves to `{answer, worktree: {agent, branch, changed, files}}`, whose `agent` is that target"
+            ),
+            "{with}"
+        );
+        // D1 (combined live run): changes come in through `apply_agent_worktree`.
+        assert!(
+            with.contains(
+                "call `apply_agent_worktree` with the target the run log names for it, not a raw `git apply`"
+            ),
+            "{with}"
+        );
+    }
+
+    /// D4 (combined live run): the status of a run keeps its newest log lines and its result
+    /// within `max_tokens`; summaries and cancellation carry no log tail.
+    #[test]
+    fn status_output_stays_within_max_tokens() {
+        let mut tracker = codex_workflow::RunTracker::new(
+            "wf-00000001".to_string(),
+            "noisy".to_string(),
+            String::new(),
+            &[],
+            /*budget_tokens*/ None,
+            /*started_at_ms*/ 0,
+        );
+        for index in 0..20 {
+            tracker.log(&format!("{index:02} {}", "a".repeat(1_990)));
+        }
+        tracker.finish(codex_workflow::RunStatus::Completed, 1, None, None);
+        let snapshot = tracker.snapshot(/*include_agents*/ false);
+        assert_eq!(snapshot.logs_tail.len(), 20);
+        let result = format!("\"{}\"", "r".repeat(100_000));
+        for max_tokens in [1_000, 1_500, 10_000] {
+            let output = status_output(&snapshot, Some(result.clone()), max_tokens);
+            let logs: Vec<String> =
+                serde_json::from_value(output["run"]["logs_tail"].clone()).expect("logs");
+            let log_tokens: usize = logs.iter().map(|line| approx_token_count(line)).sum();
+            assert!(log_tokens <= STATUS_LOG_MAX_TOKENS.min(max_tokens / 2));
+            assert!(
+                logs.last().is_some_and(|line| line.starts_with("19 ")),
+                "the newest line stays: {logs:?}"
+            );
+            assert_eq!(output["run"]["logs_omitted"], json!(20 - logs.len()));
+            let total = approx_token_count(&output.to_string());
+            assert!(total <= max_tokens + 300, "{total} tokens for {max_tokens}");
+        }
+        let compact = snapshot_json(&snapshot, /*log_tokens*/ 0);
+        assert_eq!(compact["logs_tail"], json!([]));
+        assert_eq!(compact["logs_omitted"], json!(20));
     }
 
     /// R10.4: the approval names the budget mode and, for a resumed run, its source run and

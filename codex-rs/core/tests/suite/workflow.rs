@@ -1536,14 +1536,245 @@ async fn worktree_isolation_reaches_workflow_agents() -> Result<()> {
         run_result(&test.codex, &run.run_id),
         json!("isolated answer")
     );
+    // D1 (combined live run): the log line names the `apply_agent_worktree` target.
+    let child = codex_workflow::child_agent_name(&run.run_id, 1, None);
     assert!(
-        run.logs_tail
-            .iter()
-            .any(|line| line.starts_with("agent 1 worktree:")),
+        run.logs_tail.iter().any(|line| {
+            line.starts_with("agent 1 worktree (apply it with `apply_agent_worktree` target `")
+                && line
+                    .lines()
+                    .next()
+                    .is_some_and(|first| first.ends_with(&format!("/{child}`):")))
+        }),
         "{:?}",
         run.logs_tail
     );
     Ok(())
+}
+
+const DETAILS_SCRIPT: &str = r#"export const meta = { name: 'details', description: 'd' };
+const edited = await agent('TASK-EDIT', { isolation: 'worktree', details: true, label: 'edit' });
+const plain = await agent('TASK-PLAIN', { details: true });
+const bare = await agent('TASK-BARE', { isolation: 'worktree' });
+return { edited, plain, bare };
+"#;
+const EDIT_CALL_ID: &str = "edit-cmd";
+
+/// R3.13 (Q20): `details: true` resolves to `{answer, worktree}`, where `worktree` describes
+/// the isolated agent's checkpoint and names the agent `apply_agent_worktree` accepts; a call
+/// without isolation gets a null `worktree`, a call without the option the bare answer. The
+/// journal keeps the bare answer with both forms of the worktree, and `resume_from` returns
+/// the journaled details without starting agents (R6.3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn details_return_the_worktree_of_isolated_agents() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    responses.parent_calls(
+        "parent_start",
+        "workflow",
+        &workflow_arguments(DETAILS_SCRIPT),
+        WORKFLOW_CALL_ID,
+    );
+    let command = json!({ "cmd": "printf 'edited\\n' > a.txt", "shell": "bash", "login": false });
+    responses.rule(
+        "edit-command",
+        1,
+        Duration::ZERO,
+        |body| {
+            body.contains(AGENT_MARKER)
+                && body.contains("TASK-EDIT")
+                && !has_call_output(body, EDIT_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-edit-command"),
+            ev_function_call(EDIT_CALL_ID, "exec_command", &command.to_string()),
+            completed("resp-edit-command", 0, 0, 0),
+        ]),
+    );
+    responses.rule(
+        "TASK-EDIT",
+        1,
+        Duration::ZERO,
+        |body| {
+            body.contains(AGENT_MARKER)
+                && body.contains("TASK-EDIT")
+                && has_call_output(body, EDIT_CALL_ID)
+        },
+        message("resp-edit-answer", "edited"),
+    );
+    responses.agent("TASK-PLAIN", "plain", (0, 0, 0));
+    responses.agent("TASK-BARE", "bare", (0, 0, 0));
+    // The parent applies the branch with the agent the details name, once they are known.
+    let apply_target = Arc::new(Mutex::new(Value::Null));
+    let target = Arc::clone(&apply_target);
+    responses.rule_with(
+        "parent_apply",
+        1,
+        Duration::ZERO,
+        |body| is_parent(body) && body.contains("apply it") && !has_call_output(body, "apply-1"),
+        move |_| {
+            let target = target.lock().expect("target").clone();
+            sse(vec![
+                ev_response_created("resp-apply"),
+                ev_function_call_with_namespace(
+                    "apply-1",
+                    "agents",
+                    "apply_agent_worktree",
+                    &json!({ "target": target }).to_string(),
+                ),
+                completed("resp-apply", 0, 0, 0),
+            ])
+        },
+    );
+    responses.rule(
+        "parent_after_apply",
+        1,
+        Duration::ZERO,
+        |body| is_parent(body) && has_call_output(body, "apply-1"),
+        message("resp-after-apply", "Applied."),
+    );
+    responses.rule_with(
+        "parent_resume",
+        1,
+        Duration::ZERO,
+        |body| {
+            is_parent(body) && body.contains("resume it") && !has_call_output(body, RESUME_CALL_ID)
+        },
+        |body| {
+            let arguments = json!({ "resume_from": run_id_of_call(body, WORKFLOW_CALL_ID) });
+            sse(vec![
+                ev_response_created("resp-resume"),
+                ev_function_call(RESUME_CALL_ID, "workflow", &arguments.to_string()),
+                completed("resp-resume", 0, 0, 0),
+            ])
+        },
+    );
+    responses.rule(
+        "parent_other",
+        usize::MAX,
+        Duration::ZERO,
+        is_parent,
+        message("resp-parent-other", "noted"),
+    );
+    let test = isolated_workflow_builder()
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("run it").await?;
+    let run = finished_run(&test.codex).await;
+    assert_eq!(run.status, RunStatus::Completed, "{run:?}");
+    let result = run_result(&test.codex, &run.run_id);
+    let edited = &result["edited"];
+    assert_eq!(edited["answer"], "edited", "{result}");
+    let worktree = &edited["worktree"];
+    let child = codex_workflow::child_agent_name(&run.run_id, 1, Some("edit"));
+    assert!(
+        worktree["agent"]
+            .as_str()
+            .is_some_and(|agent| agent.ends_with(&format!("/{child}"))),
+        "{worktree}"
+    );
+    assert_eq!(worktree["changed"], true, "{worktree}");
+    let branch = worktree["branch"].as_str().expect("branch");
+    assert!(branch.starts_with("codex/agents/"), "{worktree}");
+    assert_eq!(
+        worktree["files"],
+        json!([{ "status": "M", "path": "a.txt" }]),
+        "{worktree}"
+    );
+    assert_eq!(worktree["files_total"], 1, "{worktree}");
+    assert_eq!(
+        worktree["stat"], "1 file changed, 1 insertion(+), 1 deletion(-)",
+        "{worktree}"
+    );
+    // D1 (combined live run): no raw `git apply` command; the agent is the tool's target.
+    assert_eq!(worktree.get("apply"), None, "{worktree}");
+    assert!(
+        worktree["base"]
+            .as_str()
+            .is_some_and(|base| base.len() == 40),
+        "{worktree}"
+    );
+    assert!(worktree["checkout"].as_str().is_some(), "{worktree}");
+    assert_eq!(worktree["error"], Value::Null, "{worktree}");
+    assert_eq!(
+        result["plain"],
+        json!({ "answer": "plain", "worktree": null })
+    );
+    assert_eq!(result["bare"], "bare");
+    // The journal keeps the bare answer and both forms of the worktree.
+    let journaled = journal_records(&test, &run.run_id)
+        .into_iter()
+        .find(|record| record["kind"] == "agent_finished" && record["call"] == 1)
+        .expect("agent_finished");
+    assert_eq!(journaled["value"], "edited", "{journaled}");
+    assert_eq!(journaled["worktree_details"], *worktree, "{journaled}");
+    assert!(
+        journaled["worktree"]
+            .as_str()
+            .is_some_and(|report| report.contains(&format!("branch: {branch}"))),
+        "{journaled}"
+    );
+
+    *apply_target.lock().expect("target") = worktree["agent"].clone();
+    test.codex
+        .start_or_steer_turn(user_turn("apply it"))
+        .await?;
+    wait_for_served(&responses, "parent_after_apply", 1).await;
+    let applied = responses.served("parent_after_apply");
+    let output = call_output(&applied[0], "apply-1").expect("apply output");
+    assert!(output.contains(&format!("Applied {branch}")), "{output}");
+    assert_eq!(
+        std::fs::read_to_string(test.config.cwd.as_path().join("a.txt"))?,
+        "edited\n"
+    );
+
+    // R6.3: resume answers every call from the journal, details included.
+    test.codex
+        .start_or_steer_turn(user_turn("resume it"))
+        .await?;
+    let resumed_id = new_run_id(&test.codex, &[run.run_id.as_str()]).await;
+    let resumed = finished_run_with_id(&test.codex, &resumed_id).await;
+    assert_eq!(resumed.status, RunStatus::Completed, "{resumed:?}");
+    assert_eq!(run_result(&test.codex, &resumed_id), result);
+    for task in ["TASK-EDIT", "TASK-PLAIN", "TASK-BARE"] {
+        assert_eq!(responses.served(task).len(), 1, "{task}");
+    }
+    assert!(responses.served("unmatched").is_empty());
+    Ok(())
+}
+
+/// A workflow thread with agent worktree isolation in a git checkout with `a.txt`.
+fn isolated_workflow_builder() -> core_test_support::test_codex::TestCodexBuilder {
+    test_codex()
+        .with_config(|config| {
+            for feature in [
+                Feature::Collab,
+                Feature::MultiAgentV2,
+                Feature::Workflows,
+                Feature::AgentWorktreeIsolation,
+            ] {
+                config.features.enable(feature).expect("feature");
+            }
+            // Agent worktree isolation needs a custom collaboration namespace (R1.5).
+            config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+            config.workspace_roots = vec![config.cwd.clone()];
+            config.workflows.require_approval = codex_core::config::WorkflowApproval::Never;
+        })
+        .with_workspace_setup(|cwd, _fs| async move {
+            let cwd = cwd.as_path();
+            git(cwd, &["init", "--quiet", "-b", "main"]);
+            git(cwd, &["config", "user.name", "Codex Test"]);
+            git(cwd, &["config", "user.email", "codex@example.invalid"]);
+            std::fs::write(cwd.join("a.txt"), "base\n")?;
+            git(cwd, &["add", "."]);
+            git(
+                cwd,
+                &["commit", "--quiet", "--no-gpg-sign", "-m", "initial"],
+            );
+            Ok(())
+        })
 }
 
 /// Explorer workflow agents keep the explorer profile: its instructions, its read-only
@@ -2269,7 +2500,7 @@ async fn resume_reuses_journaled_answers() -> Result<()> {
             ev_function_call(
                 WORKFLOW_CALL_ID,
                 "workflow",
-                &workflow_arguments(RESUMABLE_SCRIPT),
+                &json!({ "script": RESUMABLE_SCRIPT, "budget_tokens": 1_000_000 }).to_string(),
             ),
             completed("resp-parent-start", 0, 0, 0),
         ]),
@@ -2350,6 +2581,8 @@ async fn resume_reuses_journaled_answers() -> Result<()> {
             unused: 1,
         })
     );
+    // D3 (combined live run): the resumed run keeps the budget of the run it resumes.
+    assert_eq!(second.budget_tokens, Some(1_000_000), "{second:?}");
     let (snapshot, _) = test.codex.workflow_run(&second_id, false).expect("run");
     assert!(snapshot.agent_list[0].cached, "{snapshot:?}");
     assert_eq!(snapshot.agent_list[0].thread_id, None);
@@ -2393,7 +2626,12 @@ async fn interrupted_runs_are_marked_on_load_and_resumable() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let responses = ScriptedResponses::mount(&server).await;
-    let arguments = json!({ "script": STOPPED_SCRIPT, "args": { "topic": "t1" } }).to_string();
+    let arguments = json!({
+        "script": STOPPED_SCRIPT,
+        "args": { "topic": "t1" },
+        "budget_tokens": 2_000_000,
+    })
+    .to_string();
     responses.parent_calls("parent_start", "workflow", &arguments, WORKFLOW_CALL_ID);
     responses.rule(
         "parent_after_tool",
@@ -2477,6 +2715,12 @@ async fn interrupted_runs_are_marked_on_load_and_resumable() -> Result<()> {
         .filter(|line| !line.contains("\"kind\":\"run_finished\""))
         .collect();
     std::fs::write(&journal_path, format!("{}\n", kept.join("\n")))?;
+    // ... and without the run's index line, which follows `run_finished` (R6.8).
+    let thread_dir = journal_path
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("thread directory");
+    std::fs::remove_file(thread_dir.join(codex_workflow::INDEX_FILE))?;
     let served_before_load = responses.rule_order().len();
 
     let resumed = workflow_builder(|_| {})
@@ -2515,6 +2759,8 @@ async fn interrupted_runs_are_marked_on_load_and_resumable() -> Result<()> {
     );
     assert_eq!(responses.served("TASK-SA t1").len(), 1);
     assert_eq!(second.resume.as_ref().map(|resume| resume.served), Some(1));
+    // D3 (combined live run): the resumed run keeps the budget of the run it resumes.
+    assert_eq!(second.budget_tokens, Some(2_000_000), "{second:?}");
     let second_dir = resumed
         .codex_home_path()
         .join("workflows")
@@ -2598,7 +2844,28 @@ async fn finished_runs_are_restored_by_id_after_restart() -> Result<()> {
     let run = finished_run(&test.codex).await;
     wait_for_turns(&test, 1).await;
     let resumed = workflow_builder(|_| {}).restart(&server, &test).await?;
-    assert!(resumed.codex.workflow_runs().is_empty());
+    // R6.8, R8.8 (Q10): the finished run of the earlier process is listed from the run index
+    // at once, as a summary; read rebuilds it by id with its calls and result, and cancel
+    // returns it unchanged.
+    let listed = resumed.codex.workflow_runs();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0].run_id, run.run_id);
+    assert_eq!(listed[0].status, RunStatus::Completed);
+    assert_eq!(listed[0].agents.completed, 1);
+    assert!(listed[0].result_preview.is_none(), "{listed:?}");
+    let (read, result) = resumed
+        .codex
+        .read_workflow_run(&run.run_id, /*include_result*/ true)
+        .await
+        .expect("a past run is read by id");
+    assert_eq!(read.agent_list.len(), 1, "{read:?}");
+    assert_eq!(result.as_deref(), Some("\"the answer\""));
+    let cancelled = resumed
+        .codex
+        .cancel_workflow_run(&run.run_id)
+        .await
+        .expect("a past run is found by id");
+    assert_eq!(cancelled.status, RunStatus::Completed);
 
     resumed.submit_turn("status please").await?;
     let after_status = responses.served("parent_after_status");
@@ -3195,16 +3462,21 @@ async fn resumed_isolated_answers_keep_their_worktree_report() -> Result<()> {
     test.submit_turn("run it").await?;
     let first = finished_run(&test.codex).await;
     assert_eq!(first.status, RunStatus::Completed, "{first:?}");
-    let report = first
-        .logs_tail
-        .iter()
-        .find_map(|line| line.strip_prefix("agent 1 worktree:\n"))
-        .expect("worktree report")
-        .to_string();
     let journaled = journal_records(&test, &first.run_id)
         .into_iter()
         .find(|record| record["kind"] == "agent_finished")
         .expect("agent_finished");
+    let agent = journaled["worktree_details"]["agent"]
+        .as_str()
+        .expect("journaled worktree details")
+        .to_string();
+    let apply_hint = format!(" (apply it with `apply_agent_worktree` target `{agent}`)");
+    let report = first
+        .logs_tail
+        .iter()
+        .find_map(|line| line.strip_prefix(&format!("agent 1 worktree{apply_hint}:\n")))
+        .expect("worktree report")
+        .to_string();
     assert_eq!(journaled["worktree"], json!(report), "{journaled}");
 
     test.codex
@@ -3218,7 +3490,7 @@ async fn resumed_isolated_answers_keep_their_worktree_report() -> Result<()> {
         json!("isolated answer")
     );
     let expected = format!(
-        "agent 1 answered from the journal of {}; its worktree:\n{report}",
+        "agent 1 answered from the journal of {}; its worktree{apply_hint}:\n{report}",
         first.run_id
     );
     assert!(
