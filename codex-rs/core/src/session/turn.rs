@@ -706,8 +706,8 @@ pub(crate) async fn run_turn(
                 }
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if should_roll_over {
-                    fork_loop.check_compaction_progress(token_limit_reached)?; // Fork: loop guard
+                // Fork: loop guard and compaction limit of the turn (fork_turn.rs).
+                if should_roll_over && fork_loop.before_compaction(&turn_context, &token_status)? {
                     let compacted = run_auto_compact(
                         &sess,
                         Arc::clone(&step_context),

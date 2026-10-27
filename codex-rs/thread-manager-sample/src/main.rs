@@ -387,6 +387,7 @@ async fn new_config(
         explorer_profile: Default::default(),
         agent_worktree_isolation: Default::default(),
         exec_exit_notifications: Default::default(),
+        model_auto_compact_turn_token_limit: None,
         max_goal_token_budget: None,
         token_budget: None,
         token_budget_startup_config: None,

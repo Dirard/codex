@@ -355,6 +355,11 @@ pub struct ConfigToml {
 
     /// Fork: limits of background workflow runs.
     pub workflows: Option<WorkflowsToml>,
+
+    /// Fork: context tokens the auto-compactions of one turn may replace in total; once they
+    /// did, the turn stops with an error instead of compacting again. Default: the larger of
+    /// 8000000 and 32 context windows of the model. 0 turns the limit off.
+    pub model_auto_compact_turn_token_limit: Option<u64>,
     // Fork end
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).

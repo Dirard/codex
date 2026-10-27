@@ -2316,6 +2316,190 @@ async fn optional_compactions_without_progress_are_limited() -> Result<()> {
     Ok(())
 }
 
+/// Serves a productive turn whose every step refills the context: each sample answers with
+/// progress, reports usage above the auto-compact limit and continues the turn, until the
+/// sample after `steps`, which ends it. Without `steps` the turn never ends on its own.
+struct RefillingTurnResponses {
+    steps: Option<usize>,
+    samples: std::sync::atomic::AtomicUsize,
+    compactions: std::sync::atomic::AtomicUsize,
+}
+
+impl RefillingTurnResponses {
+    /// Context each step reports, above the 100k auto-compact limit of `loop_guard_test_codex`.
+    const STEP_TOKENS: i64 = 120_000;
+
+    fn new(steps: Option<usize>) -> Self {
+        Self {
+            steps,
+            samples: std::sync::atomic::AtomicUsize::new(0),
+            compactions: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+impl wiremock::Respond for RefillingTurnResponses {
+    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+        let body: Value =
+            serde_json::from_slice(&request.body).expect("uncompressed JSON request body");
+        let is_compaction = body["input"].as_array().is_some_and(|input| {
+            input
+                .iter()
+                .any(|item| item["type"] == "compaction_trigger")
+        });
+        if is_compaction {
+            let number = self
+                .compactions
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            return responses::sse_response(remote_compaction_sse(
+                &format!("compact-{number}"),
+                &format!("SUMMARY_{number}"),
+            ));
+        }
+        let sample = self
+            .samples
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        let id = format!("sample-{sample}");
+        if self.steps.is_some_and(|steps| sample > steps) {
+            return responses::sse_response(responses::sse(vec![
+                responses::ev_response_created(&id),
+                responses::ev_assistant_message("final-message", "done"),
+                responses::ev_completed(&id),
+            ]));
+        }
+        let mut completed = responses::ev_completed_with_tokens(&id, Self::STEP_TOKENS);
+        completed["response"]["end_turn"] = json!(false);
+        responses::sse_response(responses::sse(vec![
+            responses::ev_response_created(&id),
+            responses::ev_assistant_message(&format!("step-{sample}"), &format!("step {sample}")),
+            completed,
+        ]))
+    }
+}
+
+/// Review 2026-10-27 P2-1 (docs/fork/02-compaction-context.md §4 item 11): a low
+/// `model_auto_compact_token_limit` compacts a productive turn every ~100k tokens. The turn
+/// limit counts the context its compactions replaced, not the compactions, so 40 of them in
+/// one turn still fit the default (32 windows of 300k); a limit of 32 compactions failed it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_long_turn_with_a_low_auto_compact_limit_keeps_compacting() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const STEPS: usize = 40;
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.turn_lifecycle_contributor(Arc::new(TurnErrorRecorder {
+        errors: Arc::clone(&errors),
+    }));
+    let harness = TestCodexHarness::with_builder(
+        loop_guard_test_codex()
+            .with_config(|config| {
+                // The responder reads raw request bodies.
+                let _ = config.features.disable(Feature::EnableRequestCompression);
+            })
+            .with_extensions(Arc::new(extensions.build())),
+    )
+    .await?;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path_regex(".*/responses$"))
+        .respond_with(RefillingTurnResponses::new(Some(STEPS)))
+        .mount(harness.server())
+        .await;
+
+    tokio::time::timeout(
+        Duration::from_secs(120),
+        harness.test().submit_turn("a long productive turn"),
+    )
+    .await??;
+
+    assert_eq!(
+        errors.lock().expect("turn error records lock").as_slice(),
+        &[] as &[CodexErrorInfo]
+    );
+    let requests = responses::received_responses_requests(harness.server()).await;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| is_compact_request(request))
+            .count(),
+        STEPS
+    );
+    let last = requests.last().expect("final sample");
+    assert!(!is_compact_request(last));
+    assert!(
+        last.body_json()
+            .to_string()
+            .contains(&format!("SUMMARY_{STEPS}"))
+    );
+    Ok(())
+}
+
+/// Review 2026-10-27 P2-1: a turn whose every step refills the context stops once its
+/// compactions replaced `model_auto_compact_turn_token_limit` tokens, with a turn error that
+/// names the setting, before it pays for another compaction.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_turn_that_keeps_refilling_its_context_stops_at_the_configured_limit() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.turn_lifecycle_contributor(Arc::new(TurnErrorRecorder {
+        errors: Arc::clone(&errors),
+    }));
+    let test = loop_guard_test_codex()
+        .with_config(|config| {
+            // The responder reads raw request bodies.
+            let _ = config.features.disable(Feature::EnableRequestCompression);
+            // Three compactions of about 120k each reach it.
+            config.model_auto_compact_turn_token_limit = Some(300_000);
+        })
+        .with_extensions(Arc::new(extensions.build()));
+    let harness = TestCodexHarness::with_builder(test).await?;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path_regex(".*/responses$"))
+        .respond_with(RefillingTurnResponses::new(/*steps*/ None))
+        .mount(harness.server())
+        .await;
+
+    let codex = &harness.test().codex;
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "a turn that never ends on its own".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let message = tokio::time::timeout(
+        Duration::from_secs(60),
+        wait_for_event_match(codex, |event| match event {
+            EventMsg::Error(error) => Some(error.message.clone()),
+            _ => None,
+        }),
+    )
+    .await?;
+    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    assert!(
+        message.starts_with("Codex stopped this turn: its 3 compactions replaced ")
+            && message.contains("raise model_auto_compact_turn_token_limit"),
+        "{message}"
+    );
+    assert_eq!(
+        errors.lock().expect("turn error records lock").as_slice(),
+        &[CodexErrorInfo::Other]
+    );
+    let requests = responses::received_responses_requests(harness.server()).await;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| is_compact_request(request))
+            .count(),
+        3
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result<()> {
     skip_if_no_network!(Ok(()));

@@ -16,18 +16,70 @@ use super::session::Session;
 use super::step_context::StepContext;
 use super::turn::run_hooks_and_record_inputs;
 use super::turn_context::TurnContext;
+use crate::config::Config;
 use crate::context::world_state::WorldState;
 
 /// Optional compactions in a row without progress after which no new background compaction
 /// starts until the model makes progress (review R9-1).
 const OPTIONAL_COMPACTIONS_WITHOUT_PROGRESS: usize = 2;
 
-/// Compactions one turn installs, forced and optional together, after which the turn stops
-/// with an error instead of compacting again (docs/fork/02-compaction-context.md §4 item 11).
-/// The progress guards above stop loops without progress; this backstop stops a turn whose
-/// every step refills the context. A typical turn compacts at most a few times; 32 windows of
-/// a 272k context are about 6M tokens of new context in one turn.
-pub(super) const MAX_COMPACTIONS_PER_TURN: usize = 32;
+/// Context tokens the compactions of one turn may replace by default
+/// (`model_auto_compact_turn_token_limit`; docs/fork/02-compaction-context.md §4 item 11,
+/// review 2026-10-27 P2-1). The progress guards above stop loops without progress; this
+/// backstop stops a turn whose every step refills the context. It counts tokens, not
+/// compactions: a small window, a low `model_auto_compact_token_limit`, early optional
+/// compactions (`AsyncCompaction`) or `TokenBudget` window resets compact a productive turn
+/// many times before it replaced this much context.
+pub(super) const DEFAULT_TURN_COMPACTION_TOKEN_LIMIT: u64 = 8_000_000;
+/// Context windows the compactions of one turn may replace by default when they hold more
+/// than `DEFAULT_TURN_COMPACTION_TOKEN_LIMIT`: a turn always gets this many full windows.
+pub(super) const DEFAULT_TURN_COMPACTION_WINDOWS: u64 = 32;
+
+/// How much context the compactions of one turn may replace before the turn stops.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct TurnCompactionLimit {
+    /// `None` when the limit is off.
+    tokens: Option<u64>,
+}
+
+impl TurnCompactionLimit {
+    pub(super) const OFF: Self = Self { tokens: None };
+
+    pub(super) fn tokens(tokens: u64) -> Self {
+        Self {
+            tokens: Some(tokens),
+        }
+    }
+
+    /// `configured` is `model_auto_compact_turn_token_limit`, where 0 turns the limit off;
+    /// without it, the larger of `DEFAULT_TURN_COMPACTION_TOKEN_LIMIT` and
+    /// `DEFAULT_TURN_COMPACTION_WINDOWS` windows of `context_window`.
+    pub(super) fn resolve(configured: Option<u64>, context_window: Option<i64>) -> Self {
+        match configured {
+            Some(0) => Self::OFF,
+            Some(tokens) => Self::tokens(tokens),
+            None => Self::tokens(
+                context_window
+                    .and_then(|window| u64::try_from(window).ok())
+                    .unwrap_or(0)
+                    .saturating_mul(DEFAULT_TURN_COMPACTION_WINDOWS)
+                    .max(DEFAULT_TURN_COMPACTION_TOKEN_LIMIT),
+            ),
+        }
+    }
+
+    /// The limit of a turn of `config` whose context window `token_status` reports.
+    fn of_turn(config: &Config, token_status: &ContextWindowTokenStatus) -> Self {
+        Self::resolve(
+            config.model_auto_compact_turn_token_limit,
+            token_status.full_context_window_limit,
+        )
+    }
+
+    fn is_reached(self, compacted_tokens: u64) -> bool {
+        self.tokens.is_some_and(|limit| compacted_tokens >= limit)
+    }
+}
 
 /// Fork: what one sampled response did for the turn loop.
 #[derive(Clone, Copy, Debug, Default)]
@@ -76,8 +128,13 @@ pub(super) struct TurnLoop {
     made_progress: bool,
     consecutive_compactions_without_progress: usize,
     consecutive_optional_compactions_without_progress: usize,
-    /// Compactions this turn installed, forced and optional (`MAX_COMPACTIONS_PER_TURN`).
+    /// Compactions this turn installed, forced and optional.
     compactions: usize,
+    /// Context tokens the compactions this turn installed replaced (`TurnCompactionLimit`).
+    compacted_tokens: u64,
+    /// Context of the compaction `check_compaction_progress` let through; it counts once the
+    /// compaction installs.
+    compacting_tokens: u64,
 }
 
 impl TurnLoop {
@@ -100,17 +157,44 @@ impl TurnLoop {
         model_needs_follow_up
     }
 
-    /// Before a mid-turn compaction: after two forced compactions in a row without progress,
-    /// another one cannot make the context fit. The guard checks and counts only compactions
-    /// the token limit forces (docs/fork/02-compaction-context.md R9): an optional one, such as
-    /// a ready background candidate, runs while the context still fits, so it neither fails
-    /// the turn nor counts.
+    /// Fork hook of `run_turn` before a mid-turn compaction: whether it compacts now
+    /// (`check_compaction_progress` with the turn's `TurnCompactionLimit`).
+    pub(super) fn before_compaction(
+        &mut self,
+        turn_context: &TurnContext,
+        token_status: &ContextWindowTokenStatus,
+    ) -> CodexResult<bool> {
+        self.check_compaction_progress(
+            token_status.token_limit_reached,
+            token_status.active_context_tokens,
+            TurnCompactionLimit::of_turn(&turn_context.config, token_status),
+        )
+    }
+
+    /// Before a mid-turn compaction of `context_tokens`: after two forced compactions in a row
+    /// without progress, another one cannot make the context fit. The guard checks and counts
+    /// only compactions the token limit forces (docs/fork/02-compaction-context.md R9): an
+    /// optional one, such as a ready background candidate or a `new_context` reset, runs
+    /// while the context still fits, so it neither fails the turn nor counts.
     ///
-    /// Whatever the progress, a turn that already installed `MAX_COMPACTIONS_PER_TURN`
-    /// compactions stops with an error that says so, before it pays for another one.
-    pub(super) fn check_compaction_progress(&self, token_limit_reached: bool) -> CodexResult<()> {
-        if self.compactions >= MAX_COMPACTIONS_PER_TURN {
-            return Err(CodexErr::InvalidRequest(compaction_limit_message()));
+    /// Whatever the progress, once the compactions of this turn replaced `limit` tokens of
+    /// context, a forced compaction stops the turn with an error that says so, before it pays
+    /// for another one. An optional one is skipped instead: the context still fits, so the
+    /// turn goes on without it (review 2026-10-27, P3-1). Returns whether to compact.
+    pub(super) fn check_compaction_progress(
+        &mut self,
+        token_limit_reached: bool,
+        context_tokens: i64,
+        limit: TurnCompactionLimit,
+    ) -> CodexResult<bool> {
+        if limit.is_reached(self.compacted_tokens) {
+            if !token_limit_reached {
+                return Ok(false);
+            }
+            return Err(CodexErr::InvalidRequest(compaction_limit_message(
+                self.compactions,
+                self.compacted_tokens,
+            )));
         }
         if token_limit_reached
             && !self.made_progress
@@ -118,11 +202,15 @@ impl TurnLoop {
         {
             return Err(CodexErr::ContextWindowExceeded);
         }
-        Ok(())
+        self.compacting_tokens = u64::try_from(context_tokens).unwrap_or(0);
+        Ok(true)
     }
 
     pub(super) fn on_compacted(&mut self, token_limit_reached: bool) {
         self.compactions += 1;
+        self.compacted_tokens = self
+            .compacted_tokens
+            .saturating_add(std::mem::take(&mut self.compacting_tokens));
         if self.made_progress {
             return;
         }
@@ -138,12 +226,12 @@ impl TurnLoop {
     /// async threshold, so without progress they would repeat for the rest of the turn, one
     /// compaction request every few samples (review R9-1). They stop after two in a row until
     /// the model makes progress. Forced compactions do not go through this.
-    /// No optional compaction starts either once the turn reached `MAX_COMPACTIONS_PER_TURN`:
+    /// No optional compaction starts either once the turn reached its `TurnCompactionLimit`:
     /// it could not install.
-    pub(super) fn allows_optional_compaction(&self) -> bool {
+    pub(super) fn allows_optional_compaction(&self, limit: TurnCompactionLimit) -> bool {
         self.consecutive_optional_compactions_without_progress
             < OPTIONAL_COMPACTIONS_WITHOUT_PROGRESS
-            && self.compactions < MAX_COMPACTIONS_PER_TURN
+            && !limit.is_reached(self.compacted_tokens)
     }
 
     /// Only the hooks can tell whether input queued behind a finished answer continues the
@@ -188,17 +276,17 @@ impl TurnLoop {
     }
 }
 
-/// The turn error when a turn reached `MAX_COMPACTIONS_PER_TURN`.
-fn compaction_limit_message() -> String {
+/// The turn error when a turn reached its `TurnCompactionLimit`.
+fn compaction_limit_message(compactions: usize, compacted_tokens: u64) -> String {
     format!(
-        "Codex stopped this turn after compacting its context {MAX_COMPACTIONS_PER_TURN} times in it: every step refilled the context. Send a new message to continue in a new turn, or start a new thread."
+        "Codex stopped this turn: its {compactions} compactions replaced {compacted_tokens} tokens of context, the most one turn may compact, and the context is full again. Send a new message to continue in a new turn, or raise model_auto_compact_turn_token_limit in config.toml (0 turns the limit off)."
     )
 }
 
 /// Fork: the mid-turn start of a background compaction (`async_compaction::maybe_start`, same
-/// arguments after the turn loop), unless optional compactions ran out of progress
-/// (`TurnLoop::allows_optional_compaction`). A candidate that is already running may still
-/// install: it is paid for.
+/// arguments after the turn loop), unless optional compactions ran out of progress or the turn
+/// reached its compaction limit (`TurnLoop::allows_optional_compaction`). A candidate that is
+/// already running may still install: it is paid for.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn maybe_start_async_compaction(
     turn_loop: &TurnLoop,
@@ -210,7 +298,10 @@ pub(super) async fn maybe_start_async_compaction(
     token_status: &ContextWindowTokenStatus,
     turn_state: (Option<String>, Option<u64>),
 ) {
-    if !turn_loop.allows_optional_compaction() {
+    if !turn_loop.allows_optional_compaction(TurnCompactionLimit::of_turn(
+        &step_context.turn.config,
+        token_status,
+    )) {
         return;
     }
     super::async_compaction::maybe_start(

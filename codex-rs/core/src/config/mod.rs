@@ -1164,6 +1164,9 @@ pub struct Config {
     pub agent_worktree_isolation: AgentWorktreeIsolationConfig,
     /// Fork: how long `codex exec` waits for background terminal notifications.
     pub exec_exit_notifications: ExecExitNotificationsConfig,
+    /// Fork: context tokens the compactions of one turn may replace
+    /// (`model_auto_compact_turn_token_limit`); `None` keeps the default, `Some(0)` is off.
+    pub model_auto_compact_turn_token_limit: Option<u64>,
     // Fork end
     /// Context-window token budget configuration, when enabled.
     pub token_budget: Option<TokenBudgetConfig>,
@@ -4720,6 +4723,7 @@ impl Config {
             exec_exit_notifications: ExecExitNotificationsConfig::from_features_toml(
                 cfg.features.as_ref(),
             ),
+            model_auto_compact_turn_token_limit: cfg.model_auto_compact_turn_token_limit,
             // Fork end
             token_budget,
             token_budget_startup_config: None,
