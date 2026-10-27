@@ -1,4 +1,5 @@
 mod compact;
+mod fork_wake; // Fork: a wake starts only in its reservation (H5)
 mod lifecycle;
 mod regular;
 mod review;
@@ -328,7 +329,12 @@ impl Session {
         let (pending_items, input) = self.fork_drain_task_input(task_kind, input).await;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
-            let turn = active.get_or_insert_with(ActiveTurn::default);
+            let Some(turn) = fork_wake::fork_task_turn(&mut active, &turn_context) else {
+                drop(active); // Fork (H5): the interrupt took the wake's reservation
+                return self
+                    .fork_lost_wake_start(&turn_context, pending_items, false)
+                    .await;
+            };
             debug_assert!(turn.task.is_none());
             turn.finishing = None;
             Arc::clone(&turn.turn_state)
@@ -345,7 +351,12 @@ impl Session {
         .await;
 
         let mut active = self.active_turn.lock().await;
-        let turn = active.get_or_insert_with(ActiveTurn::default);
+        let Some(turn) = fork_wake::fork_register_turn(&mut active, &turn_context) else {
+            drop(active); // Fork (H5): the interrupt took the wake's reservation
+            return self
+                .fork_lost_wake_start(&turn_context, Vec::new(), true)
+                .await;
+        };
         debug_assert!(turn.task.is_none());
         // Record lineage only when the task starts: settings changes can invalidate a reservation.
         self.record_started_turn(
@@ -569,7 +580,7 @@ impl Session {
             self.fork_requeue_input(&turn_state, &turn_context).await;
             return;
         }
-        self.fork_start_followup_watcher(followup_watcher);
+        self.fork_bind_wake(&turn_context, &turn_state, followup_watcher);
         self.start_task(turn_context, Vec::new(), RegularTask::new())
             .await;
     }

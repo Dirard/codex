@@ -5,13 +5,22 @@
 //! `notify_on_output`, every new output line of a live process that matches a pattern is an
 //! event, and Codex brings the events to the model as bounded background terminal
 //! notifications (batched, rate limited, capped per watch), then reports the exit.
+//!
+//! The output path only splits chunks into lines under the output buffer lock. The pattern is
+//! matched by the watch's delivery task on the blocking thread pool, outside every lock, so
+//! an expensive pattern cannot stall the async runtime, the output buffer or the thread queue
+//! (review 2026-10-27, P2-1).
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
 use std::sync::Weak;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use codex_utils_output_truncation::OutputTruncation;
 use codex_utils_string::truncate_middle_with_marker;
 use codex_utils_string::untrusted::UntrustedBoundary;
 use codex_utils_string::untrusted::escape_tags;
@@ -26,7 +35,8 @@ use crate::session::session::Session;
 pub(crate) const OUTPUT_WATCH_PATTERN_MAX_BYTES: usize = 256;
 /// Bytes of one output line the pattern is matched against.
 pub(crate) const OUTPUT_WATCH_MATCH_MAX_BYTES: usize = 4096;
-/// How long events gather after the first undelivered one.
+/// How long events gather after the first undelivered one; an unterminated line that stays
+/// unchanged this long is matched as it is.
 pub(crate) const OUTPUT_WATCH_BATCH_WINDOW: Duration = Duration::from_millis(500);
 /// Least time between two notifications a watch puts in the thread queue.
 pub(crate) const OUTPUT_WATCH_MIN_INTERVAL: Duration = Duration::from_secs(5);
@@ -38,13 +48,28 @@ pub(crate) const OUTPUT_WATCH_LINE_MAX_BYTES: usize = 240;
 pub(crate) const OUTPUT_WATCH_MAX_NOTIFICATIONS: usize = 10;
 /// Watches one thread runs at a time.
 pub(crate) const OUTPUT_WATCH_MAX_ACTIVE: usize = 8;
-/// Compiled size limit of a pattern.
-const OUTPUT_WATCH_REGEX_SIZE_LIMIT: usize = 1 << 20;
+/// Output lines that wait to be matched, in bytes; older lines beyond it are dropped unchecked
+/// and counted, so a process that prints faster than the pattern matches cannot grow memory
+/// or the work behind it (P2-1).
+pub(crate) const OUTPUT_WATCH_BACKLOG_MAX_BYTES: usize = 64 * 1024;
+/// A watch alone keeps `codex exec`, `wait_agent` and agent residency waiting only until its
+/// process printed no matching line for this long; `notify_on_exit` waits for the exit
+/// (review 2026-10-27, P2-3). `[features.exec_exit_notifications] output_watch_quiet_ms`
+/// overrides it.
+#[cfg(test)]
+pub(crate) const OUTPUT_WATCH_QUIET_RELEASE: Duration =
+    Duration::from_millis(crate::config::DEFAULT_OUTPUT_WATCH_QUIET_MS);
+/// Compiled size limit of a pattern. The matcher's work per byte grows with it, so it bounds
+/// the cost of one line: `.{0,255}Z` (about 22 KiB) still fits, nested counted repetitions
+/// such as `(?:.{0,30}){30}Z` do not (P2-1).
+pub(crate) const OUTPUT_WATCH_REGEX_SIZE_LIMIT: usize = 32 * 1024;
 const OUTPUT_WATCH_REGEX_NEST_LIMIT: u32 = 64;
 /// Label of the boundary lines around matching lines.
 const MATCHES_LABEL: &str = "matches";
 const LINE_TRUNCATION_MARKER: &str = "…";
 const COMMAND_TRUNCATION_MARKER: &str = "…[truncated]…";
+/// First line of an output watch notification, after the session ID.
+const OUTPUT_WATCH_HEADLINE_MARK: &str = " matching the output watch \"";
 
 /// A validated `notify_on_output` pattern (R6.2).
 pub(crate) struct OutputPattern {
@@ -71,7 +96,14 @@ impl OutputPattern {
             .size_limit(OUTPUT_WATCH_REGEX_SIZE_LIMIT)
             .nest_limit(OUTPUT_WATCH_REGEX_NEST_LIMIT)
             .build()
-            .map_err(|err| format!("notify_on_output is not a valid regular expression: {err}"))?;
+            .map_err(|err| {
+                let err = err.to_string();
+                if err.contains("size limit") {
+                    "notify_on_output is too costly to match on every output line; use a simpler pattern without large or nested counted repetitions such as (?:.{0,30}){30}".to_string()
+                } else {
+                    format!("notify_on_output is not a valid regular expression: {err}")
+                }
+            })?;
         Ok(Arc::new(Self {
             source: source.to_string(),
             regex,
@@ -79,7 +111,7 @@ impl OutputPattern {
     }
 
     pub(crate) fn source(&self) -> &str {
-        &self.source
+        self.source.as_str()
     }
 }
 
@@ -118,6 +150,17 @@ impl OutputWatchChange {
     }
 }
 
+/// Why a requested watch did not start (R6.8, review 2026-10-27 P3-6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputWatchRefusal {
+    /// The thread already runs `OUTPUT_WATCH_MAX_ACTIVE` watches.
+    Limit,
+    /// The process was started while exit notifications were disabled.
+    NoNotifications,
+    /// The process exited before the watch could start.
+    Exited,
+}
+
 /// The output watch state a tool response reports.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum OutputWatchState {
@@ -128,8 +171,8 @@ pub enum OutputWatchState {
     On(String),
     /// The call stopped the watch.
     Off,
-    /// The call asked for a watch, but the thread already runs the most watches.
-    NotStarted,
+    /// The call asked for a watch that did not start.
+    NotStarted(OutputWatchRefusal),
 }
 
 /// What Codex will report about the process of a tool response (R1.2, R6.3).
@@ -149,7 +192,8 @@ pub(crate) struct OutputBuffersFork {
 }
 
 impl OutputBuffersFork {
-    /// Called for every chunk of process output under the output buffer lock.
+    /// Called for every chunk of process output under the output buffer lock; it only splits
+    /// lines, the pattern is matched later outside the lock.
     pub(crate) fn note_output(&mut self, chunk: &[u8]) {
         if chunk.is_empty() {
             return;
@@ -164,12 +208,34 @@ impl OutputBuffersFork {
     }
 }
 
+/// How much of a `write_stdin` response the model sees whole (review 2026-10-27, P3-2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PollBudget {
+    bytes: usize,
+    lines: Option<usize>,
+}
+
+impl PollBudget {
+    pub(crate) fn new(max_output_tokens: Option<usize>, truncation: &OutputTruncation) -> Self {
+        let requested = codex_utils_string::approx_bytes_for_tokens(
+            crate::unified_exec::resolve_max_tokens(max_output_tokens),
+        );
+        Self {
+            bytes: requested.min(truncation.policy.byte_budget()),
+            lines: truncation.max_lines,
+        }
+    }
+}
+
 /// Matching lines in the order the process printed them, with the count of lines that are
-/// not quoted.
+/// not quoted. `ends` holds the stream offset after each quoted line, `last_end` the one after
+/// the last line, so lines that a poll showed can be told apart (P3-2).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct MatchedLines {
     lines: Vec<String>,
+    ends: Vec<u64>,
     total: usize,
+    last_end: u64,
 }
 
 impl MatchedLines {
@@ -177,33 +243,85 @@ impl MatchedLines {
         self.total == 0
     }
 
-    fn push(&mut self, line: String) {
+    fn push(&mut self, line: String, end: u64) {
         self.total = self.total.saturating_add(1);
+        self.last_end = self.last_end.max(end);
         if self.lines.len() < OUTPUT_WATCH_LINES_PER_NOTIFICATION {
             self.lines.push(truncate_middle_with_marker(
                 &line,
                 OUTPUT_WATCH_LINE_MAX_BYTES,
                 LINE_TRUNCATION_MARKER,
             ));
+            self.ends.push(end);
         }
     }
 
     fn append(&mut self, other: Self) {
         let room = OUTPUT_WATCH_LINES_PER_NOTIFICATION.saturating_sub(self.lines.len());
         self.lines.extend(other.lines.into_iter().take(room));
+        self.ends.extend(other.ends.into_iter().take(room));
         self.total = self.total.saturating_add(other.total);
+        self.last_end = self.last_end.max(other.last_end);
     }
+
+    /// Forget the lines that end at or before `upto`. Unquoted lines have no offset, so
+    /// they stay counted unless every line was read.
+    fn drop_read(&mut self, upto: u64) {
+        if self.last_end <= upto {
+            *self = Self::default();
+            return;
+        }
+        let read = self.ends.iter().take_while(|end| **end <= upto).count();
+        self.lines.drain(..read);
+        self.ends.drain(..read);
+        self.total = self.total.saturating_sub(read);
+    }
+}
+
+/// An output line waiting to be matched, and the stream offset right after it.
+#[derive(Debug)]
+struct RawLine {
+    bytes: Vec<u8>,
+    end: u64,
+}
+
+/// Where the unterminated line stands with the pattern.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum PartialCheck {
+    /// Not matched since it last changed.
+    #[default]
+    Unchecked,
+    /// Being matched now.
+    InFlight,
+    /// Matched as it is now, without a match: its completion needs no new check.
+    NoMatch,
+    /// It matched and was reported; its completion is not reported again.
+    Matched,
 }
 
 #[derive(Default)]
 struct WatchState {
     /// The current unterminated line, at most `OUTPUT_WATCH_MATCH_MAX_BYTES`.
     partial: Vec<u8>,
-    /// The unterminated line was already reported; its completion is not reported again.
-    partial_reported: bool,
-    /// The unterminated line matches and is reported when its batch is due.
-    partial_candidate: bool,
-    /// Events not yet in the thread queue.
+    partial_changed_at: Option<Instant>,
+    partial_check: PartialCheck,
+    /// Counts completed lines; a check of an earlier unterminated line is discarded.
+    line_generation: u64,
+    /// Complete lines waiting to be matched.
+    backlog: VecDeque<RawLine>,
+    backlog_bytes: usize,
+    /// Lines dropped from a full backlog without a check, reported with the next notification.
+    unchecked: usize,
+    /// Bytes this watch has seen, the origin of line offsets.
+    observed: u64,
+    /// Bytes up to which the last `write_stdin` response drained the output, and
+    /// `line_generation` then.
+    polled_upto: u64,
+    polled_generation: u64,
+    /// Bytes up to which a `write_stdin` response showed the output whole; matching lines
+    /// before it are no news (P3-2).
+    read_upto: u64,
+    /// Matching lines not yet in the thread queue.
     pending: MatchedLines,
     first_event_at: Option<Instant>,
     /// Events of the notification this watch put in the queue last, and its number.
@@ -212,7 +330,89 @@ struct WatchState {
     last_queued_at: Option<Instant>,
     /// A new notification may not be queued before this (the interval of R6.7).
     retry_at: Option<Instant>,
+    /// When the watch started or last found a matching line (P2-3).
+    last_match_at: Option<Instant>,
     stopped: bool,
+}
+
+impl WatchState {
+    fn extend_partial(&mut self, bytes: &[u8], now: Instant) {
+        let room = OUTPUT_WATCH_MATCH_MAX_BYTES.saturating_sub(self.partial.len());
+        let taken = bytes.len().min(room);
+        if taken == 0 {
+            return;
+        }
+        self.partial.extend_from_slice(&bytes[..taken]);
+        self.partial_changed_at = Some(now);
+        if self.partial_check != PartialCheck::Matched {
+            self.partial_check = PartialCheck::Unchecked;
+        }
+    }
+
+    /// The unterminated line ended at stream offset `end`.
+    fn complete_line(&mut self, end: u64) {
+        let line = std::mem::take(&mut self.partial);
+        let check = std::mem::take(&mut self.partial_check);
+        self.partial_changed_at = None;
+        self.line_generation = self.line_generation.wrapping_add(1);
+        if line.is_empty() || matches!(check, PartialCheck::Matched | PartialCheck::NoMatch) {
+            return;
+        }
+        while self.backlog_bytes + line.len() > OUTPUT_WATCH_BACKLOG_MAX_BYTES {
+            let Some(dropped) = self.backlog.pop_front() else {
+                break;
+            };
+            self.backlog_bytes -= dropped.bytes.len();
+            self.unchecked = self.unchecked.saturating_add(1);
+        }
+        self.backlog_bytes += line.len();
+        self.backlog.push_back(RawLine { bytes: line, end });
+    }
+
+    fn partial_due(&self, now: Instant, final_batch: bool) -> bool {
+        !self.partial.is_empty()
+            && self.partial_check == PartialCheck::Unchecked
+            && (final_batch
+                || self
+                    .partial_changed_at
+                    .is_some_and(|changed| now >= changed + OUTPUT_WATCH_BATCH_WINDOW))
+    }
+}
+
+/// Lines to match, taken out of the watch state.
+struct MatchJob {
+    lines: Vec<RawLine>,
+    partial: Option<RawLine>,
+    generation: u64,
+}
+
+/// What a match job found.
+struct MatchResult {
+    matches: Vec<(String, u64)>,
+    /// The verdict on the unterminated line, if the job checked it.
+    partial: Option<Option<(String, u64)>>,
+    generation: u64,
+    evaluated: usize,
+}
+
+impl MatchJob {
+    /// Pure matching work; runs on the blocking thread pool.
+    fn run(self, pattern: &OutputPattern) -> MatchResult {
+        let mut evaluated = 0usize;
+        let mut check = |line: &RawLine| {
+            evaluated += 1;
+            let text = clean_line(&line.bytes);
+            (!text.is_empty() && pattern.regex.is_match(&text)).then_some((text, line.end))
+        };
+        let matches = self.lines.iter().filter_map(&mut check).collect();
+        let partial = self.partial.as_ref().map(&mut check);
+        MatchResult {
+            matches,
+            partial,
+            generation: self.generation,
+            evaluated,
+        }
+    }
 }
 
 /// When the delivery task of a watch acts next.
@@ -220,13 +420,17 @@ struct WatchState {
 enum NextDelivery {
     Stopped,
     Idle,
+    /// Complete lines wait to be matched.
+    Match,
+    /// An unterminated line becomes quiet, or a batch becomes due.
     At(Instant),
 }
 
 /// One output watch of one background process (UC6).
 ///
-/// Lines are matched where output enters the process buffer, so no chunk is missed or seen
-/// twice; a delivery task turns the matching lines into notifications in the thread queue.
+/// Lines are split where output enters the process buffer, so no chunk is missed or seen
+/// twice; the delivery task matches them outside every lock and turns the matching lines into
+/// notifications in the thread queue.
 pub(crate) struct OutputWatch {
     /// Key of this watch's notification in the thread queue.
     key: u64,
@@ -235,6 +439,12 @@ pub(crate) struct OutputWatch {
     pattern: Arc<OutputPattern>,
     state: Mutex<WatchState>,
     wake: Notify,
+    /// One match job at a time, so the final batch at the exit sees every line.
+    matching: tokio::sync::Mutex<()>,
+    /// Lines the pattern was evaluated on (tests count the work).
+    evaluated: AtomicUsize,
+    /// How long the watch stays fresh without a matching line (P2-3).
+    quiet_release: Duration,
 }
 
 impl std::fmt::Debug for OutputWatch {
@@ -248,14 +458,30 @@ impl std::fmt::Debug for OutputWatch {
 }
 
 impl OutputWatch {
+    #[cfg(test)]
     pub(crate) fn new(process_id: i32, command: String, pattern: Arc<OutputPattern>) -> Arc<Self> {
+        Self::with_quiet_release(process_id, command, pattern, OUTPUT_WATCH_QUIET_RELEASE)
+    }
+
+    pub(crate) fn with_quiet_release(
+        process_id: i32,
+        command: String,
+        pattern: Arc<OutputPattern>,
+        quiet_release: Duration,
+    ) -> Arc<Self> {
         Arc::new(Self {
             key: super::next_notification_key(),
             process_id,
             command,
             pattern,
-            state: Mutex::new(WatchState::default()),
+            state: Mutex::new(WatchState {
+                last_match_at: Some(Instant::now()),
+                ..WatchState::default()
+            }),
             wake: Notify::new(),
+            matching: tokio::sync::Mutex::new(()),
+            evaluated: AtomicUsize::new(0),
+            quiet_release,
         })
     }
 
@@ -275,6 +501,23 @@ impl OutputWatch {
         self.lock().stopped
     }
 
+    /// Whether the watch still expects news: it is on and its process printed a matching
+    /// line, or the watch started, less than its quiet period ago (P2-3).
+    pub(crate) fn is_fresh(&self, now: Instant) -> bool {
+        let state = self.lock();
+        !state.stopped
+            && (state.first_event_at.is_some()
+                || state
+                    .last_match_at
+                    .is_some_and(|last| now < last + self.quiet_release))
+    }
+
+    /// Whether the watch reported or still holds matching lines.
+    pub(crate) fn has_reported(&self) -> bool {
+        let state = self.lock();
+        state.notifications > 0 || !state.pending.is_empty()
+    }
+
     /// Stop matching and delivering; undelivered events are dropped unless a final batch was
     /// taken first (R6.4, R6.9).
     pub(crate) fn stop(&self) {
@@ -282,58 +525,166 @@ impl OutputWatch {
         self.wake.notify_one();
     }
 
-    /// Match the complete lines of `chunk` and remember an unterminated last line (R6.5).
+    /// Under the output buffer lock: split `chunk` into lines and keep the complete ones for
+    /// matching; nothing is matched here (R6.5, P2-1).
     pub(crate) fn observe_chunk(&self, chunk: &[u8]) {
         let mut state = self.lock();
         if state.stopped {
             return;
         }
+        let now = Instant::now();
+        let mut rest = chunk;
+        while let Some(index) = rest.iter().position(|byte| matches!(byte, b'\n' | b'\r')) {
+            state.extend_partial(&rest[..index], now);
+            state.observed = state.observed.saturating_add(index as u64 + 1);
+            let end = state.observed;
+            state.complete_line(end);
+            rest = &rest[index + 1..];
+        }
+        state.extend_partial(rest, now);
+        state.observed = state.observed.saturating_add(rest.len() as u64);
+        drop(state);
+        self.wake.notify_one();
+    }
+
+    /// Count bytes that precede what this watch sees, so line offsets match the output stream
+    /// that `write_stdin` reads.
+    pub(crate) fn skip_bytes(&self, bytes: usize) {
+        let mut state = self.lock();
+        state.observed = state.observed.saturating_add(bytes as u64);
+    }
+
+    fn take_job(&self, now: Instant, final_batch: bool) -> Option<MatchJob> {
+        let mut state = self.lock();
+        if state.stopped {
+            return None;
+        }
+        let lines: Vec<RawLine> = state.backlog.drain(..).collect();
+        state.backlog_bytes = 0;
+        let partial = state.partial_due(now, final_batch).then(|| {
+            state.partial_check = PartialCheck::InFlight;
+            RawLine {
+                bytes: state.partial.clone(),
+                end: state.observed,
+            }
+        });
+        if lines.is_empty() && partial.is_none() {
+            return None;
+        }
+        Some(MatchJob {
+            lines,
+            partial,
+            generation: state.line_generation,
+        })
+    }
+
+    fn apply(&self, result: MatchResult, now: Instant) {
+        self.evaluated
+            .fetch_add(result.evaluated, Ordering::Relaxed);
+        let mut state = self.lock();
+        if state.stopped {
+            return;
+        }
+        let read_upto = state.read_upto;
         let mut found = false;
-        for &byte in chunk {
-            if byte == b'\n' || byte == b'\r' {
-                let line = std::mem::take(&mut state.partial);
-                let reported = std::mem::replace(&mut state.partial_reported, false);
-                if !reported && let Some(text) = self.matching_line(&line) {
-                    state.pending.push(text);
-                    found = true;
-                }
-            } else if state.partial.len() < OUTPUT_WATCH_MATCH_MAX_BYTES {
-                state.partial.push(byte);
+        for (text, end) in result.matches {
+            if end > read_upto {
+                state.pending.push(text, end);
+                found = true;
             }
         }
-        state.partial_candidate = !state.partial_reported
-            && !state.partial.is_empty()
-            && self.matching_line(&state.partial).is_some();
-        if found || state.partial_candidate {
-            state.first_event_at.get_or_insert_with(Instant::now);
-            drop(state);
-            self.wake.notify_one();
+        if let Some(verdict) = result.partial
+            && result.generation == state.line_generation
+        {
+            match verdict {
+                Some((text, end)) => {
+                    state.partial_check = PartialCheck::Matched;
+                    if end > read_upto {
+                        state.pending.push(text, end);
+                        found = true;
+                    }
+                }
+                None if state.partial_check == PartialCheck::InFlight => {
+                    state.partial_check = PartialCheck::NoMatch;
+                }
+                None => {}
+            }
+        }
+        if found {
+            state.first_event_at.get_or_insert(now);
+            state.last_match_at = Some(now);
         }
     }
 
-    fn matching_line(&self, raw: &[u8]) -> Option<String> {
-        let text = clean_line(raw);
-        (!text.is_empty() && self.pattern.regex.is_match(&text)).then_some(text)
+    /// Match the lines that wait, on the blocking thread pool and outside every lock (P2-1).
+    /// `final_batch` (the process exited) matches all of them, the unterminated line too;
+    /// otherwise one job runs, so a flood of output cannot hold back delivery.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "one match job at a time; the final batch waits for a job in flight"
+    )]
+    pub(crate) async fn match_waiting_lines(&self, final_batch: bool) {
+        let _matching = self.matching.lock().await;
+        loop {
+            let Some(job) = self.take_job(Instant::now(), final_batch) else {
+                return;
+            };
+            let pattern = Arc::clone(&self.pattern);
+            let Ok(result) = tokio::task::spawn_blocking(move || job.run(&pattern)).await else {
+                return;
+            };
+            self.apply(result, Instant::now());
+            if !final_batch {
+                return;
+            }
+        }
     }
 
-    fn next_delivery(&self) -> NextDelivery {
+    /// Matches the waiting lines on the calling thread (tests).
+    #[cfg(test)]
+    fn match_now(&self, final_batch: bool, now: Instant) {
+        while let Some(job) = self.take_job(now, final_batch) {
+            let result = job.run(&self.pattern);
+            self.apply(result, now);
+        }
+    }
+
+    /// Lines the pattern was evaluated on so far.
+    #[cfg(test)]
+    fn evaluated(&self) -> usize {
+        self.evaluated.load(Ordering::Relaxed)
+    }
+
+    fn next_delivery(&self, now: Instant) -> NextDelivery {
         let state = self.lock();
         if state.stopped {
             return NextDelivery::Stopped;
         }
-        let Some(first_event_at) = state.first_event_at else {
-            return NextDelivery::Idle;
-        };
-        let due = first_event_at + OUTPUT_WATCH_BATCH_WINDOW;
-        NextDelivery::At(state.retry_at.map_or(due, |retry_at| retry_at.max(due)))
+        if !state.backlog.is_empty() || state.partial_due(now, /*final_batch*/ false) {
+            return NextDelivery::Match;
+        }
+        let partial_at = (!state.partial.is_empty()
+            && state.partial_check == PartialCheck::Unchecked)
+            .then_some(state.partial_changed_at)
+            .flatten()
+            .map(|changed| changed + OUTPUT_WATCH_BATCH_WINDOW);
+        let batch_at = state.first_event_at.map(|first| {
+            let due = first + OUTPUT_WATCH_BATCH_WINDOW;
+            state.retry_at.map_or(due, |retry_at| retry_at.max(due))
+        });
+        match (partial_at, batch_at) {
+            (Some(partial), Some(batch)) => NextDelivery::At(partial.min(batch)),
+            (Some(at), None) | (None, Some(at)) => NextDelivery::At(at),
+            (None, None) => NextDelivery::Idle,
+        }
     }
 
     /// Under the thread-queue lock: the text to put in the queue now, if any (R6.7, R6.8).
+    /// It only moves lines that were already matched and renders them (P2-1).
     ///
     /// `queued` says whether this watch's last notification still waits in the queue; the
     /// new events are then added to it. `exited` takes the final batch when the process
-    /// exited: the unterminated line counts, and neither the batch window nor the interval
-    /// applies (R6.9).
+    /// exited: neither the batch window nor the interval applies (R6.9).
     pub(crate) fn take_for_queue(
         &self,
         queued: bool,
@@ -353,15 +704,6 @@ impl OutputWatch {
                 .is_some_and(|first| now >= first + OUTPUT_WATCH_BATCH_WINDOW);
         if !due {
             return None;
-        }
-        if state.partial_candidate && !state.partial_reported {
-            let partial = std::mem::take(&mut state.partial);
-            if let Some(text) = self.matching_line(&partial) {
-                state.pending.push(text);
-                state.partial_reported = true;
-            }
-            state.partial = partial;
-            state.partial_candidate = false;
         }
         if state.pending.is_empty() {
             state.first_event_at = None;
@@ -396,6 +738,7 @@ impl OutputWatch {
         }
         state.first_event_at = None;
         state.retry_at = None;
+        let unchecked = std::mem::take(&mut state.unchecked);
         let text = render(
             &RenderInput {
                 process_id: self.process_id,
@@ -405,11 +748,53 @@ impl OutputWatch {
                 number,
                 exited,
                 last,
+                unchecked,
             },
             boundary,
         );
         state.queued = Some((lines, number));
         Some(text)
+    }
+
+    /// A `write_stdin` response showed the process output up to the bytes that are still
+    /// unread (`unread`). When the response showed what it drained whole, the matching lines
+    /// in it are no news: they are dropped before they reach the queue (P3-2).
+    pub(crate) fn mark_read(&self, unread: usize, budget: PollBudget) {
+        let mut state = self.lock();
+        let upto = state.observed.saturating_sub(unread as u64);
+        let drained = upto.saturating_sub(state.polled_upto);
+        // Lines completed since the last poll, unread ones included: an upper bound.
+        let lines = state.line_generation.wrapping_sub(state.polled_generation);
+        state.polled_upto = state.polled_upto.max(upto);
+        state.polled_generation = state.line_generation;
+        let whole = drained > 0
+            && drained <= budget.bytes as u64
+            && budget.lines.is_none_or(|max| lines <= max as u64);
+        if !whole {
+            return;
+        }
+        state.read_upto = upto;
+        state.backlog.retain(|line| line.end > upto);
+        state.backlog_bytes = state.backlog.iter().map(|line| line.bytes.len()).sum();
+        state.pending.drop_read(upto);
+        if state.pending.is_empty() {
+            state.first_event_at = None;
+            state.retry_at = None;
+        }
+    }
+
+    /// Under the thread-queue lock, after `mark_read`: whether the notification this watch
+    /// queued holds only lines a poll already showed, so it can be withdrawn (P3-2).
+    pub(crate) fn forget_read_queued(&self) -> bool {
+        let mut state = self.lock();
+        let read = state
+            .queued
+            .as_ref()
+            .is_some_and(|(lines, _)| lines.last_end <= state.read_upto);
+        if read {
+            state.queued = None;
+        }
+        read
     }
 }
 
@@ -421,6 +806,7 @@ struct RenderInput<'a> {
     number: usize,
     exited: bool,
     last: bool,
+    unchecked: usize,
 }
 
 /// The notification body; program output stays inside the untrusted boundary (R6.6, R6.11).
@@ -433,6 +819,7 @@ fn render(input: &RenderInput<'_>, boundary: &UntrustedBoundary) -> String {
         number,
         exited,
         last,
+        unchecked,
     } = input;
     let count = lines.total;
     let noun = if count == 1 { "line" } else { "lines" };
@@ -443,7 +830,7 @@ fn render(input: &RenderInput<'_>, boundary: &UntrustedBoundary) -> String {
     };
     let mut text = vec![
         format!(
-            "Background terminal session {id} printed {count} new {noun} matching the output watch \"{}\" (notification {number} of at most {OUTPUT_WATCH_MAX_NOTIFICATIONS}){state}",
+            "Background terminal session {id} printed {count} new {noun}{OUTPUT_WATCH_HEADLINE_MARK}{}\" (notification {number} of at most {OUTPUT_WATCH_MAX_NOTIFICATIONS}){state}",
             escape_tags(pattern)
         ),
         format!(
@@ -468,12 +855,27 @@ fn render(input: &RenderInput<'_>, boundary: &UntrustedBoundary) -> String {
             if unshown == 1 { "line is" } else { "lines are" }
         ));
     }
+    if *unchecked > 0 {
+        text.push(format!(
+            "{unchecked} output {} not checked against the pattern because the process printed faster than the watch could match; write_stdin with session_id {id} returns the output you have not read yet.",
+            if *unchecked == 1 { "line was" } else { "lines were" }
+        ));
+    }
     if *last && !*exited {
         text.push(format!(
             "This was the last notification of this output watch; call write_stdin with session_id {id} and notify_on_output to watch again. The exit is still reported."
         ));
     }
     text.join("\n")
+}
+
+/// Whether `text`, the body of a background terminal notification, is an output watch
+/// notification rather than an exit notification (P3-3). Only the first line, which Codex
+/// writes, is read.
+pub(crate) fn is_output_watch_text(text: &str) -> bool {
+    text.lines()
+        .find(|line| line.starts_with("Background terminal session "))
+        .is_some_and(|line| line.contains(OUTPUT_WATCH_HEADLINE_MARK))
 }
 
 /// Text of one output line as the watch matches it: ANSI escape sequences and other control
@@ -519,8 +921,8 @@ fn clean_line(raw: &[u8]) -> String {
     out
 }
 
-/// Turns the events of `watch` into notifications until the watch stops or the process exits.
-/// The exit itself delivers the final batch (`ExitWatch::report`).
+/// Matches the lines of `watch` and turns its events into notifications until the watch
+/// stops or the process exits. The exit itself delivers the final batch (`ExitWatch::report`).
 pub(crate) fn spawn_delivery(
     watch: Arc<OutputWatch>,
     session: &Arc<Session>,
@@ -532,15 +934,18 @@ pub(crate) fn spawn_delivery(
             let notified = watch.wake.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            match watch.next_delivery() {
+            let now = Instant::now();
+            match watch.next_delivery(now) {
                 NextDelivery::Stopped => return,
+                // Not cancelled by the exit: the lines it takes must reach the final batch.
+                NextDelivery::Match => watch.match_waiting_lines(/*final_batch*/ false).await,
                 NextDelivery::Idle => {
                     tokio::select! {
                         () = &mut notified => {}
                         () = exit_token.cancelled() => return,
                     }
                 }
-                NextDelivery::At(at) if at > Instant::now() => {
+                NextDelivery::At(at) if at > now => {
                     tokio::select! {
                         () = tokio::time::sleep_until(at) => {}
                         () = &mut notified => {}
@@ -555,7 +960,7 @@ pub(crate) fn spawn_delivery(
                         .deliver_output_watch_notification(&watch, /*exited*/ false)
                         .await;
                     // Nothing was due (the interval holds the batch back): wait for news.
-                    if matches!(watch.next_delivery(), NextDelivery::At(at) if at <= Instant::now())
+                    if matches!(watch.next_delivery(Instant::now()), NextDelivery::At(at) if at <= Instant::now())
                     {
                         tokio::select! {
                             () = &mut notified => {}

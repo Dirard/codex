@@ -34,6 +34,7 @@ fn pending(process_id: i32, command: &str, report: ExitReport) -> PendingExitNot
         process_id,
         command: command.to_string(),
         report,
+        watch_reported: false,
     }
 }
 
@@ -68,7 +69,7 @@ fn delivers_once_whether_exit_or_arming_comes_first() {
 fn observed_exit_and_unarmed_exit_never_deliver() {
     let notifier1 = notifier(1000, "make");
     assert!(notifier1.arm().is_none());
-    assert_eq!(notifier1.observe(), None);
+    assert_eq!(notifier1.observe(), Vec::<u64>::new());
     assert!(!notifier1.is_pending());
     assert!(notifier1.on_exit(report(exited(0), b"")).is_none());
 
@@ -85,7 +86,65 @@ fn observing_a_delivered_notification_returns_its_key() {
     notifier.arm();
     let pending = notifier.on_exit(report(exited(0), b"")).expect("delivers");
     notifier.finish_delivery();
-    assert_eq!(notifier.observe(), Some(pending.key));
+    assert_eq!(notifier.observe(), vec![pending.key]);
+}
+
+/// Review 2026-10-27 P3-1: a poll after the exit also withdraws the final batch of the output
+/// watch that went to the queue right before the exit notification.
+#[test]
+fn observing_after_the_exit_returns_the_final_watch_batch_too() {
+    let notifier = notifier(1000, "make");
+    notifier.arm();
+    let pending = notifier.on_exit(report(exited(2), b"")).expect("delivers");
+    notifier.note_final_watch_batch(77);
+    notifier.finish_delivery();
+    assert_eq!(notifier.observe(), vec![pending.key, 77]);
+}
+
+/// Review 2026-10-27 P2-3: `notify_on_exit` is waited for until the exit; an output watch alone
+/// only while it is fresh, and a delivery in flight always.
+#[test]
+fn a_watch_alone_is_awaited_only_while_it_is_fresh() {
+    let now = Instant::now();
+    let quiet = now + OUTPUT_WATCH_QUIET_RELEASE + Duration::from_secs(1);
+    let watch = OutputWatch::new(
+        1000,
+        "npm run dev".to_string(),
+        OutputPattern::parse("ready").expect("valid"),
+    );
+    let watched = ExitNotifier::with_request(
+        1000,
+        "npm run dev".to_string(),
+        now,
+        /*requested*/ true,
+        /*exit_requested*/ false,
+    );
+    assert!(!watched.is_awaited(now), "not armed yet");
+    watched.set_output_watch(Some(Arc::clone(&watch)));
+    watched.arm();
+    assert!(watched.is_awaited(now));
+    assert!(
+        !watched.is_awaited(quiet),
+        "a quiet watch is not waited for"
+    );
+    assert!(watched.is_pending(), "its exit is still reported");
+    watch.stop();
+    assert!(
+        !watched.is_awaited(now),
+        "a stopped watch is not waited for"
+    );
+
+    let exit = notifier(1001, "make");
+    exit.arm();
+    assert!(exit.is_awaited(quiet), "notify_on_exit waits for the exit");
+
+    let pending = watched
+        .on_exit(report(exited(0), b""))
+        .expect("the armed exit is reported");
+    assert!(watched.is_awaited(quiet), "a delivery in flight");
+    watched.finish_delivery();
+    assert!(!watched.is_awaited(now));
+    assert_eq!(pending.process_id, 1000);
 }
 
 #[test]

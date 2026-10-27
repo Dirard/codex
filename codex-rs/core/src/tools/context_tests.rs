@@ -2,6 +2,7 @@ use super::*;
 use crate::context_manager::ContextManager;
 use crate::tools::registry::AnyToolResult;
 use crate::unified_exec::ArmedNotifications;
+use crate::unified_exec::OutputWatchRefusal;
 use crate::unified_exec::OutputWatchState;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::ImageReference;
@@ -927,7 +928,7 @@ fn exec_command_output_reports_the_output_watch() {
         Some(1000),
         ArmedNotifications {
             exit: false,
-            output_watch: OutputWatchState::NotStarted,
+            output_watch: OutputWatchState::NotStarted(OutputWatchRefusal::Limit),
         },
     );
     let text = refused.response_text();
@@ -936,6 +937,28 @@ fn exec_command_output_reports_the_output_watch() {
         "{text}"
     );
     assert!(!text.contains(EXIT_NOTIFICATION_ARMED_LINE), "{text}");
+
+    // P3-6: a watch that cannot start says why instead of saying nothing.
+    for (refusal, reason) in [
+        (
+            OutputWatchRefusal::NoNotifications,
+            "Output watch: not started (this session started before background notifications were enabled;",
+        ),
+        (
+            OutputWatchRefusal::Exited,
+            "Output watch: not started (the process exited;",
+        ),
+    ] {
+        let text = armed_output(
+            Some(1000),
+            ArmedNotifications {
+                exit: false,
+                output_watch: OutputWatchState::NotStarted(refusal),
+            },
+        )
+        .response_text();
+        assert!(text.contains(reason), "{text}");
+    }
 
     // An exited process has no session, so nothing is promised.
     let exited = armed_output(

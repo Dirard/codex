@@ -126,14 +126,6 @@ impl Session {
             .requeue_lost_wake_input(input, start_options)
             .await;
     }
-
-    /// Fork (H3): only a wake that still owns its turn reservation starts its follow-up
-    /// watcher, right before the turn.
-    pub(crate) fn fork_start_followup_watcher(&self, watcher: Option<FollowupCompletionWatcher>) {
-        if let Some(watcher) = watcher {
-            watcher.start();
-        }
-    }
 }
 
 /// Fork (B4): the agent status that `send_event` publishes for `msg` after the parent's mail.

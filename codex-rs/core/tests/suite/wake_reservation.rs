@@ -113,12 +113,19 @@ struct SleepingTurn {
     has_stopped: AtomicBool,
     stop: Gate,
     finished: Arc<Notify>,
+    /// Holds the second turn start (the wake's `BeforeTaskRegistration` hooks) at `start`.
+    gate_second_start: AtomicBool,
+    start: Gate,
 }
 
 impl TurnLifecycleContributor for SleepingTurn {
     fn on_turn_start<'a>(&'a self, _input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            self.started.fetch_add(/*val*/ 1, Ordering::SeqCst);
+            let previous = self.started.fetch_add(/*val*/ 1, Ordering::SeqCst);
+            if previous == 1 && self.gate_second_start.load(Ordering::SeqCst) {
+                self.start.entered.notify_one();
+                self.start.release.notified().await;
+            }
         })
     }
 
@@ -298,6 +305,135 @@ async fn interrupt_during_wake_context_construction_keeps_mail_for_the_next_turn
     };
     for text in ["continue", "read the worker update"] {
         // A finishing turn is not idle yet; acceptance proves the previous turn ended.
+        let turn_id = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                match codex
+                    .start_turn_if_idle(TurnInputRequest::user_input(vec![UserInput::Text {
+                        text: text.to_string(),
+                        text_elements: Vec::new(),
+                    }]))
+                    .await?
+                {
+                    StartIfIdleSubmission::Started { turn_id, .. } => {
+                        return Ok::<_, anyhow::Error>(turn_id);
+                    }
+                    StartIfIdleSubmission::NotSubmitted {
+                        reason: NotSubmittedReason::NotIdle,
+                    } => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+                    other => anyhow::bail!("unexpected explicit turn result: {other:?}"),
+                }
+            }
+        })
+        .await??;
+        wait_for_event(
+            codex,
+            |event| matches!(event, EventMsg::TurnComplete(complete) if complete.turn_id == turn_id),
+        )
+        .await;
+        if mail_reached_model() {
+            break;
+        }
+    }
+    assert!(
+        mail_reached_model(),
+        "the mail the interrupted wake took should reach the model in an explicit turn"
+    );
+    codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+/// Review 2026-10-27 P2-2: an interrupt that takes the wake's reservation after its check but
+/// before `start_task` registers the task neither runs the wake against the model nor loses
+/// the mail it took.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupt_during_wake_task_registration_keeps_mail_and_skips_the_model()
+-> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let initial = responses::mount_sse_once(&server, responses::sse_completed("initial")).await;
+    let sleeping_turn = Arc::new(SleepingTurn {
+        gate_second_start: AtomicBool::new(/*v*/ true),
+        ..SleepingTurn::default()
+    });
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.turn_lifecycle_contributor(sleeping_turn.clone());
+    let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .build_with_auto_env(&server)
+        .await?;
+    let codex = &test.codex;
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "wait for the worker".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    sleeping_turn.stop.entered.notified().await;
+    codex
+        .submit(Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                AgentPath::try_from("/root/worker").expect("valid worker path"),
+                AgentPath::root(),
+                Vec::new(),
+                "worker completed".to_string(),
+                /*trigger_turn*/ false,
+            ),
+            start_options: Default::default(),
+        })
+        .await?;
+    codex.submit(Op::RealtimeConversationListVoices).await?;
+    wait_for_event(codex, |event| {
+        matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
+    })
+    .await;
+    sleeping_turn.stop.release.notify_one();
+
+    // The wake passed its reservation check and runs the hooks before task registration.
+    sleeping_turn.start.entered.notified().await;
+    codex.submit(Op::Interrupt).await?;
+    codex.submit(Op::RealtimeConversationListVoices).await?;
+    wait_for_event(codex, |event| {
+        matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
+    })
+    .await;
+    sleeping_turn.start.release.notify_one();
+    sleeping_turn.finished.notified().await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let model_requests = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter(|request| request.url.path().ends_with("/responses"))
+        .count();
+    assert_eq!(
+        model_requests, 1,
+        "the interrupted wake must not call the model"
+    );
+    initial.single_request();
+
+    let mut explicit = Vec::new();
+    for index in 0..4 {
+        explicit.push(
+            responses::mount_sse_once(
+                &server,
+                responses::sse_completed(&format!("explicit-{index}")),
+            )
+            .await,
+        );
+    }
+    let mail = serde_json::json!([{"type": "input_text", "text": "worker completed"}]);
+    let mail_reached_model = || {
+        explicit
+            .iter()
+            .flat_map(responses::ResponseMock::requests)
+            .any(|request| {
+                request
+                    .inputs_of_type("agent_message")
+                    .iter()
+                    .any(|message| message["content"] == mail)
+            })
+    };
+    for text in ["continue", "read the worker update"] {
         let turn_id = tokio::time::timeout(std::time::Duration::from_secs(10), async {
             loop {
                 match codex

@@ -1691,3 +1691,245 @@ async fn wait_agent_returns_on_an_output_notification() -> Result<()> {
     test.codex.submit(Op::CleanBackgroundTerminals).await?;
     Ok(())
 }
+
+/// Review 2026-10-27 P2-1: matching an expensive pattern never runs on the async runtime or
+/// under the output buffer and thread-queue locks. Two watched processes flood 4 KiB lines
+/// that `.{0,255}Z` has to scan in full, and another turn still finishes promptly.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_expensive_output_pattern_does_not_stall_other_turns() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_target_windows!(Ok(()), "uses POSIX shell commands");
+
+    let flood = "sleep 1; for i in $(seq 1 400); do printf '%04096d\\n' $i; done; sleep 60";
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            tool_call(
+                "resp-1",
+                "flood-a",
+                "exec_command",
+                &watch_args(flood, ".{0,255}Z", /*tty*/ false),
+            ),
+            tool_call(
+                "resp-2",
+                "flood-b",
+                "exec_command",
+                &watch_args(flood, ".{0,255}Z", /*tty*/ false),
+            ),
+            message("resp-3", "Both are running."),
+            message("resp-4", "pong"),
+        ],
+    )
+    .await;
+    let test = build(&server, /*exit_notifications*/ true).await?;
+
+    test.submit_turn("start two noisy jobs").await?;
+    // Both processes now print 1.6 MB of lines that the pattern scans to the end.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let started = std::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(60), test.submit_turn("ping")).await??;
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "a turn took {elapsed:?} while the watches matched"
+    );
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(watch_notifications(&requests[3]), Vec::<String>::new());
+
+    test.codex.submit(Op::CleanBackgroundTerminals).await?;
+    Ok(())
+}
+
+/// Review 2026-10-27 P3-1 (R6.9): a poll that shows the exit also withdraws the final batch
+/// of the output watch, so the model gets neither a duplicate line nor a batch "before it
+/// exited" without the exit notification.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn poll_after_exit_withdraws_the_final_watch_batch() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_target_windows!(Ok(()), "uses POSIX shell commands");
+
+    let server = start_mock_server().await;
+    let code = r#"
+const bg = await tools.exec_command({ cmd: "sleep 1; echo 'ERROR dup-77'; exit 2", yield_time_ms: 250, login: false, notify_on_output: "ERROR" });
+await tools.exec_command({ cmd: "sleep 3", yield_time_ms: 10000, login: false });
+const poll = await tools.write_stdin({ session_id: bg.session_id, chars: "", yield_time_ms: 5000 });
+text(JSON.stringify({ watch: bg.output_watch, exit_code: poll.exit_code, output: poll.output }));
+"#;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_custom_tool_call("cell", "exec", code),
+                ev_completed("resp-1"),
+            ]),
+            message("resp-2", "It failed with ERROR dup-77."),
+        ],
+    )
+    .await;
+    let test = code_mode_builder().build(&server).await?;
+
+    test.submit_turn("run, wait and poll in one cell").await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    let cell_output = requests[1].custom_tool_call_output("cell").to_string();
+    assert!(
+        cell_output.contains(r#"\"watch\":\"ERROR\""#),
+        "{cell_output}"
+    );
+    assert!(cell_output.contains(r#"\"exit_code\":2"#), "{cell_output}");
+    assert!(cell_output.contains("ERROR dup-77"), "{cell_output}");
+    assert_eq!(notifications(&requests[1]), Vec::<String>::new());
+    assert_requests_settle(&mock, 2, Duration::from_secs(1)).await;
+    Ok(())
+}
+
+/// Review 2026-10-27 P3-2: a poll of a live watched session that showed a matching line
+/// whole withdraws the watch notification of that line, so the model does not read it twice.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn poll_of_a_watched_session_does_not_repeat_its_lines() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_target_windows!(Ok(()), "uses POSIX shell commands");
+
+    let server = start_mock_server().await;
+    let code = r#"
+const bg = await tools.exec_command({ cmd: "sleep 1; echo 'ERROR once-42'; sleep 60", yield_time_ms: 250, login: false, notify_on_output: "ERROR" });
+const poll = await tools.write_stdin({ session_id: bg.session_id, chars: "", yield_time_ms: 3000 });
+text(JSON.stringify({ watch: bg.output_watch, output: poll.output }));
+"#;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_custom_tool_call("cell", "exec", code),
+                ev_completed("resp-1"),
+            ]),
+            message("resp-2", "It printed ERROR once-42."),
+        ],
+    )
+    .await;
+    let test = code_mode_builder().build(&server).await?;
+
+    test.submit_turn("start and poll in one cell").await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    let cell_output = requests[1].custom_tool_call_output("cell").to_string();
+    assert!(
+        cell_output.contains(r#"\"watch\":\"ERROR\""#),
+        "{cell_output}"
+    );
+    assert!(cell_output.contains("ERROR once-42"), "{cell_output}");
+    assert_eq!(watch_notifications(&requests[1]), Vec::<String>::new());
+    assert_requests_settle(&mock, 2, Duration::from_secs(1)).await;
+
+    test.codex.submit(Op::CleanBackgroundTerminals).await?;
+    Ok(())
+}
+
+/// Review 2026-10-27 P3-4 (R3.3): after the user's interrupt a background exit does not start
+/// a turn, not even through mail that asks for one; the next user turn gets the notification.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_exit_after_an_interrupt_does_not_start_a_turn_for_waiting_mail() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_target_windows!(Ok(()), "uses POSIX shell commands");
+
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            tool_call(
+                "resp-1",
+                "bg-call",
+                "exec_command",
+                &exec_args(
+                    "sleep 3; echo after-interrupt",
+                    /*yield_time_ms*/ 250,
+                    /*notify_on_exit*/ true,
+                ),
+            ),
+            tool_call(
+                "resp-2",
+                "blocking-call",
+                "exec_command",
+                &exec_args(
+                    "sleep 60", /*yield_time_ms*/ 30_000, /*notify_on_exit*/ false,
+                ),
+            ),
+            message("resp-3", "Continuing with the result."),
+        ],
+    )
+    .await;
+    let test = build(&server, /*exit_notifications*/ true).await?;
+
+    test.codex
+        .start_or_steer_turn(codex_core::TurnInputRequest::user_input(vec![
+            codex_protocol::user_input::UserInput::Text {
+                text: "start and get interrupted".to_string(),
+                text_elements: Vec::new(),
+            },
+        ]))
+        .await?;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::ExecCommandBegin(begin) if begin.call_id == "blocking-call"),
+        EVENT_TIMEOUT,
+    )
+    .await;
+    // Mail that asks for a turn arrives while the turn runs and waits in the mailbox.
+    test.codex
+        .submit(Op::InterAgentCommunication {
+            communication: codex_protocol::protocol::InterAgentCommunication::new(
+                codex_protocol::AgentPath::try_from("/root/worker").expect("worker path"),
+                codex_protocol::AgentPath::root(),
+                Vec::new(),
+                "worker finished".to_string(),
+                /*trigger_turn*/ true,
+            ),
+            start_options: Default::default(),
+        })
+        .await?;
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnAborted(_)),
+        EVENT_TIMEOUT,
+    )
+    .await;
+    // The background command exits about three seconds after it started.
+    assert_requests_settle(&mock, 2, Duration::from_secs(4)).await;
+
+    test.submit_turn("what happened?").await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 3);
+    let delivered = notifications(&requests[2]);
+    assert_eq!(delivered.len(), 1, "{delivered:?}");
+    assert!(delivered[0].contains("after-interrupt"), "{}", delivered[0]);
+
+    test.codex.submit(Op::CleanBackgroundTerminals).await?;
+    Ok(())
+}
+
+/// A Code Mode test thread with exit notifications.
+fn code_mode_builder() -> TestCodexBuilder {
+    test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("enable Code Mode");
+            config
+                .features
+                .enable(Feature::ExecExitNotifications)
+                .expect("enable exit notifications");
+        })
+}

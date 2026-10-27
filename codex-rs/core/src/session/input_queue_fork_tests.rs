@@ -644,3 +644,80 @@ async fn lost_wake_input_returns_to_the_front_of_the_thread_queues() {
         )
     );
 }
+
+/// Review 2026-10-27 P3-3: notifications an aborted turn took go back with their queue
+/// metadata: an output watch notification still does not count toward the limits of R3.4
+/// and keeps its merge key, an exit notification keeps the key a poll withdraws it by.
+#[tokio::test]
+async fn requeued_notifications_keep_their_keys_and_limit_class() {
+    let input_queue = InputQueue::new();
+    input_queue
+        .enqueue_background_notification(
+            /*key*/ Some(11),
+            Some(1000),
+            /*wakes*/ true,
+            |_| {
+                background_notification(
+                    "Background terminal session 1000 exited with code 0 after 1.0s.",
+                )
+            },
+        )
+        .await;
+    let watch_text = "Background terminal session 1001 printed 1 new line matching the output watch \"ERROR\" (notification 1 of at most 10); it is still running.";
+    input_queue
+        .offer_output_notification(
+            /*key*/ 7,
+            |_| Some(background_notification(watch_text)),
+        )
+        .await;
+    let (taken, _) = input_queue.drain_mailbox_input_items().await;
+    let active_turn = ActiveTurn::default();
+    input_queue
+        .extend_pending_input_for_turn_state(active_turn.turn_state.as_ref(), taken)
+        .await;
+    input_queue.clear_pending(&active_turn).await;
+
+    // The watch's next events join its returned notification instead of queueing another.
+    let mut queued = None;
+    input_queue
+        .offer_output_notification(/*key*/ 7, |is_queued| {
+            queued = Some(is_queued);
+            None
+        })
+        .await;
+    assert_eq!(queued, Some(true));
+
+    // Only the exit notification counts: 31 more exits still fit.
+    for index in 0..MAX_PENDING_BACKGROUND_NOTIFICATIONS - 1 {
+        let outcome = input_queue
+            .enqueue_background_notification(
+                /*key*/ None,
+                Some(2000 + i32::try_from(index).expect("small index")),
+                /*wakes*/ false,
+                |_| background_notification("exited"),
+            )
+            .await;
+        assert_eq!(outcome, BackgroundNotificationEnqueue::Queued, "{index}");
+    }
+
+    // A poll that shows the exit withdraws the returned exit notification.
+    assert!(input_queue.withdraw_background_notification(11).await);
+
+    // Unknown items fall back to their text: an output watch notification is not counted.
+    let active_turn = ActiveTurn::default();
+    input_queue
+        .extend_pending_input_for_turn_state(
+            active_turn.turn_state.as_ref(),
+            vec![TurnInput::ResponseItem(ResponseItemEnvelope::new(
+                background_notification(&watch_text.replace("1001", "1002")),
+            ))],
+        )
+        .await;
+    input_queue.clear_pending(&active_turn).await;
+    let outcome = input_queue
+        .enqueue_background_notification(/*key*/ None, Some(3000), /*wakes*/ false, |_| {
+            background_notification("exited")
+        })
+        .await;
+    assert_eq!(outcome, BackgroundNotificationEnqueue::Queued);
+}

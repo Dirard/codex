@@ -56,6 +56,8 @@ pub(crate) const DETAILED_PENDING_BACKGROUND_NOTIFICATIONS: usize = 8;
 pub(crate) const MAX_PENDING_BACKGROUND_NOTIFICATIONS: usize = 32;
 /// Fork: the summary line names at most this many dropped session IDs.
 const MAX_LISTED_DROPPED_SESSIONS: usize = 16;
+/// Fork: notifications a turn took whose queue metadata an abort can still restore (P3-3).
+const MAX_REMEMBERED_TAKEN_NOTIFICATIONS: usize = 128;
 
 /// Fork: runs once the model's input took a queued notification (R2.12).
 pub(crate) type SampledCallback = Box<dyn FnOnce() + Send>;
@@ -94,6 +96,43 @@ pub(super) struct BackgroundNotificationQueue {
     dropped: usize,
     dropped_session_ids: Vec<i32>,
     dropped_wakes: bool,
+    /// Queue metadata of notifications a turn took, newest last, so an abort or a lost wake
+    /// returns them with their key and limit class (review 2026-10-27, P3-3).
+    taken: VecDeque<TakenNotification>,
+}
+
+/// Fork: what the queue knew about a notification a turn took.
+struct TakenNotification {
+    fingerprint: u64,
+    counted: bool,
+    key: Option<u64>,
+}
+
+/// Fork: identifies a notification by its content; every rendering carries a fresh nonce.
+fn fingerprint(item: &ResponseItem) -> u64 {
+    use std::hash::Hash;
+    use std::hash::Hasher;
+    let mut hasher = std::hash::DefaultHasher::new();
+    serde_json::to_vec(item)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Fork: whether `item` is an output watch notification; the limits of R3.4 do not count it
+/// (R6.10).
+fn is_output_watch_item(item: &ResponseItem) -> bool {
+    let ResponseItem::Message { content, .. } = item else {
+        return false;
+    };
+    BackgroundTerminalNotification::is_notification_item(item)
+        && content.iter().any(|content| {
+            matches!(
+                content,
+                codex_protocol::models::ContentItem::InputText { text }
+                    if crate::unified_exec::is_output_watch_text(text)
+            )
+        })
 }
 
 struct BackgroundNotificationEntry {
@@ -125,14 +164,24 @@ impl BackgroundNotificationQueue {
     /// Takes every notification and the callbacks to run once the lock is released.
     fn drain(&mut self) -> (Vec<TurnInput>, Vec<SampledCallback>) {
         let mut sampled = Vec::new();
-        let mut items: Vec<TurnInput> = self
-            .items
-            .drain(..)
-            .map(|entry| {
-                sampled.extend(entry.on_sampled);
-                TurnInput::ResponseItem(ResponseItemEnvelope::new(entry.item))
-            })
-            .collect();
+        let entries: Vec<_> = self.items.drain(..).collect();
+        let mut items = Vec::with_capacity(entries.len());
+        for entry in entries {
+            sampled.extend(entry.on_sampled);
+            if entry.key.is_some() || !entry.counted {
+                self.taken.push_back(TakenNotification {
+                    fingerprint: fingerprint(&entry.item),
+                    counted: entry.counted,
+                    key: entry.key,
+                });
+            }
+            items.push(TurnInput::ResponseItem(ResponseItemEnvelope::new(
+                entry.item,
+            )));
+        }
+        while self.taken.len() > MAX_REMEMBERED_TAKEN_NOTIFICATIONS {
+            self.taken.pop_front();
+        }
         if self.dropped > 0 {
             let summary = BackgroundTerminalNotification::new(dropped_summary(
                 self.dropped,
@@ -242,6 +291,26 @@ impl InputQueue {
         changed
     }
 
+    /// Fork: under the queue lock, remove the notification with `key` when `redundant` says
+    /// so; the output watch decides there, so its delivery cannot add lines in between (P3-2).
+    pub(crate) async fn withdraw_background_notification_if(
+        &self,
+        key: u64,
+        redundant: impl FnOnce() -> bool,
+    ) {
+        let withdrawn: Vec<BackgroundNotificationEntry> = {
+            let mut queue = self.background_notifications.lock().await;
+            let Some(position) = queue.items.iter().position(|entry| entry.key == Some(key)) else {
+                return;
+            };
+            if !redundant() {
+                return;
+            }
+            queue.items.remove(position).into_iter().collect()
+        };
+        drop(withdrawn);
+    }
+
     /// Fork: remove a queued notification that a tool response made redundant (R2.10).
     pub(crate) async fn withdraw_background_notification(&self, key: u64) -> bool {
         // Dropping a withdrawn entry drops its release callback: the poll that showed the
@@ -260,7 +329,8 @@ impl InputQueue {
     /// Fork: put notifications that an aborted turn or task took back in front of the
     /// thread queue (R3.7). A background terminal notification no longer wakes the thread;
     /// a workflow notification still asks for a turn, which the user's interrupt or Plan
-    /// mode hold back like any wake (dynamic workflow R7.7).
+    /// mode hold back like any wake (dynamic workflow R7.7). Each keeps the withdrawal or
+    /// merge key and the limit class it had in the queue (R2.10, R6.7, R6.10; P3-3).
     pub(crate) async fn requeue_background_notifications(&self, items: Vec<ResponseItem>) {
         if items.is_empty() {
             return;
@@ -271,11 +341,24 @@ impl InputQueue {
             for item in items.into_iter().rev() {
                 let workflow = WorkflowNotification::is_notification_item(&item);
                 workflow_requeued |= workflow;
+                let print = fingerprint(&item);
+                let taken = queue
+                    .taken
+                    .iter()
+                    .rposition(|taken| taken.fingerprint == print)
+                    .and_then(|position| queue.taken.remove(position));
+                let (counted, key) = match taken {
+                    Some(taken) => (taken.counted, taken.key),
+                    None => (!workflow && !is_output_watch_item(&item), None),
+                };
+                // A newer notification of the same output watch already holds the key.
+                let key =
+                    key.filter(|key| !queue.items.iter().any(|entry| entry.key == Some(*key)));
                 queue.items.push_front(BackgroundNotificationEntry {
                     item,
                     wakes: workflow,
-                    counted: !workflow,
-                    key: None,
+                    counted,
+                    key,
                     on_sampled: None,
                 });
             }

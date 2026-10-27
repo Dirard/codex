@@ -20,6 +20,7 @@ use super::ExecCommandToolOutput;
 use super::McpToolOutput;
 use super::format_output_omission_marker;
 use crate::unified_exec::OUTPUT_WATCH_MAX_ACTIVE;
+use crate::unified_exec::OutputWatchRefusal;
 use crate::unified_exec::OutputWatchState;
 
 /// Header line telling the model that the exit will be reported without polling.
@@ -84,9 +85,15 @@ impl ExecCommandToolOutput {
                 "Output watch: on for lines matching \"{pattern}\" (Codex reports new matching lines while this Codex session is running; do not poll for them)"
             )),
             OutputWatchState::Off => lines.push("Output watch: off".to_string()),
-            OutputWatchState::NotStarted => lines.push(format!(
+            OutputWatchState::NotStarted(OutputWatchRefusal::Limit) => lines.push(format!(
                 "Output watch: not started (at most {OUTPUT_WATCH_MAX_ACTIVE} terminals can watch their output at a time; stop a watch with write_stdin notify_on_output \"\")"
             )),
+            OutputWatchState::NotStarted(OutputWatchRefusal::NoNotifications) => lines.push(
+                "Output watch: not started (this session started before background notifications were enabled; run the command again with exec_command notify_on_output to watch it)".to_string(),
+            ),
+            OutputWatchState::NotStarted(OutputWatchRefusal::Exited) => lines.push(
+                "Output watch: not started (the process exited; call write_stdin with this session_id to read its exit code and remaining output)".to_string(),
+            ),
         }
         lines
     }

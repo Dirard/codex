@@ -1143,6 +1143,10 @@ impl UnifiedExecProcessManager {
                 &process,
                 exit_notifier.as_ref(),
                 request.output_watch,
+                crate::unified_exec::PollBudget::new(
+                    request.max_output_tokens,
+                    &request.truncation,
+                ),
             )
             .await;
         let response = ExecCommandToolOutput {

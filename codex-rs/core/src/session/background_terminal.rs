@@ -61,12 +61,26 @@ impl Session {
             )
             .await;
         exit_notifier.finish_delivery();
-        if wakes && !self.state.lock().await.shutting_down {
-            let session = Arc::clone(self);
-            tokio::spawn(async move {
-                session.maybe_start_turn_for_pending_work().await;
-            });
+        if wakes {
+            self.wake_for_background_notification().await;
         }
+    }
+
+    /// Starts a turn for a waking background notification. The scheduler runs only when the
+    /// notification itself may wake the thread (R3.1, R3.3): after the user's interrupt or in
+    /// Plan mode a background event must not start a turn through other pending work, such
+    /// as mail that asks for a turn (review 2026-10-27, P3-4). A session that is shutting
+    /// down does not wake (R2.5).
+    async fn wake_for_background_notification(self: &Arc<Self>) {
+        if self.state.lock().await.shutting_down
+            || !self.should_wake_on_background_notifications().await
+        {
+            return;
+        }
+        let session = Arc::clone(self);
+        tokio::spawn(async move {
+            session.maybe_start_turn_for_pending_work().await;
+        });
     }
 
     /// Deliver the due events of an output watch (UC6, R6.7, R6.10).
@@ -75,12 +89,12 @@ impl Session {
     /// otherwise they become a new notification once the interval allows it. Like an exit
     /// notification, a new one starts a turn for an idle thread; a session that is shutting
     /// down queues it without a wake, and the shutdown records it (R2.5). `exited` takes the
-    /// final batch of a process that exited (R6.9).
+    /// final batch of a process that exited (R6.9). Returns whether the queue changed.
     pub(crate) async fn deliver_output_watch_notification(
         self: &Arc<Self>,
         watch: &OutputWatch,
         exited: bool,
-    ) {
+    ) -> bool {
         let now = tokio::time::Instant::now();
         let boundary = UntrustedBoundary::random();
         let changed = self
@@ -93,12 +107,10 @@ impl Session {
                     })
             })
             .await;
-        if changed && !self.state.lock().await.shutting_down {
-            let session = Arc::clone(self);
-            tokio::spawn(async move {
-                session.maybe_start_turn_for_pending_work().await;
-            });
+        if changed {
+            self.wake_for_background_notification().await;
         }
+        changed
     }
 
     fn release_when_sampled(
@@ -125,6 +137,8 @@ impl Session {
     /// (`specs/dynamic-workflow-2026-10-25.md`, UC7, R7.2): a running turn samples it in its
     /// next model request, an idle thread starts a turn, and a turn that already decided to
     /// finish leaves it queued for the turn started after it. A shutting-down session drops it.
+    /// Like a terminal notification it does not start a turn after the user's interrupt or in
+    /// Plan mode, not even through other pending work (review 2026-10-27, P3-4).
     pub(crate) async fn deliver_workflow_notification(self: &Arc<Self>, body: String) {
         if self.state.lock().await.shutting_down {
             return;
@@ -134,7 +148,9 @@ impl Session {
                 crate::context::WorkflowNotification::new(body),
             ))
             .await;
-        self.maybe_start_turn_for_pending_work().await;
+        if self.should_wake_on_background_notifications().await {
+            self.maybe_start_turn_for_pending_work().await;
+        }
     }
 
     /// Whether this thread still expects or holds a background terminal notification.

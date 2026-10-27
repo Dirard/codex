@@ -220,14 +220,19 @@ pub const DEFAULT_EXPLORER_PROFILE_MAX_RESULT_TOKENS: usize = 2_000;
 pub struct ExecExitNotificationsConfig {
     /// How long `codex exec` waits for background terminals before it gives up.
     pub exec_wait_timeout_ms: u64,
+    /// How long an output watch alone is waited for after its last matching line (review
+    /// 2026-10-27, P2-3).
+    pub output_watch_quiet_ms: u64,
 }
 
 pub const DEFAULT_EXEC_WAIT_TIMEOUT_MS: u64 = 30 * 60 * 1000;
+pub const DEFAULT_OUTPUT_WATCH_QUIET_MS: u64 = 60 * 1000;
 
 impl Default for ExecExitNotificationsConfig {
     fn default() -> Self {
         Self {
             exec_wait_timeout_ms: DEFAULT_EXEC_WAIT_TIMEOUT_MS,
+            output_watch_quiet_ms: DEFAULT_OUTPUT_WATCH_QUIET_MS,
         }
     }
 }
@@ -244,6 +249,9 @@ impl ExecExitNotificationsConfig {
             exec_wait_timeout_ms: configured
                 .and_then(|config| config.exec_wait_timeout_ms)
                 .unwrap_or(DEFAULT_EXEC_WAIT_TIMEOUT_MS),
+            output_watch_quiet_ms: configured
+                .and_then(|config| config.output_watch_quiet_ms)
+                .unwrap_or(DEFAULT_OUTPUT_WATCH_QUIET_MS),
         }
     }
 }
