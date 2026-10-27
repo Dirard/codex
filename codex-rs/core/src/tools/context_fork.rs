@@ -29,7 +29,7 @@ pub(super) const EXIT_NOTIFICATION_ARMED_LINE: &str = "Exit notification: on (Co
 /// as after a match (live recheck 2 R3, review of the fixes 2, N-2).
 pub(super) const OUTPUT_WATCH_AFTER_MATCH_NOTE: &str = ". This process already matched an output watch, so codex exec and wait_agent wait for this one only while matching lines keep coming, not for a first match; set notify_on_exit to wait for the process to exit.";
 /// An empty `notify_on_output` of `write_stdin` changes nothing (review of the fixes 2, N-1).
-pub(super) const OUTPUT_WATCH_UNCHANGED_LINE: &str = "Output watch: unchanged (an empty notify_on_output changes nothing; pass stop_output_watch: true to stop the watch)";
+pub(super) const OUTPUT_WATCH_UNCHANGED_LINE: &str = "Output watch: unchanged (an empty notify_on_output changes nothing; stop the watch with stop_output_watch: true only once what it reports is no longer needed)";
 /// Added to the output watch line when the pattern was too large with Unicode classes and is
 /// matched with ASCII classes (review of the fixes, P3-4).
 pub(super) const OUTPUT_WATCH_ASCII_NOTE: &str = ". The pattern was too large with Unicode classes, so it is matched with ASCII classes: \\w, \\d, \\s, \\b and (?i) see ASCII letters and digits only, and . matches one byte.";
@@ -138,6 +138,19 @@ impl ExecCommandToolOutput {
         match &self.armed_notifications.output_watch {
             state if self.process_id.is_some() => state.started().map(str::to_string),
             _ => None,
+        }
+    }
+
+    /// The status lines of a running session for the Code Mode result, the same lines the text
+    /// output carries in its header (live recheck 4 R12): a model that calls `exec_command` and
+    /// `write_stdin` from Code Mode reads the exit notification, the output watch, a watch that
+    /// did not start and why, and what an empty pattern or a watch after a match means. Empty
+    /// without exit notifications, so the result stays as before.
+    pub(super) fn fork_code_mode_notes(&self) -> Vec<String> {
+        if self.process_id.is_some() {
+            self.fork_notification_lines()
+        } else {
+            Vec::new()
         }
     }
 

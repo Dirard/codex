@@ -128,7 +128,7 @@ pub(crate) fn create_exec_command_tool_with_environment_id(
             Some(vec!["cmd".to_string()]),
             Some(false.into()),
         ),
-        output_schema: Some(unified_exec_output_schema().into()),
+        output_schema: Some(fork::unified_exec_output_schema(options.exit_notifications).into()),
     })
 }
 
@@ -191,7 +191,7 @@ pub fn create_write_stdin_tool(exit_notifications: bool) -> ToolSpec {
             Some(vec!["session_id".to_string()]),
             Some(false.into()),
         ),
-        output_schema: Some(unified_exec_output_schema().into()),
+        output_schema: Some(fork::unified_exec_output_schema(exit_notifications).into()),
     })
 }
 
@@ -379,6 +379,9 @@ fn windows_shell_guidance() -> &'static str {
 - Before any recursive delete or move on Windows, verify the resolved absolute target paths stay within the intended workspace or explicitly named target directory. Never issue a recursive delete or move against a computed path if the final target has not been checked.
 - When using `Start-Process` to launch a background helper or service, pass `-WindowStyle Hidden` unless the user explicitly asked for a visible interactive window. Use visible windows only for interactive tools the user needs to see or control."#
 }
+
+#[path = "shell_spec_fork.rs"]
+mod fork;
 
 #[cfg(test)]
 #[path = "shell_spec_tests.rs"]

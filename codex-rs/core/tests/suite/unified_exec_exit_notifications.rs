@@ -2377,7 +2377,7 @@ async fn write_stdin_says_what_its_notification_changes_left() -> Result<()> {
     let empty = output("empty-call");
     assert!(
         empty.contains(
-            "Output watch: unchanged (an empty notify_on_output changes nothing; pass stop_output_watch: true to stop the watch)"
+            "Output watch: unchanged (an empty notify_on_output changes nothing; stop the watch with stop_output_watch: true only once what it reports is no longer needed)"
         ),
         "{empty}"
     );
@@ -2440,6 +2440,130 @@ async fn a_watch_after_a_match_says_how_long_it_is_awaited() -> Result<()> {
             "This process already matched an output watch, so codex exec and wait_agent wait for this one only while matching lines keep coming, not for a first match"
         ),
         "{rearmed}"
+    );
+    test.codex.submit(Op::CleanBackgroundTerminals).await?;
+    Ok(())
+}
+
+/// Live recheck 4 R12: a model that calls `exec_command` and `write_stdin` from Code Mode reads
+/// the status lines of the text output in `notes`: what an empty pattern leaves (N-1), that a
+/// watch after a match is awaited only while lines keep matching (N-2), and why a watch did not
+/// start. The declaration the model reads describes the field.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_results_carry_the_status_lines() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_target_windows!(Ok(()), "uses POSIX shell commands");
+
+    let server = start_mock_server().await;
+    let code = r#"
+const bg = await tools.exec_command({ cmd: "sleep 1; echo 'server ready'; sleep 60", yield_time_ms: 250, login: false, tty: true, notify_on_output: "ready" });
+await tools.exec_command({ cmd: "sleep 3", yield_time_ms: 10000, login: false });
+const empty = await tools.write_stdin({ session_id: bg.session_id, chars: " ", yield_time_ms: 250, notify_on_output: "" });
+const emptyOff = await tools.write_stdin({ session_id: bg.session_id, chars: " ", yield_time_ms: 250, notify_on_exit: false, notify_on_output: "" });
+const rearmed = await tools.write_stdin({ session_id: bg.session_id, chars: " ", yield_time_ms: 250, notify_on_output: "(?i)error" });
+const awaited = await tools.write_stdin({ session_id: bg.session_id, chars: " ", yield_time_ms: 250, notify_on_output: "(?i)fail", notify_on_exit: true });
+const has = (notes, text) => (notes ?? []).some((note) => note.includes(text));
+for (let i = 0; i < 7; i++) {
+  await tools.exec_command({ cmd: "sleep 60", yield_time_ms: 250, login: false, notify_on_output: "never" });
+}
+const refused = await tools.exec_command({ cmd: "sleep 60", yield_time_ms: 250, login: false, notify_on_output: "never" });
+const plain = await tools.exec_command({ cmd: "sleep 60", yield_time_ms: 250, login: false });
+text(JSON.stringify({ started: bg.notes, empty: empty.notes, rearmed: rearmed.notes, refused: refused.notes, refused_watch: refused.output_watch ?? null, plain: plain.notes ?? null, awaited_watch_on: has(awaited.notes, 'matching "(?i)fail"'), awaited_after_match: has(awaited.notes, "already matched"), awaited_exit_hint: has(awaited.notes, "set notify_on_exit"), empty_off_exit: has(emptyOff.notes, "Exit notification: off (codex exec and wait_agent no longer wait for this process to exit; its output watch still reports matching lines and the exit)"), empty_off_watch: has(emptyOff.notes, "Output watch: unchanged (an empty notify_on_output changes nothing; stop the watch with stop_output_watch: true only once what it reports is no longer needed)") }));
+"#;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_custom_tool_call("cell", "exec", code),
+                ev_completed("resp-1"),
+            ]),
+            message("resp-2", "Read the notes."),
+        ],
+    )
+    .await;
+    let test = code_mode_builder().build(&server).await?;
+
+    test.submit_turn("start servers and change their watches in one cell")
+        .await?;
+
+    let requests = mock.requests();
+    let declaration = requests[0].body_json().to_string();
+    assert!(
+        declaration.contains("notes?:")
+            && declaration.contains("Status of this running session's notifications"),
+        "the declaration describes notes: {declaration}"
+    );
+    let cell_output = requests[1].custom_tool_call_output("cell").to_string();
+    for expected in [
+        "Output watch: on for lines matching \\\\\\\"ready\\\\\\\"",
+        "Output watch: unchanged (an empty notify_on_output changes nothing; stop the watch with stop_output_watch: true only once what it reports is no longer needed)",
+        "This process already matched an output watch, so codex exec and wait_agent wait for this one only while matching lines keep coming, not for a first match; set notify_on_exit to wait for the process to exit.",
+        "Output watch: not started (at most 8 terminals can watch their output at a time; stop a watch with write_stdin stop_output_watch true)",
+        r#"\"refused_watch\":null"#,
+        r#"\"plain\":null"#,
+        // Review of the fixes 3, T-2: with notify_on_exit on, the process is awaited until it
+        // exits, so the note about the watch's own window, and its advice, are left out.
+        r#"\"awaited_watch_on\":true"#,
+        r#"\"awaited_after_match\":false"#,
+        r#"\"awaited_exit_hint\":false"#,
+        // The R5 pattern: turning the exit off with an empty pattern keeps the watch, and both
+        // lines say so.
+        r#"\"empty_off_exit\":true"#,
+        r#"\"empty_off_watch\":true"#,
+    ] {
+        assert!(cell_output.contains(expected), "{expected}\n{cell_output}");
+    }
+    test.codex.submit(Op::CleanBackgroundTerminals).await?;
+    Ok(())
+}
+
+/// Live recheck 4 R12: without exit notifications the Code Mode result and its declaration
+/// stay as before: no `notes`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_results_without_the_feature_have_no_notes() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_target_windows!(Ok(()), "uses POSIX shell commands");
+
+    let server = start_mock_server().await;
+    let code = r#"
+const bg = await tools.exec_command({ cmd: "sleep 60", yield_time_ms: 250, login: false });
+text(JSON.stringify({ keys: Object.keys(bg).sort() }));
+"#;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_custom_tool_call("cell", "exec", code),
+                ev_completed("resp-1"),
+            ]),
+            message("resp-2", "Started."),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("enable Code Mode");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("start a server in a cell").await?;
+
+    let requests = mock.requests();
+    let declaration = requests[0].body_json().to_string();
+    assert!(!declaration.contains("notes?:"), "{declaration}");
+    let cell_output = requests[1].custom_tool_call_output("cell").to_string();
+    assert!(
+        cell_output.contains(r#"\"session_id\""#) && !cell_output.contains("notes"),
+        "{cell_output}"
     );
     test.codex.submit(Op::CleanBackgroundTerminals).await?;
     Ok(())

@@ -1174,6 +1174,17 @@ impl super::UnifiedExecContext {
             _ => {}
         }
         self.session.fork_sync_terminal_journal().await;
+        // With notify_on_exit on, the process is awaited until it exits, so how long its new
+        // watch alone would be awaited after a match does not matter (review of the fixes 3,
+        // T-2): the response leaves that note out.
+        let output_watch = match output_watch {
+            OutputWatchState::OnAfterMatch(pattern)
+                if exit_notifier.is_some_and(|notifier| notifier.exit_requested()) =>
+            {
+                OutputWatchState::On(pattern)
+            }
+            output_watch => output_watch,
+        };
         // The answer is the same whatever the order of the changes: once the model turned
         // `notify_on_exit` off, only an output watch that is on reports the exit (P3-5).
         let (exit, exit_off) = match exit_notifier {

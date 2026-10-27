@@ -521,6 +521,9 @@ impl ToolOutput for ExecCommandToolOutput {
             /// Fork: the pattern of the output watch this call started (UC6).
             #[serde(skip_serializing_if = "Option::is_none")]
             output_watch: Option<String>,
+            /// Fork: the status lines of the text output (live recheck 4 R12).
+            #[serde(skip_serializing_if = "Vec::is_empty")]
+            notes: Vec<String>,
             output: String,
         }
 
@@ -532,6 +535,7 @@ impl ToolOutput for ExecCommandToolOutput {
             original_token_count: self.original_token_count,
             exit_notification: self.process_id.is_some() && self.armed_notifications.exit,
             output_watch: self.fork_code_mode_output_watch(),
+            notes: self.fork_code_mode_notes(),
             output: match self.max_output_tokens {
                 Some(max_tokens) => self.truncated_output(max_tokens),
                 None => String::from_utf8_lossy(&self.raw_output).to_string(),
