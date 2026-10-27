@@ -473,13 +473,28 @@ fn mail_block(request: &ResponsesRequest) -> String {
     text[start..end].to_owned()
 }
 
-/// The `apply:` command of a worktree block.
+/// The `fallback:` git command of a worktree block, which names `apply_agent_worktree` first
+/// (R4.10).
 fn apply_line(block: &str) -> String {
-    let commands = block
+    let tools = block
         .lines()
         .filter_map(|line| line.strip_prefix("apply: "))
         .collect::<Vec<_>>();
-    assert_eq!(commands.len(), 1, "one apply command in {block}");
+    assert_eq!(tools.len(), 1, "one apply line in {block}");
+    assert!(
+        tools[0].starts_with("apply_agent_worktree {\"target\":\"/root/"),
+        "{block}"
+    );
+    assert_eq!(
+        block.lines().nth(1).map(|line| line.starts_with("apply: ")),
+        Some(true),
+        "{block}"
+    );
+    let commands = block
+        .lines()
+        .filter_map(|line| line.strip_prefix("fallback: "))
+        .collect::<Vec<_>>();
+    assert_eq!(commands.len(), 1, "one fallback command in {block}");
     commands[0].to_owned()
 }
 
@@ -753,7 +768,14 @@ async fn isolated_child_works_on_a_snapshot_and_the_parent_applies_its_branch() 
         "git diff-tree -p --binary {base} {branch} \
          | git -C \"$(git rev-parse --show-toplevel)\" apply --whitespace=nowarn"
     );
-    assert!(block.contains(&format!("apply: {apply}\n")), "{block}");
+    // R4.10: the block names the tool first; the git command is the fallback.
+    assert!(block.contains(&format!("fallback: {apply}\n")), "{block}");
+    assert!(
+        block.starts_with(
+            "<agent_worktree>\napply: apply_agent_worktree {\"target\":\"/root/worker\"} "
+        ),
+        "{block}"
+    );
 
     // R7.1, R7.2: the parent applies the command in workspace-write without /tmp.
     let commits_before = git(&parent, &["rev-list", "--count", "--all"]);
@@ -1333,7 +1355,8 @@ async fn a_child_cannot_forge_block_lines_with_file_names() -> Result<()> {
                 "changes: ",
                 "files: ",
                 "checkout: ",
-                "apply: "
+                "apply: ",
+                "fallback: "
             ]
             .iter()
             .any(|key| line.starts_with(key)),

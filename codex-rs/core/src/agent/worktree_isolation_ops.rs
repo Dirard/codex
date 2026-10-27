@@ -662,7 +662,7 @@ pub(crate) fn apply_refusal(
         .collect::<Vec<_>>()
         .join("; ");
     format!(
-        "cannot apply agent {target}: {reason} {paths}. Nothing was written. Resolve it yourself: read the agent's version with `git show {branch}:<path>` and edit your files, or run the command from its <agent_worktree> block and fix what it rejects.\napply: {command}",
+        "cannot apply agent {target}: {reason} {paths}. Nothing was written. Resolve it yourself: read the agent's version with `git show {branch}:<path>` and edit your files, or run this command and fix what it rejects.\napply: {command}",
         target = block_text(target),
         reason = block_text(reason),
         paths = if paths.is_empty() {

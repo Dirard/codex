@@ -1224,8 +1224,11 @@ pub(crate) fn apply_command(base_sha: &str, branch: &str) -> String {
     )
 }
 
+/// The tool that applies an agent branch, named first by the block (R4.10).
+const APPLY_TOOL: &str = "apply_agent_worktree";
+
 /// Renders the `<agent_worktree>` block appended to the completion message (R4.4, R4.5,
-/// R4.7, R7.2): the step "append the worktree block to the completion message".
+/// R4.7, R4.10, R7.2): the step "append the worktree block to the completion message".
 ///
 /// The child chooses its file names, so paths, the checkout and failure reasons are escaped:
 /// no value can add a line, close the block or split an entry of the `files` list.
@@ -1244,6 +1247,13 @@ pub(crate) fn render_worktree_block(
             None
         }
     };
+    // R4.10: the tool comes first; it checks, approves and hooks the write like apply_patch.
+    if changes.is_some() {
+        lines.push(format!(
+            "apply: {APPLY_TOOL} {} (the fallback command is only for binary files, executables and symlinks that it refuses)",
+            serde_json::json!({ "target": binding.agent_path.as_str() })
+        ));
+    }
     match &changes {
         Some(_) => lines.push(format!("branch: {}", metadata.branch)),
         None => lines.push("branch: none".to_string()),
@@ -1286,7 +1296,7 @@ pub(crate) fn render_worktree_block(
     ));
     if changes.is_some() {
         lines.push(format!(
-            "apply: {}",
+            "fallback: {}",
             apply_command(&metadata.base_sha, &metadata.branch)
         ));
     }

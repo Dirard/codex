@@ -515,14 +515,15 @@ fn spawn_agent_tool_v2_exposes_isolation_only_when_enabled() {
             .and_then(|schema| serde_json::to_value(schema).ok())
             .expect("isolation schema");
         assert_eq!(isolation["enum"], serde_json::json!(["none", "worktree"]));
-        // The description shows the same command the completion block carries (R7.2).
-        let apply = crate::agent::worktree_isolation::apply_command("<base>", "<branch>");
+        // R4.10, R7.2: the description names the tool first and the block's git command only
+        // as the fallback for what the tool refuses.
+        let description = isolation["description"].as_str().unwrap_or_default();
+        let tool = description.find("apply_agent_worktree");
+        let fallback = description.find("`fallback` git command");
         assert!(
-            isolation["description"]
-                .as_str()
-                .is_some_and(|description| description.contains(&apply)
-                    && description.contains("apply_agent_worktree")),
+            tool.is_some() && fallback.is_some() && tool < fallback,
             "{isolation}"
         );
+        assert!(!description.contains("git diff-tree"), "{isolation}");
     }
 }

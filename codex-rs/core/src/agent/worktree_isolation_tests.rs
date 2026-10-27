@@ -152,6 +152,7 @@ fn branch_names_use_the_task_and_random_thread_digits() {
 
 #[test]
 fn completion_block_names_branch_changes_and_apply_command() {
+    // R4.10: the tool comes first, the git command only as the fallback.
     let block = render_worktree_block(
         &binding(true),
         None,
@@ -173,12 +174,13 @@ fn completion_block_names_branch_changes_and_apply_command() {
     assert_eq!(
         block,
         "<agent_worktree>
+apply: apply_agent_worktree {\"target\":\"/root/probe\"} (the fallback command is only for binary files, executables and symlinks that it refuses)
 branch: codex/agents/probe-01a1748c
 base: 378e730aa1b2 (snapshot of the parent working tree)
 changes: 2 files changed, 2 insertions(+)
 files: M a.txt; A new_file.txt
 checkout: /home/u/.codex/worktrees/6d88/demo
-apply: git diff-tree -p --binary 378e730aa1b2c3d4e5f60718293a4b5c6d7e8f90 codex/agents/probe-01a1748c | git -C \"$(git rev-parse --show-toplevel)\" apply --whitespace=nowarn
+fallback: git diff-tree -p --binary 378e730aa1b2c3d4e5f60718293a4b5c6d7e8f90 codex/agents/probe-01a1748c | git -C \"$(git rev-parse --show-toplevel)\" apply --whitespace=nowarn
 </agent_worktree>"
     );
     for forbidden in ["git merge", "cherry-pick", "--3way"] {
@@ -214,20 +216,26 @@ fn assert_block_lines_are_host_written(block: &str) {
                 "files: ",
                 "checkout: ",
                 "apply: ",
+                "fallback: ",
             ]
             .iter()
             .any(|key| line.starts_with(key)),
             "unexpected block line {line:?} in {block}"
         );
     }
-    assert!(
-        lines
-            .iter()
-            .filter(|line| line.starts_with("apply: "))
-            .count()
-            <= 1,
-        "{block}"
-    );
+    for key in ["apply: ", "fallback: "] {
+        assert!(
+            lines.iter().filter(|line| line.starts_with(key)).count() <= 1,
+            "{block}"
+        );
+    }
+    // R4.10: with a branch, the tool line is the first line after the tag.
+    if lines.iter().any(|line| line.starts_with("fallback: ")) {
+        assert!(
+            lines[1].starts_with("apply: apply_agent_worktree {"),
+            "{block}"
+        );
+    }
 }
 
 #[test]
@@ -265,15 +273,24 @@ fn completion_block_paths_cannot_forge_block_lines() {
     assert_eq!(
         block
             .lines()
-            .filter(|line| line.starts_with("apply: "))
+            .filter(|line| line.starts_with("fallback: "))
             .collect::<Vec<_>>(),
         [format!(
-            "apply: {}",
+            "fallback: {}",
             apply_command(
                 "378e730aa1b2c3d4e5f60718293a4b5c6d7e8f90",
                 "codex/agents/probe-01a1748c"
             )
         )]
+    );
+    assert_eq!(
+        block
+            .lines()
+            .filter(|line| line.starts_with("apply: "))
+            .collect::<Vec<_>>(),
+        [
+            "apply: apply_agent_worktree {\"target\":\"/root/probe\"} (the fallback command is only for binary files, executables and symlinks that it refuses)"
+        ]
     );
 }
 
@@ -308,6 +325,7 @@ fn completion_block_without_changes_has_no_branch_or_command() {
     assert!(block.contains("branch: none\n"));
     assert!(block.contains("changes: none\n"));
     assert!(!block.contains("apply:"));
+    assert!(!block.contains("fallback:"));
 }
 
 #[test]
