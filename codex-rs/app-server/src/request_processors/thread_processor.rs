@@ -2842,6 +2842,7 @@ impl ThreadRequestProcessor {
             |thread| thread,
         )
         .await;
+        super::thread_agent_worktree_fork::annotate_agent_worktrees(&self.config, &mut data).await; // Fork: R9.3
         let read_states = super::thread_read_state::snapshots(self.state_db.as_ref(), &data).await;
         Ok(ThreadListResponse {
             data,
@@ -3036,10 +3037,12 @@ impl ThreadRequestProcessor {
         let thread_uuid = ThreadId::from_string(&thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
-        let thread = self
+        let mut thread = self
             .read_thread_view(thread_uuid, include_turns)
             .await
             .map_err(thread_read_view_error)?;
+        super::thread_agent_worktree_fork::annotate_agent_worktrees(&self.config, [&mut thread])
+            .await; // Fork: R9.3
         let read_state = super::thread_read_state::snapshots(
             self.state_db.as_ref(),
             std::slice::from_ref(&thread),

@@ -6038,9 +6038,9 @@
       }
     ],
     "digests": {
-      "manifestDigest": "738152aa67db25a36ae95fa09b06bc4a30789b5c9d9fdf036909b373e491520d",
-      "protocolDigest": "36aac592f0f8e0703ecb45b3618e398b5ff792d8add1d31557b0a7bfeb007608",
-      "schemaDigest": "eeb34f897b3adeabb244f59eb20ea9ea89b610c30ad77b8a5f24f589dd7502ec"
+      "manifestDigest": "41958b6a84d086603e833f95a7b1a205c93ee831635badd1c593d81b6c65ad46",
+      "protocolDigest": "40237e23f64e633826a712374fea8d373cd594dcf50001c50c40939a8679f00a",
+      "schemaDigest": "6d54f919858f8b0ebdf727cbcd45a928b6a528b1eb5a8b384eaa1b99ce129459"
     },
     "protocolMode": "experimental",
     "routingLifecycle": [
@@ -20255,6 +20255,48 @@
         "metadataStatus": "schemaSufficient",
         "rustType": "ThreadActiveFlag",
         "schemaRef": "#/definitions/v2/ThreadActiveFlag",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadAgentWorktree",
+        "schemaRef": "#/definitions/v2/ThreadAgentWorktree",
+        "schemaSufficientProof": {
+          "checkedAdditionalProperties": true,
+          "checkedEnumValues": true,
+          "checkedNullableFields": true,
+          "checkedRequiredFields": true,
+          "checkedUnionTags": true,
+          "noCustomSerde": true,
+          "noFlatten": true,
+          "noSerdeAliases": true,
+          "noSerdeDefaults": true,
+          "noSkipSerializingIf": true,
+          "sourceAnchor": "generated JSON schema definition plus reviewed manifest-required override list"
+        },
+        "variantAliases": []
+      },
+      {
+        "fields": [],
+        "manualPayloadConversion": null,
+        "metadataStatus": "schemaSufficient",
+        "rustType": "ThreadAgentWorktreeStatus",
+        "schemaRef": "#/definitions/v2/ThreadAgentWorktreeStatus",
         "schemaSufficientProof": {
           "checkedAdditionalProperties": true,
           "checkedEnumValues": true,

@@ -42,8 +42,11 @@ mod turn;
 mod user_verification;
 mod windows_sandbox;
 mod workflow;
+// Fork: agent worktrees (specs/agent-worktree-isolation-2026-10-25.md, UC9).
+mod agent_worktree;
 
 pub use account::*;
+pub use agent_worktree::*;
 pub use application::*;
 pub use apps::*;
 pub use attestation::*;

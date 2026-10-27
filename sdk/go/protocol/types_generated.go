@@ -21903,6 +21903,38 @@ const (
 	ThreadActiveFlagWaitingOnUserInput ThreadActiveFlag = "waitingOnUserInput"
 )
 
+type ThreadAgentWorktree struct {
+	Branch Optional[string]          `json:"branch,omitzero"`
+	Path   AbsolutePathBuf           `json:"path"`
+	Status ThreadAgentWorktreeStatus `json:"status"`
+}
+
+var threadAgentWorktreeSpec = objectSpec{
+	fields: []objectField{
+		{name: "branch"},
+		{name: "path", flags: fieldRequired | fieldRejectNull},
+		{name: "status", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadAgentWorktree) MarshalJSON() ([]byte, error) {
+	type wire ThreadAgentWorktree
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadAgentWorktree) UnmarshalJSON(data []byte) error {
+	type wire ThreadAgentWorktree
+	return decodeObject(data, &threadAgentWorktreeSpec, (*wire)(v))
+}
+
+type ThreadAgentWorktreeStatus string
+
+const (
+	ThreadAgentWorktreeStatusChanged ThreadAgentWorktreeStatus = "changed"
+	ThreadAgentWorktreeStatusClean   ThreadAgentWorktreeStatus = "clean"
+	ThreadAgentWorktreeStatusRemoved ThreadAgentWorktreeStatus = "removed"
+)
+
 type ThreadApproveGuardianDeniedActionParams struct {
 	Event    json.RawMessage `json:"event"`
 	ThreadID string          `json:"threadId"`
@@ -22736,25 +22768,24 @@ func (v *ThreadEnvironment) UnmarshalJSON(data []byte) error {
 	return decodeObject(data, &threadEnvironmentSpec, (*wire)(v))
 }
 
-type ThreadExtra map[string]json.RawMessage
+type ThreadExtra struct {
+	AgentWorktree Optional[ThreadAgentWorktree] `json:"agentWorktree,omitzero"`
+}
+
+var threadExtraSpec = objectSpec{
+	fields: []objectField{
+		{name: "agentWorktree"},
+	},
+}
 
 func (v ThreadExtra) MarshalJSON() ([]byte, error) {
-	if v == nil {
-		return []byte("{}"), nil
-	}
-	return json.Marshal(map[string]json.RawMessage(v))
+	type wire ThreadExtra
+	return json.Marshal(wire(v))
 }
 
 func (v *ThreadExtra) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
-		return DecodeError{Field: "", Reason: "cannot be null"}
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	*v = ThreadExtra(raw)
-	return nil
+	type wire ThreadExtra
+	return decodeObject(data, &threadExtraSpec, (*wire)(v))
 }
 
 type ThreadForkParams struct {

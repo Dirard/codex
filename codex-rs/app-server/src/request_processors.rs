@@ -570,6 +570,8 @@ mod projects;
 mod remote_control_processor;
 mod rollout;
 mod search;
+// Fork: agent worktrees in `Thread.extra` (specs/agent-worktree-isolation-2026-10-25.md).
+mod thread_agent_worktree_fork;
 mod thread_attachments;
 mod thread_enrichment;
 mod thread_fork_goal;

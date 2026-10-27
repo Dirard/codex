@@ -1577,6 +1577,60 @@
       ],
       "type": "string"
     },
+    "ThreadAgentWorktree": {
+      "description": "The managed git worktree of an isolated sub-agent thread.",
+      "properties": {
+        "branch": {
+          "description": "The agent branch that holds the agent's recorded changes; null until it exists.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Root of the worktree."
+        },
+        "status": {
+          "$ref": "#/definitions/ThreadAgentWorktreeStatus"
+        }
+      },
+      "required": [
+        "path",
+        "status"
+      ],
+      "type": "object"
+    },
+    "ThreadAgentWorktreeStatus": {
+      "description": "Whether an agent worktree holds work.",
+      "oneOf": [
+        {
+          "description": "The agent branch exists, or the worktree has uncommitted changes or new commits.",
+          "enum": [
+            "changed"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "No branch and no changes.",
+          "enum": [
+            "clean"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The worktree checkout no longer exists.",
+          "enum": [
+            "removed"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "ThreadEnvironment": {
       "description": "An environment selected by a loaded thread, independent of connection status.",
       "properties": {
@@ -1602,6 +1656,7 @@
     },
     "ThreadExtra": {
       "description": "Extra app-server data for a thread.",
+      "properties": {},
       "type": "object"
     },
     "ThreadHistoryMode": {

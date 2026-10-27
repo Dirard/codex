@@ -161,10 +161,19 @@ impl From<ThreadSource> for CoreThreadSource {
 }
 
 /// Extra app-server data for a thread.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS, ExperimentalApi,
+)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
-pub struct ThreadExtra {}
+pub struct ThreadExtra {
+    /// Fork: the managed git worktree of an isolated sub-agent thread
+    /// (specs/agent-worktree-isolation-2026-10-25.md, R9.3).
+    #[experimental("thread.extra.agentWorktree")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub agent_worktree: Option<super::ThreadAgentWorktree>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

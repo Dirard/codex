@@ -1,16 +1,21 @@
-//! Fork: an isolated MultiAgentV2 child appears through the unchanged `Thread` fields.
+//! Fork: an isolated MultiAgentV2 child appears through the `Thread` fields and, since amend
+//! 2026-10-27, through the experimental `Thread.extra.agentWorktree`.
 //!
-//! Spec: `specs/agent-worktree-isolation-2026-10-25.md`, R8.1.
+//! Spec: `specs/agent-worktree-isolation-2026-10-25.md`, R8.1, R9.3.
 
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::write_models_cache;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ThreadAgentWorktreeStatus;
+use codex_app_server_protocol::ThreadListParams;
+use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -200,6 +205,63 @@ async fn thread_read_reports_the_isolated_child_worktree() -> Result<()> {
             Path::new(environment.cwd.as_str()).starts_with(&managed_root),
             "child environment cwd {:?} is outside the managed root",
             environment.cwd
+        );
+    }
+
+    // Amend 2026-10-27, R9.3: the experimental `extra` names the child's worktree in
+    // `thread/read` and `thread/list`; the root's `extra` stays empty.
+    let worktree = child
+        .extra
+        .as_ref()
+        .and_then(|extra| extra.agent_worktree.clone())
+        .expect("agent worktree in thread/read");
+    assert!(
+        worktree.path.as_path().starts_with(&managed_root),
+        "{worktree:?}"
+    );
+    assert_eq!(worktree.branch, None);
+    assert_eq!(worktree.status, ThreadAgentWorktreeStatus::Clean);
+    let ThreadReadResponse { thread: root, .. } = app_server
+        .request(|request_id| ClientRequest::ThreadRead {
+            request_id,
+            params: ThreadReadParams {
+                thread_id: thread.id.clone(),
+                include_turns: false,
+            },
+        })
+        .await?;
+    assert_eq!(root.extra, None);
+    let listed: ThreadListResponse = app_server
+        .request(|request_id| ClientRequest::ThreadList {
+            request_id,
+            params: ThreadListParams {
+                excluded_thread_ids: None,
+                attached_to_thread_id: None,
+                originators: None,
+                cursor: None,
+                limit: None,
+                sort_key: None,
+                sort_direction: None,
+                model_providers: Some(Vec::new()),
+                source_kinds: Some(vec![ThreadSourceKind::SubAgentThreadSpawn]),
+                archived: None,
+                section_id: None,
+                project_id: None,
+                cwd: None,
+                use_state_db_only: false,
+                search_term: None,
+                parent_thread_id: Some(thread.id.clone()),
+                ancestor_thread_id: None,
+            },
+        })
+        .await?;
+    if let Some(listed_child) = listed.data.iter().find(|listed| listed.id == child.id) {
+        assert_eq!(
+            listed_child
+                .extra
+                .as_ref()
+                .and_then(|extra| extra.agent_worktree.as_ref()),
+            Some(&worktree)
         );
     }
     Ok(())

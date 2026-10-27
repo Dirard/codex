@@ -5048,6 +5048,12 @@ class ThreadActiveFlag(Enum):
     waiting_on_user_input = "waitingOnUserInput"
 
 
+class ThreadAgentWorktreeStatus(Enum):
+    changed = "changed"
+    clean = "clean"
+    removed = "removed"
+
+
 class ThreadApproveGuardianDeniedActionParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -9953,6 +9959,20 @@ class SubAgentSource(
     RootModel[SubAgentSourceValue | ThreadSpawnSubAgentSource | OtherSubAgentSource]
 ):
     root: SubAgentSourceValue | ThreadSpawnSubAgentSource | OtherSubAgentSource
+
+
+class ThreadAgentWorktree(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    branch: Annotated[
+        str | None,
+        Field(
+            description="The agent branch that holds the agent's recorded changes; null until it exists."
+        ),
+    ] = None
+    path: Annotated[AbsolutePathBuf, Field(description="Root of the worktree.")]
+    status: ThreadAgentWorktreeStatus
 
 
 class ThreadForkParams(BaseModel):
