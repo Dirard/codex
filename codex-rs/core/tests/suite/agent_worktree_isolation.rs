@@ -2729,6 +2729,7 @@ async fn apply_agent_worktree_refuses_a_conflict_without_writing() -> Result<()>
     .await?;
 
     // R11.4: a refusal with the file and the block's command; the parent's file is unchanged.
+    // P3-7: the git command carries the block's `fallback:` label; `apply:` names the tool.
     let output = apply
         .function_call_output_text("apply-conflict")
         .context("apply output")?;
@@ -2737,9 +2738,10 @@ async fn apply_agent_worktree_refuses_a_conflict_without_writing() -> Result<()>
         "{output}"
     );
     assert!(
-        output.contains("\napply: git diff-tree -p --binary "),
+        output.contains("\nfallback: git diff-tree -p --binary "),
         "{output}"
     );
+    assert!(!output.contains("\napply: "), "{output}");
     assert_eq!(
         std::fs::read_to_string(parent.join("geometry.txt"))?,
         edited

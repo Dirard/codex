@@ -64,3 +64,32 @@ fn submodule_refusal_names_the_submodule_command() {
     );
     assert!(!removed.contains("\napply:"));
 }
+
+/// P3-7: the tool texts say what a close does to the branch, and the git command is the
+/// fallback, as in the `<agent_worktree>` block.
+#[test]
+fn texts_match_what_close_does_to_the_branch() {
+    assert!(!DESCRIPTION.contains("its branch stays"), "{DESCRIPTION}");
+    assert!(
+        DESCRIPTION.contains("retired from the branch list"),
+        "{DESCRIPTION}"
+    );
+    assert!(
+        DESCRIPTION.contains("fallback git command"),
+        "{DESCRIPTION}"
+    );
+    let ToolSpec::Function(tool) = Handler.spec() else {
+        panic!("a function tool");
+    };
+    let close = serde_json::to_value(&tool.parameters).expect("schema")["properties"]["close"]
+        ["description"]
+        .as_str()
+        .expect("close description")
+        .to_string();
+    assert!(!close.contains("its branch keeps the changes"), "{close}");
+    assert!(close.contains("retired"), "{close}");
+    assert!(
+        close.contains("an agent working in its worktree"),
+        "{close}"
+    );
+}

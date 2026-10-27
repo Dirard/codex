@@ -45,7 +45,7 @@ use std::sync::PoisonError;
 
 pub(crate) const TOOL_NAME: &str = "apply_agent_worktree";
 
-const DESCRIPTION: &str = "Apply an isolated agent's recorded changes (its codex/agents/* branch from the <agent_worktree> block) to your checkout as uncommitted edits, with a three-way merge over your current files. The write is approved, sandboxed and hooked like apply_patch, and it is all or nothing: if the merge conflicts with your edits or a file changes before the write, nothing is written and the result lists the files and the git command from the block. With `close`, once the agent is done and its changes are applied, its worktree checkout is removed to free the disk; its branch stays, and a later task for the agent restores the worktree.";
+const DESCRIPTION: &str = "Apply an isolated agent's recorded changes (its codex/agents/* branch from the <agent_worktree> block) to your checkout as uncommitted edits, with a three-way merge over your current files. The write is approved, sandboxed and hooked like apply_patch, and it is all or nothing: if the merge conflicts with your edits or a file changes before the write, nothing is written and the result lists the files and the block's fallback git command. With `close`, once the agent and every agent working in its worktree are done and its changes are applied, its worktree checkout is removed to free the disk and a later task for the agent restores it. A branch your checkout then holds is retired from the branch list (its commit stays recoverable); any other branch stays.";
 
 pub(crate) struct Handler;
 
@@ -66,7 +66,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
             (
                 "close".to_string(),
                 JsonSchema::boolean(Some(
-                    "After applying, unload the finished agent and remove its worktree checkout; its branch keeps the changes. Refused while the agent is still running or when the apply fails."
+                    "After applying, unload the finished agent and remove its worktree checkout; the result says whether its branch stays or was retired because your checkout holds it. Refused while the agent, or an agent working in its worktree, is still running, and when the apply fails."
                         .to_string(),
                 )),
             ),
@@ -972,7 +972,7 @@ fn failed_write_message(
     };
     let metadata = binding.metadata();
     message.push_str(&format!(
-        "\napply: {}",
+        "\nfallback: {}",
         crate::agent::worktree_isolation::apply_command(&metadata.base_sha, &metadata.branch)
     ));
     message

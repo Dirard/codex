@@ -104,9 +104,11 @@ pub enum AgentWorktreeBase {
 /// `features.multi_agent_v2.tool_namespace` is set; the reserved namespace `collaboration` turns
 /// the feature off with a startup warning. Agent worktrees share the managed root with Codex
 /// Desktop, whose automatic cleanup removes them like the worktrees of inactive threads once
-/// the root holds more than `[desktop] worktree-keep-count`; the agent's work stays on its
-/// branch and Codex restores the worktree, but ignored files such as build output are lost.
-/// Raise `worktree-keep-count` or set `worktree-auto-cleanup-enabled = false` to keep them.
+/// the root holds more than `[desktop] worktree-keep-count`. Codex restores such a worktree
+/// before the agent's next turn from what it recorded on the agent's branch at the end of each
+/// turn; edits made after the agent's last turn ended survive only in Desktop's own snapshot
+/// ref, and ignored files such as build output are lost. Raise `worktree-keep-count` or set
+/// `worktree-auto-cleanup-enabled = false` to keep them.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AgentWorktreeIsolationConfigToml {

@@ -932,12 +932,34 @@ fn guardian_action_json_describes_the_worktree() {
     assert_eq!(context["worktree"], "/home/u/.codex/worktrees/6d88/demo");
     assert_eq!(context["parent_checkout"], "/work/demo");
     assert_eq!(context["parent_checkout_protected"], true);
+    // P3-6: the note claims only what the sandbox enforces; an escalation leaves it.
+    let note = context["note"].as_str().expect("note").to_string();
+    assert!(note.contains("isolated git worktree"), "{note}");
     assert!(
-        context["note"]
-            .as_str()
-            .is_some_and(|note| note.contains("isolated git worktree")),
-        "{context}"
+        !note.contains("Its edits change only that worktree"),
+        "{note}"
     );
+    assert!(
+        note.contains(
+            "An approved escalation runs outside that sandbox and is not limited to the worktree"
+        ),
+        "{note}"
+    );
+    assert!(note.contains("bypass the isolation"), "{note}");
+    let unprotected: serde_json::Value = serde_json::from_str(&ops::guardian_action_json(
+        &binding(false),
+        serde_json::to_string_pretty(&action).expect("action JSON"),
+    ))
+    .expect("valid JSON");
+    let unprotected = unprotected["agent_worktree"]["note"]
+        .as_str()
+        .expect("note")
+        .to_string();
+    assert!(
+        unprotected.contains("its sandbox does not protect the parent checkout"),
+        "{unprotected}"
+    );
+    assert!(!unprotected.contains("read-only for it"), "{unprotected}");
     // Keys stay sorted, as in the upstream rendering.
     assert!(json.find("\"agent_worktree\"") < json.find("\"command\""));
     // Not JSON or not an object: unchanged.

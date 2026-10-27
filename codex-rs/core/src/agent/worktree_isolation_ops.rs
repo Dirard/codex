@@ -716,7 +716,7 @@ pub(crate) async fn merge_for_parent(
 }
 
 /// R11.4, R11.6: a refusal names the paths, escaped like the completion block, and gives the
-/// block's apply command.
+/// block's fallback command under the same `fallback:` label (P3-7).
 pub(crate) fn apply_refusal(
     binding: &AgentWorktreeBinding,
     target: &str,
@@ -730,7 +730,7 @@ pub(crate) fn apply_refusal(
         .collect::<Vec<_>>()
         .join("; ");
     format!(
-        "cannot apply agent {target}: {reason} {paths}. Nothing was written. Resolve it yourself: read the agent's version with `git show {branch}:<path>` and edit your files, or run this command and fix what it rejects.\napply: {command}",
+        "cannot apply agent {target}: {reason} {paths}. Nothing was written. Resolve it yourself: read the agent's version with `git show {branch}:<path>` and edit your files, or run this fallback command and fix what it rejects.\nfallback: {command}",
         target = block_text(target),
         reason = block_text(reason),
         paths = if paths.is_empty() {
@@ -1169,8 +1169,16 @@ pub(crate) fn fork_guardian_action_json(
     }
 }
 
-/// The note Guardian reads next to the worktree paths (R3.8).
-const GUARDIAN_NOTE: &str = "Host context, not part of the action: Codex runs this agent in an isolated git worktree. Its edits change only that worktree; its parent agent reviews them and applies them to the parent checkout. The agent was told not to edit the parent checkout and not to request escalated permissions for it.";
+/// The note Guardian reads next to the worktree paths (R3.8). It states only what the sandbox
+/// enforces (P3-6, as D8 for the agent's note): Guardian reviews escalations, which leave the
+/// sandbox, so the worktree limits nothing an approved action does.
+fn guardian_note(parent_checkout_protected: bool) -> &'static str {
+    if parent_checkout_protected {
+        "Host context, not part of the action: Codex runs this agent in an isolated git worktree. Inside its sandbox the agent can write only that worktree, and the parent checkout is read-only for it. An approved escalation runs outside that sandbox and is not limited to the worktree: writes to the parent checkout or to its .git directory bypass the isolation. The agent's parent reviews the worktree's changes and applies them to the parent checkout; the agent was told not to edit the parent checkout and not to request escalated permissions for it."
+    } else {
+        "Host context, not part of the action: Codex runs this agent in an isolated git worktree, but its sandbox does not protect the parent checkout: its commands can write the parent checkout and its .git directory directly, which bypasses the isolation, and an approved escalation is not limited to the worktree either. The agent's parent reviews the worktree's changes and applies them to the parent checkout; the agent was told not to edit the parent checkout and not to request escalated permissions for it."
+    }
+}
 
 pub(crate) fn guardian_action_json(binding: &AgentWorktreeBinding, action_json: String) -> String {
     let Ok(mut action) = serde_json::from_str::<serde_json::Value>(&action_json) else {
@@ -1182,7 +1190,7 @@ pub(crate) fn guardian_action_json(binding: &AgentWorktreeBinding, action_json: 
     fields.insert(
         "agent_worktree".to_string(),
         serde_json::json!({
-            "note": GUARDIAN_NOTE,
+            "note": guardian_note(binding.parent_checkout_protected()),
             "worktree": binding.root.to_string_lossy(),
             "parent_checkout": binding.source_root.to_string_lossy(),
             "parent_checkout_protected": binding.parent_checkout_protected(),
