@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use codex_analytics::CompactionPhase;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_thread_store::PersistContext;
@@ -166,7 +167,10 @@ impl TurnLoop {
     ) -> CodexResult<bool> {
         self.check_compaction_progress(
             token_status.token_limit_reached,
-            token_status.active_context_tokens,
+            replaced_context_tokens(
+                turn_context.config.model_auto_compact_token_limit_scope,
+                token_status,
+            ),
             TurnCompactionLimit::of_turn(&turn_context.config, token_status),
         )
     }
@@ -273,6 +277,20 @@ impl TurnLoop {
                 .await;
         }
         !blocked
+    }
+}
+
+/// The context a compaction replaces, as the turn's `TurnCompactionLimit` counts it. With
+/// `model_auto_compact_token_limit_scope = "body_after_prefix"` a compaction keeps the prefix
+/// of its window and replaces only the body after it, so only the body counts; otherwise the
+/// whole active context (review of the fixes, P3-6).
+pub(super) fn replaced_context_tokens(
+    scope: AutoCompactTokenLimitScope,
+    token_status: &ContextWindowTokenStatus,
+) -> i64 {
+    match scope {
+        AutoCompactTokenLimitScope::Total => token_status.active_context_tokens,
+        AutoCompactTokenLimitScope::BodyAfterPrefix => token_status.auto_compact_scope_tokens,
     }
 }
 

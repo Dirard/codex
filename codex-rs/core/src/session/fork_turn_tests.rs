@@ -5,10 +5,14 @@
 use codex_protocol::error::CodexErrorDetails;
 use pretty_assertions::assert_eq;
 
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
+
+use super::super::context_window::ContextWindowTokenStatus;
 use super::DEFAULT_TURN_COMPACTION_TOKEN_LIMIT;
 use super::SamplingOutcome;
 use super::TurnCompactionLimit;
 use super::TurnLoop;
+use super::replaced_context_tokens;
 
 const FORCED: bool = true;
 const OPTIONAL: bool = false;
@@ -324,5 +328,32 @@ fn the_limit_follows_the_configuration_and_each_turn() {
         TurnLoop::default()
             .check_compaction_progress(FORCED, CONTEXT_TOKENS, limit)
             .is_ok_and(|compacts| compacts)
+    );
+}
+
+/// Review of the fixes P3-6: with `body_after_prefix`, a compaction keeps the prefix of its
+/// window (instructions, tools, the carried summary) and replaces only the body after it, so
+/// only the body counts toward the turn's limit. A 100k prefix with a 20k body threshold would
+/// otherwise reach the limit after a sixth of the context it allows.
+#[test]
+fn a_body_after_prefix_compaction_counts_only_the_body() {
+    let status = ContextWindowTokenStatus {
+        active_context_tokens: 120_000,
+        auto_compact_scope_tokens: 20_000,
+        auto_compact_scope_limit: Some(20_000),
+        full_context_window_limit: Some(WINDOW_272K),
+        base_window_tokens_remaining: Some(0),
+        auto_compact_window_prefill_tokens: Some(100_000),
+        full_context_window_limit_reached: false,
+        token_limit_reached: true,
+        turn_end_compaction_threshold_reached: false,
+    };
+    assert_eq!(
+        replaced_context_tokens(AutoCompactTokenLimitScope::BodyAfterPrefix, &status),
+        20_000
+    );
+    assert_eq!(
+        replaced_context_tokens(AutoCompactTokenLimitScope::Total, &status),
+        120_000
     );
 }
