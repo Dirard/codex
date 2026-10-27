@@ -3846,3 +3846,94 @@ async fn a_second_load_of_a_live_thread_leaves_its_runs_alone() -> Result<()> {
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }
+
+/// A script that passes the static checks but does not compile.
+const BROKEN_SCRIPT: &str =
+    "export const meta = { name: 'broken', description: 'd' };\nconst x = ;\nreturn x;\n";
+
+/// N5 (live recheck 2026-10-27): a script that does not compile answers the `workflow` call
+/// with its syntax error, for an inline script, a saved one and the script of a
+/// `resume_from` source alike: no run, no journal and no notification.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_script_that_does_not_compile_creates_no_run() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    parent_chain(
+        &responses,
+        "inline",
+        None,
+        "call-1",
+        json!({ "script": BROKEN_SCRIPT }),
+    );
+    parent_chain(
+        &responses,
+        "saved",
+        Some("call-1"),
+        "call-2",
+        json!({ "name": "broken" }),
+    );
+    parent_chain(
+        &responses,
+        "resumed",
+        Some("call-2"),
+        "call-3",
+        json!({ "resume_from": OLD_RUN_ID }),
+    );
+    responses.rule(
+        "parent_done",
+        1,
+        Duration::ZERO,
+        |body| is_parent(body) && has_call_output(body, "call-3"),
+        message("resp-parent-done", "Done."),
+    );
+    let test = build(&server, |_| {}).await?;
+    let saved = test.codex_home_path().join("workflows");
+    std::fs::create_dir_all(&saved)?;
+    std::fs::write(saved.join("broken.js"), BROKEN_SCRIPT)?;
+    // A failed run of an earlier version whose script never compiled.
+    let dir = run_dir(&test, OLD_RUN_ID);
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("script.js"), BROKEN_SCRIPT)?;
+    std::fs::write(dir.join("args.json"), "null")?;
+    let records = [
+        json!({"seq": 1, "kind": "run_started", "run_id": OLD_RUN_ID, "name": "broken", "script_sha256": "s", "args_sha256": "a", "parent_turn_id": "t", "resume_from": null}),
+        json!({"seq": 2, "kind": "run_finished", "status": "failed", "result_bytes": 0, "tokens": {"charged": 0, "cached": 0}, "error": "SyntaxError"}),
+    ];
+    std::fs::write(
+        dir.join("journal.jsonl"),
+        records
+            .iter()
+            .map(|record| format!("{record}\n"))
+            .collect::<String>(),
+    )?;
+
+    test.submit_turn("start them").await?;
+    let done = &responses.served("parent_done")[0];
+    for call_id in ["call-1", "call-2", "call-3"] {
+        let output = call_output(done, call_id).expect("output");
+        assert!(
+            output.contains("the script does not compile: SyntaxError"),
+            "{call_id}: {output}"
+        );
+        assert!(
+            output.contains("No run was created."),
+            "{call_id}: {output}"
+        );
+    }
+    let runs = std::fs::read_dir(dir.parent().expect("thread directory"))?
+        .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    assert_eq!(runs, vec![OLD_RUN_ID.to_string()]);
+    assert!(
+        test.codex
+            .workflow_runs()
+            .iter()
+            .all(|run| run.run_id == OLD_RUN_ID)
+    );
+    assert!(
+        !done.contains(NOTIFICATION_MARKER),
+        "no run, so no notification"
+    );
+    Ok(())
+}

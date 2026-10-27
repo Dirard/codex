@@ -418,6 +418,14 @@ impl ToolExecutor<ToolInvocation> for WorkflowStartHandler {
             };
             check_args_size(&args_json).map_err(reject)?;
             let parsed = parse_script(&script).map_err(reject)?;
+            // N5: a script that does not compile answers this call; no run, no journal.
+            super::run::check_script_syntax(&session, &parsed.body)
+                .await
+                .map_err(|error| {
+                    FunctionCallError::RespondToModel(format!(
+                        "the script does not compile: {error}. No run was created."
+                    ))
+                })?;
             let resume_stats = resume.as_ref().map(codex_workflow::JournalCache::stats);
             if needs_approval(&turn)
                 && !approve_run(

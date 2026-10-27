@@ -739,6 +739,55 @@ async fn execute_cell(
     result
 }
 
+/// How long the syntax check of a script may take.
+const SYNTAX_CHECK_YIELD_MS: u64 = 30_000;
+
+/// N5 (live recheck 2026-10-27): compiles a validated script body in a Code Mode session of
+/// its own before a run is registered, so a syntax error answers the `workflow` call instead
+/// of a failed run's notification. The body sits in `async function __wf_main()` on the
+/// first line, as in the run's cell, so V8 compiles it the same way and reports the same
+/// lines; it is wrapped in a function that is never called, so nothing of the script runs.
+/// Only a `SyntaxError` is returned: a check that cannot run leaves the run to report it.
+pub(crate) async fn check_script_syntax(session: &Session, body: &str) -> Result<(), String> {
+    let provider = session.services.code_mode_service.session_provider();
+    let code_mode = match provider.create_session().await {
+        Ok(code_mode) => code_mode,
+        Err(error) => {
+            warn!(%error, "cannot start the workflow syntax check");
+            return Ok(());
+        }
+    };
+    let request = ExecuteRequest {
+        tool_call_id: "workflow-syntax-check".to_string(),
+        enabled_tools: Vec::new(),
+        source: format!(
+            "async function __wf_check() {{ async function __wf_main() {{{body}\n}} }}\n"
+        ),
+        yield_time_ms: Some(SYNTAX_CHECK_YIELD_MS),
+        max_output_tokens: Some(1_000),
+    };
+    let delegate: Arc<dyn CodeModeSessionDelegate> =
+        Arc::new(codex_code_mode::NoopCodeModeSessionDelegate);
+    let response = match code_mode.execute(request, delegate, /*preempt*/ None).await {
+        Ok(started) => started.initial_response().await,
+        Err(error) => Err(error),
+    };
+    if let Err(error) = code_mode.shutdown().await {
+        warn!(%error, "failed to shut down the workflow syntax check");
+    }
+    match response {
+        Ok(RuntimeResponse::Result {
+            error_text: Some(error),
+            ..
+        }) if error.contains("SyntaxError") => Err(display_error(error.trim())),
+        Ok(_) => Ok(()),
+        Err(error) => {
+            warn!(%error, "the workflow syntax check did not run");
+            Ok(())
+        }
+    }
+}
+
 async fn drive_cell(
     session: &Arc<Session>,
     step_context: &Arc<StepContext>,
