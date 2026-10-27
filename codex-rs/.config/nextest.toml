@@ -68,13 +68,6 @@ filter = 'package(codex-core) & (test(=suite::code_mode::code_mode_excludes_mcp_
 slow-timeout = { period = "1m", terminate-after = 3 }
 
 [[profile.default.overrides]]
-# Fork: starts an embedded app server for each of 11 plans: 17-20s alone and
-# 31-38s in a loaded codex-tui run on a 32-thread host; fork CI runners are about
-# twice as slow, which would cross the 60s limit.
-filter = 'package(codex-tui) & test(=analytics::tests::account_layout::unsupported_workspace_plans_hide_top_chats_and_skip_loading)'
-slow-timeout = { period = "1m", terminate-after = 2 }
-
-[[profile.default.overrides]]
 filter = 'test(approval_matrix_covers_all_modes)'
 slow-timeout = { period = "30s", terminate-after = 2 }
 

@@ -40,11 +40,45 @@ pub(in crate::analytics) fn sign_in(home: &std::path::Path, account: &str, user:
     .unwrap();
 }
 
+/// Fork: the backend of everything except the analytics requests themselves, shared by the
+/// tests of this binary. It serves an empty cloud config bundle, so a workspace plan does not
+/// retry the bundle for seconds and fall back to default settings, and answers 404 otherwise.
+/// The analytics mock of each test keeps only the requests the test asserts on.
+async fn write_app_server_backend_config(home: &std::path::Path) {
+    static BACKEND: tokio::sync::OnceCell<MockServer> = tokio::sync::OnceCell::const_new();
+    let backend = BACKEND
+        .get_or_init(|| async {
+            let backend = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/backend-api/wham/config/bundle"))
+                .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+                    "config_toml": {"enterprise_managed": []}
+                })))
+                .mount(&backend)
+                .await;
+            backend
+        })
+        .await;
+    std::fs::write(
+        home.join("config.toml"),
+        format!(
+            "chatgpt_base_url = \"{base}/backend-api\"\nopenai_base_url = \"{base}/backend-api/codex\"\ncli_auth_credentials_store = \"file\"\n",
+            base = backend.uri()
+        ),
+    )
+    .unwrap();
+}
+
 pub(in crate::analytics) async fn live(
     server: &MockServer,
     plan: &str,
 ) -> (tempfile::TempDir, Live) {
     let home = tempfile::tempdir().unwrap();
+    // Fork: `config.toml` points the backend and the model provider at a local mock as well.
+    // The embedded app server of `connected_view` loads `config.toml` again for its own
+    // startup work (cloud config bundle, workspace routing, plugin warmups), and the default
+    // provider lists models; all of it used to reach chatgpt.com and auth.openai.com.
+    write_app_server_backend_config(home.path()).await;
     let mut config = ConfigBuilder::default()
         .codex_home(home.path().to_path_buf())
         .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
