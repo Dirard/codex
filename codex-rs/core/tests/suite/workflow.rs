@@ -3941,6 +3941,105 @@ async fn a_script_that_does_not_compile_creates_no_run() -> Result<()> {
     Ok(())
 }
 
+/// K3/R8 (deferred-fixes-3 review and live recheck 3): the syntax error names the line of the
+/// real error, not the line that opened an earlier block or call, and an unclosed script says
+/// so instead of naming a misleading line. Four inline scripts cover a stray `}` after a
+/// multi-line call, an unclosed block, an error inside a nested block, and a top-level error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_syntax_error_names_the_real_line() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = ScriptedResponses::mount(&server).await;
+    // 1: a stray `}` on line 8 after an unfinished expression, past a multi-line call (3-6).
+    let stray_brace = [
+        "export const meta = { name: 'lines', description: 'd' };", // 1
+        "const total = 0;",                                         // 2
+        "const found = await agent(",                               // 3
+        "  'list the modules',",                                    // 4
+        "  { label: 'scan' },",                                     // 5
+        ");",                                                       // 6
+        "const sum = found.length +",                               // 7
+        "}",                                                        // 8
+        "return sum;",                                              // 9
+    ]
+    .join("\n");
+    // 2: a `for` block opened on line 3 and never closed.
+    let unclosed = [
+        "export const meta = { name: 'open', description: 'd' };", // 1
+        "const items = ['a'];",                                    // 2
+        "for (const item of items) {",                             // 3
+        "  log(item);",                                            // 4
+        "return items.length;",                                    // 5
+    ]
+    .join("\n");
+    // 3: an extra `)` on line 4, inside a `for` block opened on line 3.
+    let nested = [
+        "export const meta = { name: 'nested', description: 'd' };", // 1
+        "const items = [1];",                                        // 2
+        "for (const item of items) {",                               // 3
+        "  log(item));",                                             // 4
+        "}",                                                         // 5
+        "return items.length;",                                      // 6
+    ]
+    .join("\n");
+    // 4: a top-level call missing its `)` on line 3.
+    let top_level = [
+        "export const meta = { name: 'top', description: 'd' };", // 1
+        "const total = 0;",                                       // 2
+        "log(total;",                                             // 3
+        "return total;",                                          // 4
+    ]
+    .join("\n");
+    let scripts = [
+        ("call-1", stray_brace),
+        ("call-2", unclosed),
+        ("call-3", nested),
+        ("call-4", top_level),
+    ];
+    let mut previous = None;
+    for (index, (call_id, script)) in scripts.iter().enumerate() {
+        parent_chain(
+            &responses,
+            &format!("script-{index}"),
+            previous,
+            call_id,
+            json!({ "script": script }),
+        );
+        previous = Some(*call_id);
+    }
+    responses.rule(
+        "parent_done",
+        1,
+        Duration::ZERO,
+        |body| is_parent(body) && has_call_output(body, "call-4"),
+        message("resp-parent-done", "Done."),
+    );
+    let test = build(&server, |_| {}).await?;
+    test.submit_turn("start them").await?;
+    let done = &responses.served("parent_done")[0];
+
+    let output = |call_id: &str| call_output(done, call_id).expect("output");
+    let stray = output("call-1");
+    assert!(
+        stray.contains("SyntaxError: Unexpected token '}' (line 8)"),
+        "stray brace: {stray}"
+    );
+    let open = output("call-2");
+    assert!(
+        open.contains("a block, call or bracket is not closed before the end of the script"),
+        "unclosed: {open}"
+    );
+    assert!(!open.contains("(line"), "unclosed names no line: {open}");
+    let inner = output("call-3");
+    assert!(inner.contains("(line 4)"), "nested: {inner}");
+    let top = output("call-4");
+    assert!(top.contains("(line 3)"), "top level: {top}");
+    for call_id in ["call-1", "call-2", "call-3", "call-4"] {
+        assert!(output(call_id).contains("No run was created."), "{call_id}");
+    }
+    Ok(())
+}
+
 /// F4 (review 2026-10-27 of the deferred fixes): the syntax check compiles the script and
 /// runs none of it. A body that closes the function the run's cell wraps it in and leaves
 /// code at the top level does not compile there either: the call answers with the

@@ -150,7 +150,7 @@ fn workflow_description(
     };
     format!(
         r#"Run a JavaScript workflow script in the background: it orchestrates many sub-agents deterministically while you keep working, and agent answers go to the script instead of your context.
-When to use it: when a task splits into many independent pieces and separate agents clearly pay off: auditing, reviewing or searching across many files, modules or items (about five or more), independent checks of each finding, or a multi-stage find/verify/report pipeline whose intermediate results would flood your context. Then you may start one without being asked, and also when the user asks for a workflow. Every agent spends tokens, usually 10k to 50k for one focused task and more for a broad one: pass `budget_tokens` only when the user asked for a limit or the cost needs a cap, and then allow at least that much per planned agent. Not for work that one agent or a few of your own tool calls can do.
+When to use it: when a task splits into many independent pieces and separate agents clearly pay off: auditing, reviewing or searching across many files, modules or items (about five or more), independent checks of each finding, or a multi-stage find/verify/report pipeline whose intermediate results would flood your context. Then you may start one without being asked, and also when the user asks for a workflow. Every agent spends tokens: a focused explorer or worker usually charges about 15k to 30k, a broad one more. Do not pass `budget_tokens` unless the user asked for a limit or the cost needs a cap; when you do, allow about 30k per planned agent and then roughly half again on top, because a soft budget lets running agents finish and is spent past its figure. Not for work that one agent or a few of your own tool calls can do.
 
 The script starts with `export const meta = {{ name, description, phases }};` (name: letters, digits, `_`, `-`), followed by a body that may use `await` and `return`. The returned JSON value is the run result.
 
@@ -929,9 +929,10 @@ mod tests {
                 "auditing, reviewing or searching across many files",
                 "independent checks of each finding",
                 "Then you may start one without being asked",
-                // P3-13, R6 (live recheck 2): the hint names the cost per agent and when to
-                // pass a budget.
-                "Every agent spends tokens, usually 10k to 50k for one focused task and more for a broad one: pass `budget_tokens` only when the user asked for a limit or the cost needs a cap, and then allow at least that much per planned agent.",
+                // P3-13, R6/R9 (live recheck 2 and 3): the hint names a realistic cost per
+                // agent, tells the model to add headroom, and warns that a soft budget overspends.
+                "a focused explorer or worker usually charges about 15k to 30k",
+                "allow about 30k per planned agent and then roughly half again on top, because a soft budget lets running agents finish and is spent past its figure",
                 "Not for work that one agent or a few of your own tool calls can do.",
             ] {
                 assert!(opening.contains(hint), "{hint:?} missing from {opening}");

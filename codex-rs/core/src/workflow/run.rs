@@ -743,8 +743,17 @@ async fn execute_cell(
 const SYNTAX_CHECK_YIELD_MS: u64 = 30_000;
 
 /// The syntax check after `const body = <the script body>;`: compiles the body as the strict
-/// body of an async function and, for a `SyntaxError`, throws its message with the line
-/// (binary search over the prefixes of the body that fail with the same message).
+/// body of an async function and, for a `SyntaxError`, throws its message with the line.
+///
+/// R8/K3 (live recheck 3 and its review): the `AsyncFunction` constructor closes the body with
+/// its own `}`, so a prefix cut inside an open block, call or bracket was closed by that `}`
+/// and failed with the same message as a real stray token — the binary search then landed on
+/// the line that opened the block instead of the line of the error. Each prefix is now checked
+/// with a trailing unterminated comment (`"\n/*"`): the comment swallows the wrapper's `}`, so
+/// the prefix fails with the target message only when the error lies inside the prefix itself,
+/// which makes the search monotone and lands on the real line. When the whole body with that
+/// comment fails with a different message than the body alone, the body's own error was the
+/// wrapper's `}` meeting an unclosed construct, so the script is unclosed and no line is named.
 const SYNTAX_CHECK_SOURCE: &str = r#"(() => {
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   const failure = (text) => {
@@ -759,15 +768,16 @@ const SYNTAX_CHECK_SOURCE: &str = r#"(() => {
   if (message === null) {
     return;
   }
-  if (message === "Unexpected end of input") {
-    throw `SyntaxError: ${message}`;
+  const unclosed = "a block, call or bracket is not closed before the end of the script";
+  if (message === "Unexpected end of input" || failure(body + "\n/*") !== message) {
+    throw `SyntaxError: ${unclosed}`;
   }
   const lines = body.split("\n");
   let low = 1;
   let high = lines.length;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
-    if (failure(lines.slice(0, middle).join("\n")) === message) {
+    if (failure(lines.slice(0, middle).join("\n") + "\n/*") === message) {
       high = middle;
     } else {
       low = middle + 1;
@@ -790,7 +800,9 @@ const SYNTAX_CHECK_SOURCE: &str = r#"(() => {
 /// R6 (live recheck 2 2026-10-27): V8 gives the message of a `SyntaxError` without its place,
 /// so the check names the line itself: the first line whose prefix of the script fails with
 /// the same message. The body keeps the lines of the script, so the number is the script's.
-/// An error at the end of the input names no line.
+/// R8/K3 (live recheck 3): each prefix is probed with a trailing unterminated comment so an
+/// open block is not closed by the wrapper and the search lands on the real line; an unclosed
+/// script names no line but says a block, call or bracket is not closed.
 pub(crate) async fn check_script_syntax(session: &Session, body: &str) -> Result<(), String> {
     let body = serde_json::to_string(body)
         .map_err(|error| format!("the script cannot be checked: {error}"))?;
