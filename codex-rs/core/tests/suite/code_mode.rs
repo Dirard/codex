@@ -2,6 +2,9 @@
 
 #[path = "code_mode_dynamic_tools_tests.rs"]
 mod dynamic_tools;
+// Fork: the default cell output budget follows the configured output truncation.
+#[path = "code_mode_output_budget_fork_tests.rs"]
+mod output_budget_fork;
 
 use anyhow::Context;
 use anyhow::Result;

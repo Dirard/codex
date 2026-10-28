@@ -2,6 +2,8 @@ mod delegate;
 mod execute_handler;
 pub(crate) mod execute_spec;
 mod output;
+// Fork: the default cell output budget follows the configured output truncation.
+mod output_budget_fork;
 mod response_adapter;
 mod telemetry;
 mod tool_definitions;
@@ -41,7 +43,6 @@ use crate::tools::context::ToolPayload;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
-use crate::unified_exec::resolve_max_tokens;
 use codex_protocol::openai_models::ToolMode;
 use codex_tools::ToolName;
 use codex_utils_audio::estimate_audio_token_count;
@@ -290,7 +291,11 @@ fn handle_runtime_response(
             text: format!("Script error:\n{error_text}"),
         });
     }
-    content_items = truncate_code_mode_result(content_items, max_output_tokens);
+    content_items = truncate_code_mode_result(
+        content_items,
+        max_output_tokens,
+        step_context.output_truncation().policy,
+    );
     CodeModeToolOutput::new(
         FunctionToolOutput::from_content(content_items, Some(success)),
         script_status,
@@ -316,12 +321,16 @@ fn format_script_status(response: &RuntimeResponse) -> String {
     }
 }
 
+/// Fork: use case "Обрезать результат ячейки Code Mode по настроенной политике"
+/// (specs/code-mode-cell-output-budget-2026-10-29.md, UC1). The `max_output_tokens` pragma cuts
+/// to `Tokens(n)`; without it the cell follows the step's output truncation policy
+/// (`default_policy`), so `tool_output_token_limit` and `[output_truncation]` set its budget.
 fn truncate_code_mode_result(
     items: Vec<FunctionCallOutputContentItem>,
     max_output_tokens: Option<usize>,
+    default_policy: TruncationPolicy,
 ) -> Vec<FunctionCallOutputContentItem> {
-    let max_output_tokens = resolve_max_tokens(max_output_tokens);
-    let policy = TruncationPolicy::Tokens(max_output_tokens);
+    let policy = max_output_tokens.map_or(default_policy, TruncationPolicy::Tokens);
     if items
         .iter()
         .all(|item| matches!(item, FunctionCallOutputContentItem::InputText { .. }))
@@ -480,6 +489,7 @@ mod tests {
     use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_protocol::openai_models::ToolMode;
     use codex_tools::ToolName;
+    use codex_utils_output_truncation::TruncationPolicy;
     use serde_json::json;
 
     #[tokio::test]
@@ -552,7 +562,7 @@ mod tests {
         }];
 
         assert_eq!(
-            truncate_code_mode_result(items, Some(5)),
+            truncate_code_mode_result(items, Some(5), TruncationPolicy::Tokens(10_000)),
             vec![FunctionCallOutputContentItem::InputText {
                 text: concat!(
                     "Warning: truncated output (original token count: 10)\n",
@@ -571,7 +581,7 @@ mod tests {
         }];
 
         assert_eq!(
-            truncate_code_mode_result(items, Some(5)),
+            truncate_code_mode_result(items, Some(5), TruncationPolicy::Tokens(10_000)),
             vec![FunctionCallOutputContentItem::InputText {
                 text: "[omitted 1 audio items ...]".to_string(),
             }]
