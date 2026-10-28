@@ -1,15 +1,35 @@
 name: fork-rust-release
 
-# Builds the fork runtime packages for one exact commit, verifies them, runs
-# fork-ci on the same commit, and stages a draft GitHub release. Tags and
-# publication stay manual: the draft job summary lists the commands.
+# Builds the fork runtime packages for one exact commit, verifies them and, on a
+# release dispatch, runs fork-ci on the same commit and stages a draft GitHub
+# release. Tags and publication stay manual: the draft job summary lists the
+# commands.
 #
-# Dispatch from codex/fork; the commit must be on codex/fork and carry the same
-# workflows and scripts as its tip (scripts/fork/release.sh machinery):
+# Each target builds in two bundle jobs, primary and app-server
+# (scripts/fork/release-package.sh); verify merges their parts into the five
+# packages and checks them with scripts/fork/verify-release.sh.
+#
+# A push to codex/fork prebuilds and verifies the packages of the pushed commit
+# (version from codex-rs/Cargo.toml) and keeps them for 30 days. It never
+# touches tags, drafts or releases, and no job of a push run holds a write
+# token; a newer push cancels an older prebuild.
+#
+# Dispatch a release from codex/fork; the commit must be on codex/fork and
+# carry the same workflows and scripts as its tip (scripts/fork/release.sh
+# machinery):
 #   gh workflow run fork-rust-release.yml --ref codex/fork \
 #     -f release_version=X.Y.Z -f checkout_ref=<full SHA>
-# Re-running a failed draft job replaces the partial draft it left.
+# A full-matrix dispatch skips the build when a successful prebuild of the
+# commit has all ten parts (rebuild=true builds anyway), and skips fork-ci when
+# its push run for the commit succeeded. Dispatch once the prebuild is green:
+#   gh run list --workflow fork-rust-release.yml --event push
+# create_draft=false skips the tag and release checks, so a dispatch can
+# rehearse the pipeline for a released version. A failed bundle job re-runs
+# alone (gh run rerun --failed); re-running a failed draft job replaces the
+# partial draft it left.
 on:
+  push:
+    branches: [codex/fork]
   workflow_dispatch:
     inputs:
       release_version:
@@ -25,7 +45,7 @@ on:
         required: false
         type: string
       create_draft:
-        description: Create a draft release after the packages pass verification
+        description: Create a draft release after the packages pass verification (false also skips the tag and release checks)
         required: false
         default: true
         type: boolean
@@ -34,27 +54,42 @@ on:
         required: false
         default: true
         type: boolean
+      rebuild:
+        description: Build every bundle even when a successful prebuild of the commit exists
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
+# Prebuilds share one group, and a newer push cancels the older one (R4.2).
+# Releases group by version and are never cancelled by a push.
 concurrency:
-  group: fork-rust-release-${{ inputs.release_version }}
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'push' && 'fork-rust-prebuild' || format('fork-rust-release-{0}', inputs.release_version) }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   preflight:
     name: Validate inputs
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # actions: read lists the fork-ci and prebuild runs of the release commit.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       version: ${{ steps.validate.outputs.version }}
       sha: ${{ steps.validate.outputs.sha }}
       matrix: ${{ steps.validate.outputs.matrix }}
       targets: ${{ steps.validate.outputs.targets }}
       full_matrix: ${{ steps.validate.outputs.full_matrix }}
+      ci_run_url: ${{ steps.validate.outputs.ci_run_url }}
+      prebuilt_run_id: ${{ steps.validate.outputs.prebuilt_run_id }}
+      prebuilt_run_url: ${{ steps.validate.outputs.prebuilt_run_url }}
     steps:
       - name: Require a full commit SHA and a codex/fork dispatch
+        if: github.event_name != 'push'
         env:
           CHECKOUT_REF: ${{ inputs.checkout_ref }}
           DISPATCH_REF: ${{ github.ref }}
@@ -69,13 +104,16 @@ jobs:
           }
 
       # Trusted code first: the dispatched codex/fork commit checks where the
-      # release commit comes from before any code of that commit runs.
+      # release commit comes from before any code of that commit runs. A push
+      # builds the pushed tip of codex/fork, so this checkout is also the code
+      # it builds.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Require the release commit on codex/fork with this workflow's machinery
+        if: github.event_name != 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -84,28 +122,40 @@ jobs:
         run: scripts/fork/release.sh provenance --repo "${REPO}" --sha "${SHA}" --base "${DISPATCHED}"
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: github.event_name != 'push'
         with:
           ref: ${{ inputs.checkout_ref }}
           persist-credentials: false
 
-      - name: Validate version, commit, matrix, tags and releases
+      - name: Validate version, commit and matrix; check tags and releases; find reusable runs
         id: validate
         env:
+          EVENT: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.release_version }}
-          SHA: ${{ inputs.checkout_ref }}
-          BUILD_MATRIX: ${{ inputs.build_matrix }}
           REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.release_version }}
+          SHA: ${{ github.event_name == 'push' && github.sha || inputs.checkout_ref }}
+          BUILD_MATRIX: ${{ inputs.build_matrix }}
+          CREATE_DRAFT: ${{ inputs.create_draft }}
+          REBUILD: ${{ inputs.rebuild }}
         run: |
-          scripts/fork/release.sh preflight --repo "${REPO}" --version "${VERSION}" \
-            --sha "${SHA}" --matrix "${BUILD_MATRIX}" --output "${GITHUB_OUTPUT}"
+          if [[ "${EVENT}" == push ]]; then
+            # Prebuild: version from codex-rs/Cargo.toml, no GitHub calls (R4.1).
+            scripts/fork/release.sh preflight --mode prebuild --sha "${SHA}" --output "${GITHUB_OUTPUT}"
+          else
+            scripts/fork/release.sh preflight --repo "${REPO}" --version "${VERSION}" \
+              --sha "${SHA}" --matrix "${BUILD_MATRIX}" --create-draft "${CREATE_DRAFT}" \
+              --rebuild "${REBUILD}" --output "${GITHUB_OUTPUT}"
+          fi
 
   # Drafts are visible only to a token with push access, so this job holds
-  # contents: write; it only reads releases. It always runs (its steps are
-  # conditional) so that build never turns skipped through a skipped need.
+  # contents: write; it only reads releases. A push run skips the whole job, so
+  # no job of a prebuild holds a write token (R4.1). On a dispatch it always
+  # runs (its steps are conditional), and build and ci start after it.
   draft-precheck:
     name: Check existing releases for the draft
     needs: preflight
+    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -131,17 +181,27 @@ jobs:
           SHA: ${{ needs.preflight.outputs.sha }}
         run: scripts/fork/release.sh draft-check --repo "${REPO}" --version "${VERSION}" --sha "${SHA}"
 
+  # One job per target and bundle (R1.1). The parts of a successful prebuild of
+  # the release commit replace this job on a full-matrix dispatch (R4.3).
   build:
-    name: Build ${{ matrix.target }}
+    name: Build ${{ matrix.target }} ${{ matrix.bundle }}
     needs: [preflight, draft-precheck]
+    if: >-
+      !cancelled()
+      && needs.preflight.result == 'success'
+      && needs.draft-precheck.result != 'failure'
+      && needs.preflight.outputs.prebuilt_run_id == ''
     runs-on: ${{ matrix.runner }}
-    # macOS arm64 took 201 minutes for 0.164.0; hosted jobs stop at 360.
+    # macOS arm64 took 201 minutes for 0.164.0 in one job; hosted jobs stop at 360.
     timeout-minutes: 330
     defaults:
       run:
         working-directory: codex-rs
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      # No debuginfo (R1.2): packaging strips it anyway, and the final link
+      # takes less time and memory. [profile.release] stays upstream's.
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
     strategy:
       fail-fast: false
       matrix:
@@ -176,6 +236,8 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
+      # Both Linux bundles embed the digest of the bwrap they built (R1.3);
+      # verify requires the packaged bwrap's digest in both (R2.3).
       - name: Build bwrap and export digest
         if: runner.os == 'Linux'
         shell: bash
@@ -194,84 +256,65 @@ jobs:
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
+          BINARIES: ${{ matrix.binaries }}
         run: |
           set -euo pipefail
-          binaries=(codex codex-app-server codex-code-mode-host codex-responses-api-proxy)
           if [[ "${TARGET}" == *windows* ]]; then
             export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
-            binaries+=(codex-command-runner codex-windows-sandbox-setup)
           fi
+          read -r -a binaries <<<"${BINARIES}"
           build_args=()
           for binary in "${binaries[@]}"; do
-            build_args+=(--bin "${binary}")
+            # The previous step built and stripped bwrap; building it again
+            # could replace the binary whose digest this bundle embeds.
+            if [[ "${binary}" != bwrap ]]; then
+              build_args+=(--bin "${binary}")
+            fi
           done
-          cargo build --locked --target "${TARGET}" --release "${build_args[@]}"
+          cargo build --locked --target "${TARGET}" --release --timings "${build_args[@]}"
 
-      - name: Package runtime
+      - name: Package the bundle part
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
+          BUNDLE: ${{ matrix.bundle }}
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
-          set -euo pipefail
-          dest="${GITHUB_WORKSPACE}/dist/${TARGET}"
-          stage_dir="${RUNNER_TEMP}/fork-release-${TARGET}"
-          rm -rf "${stage_dir}"
-          mkdir -p "${dest}" "${stage_dir}/bin"
+          bash ../scripts/fork/release-package.sh part --version "${VERSION}" --target "${TARGET}" \
+            --bundle "${BUNDLE}" --release-dir "target/${TARGET}/release" --out ../parts
 
-          binaries=(codex codex-app-server codex-code-mode-host codex-responses-api-proxy)
-          if [[ "${TARGET}" == *linux* ]]; then
-            binaries+=(bwrap)
-          elif [[ "${TARGET}" == *windows* ]]; then
-            binaries+=(codex-command-runner codex-windows-sandbox-setup)
-          fi
-
-          extension=""
-          if [[ "${TARGET}" == *windows* ]]; then
-            extension=".exe"
-          fi
-
-          expected_entries=()
-          for binary in "${binaries[@]}"; do
-            cp "target/${TARGET}/release/${binary}${extension}" "${stage_dir}/bin/${binary}${extension}"
-            expected_entries+=("bin/${binary}${extension}")
-            if [[ "${TARGET}" == *apple-darwin ]]; then
-              strip -S -x "${stage_dir}/bin/${binary}"
-            elif [[ "${TARGET}" != *windows* && "${binary}" != "bwrap" ]]; then
-              strip --strip-debug --strip-unneeded "${stage_dir}/bin/${binary}"
-            fi
-          done
-
-          if [[ "${TARGET}" == *windows* ]]; then
-            archive="${dest}/codex-package-${TARGET}.zip"
-            (cd "${stage_dir}" && 7z a -tzip "${archive}" bin)
-            actual_entries="$(
-              7z l -ba "${archive}" |
-                awk '{print $NF}' |
-                sed 's#\\#/#g' |
-                sed -E '/^bin\/?$/d' |
-                sort
-            )"
-          else
-            archive="${dest}/codex-package-${TARGET}.tar.gz"
-            tar -C "${stage_dir}" -czf "${archive}" bin
-            actual_entries="$(tar -tzf "${archive}" | sed -E '/^bin\/?$/d' | sort)"
-          fi
-
-          expected_listing="$(printf '%s\n' "${expected_entries[@]}" | sort)"
-          test "${actual_entries}" = "${expected_listing}"
-          test "$("${stage_dir}/bin/codex${extension}" --version)" = "codex-cli ${VERSION}"
-
-      - name: Upload release binaries
+      # The tar keeps the 0755 modes that the artifact zip would drop (R1.5).
+      # overwrite: a re-run of a failed bundle job uploads again.
+      - name: Upload the bundle part
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: codex-${{ needs.preflight.outputs.version }}-${{ matrix.target }}
-          path: dist/${{ matrix.target }}
+          name: codex-parts-${{ needs.preflight.outputs.version }}-${{ matrix.target }}-${{ matrix.bundle }}
+          path: parts/codex-parts-${{ needs.preflight.outputs.version }}-${{ matrix.target }}-${{ matrix.bundle }}.tar
           if-no-files-found: error
+          retention-days: ${{ github.event_name == 'push' && 30 || '' }}
+          overwrite: true
 
+      - name: Upload cargo timings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: codex-timings-${{ needs.preflight.outputs.version }}-${{ matrix.target }}-${{ matrix.bundle }}
+          path: codex-rs/target/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
+          retention-days: ${{ github.event_name == 'push' && 30 || '' }}
+          overwrite: true
+
+  # A successful push run of fork-ci.yml for the release commit stands in for
+  # this job (R3.1). A push run never calls fork-ci: the push runs it itself.
   ci:
     name: fork-ci
     needs: [preflight, draft-precheck]
+    if: >-
+      !cancelled()
+      && github.event_name != 'push'
+      && needs.preflight.result == 'success'
+      && needs.draft-precheck.result != 'failure'
+      && needs.preflight.outputs.ci_run_url == ''
     uses: ./.github/workflows/fork-ci.yml
     with:
       ref: ${{ needs.preflight.outputs.sha }}
@@ -279,8 +322,18 @@ jobs:
   verify:
     name: Verify packages
     needs: [preflight, build]
+    if: >-
+      !cancelled()
+      && needs.preflight.result == 'success'
+      && (needs.build.result == 'success'
+        || (needs.build.result == 'skipped' && needs.preflight.outputs.prebuilt_run_id != ''))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # actions: read downloads the parts of a prebuild run (R4.3). The job runs
+    # the packaged binaries, so it holds no write permission.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -292,14 +345,33 @@ jobs:
           go-version-file: sdk/go/go.mod
           cache-dependency-path: sdk/go/go.mod
 
-      # Package artifacts are codex-<version>-<target>; every target contains a
-      # hyphen, so the pattern skips codex-<version>-SHA256SUMS.
-      - name: Download packages
+      - name: Download the bundle parts built by this run
+        if: needs.preflight.outputs.prebuilt_run_id == ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: codex-${{ needs.preflight.outputs.version }}-*-*
-          path: ${{ runner.temp }}/dist
+          pattern: codex-parts-${{ needs.preflight.outputs.version }}-*
+          path: ${{ runner.temp }}/parts
           merge-multiple: true
+
+      - name: Download the bundle parts of the prebuild run
+        if: needs.preflight.outputs.prebuilt_run_id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: codex-parts-${{ needs.preflight.outputs.version }}-*
+          path: ${{ runner.temp }}/parts
+          merge-multiple: true
+          run-id: ${{ needs.preflight.outputs.prebuilt_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Assemble the packages from the bundle parts
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          TARGETS: ${{ needs.preflight.outputs.targets }}
+          PARTS: ${{ runner.temp }}/parts
+          DIST: ${{ runner.temp }}/dist
+        run: |
+          scripts/fork/release-package.sh assemble --version "${VERSION}" --parts "${PARTS}" \
+            --dist "${DIST}" --targets "${TARGETS}"
 
       - name: Verify layout, modes, architectures, version and strict handshake
         env:
@@ -308,24 +380,49 @@ jobs:
           DIST: ${{ runner.temp }}/dist
         run: scripts/fork/verify-release.sh --version "${VERSION}" --dist "${DIST}" --targets "${TARGETS}"
 
+      - name: Name the run that built the bundle parts
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PARTS_RUN_URL: ${{ needs.preflight.outputs.prebuilt_run_url }}
+        run: |
+          if [[ -n "${PARTS_RUN_URL}" ]]; then
+            echo "Bundle parts: prebuild run ${PARTS_RUN_URL}, assembled and verified in ${RUN_URL}." >>"${GITHUB_STEP_SUMMARY}"
+          else
+            echo "Bundle parts: built by this run, ${RUN_URL}." >>"${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Upload the verified packages
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: codex-${{ needs.preflight.outputs.version }}-packages
+          path: ${{ runner.temp }}/dist/codex-package-*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: ${{ github.event_name == 'push' && 30 || '' }}
+          overwrite: true
+
       - name: Upload SHA256SUMS
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: codex-${{ needs.preflight.outputs.version }}-SHA256SUMS
           path: ${{ runner.temp }}/dist/SHA256SUMS
           if-no-files-found: error
+          retention-days: ${{ github.event_name == 'push' && 30 || '' }}
+          overwrite: true
 
   # !cancelled(), not always(): a cancelled run must not start or keep a draft
-  # job. A failed ci still reaches this condition when require_ci is false.
+  # job. A failed ci still reaches this condition when require_ci is false, and
+  # a skipped ci when fork-ci passed in the push run of the commit (R3.1).
   draft:
     name: Create draft release
     needs: [preflight, verify, ci]
     if: >-
       !cancelled()
+      && github.event_name != 'push'
       && inputs.create_draft
       && needs.preflight.outputs.full_matrix == 'true'
       && needs.verify.result == 'success'
-      && (needs.ci.result == 'success' || !inputs.require_ci)
+      && (needs.ci.result == 'success' || needs.preflight.outputs.ci_run_url != '' || !inputs.require_ci)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -336,12 +433,18 @@ jobs:
           ref: ${{ needs.preflight.outputs.sha }}
           persist-credentials: false
 
-      - name: Download verified packages and SHA256SUMS
+      # Exactly the packages and SHA256SUMS that verify checked (R2.4).
+      - name: Download the verified packages
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: codex-${{ needs.preflight.outputs.version }}-*
+          name: codex-${{ needs.preflight.outputs.version }}-packages
           path: ${{ runner.temp }}/dist
-          merge-multiple: true
+
+      - name: Download SHA256SUMS
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codex-${{ needs.preflight.outputs.version }}-SHA256SUMS
+          path: ${{ runner.temp }}/dist
 
       - name: Stage the draft release
         env:
@@ -351,6 +454,9 @@ jobs:
           SHA: ${{ needs.preflight.outputs.sha }}
           DIST: ${{ runner.temp }}/dist
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CI_RUN_URL: ${{ needs.preflight.outputs.ci_run_url }}
+          PARTS_RUN_URL: ${{ needs.preflight.outputs.prebuilt_run_url }}
         run: |
           scripts/fork/release.sh draft --repo "${REPO}" --version "${VERSION}" \
-            --sha "${SHA}" --dist "${DIST}" --run-url "${RUN_URL}"
+            --sha "${SHA}" --dist "${DIST}" --run-url "${RUN_URL}" \
+            --ci-run-url "${CI_RUN_URL}" --parts-run-url "${PARTS_RUN_URL}"

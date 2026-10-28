@@ -3,11 +3,12 @@
 #
 #   scripts/fork/test-release.sh
 #
-# Runs preflight against this checkout (HEAD and codex-rs/Cargo.toml),
-# provenance against a small temporary git repository, and draft against a small
-# fake dist. Every GitHub call goes to a stub `gh` placed first on PATH, so the
-# test is hermetic and never changes GitHub. The last section checks the fork
-# workflows statically.
+# Runs preflight (release and prebuild modes) against this checkout (HEAD and
+# codex-rs/Cargo.toml), find-run against fake workflow run and artifact
+# listings, provenance against a small temporary git repository, and draft
+# against a small fake dist. Every GitHub call goes to a stub `gh` placed first
+# on PATH, so the test is hermetic and never changes GitHub. The last section
+# checks the fork workflows statically.
 
 # Written for bash 3.2 too, so an old bash reaches this message.
 if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4))); then
@@ -46,7 +47,9 @@ marker="Draft staged by fork-rust-release."
 # Stub gh: answers the calls release.sh makes with the post---jq output, using
 # files under $FAKE_GH_STATE. Releases are lines of
 #   id <TAB> draft <TAB> published_at <TAB> target <TAB> marker <TAB> html_url
-# in $FAKE_GH_STATE/releases. Unknown calls fail loudly.
+# in $FAKE_GH_STATE/releases. Workflow runs and run artifacts are raw API JSON
+# (release.sh filters them with jq): runs-<workflow file> and artifacts-<run id>.
+# Unknown calls fail loudly.
 mkdir -p "${work}/bin"
 cat >"${work}/bin/gh" <<'GH'
 #!/usr/bin/env bash
@@ -60,6 +63,24 @@ if [[ -f "${state}/fail-api" && "${args}" == *" api "* ]]; then
 fi
 touch "${state}/releases"
 case "${args}" in
+  " api repos/"*"/actions/workflows/"*"/runs?"*)
+    workflow="${args#*/actions/workflows/}"
+    workflow="${workflow%%/runs\?*}"
+    if [[ -f "${state}/runs-${workflow}" ]]; then
+      cat "${state}/runs-${workflow}"
+    else
+      echo '{"total_count":0,"workflow_runs":[]}'
+    fi
+    ;;
+  " api repos/"*"/actions/runs/"*"/artifacts?"*)
+    id="${args#*/actions/runs/}"
+    id="${id%%/artifacts*}"
+    if [[ -f "${state}/artifacts-${id}" ]]; then
+      cat "${state}/artifacts-${id}"
+    else
+      echo '{"total_count":0,"artifacts":[]}'
+    fi
+    ;;
   *"/git/matching-refs/tags/"*)
     tag="${args#*/git/matching-refs/tags/}"
     tag="${tag%% *}"
@@ -221,10 +242,51 @@ check preflight-offline ok '^full_matrix=true$' \
 expect preflight-output-file \
   grep -qx "sha=${head}" "${work}/github-output"
 expect preflight-output-matrix \
-  grep -q '^matrix=\[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"}' "${work}/github-output"
+  grep -q '^matrix=\[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","bundle":"primary","binaries":"codex codex-responses-api-proxy bwrap"}' "${work}/github-output"
+
+# output_value FILE KEY: the value of KEY= in a preflight output.
+output_value() { sed -n "s/^$2=//p" "$1"; }
+
+# R1.1: one matrix entry per target and bundle, with the bundle's binaries;
+# targets and full_matrix still count targets.
+bundle_binaries='{
+  "primary": {"linux": "codex codex-responses-api-proxy bwrap",
+              "windows": "codex codex-responses-api-proxy codex-command-runner codex-windows-sandbox-setup",
+              "apple": "codex codex-responses-api-proxy"},
+  "app-server": {"linux": "codex-app-server codex-code-mode-host",
+                 "windows": "codex-app-server codex-code-mode-host",
+                 "apple": "codex-app-server codex-code-mode-host"}
+}'
+# bundle_matrix_ok MATRIX COUNT: COUNT entries, each target twice (primary, then
+# app-server, in target order), each with the binaries of the bundles table.
+bundle_matrix_ok() {
+  jq -e --argjson want "${bundle_binaries}" --argjson count "$2" '
+    length == $count
+    and ([.[] | .bundle] == ([range($count / 2)] | map("primary", "app-server")))
+    and ([.[] | .target] | [range(0; length; 2) as $i | .[$i] == .[$i + 1]] | all)
+    and all(.[]; keys == ["binaries", "bundle", "runner", "target"]
+      and .binaries == $want[.bundle][.target | if test("linux") then "linux"
+        elif test("windows") then "windows" else "apple" end])
+  ' <<<"$1" >/dev/null
+}
+expect preflight-bundle-matrix-full \
+  bundle_matrix_ok "$(output_value "${work}/github-output" matrix)" 10
+expect preflight-targets-per-target test \
+  "$(output_value "${work}/github-output" targets)" = \
+  "x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin x86_64-pc-windows-msvc"
+expect preflight-offline-no-reuse test -z \
+  "$(output_value "${work}/github-output" ci_run_url)$(output_value "${work}/github-output" prebuilt_run_id)"
+
 check preflight-partial-matrix ok '^full_matrix=false$' \
   "${release}" preflight --version "${version}" --sha "${head}" \
-  --matrix '[{"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-gnu"}]'
+  --matrix '[{"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-gnu"}]' --output "${work}/partial-output"
+expect preflight-bundle-matrix-partial \
+  bundle_matrix_ok "$(output_value "${work}/partial-output" matrix)" 2
+expect preflight-partial-targets test "$(output_value "${work}/partial-output" targets)" = aarch64-unknown-linux-gnu
+check preflight-bad-mode fail '--mode must be release or prebuild' \
+  "${release}" preflight --mode nightly --version "${version}" --sha "${head}"
+check preflight-bad-create-draft fail '--create-draft must be true or false' \
+  "${release}" preflight --version "${version}" --sha "${head}" --create-draft yes
 check preflight-unknown-target fail 'build_matrix must be' \
   "${release}" preflight --version "${version}" --sha "${head}" \
   --matrix '[{"runner":"ubuntu-24.04","target":"riscv64gc-unknown-linux-gnu"}]'
@@ -266,6 +328,191 @@ FAKE_GH_STATE="$(new_state)"
 touch "${FAKE_GH_STATE}/fail-api"
 check preflight-api-error fail "cannot look up tag rust-v${version}" \
   "${release}" preflight --version "${version}" --sha "${head}" --repo "${repo}"
+
+# --- prebuild mode (R4.1) and create_draft=false (R4.5) ----------------------
+
+FAKE_GH_STATE="$(new_state)"
+check preflight-prebuild ok "^version=${version//./\\.}$" \
+  "${release}" preflight --mode prebuild --sha "${head}" --output "${work}/prebuild-output"
+expect preflight-prebuild-no-gh-calls test ! -s "${FAKE_GH_STATE}/calls"
+expect preflight-prebuild-full-matrix grep -qx 'full_matrix=true' "${work}/prebuild-output"
+expect preflight-prebuild-bundles bundle_matrix_ok "$(output_value "${work}/prebuild-output" matrix)" 10
+expect preflight-prebuild-no-reuse test -z \
+  "$(output_value "${work}/prebuild-output" ci_run_url)$(output_value "${work}/prebuild-output" prebuilt_run_id)"
+check preflight-prebuild-no-repo fail 'prebuild mode makes no GitHub calls' \
+  "${release}" preflight --mode prebuild --sha "${head}" --repo "${repo}"
+check preflight-prebuild-no-matrix fail 'prebuild mode builds the default matrix' \
+  "${release}" preflight --mode prebuild --sha "${head}" \
+  --matrix '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"}]'
+check preflight-prebuild-version-mismatch fail "not '${version}-beta.1'" \
+  "${release}" preflight --mode prebuild --sha "${head}" --version "${version}-beta.1"
+check preflight-prebuild-checkout-mismatch fail "checkout is at ${head}" \
+  "${release}" preflight --mode prebuild --sha "${other_sha}"
+expect preflight-prebuild-never-called-gh test ! -s "${FAKE_GH_STATE}/calls"
+
+# A released version: tags at the release commit, rust-vX published.
+released_state() {
+  local dir
+  dir="$(new_state)"
+  touch "${dir}/published"
+  printf 'commit %s\n' "${head}" >"${dir}/ref-rust-v${version}"
+  printf 'commit %s\n' "${head}" >"${dir}/ref-sdk_go_v${version}"
+  printf '%s\n' "${dir}"
+}
+FAKE_GH_STATE="$(released_state)"
+check preflight-rehearsal-of-released ok 'create_draft is false: tags and releases' \
+  "${release}" preflight --version "${version}" --sha "${head}" --repo "${repo}" --create-draft false
+expect preflight-rehearsal-skips-tags-and-releases no_calls_match 'matching-refs|/releases'
+FAKE_GH_STATE="$(released_state)"
+check preflight-draft-of-released fail "rust-v${version} is already published" \
+  "${release}" preflight --version "${version}" --sha "${head}" --repo "${repo}" --create-draft true
+
+# --- find-run and reuse (R3.1, R3.2, R4.3, R4.4) ---------------------------
+
+ci_path=.github/workflows/fork-ci.yml
+release_path=.github/workflows/fork-rust-release.yml
+runs_url=https://github.com/example/codex/actions/runs
+
+# run_json ID PATH EVENT BRANCH SHA CONCLUSION CREATED_AT: one workflow run.
+run_json() {
+  jq -cn --argjson id "$1" --arg path "$2" --arg event "$3" --arg branch "$4" --arg sha "$5" \
+    --arg conclusion "$6" --arg created "$7" --arg url "${runs_url}/$1" '{
+      id: $id, path: $path, event: $event, head_branch: $branch, head_sha: $sha,
+      status: "completed", conclusion: $conclusion, created_at: $created, html_url: $url}'
+}
+# runs_listing RUN_JSON...: a workflow runs API response.
+runs_listing() { printf '%s\n' "$@" | jq -cs '{total_count: length, workflow_runs: .}'; }
+# parts_listing [DROP [EXPIRED]]: a run artifacts API response with the ten
+# parts of ${version} (without DROP, with EXPIRED expired) and other artifacts.
+parts_listing() {
+  local target bundle
+  {
+    for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin \
+      aarch64-apple-darwin x86_64-pc-windows-msvc; do
+      for bundle in primary app-server; do
+        printf 'codex-parts-%s-%s-%s\n' "${version}" "${target}" "${bundle}"
+        printf 'codex-timings-%s-%s-%s\n' "${version}" "${target}" "${bundle}"
+      done
+    done
+    printf 'codex-%s-packages\ncodex-%s-SHA256SUMS\n' "${version}" "${version}"
+  } | jq -Rn --arg drop "${1-}" --arg expired "${2-}" '
+    [inputs | select(. != $drop) | {name: ., expired: (. == $expired)}]
+    | {total_count: length, artifacts: .}'
+}
+# finds_nothing WORKFLOW [find-run options...]: find-run succeeds without a run.
+finds_nothing() {
+  local workflow="$1" out
+  shift
+  out="$("${release}" find-run --repo "${repo}" --workflow "${workflow}" --sha "${head}" \
+    --event push --branch codex/fork "$@" 2>/dev/null)" && [[ -z "${out}" ]]
+}
+find_ci=("${release}" find-run --repo "${repo}" --workflow fork-ci.yml --sha "${head}" --event push --branch codex/fork)
+find_prebuild=("${release}" find-run --repo "${repo}" --workflow fork-rust-release.yml --sha "${head}"
+  --event push --branch codex/fork --parts-version "${version}")
+x86_part="codex-parts-${version}-x86_64-apple-darwin-primary"
+
+FAKE_GH_STATE="$(new_state)"
+runs_listing "$(run_json 101 "${ci_path}" push codex/fork "${head}" success 2026-10-28T01:00:00Z)" \
+  >"${FAKE_GH_STATE}/runs-fork-ci.yml"
+check find-run-ci-push-success ok "^101 ${runs_url}/101$" "${find_ci[@]}"
+expect find-run-ci-query calls_match \
+  "^gh api repos/${repo}/actions/workflows/fork-ci.yml/runs\?head_sha=${head}&event=push&branch=codex/fork&status=success&per_page=100 $"
+
+for spec in "other-sha 102 push codex/fork ${other_sha} success" \
+  "failure 103 push codex/fork ${head} failure" \
+  "dispatch-event 104 workflow_dispatch codex/fork ${head} success" \
+  "other-branch 105 push main ${head} success"; do
+  read -r name id event branch sha conclusion <<<"${spec}"
+  FAKE_GH_STATE="$(new_state)"
+  runs_listing "$(run_json "${id}" "${ci_path}" "${event}" "${branch}" "${sha}" "${conclusion}" 2026-10-28T01:00:00Z)" \
+    >"${FAKE_GH_STATE}/runs-fork-ci.yml"
+  expect "find-run-ci-${name}-ignored" finds_nothing fork-ci.yml
+done
+
+FAKE_GH_STATE="$(new_state)"
+runs_listing "$(run_json 106 "${ci_path}" push codex/fork "${head}" success 2026-10-28T01:00:00Z)" \
+  "$(run_json 107 "${ci_path}" push codex/fork "${head}" success 2026-10-28T03:00:00Z)" \
+  >"${FAKE_GH_STATE}/runs-fork-ci.yml"
+check find-run-newest ok "^107 ${runs_url}/107$" "${find_ci[@]}"
+
+FAKE_GH_STATE="$(new_state)"
+runs_listing "$(run_json 201 "${release_path}" push codex/fork "${head}" success 2026-10-28T01:00:00Z)" \
+  >"${FAKE_GH_STATE}/runs-fork-rust-release.yml"
+parts_listing >"${FAKE_GH_STATE}/artifacts-201"
+check find-run-prebuild-ten-parts ok "^201 ${runs_url}/201$" "${find_prebuild[@]}"
+
+FAKE_GH_STATE="$(new_state)"
+runs_listing "$(run_json 202 "${release_path}" push codex/fork "${head}" success 2026-10-28T01:00:00Z)" \
+  >"${FAKE_GH_STATE}/runs-fork-rust-release.yml"
+parts_listing "${x86_part}" >"${FAKE_GH_STATE}/artifacts-202"
+expect find-run-prebuild-nine-parts finds_nothing fork-rust-release.yml --parts-version "${version}"
+
+FAKE_GH_STATE="$(new_state)"
+runs_listing "$(run_json 203 "${release_path}" push codex/fork "${head}" success 2026-10-28T01:00:00Z)" \
+  >"${FAKE_GH_STATE}/runs-fork-rust-release.yml"
+parts_listing "" "${x86_part}" >"${FAKE_GH_STATE}/artifacts-203"
+expect find-run-prebuild-expired-part finds_nothing fork-rust-release.yml --parts-version "${version}"
+
+FAKE_GH_STATE="$(new_state)"
+runs_listing "$(run_json 204 .github/workflows/rust-release.yml push codex/fork "${head}" success 2026-10-28T01:00:00Z)" \
+  >"${FAKE_GH_STATE}/runs-fork-rust-release.yml"
+parts_listing >"${FAKE_GH_STATE}/artifacts-204"
+expect find-run-prebuild-other-workflow finds_nothing fork-rust-release.yml --parts-version "${version}"
+
+FAKE_GH_STATE="$(new_state)"
+runs_listing "$(run_json 205 "${release_path}" push codex/fork "${head}" success 2026-10-28T03:00:00Z)" \
+  "$(run_json 206 "${release_path}" push codex/fork "${head}" success 2026-10-28T01:00:00Z)" \
+  >"${FAKE_GH_STATE}/runs-fork-rust-release.yml"
+parts_listing "${x86_part}" >"${FAKE_GH_STATE}/artifacts-205"
+parts_listing >"${FAKE_GH_STATE}/artifacts-206"
+check find-run-prebuild-older-complete ok "^206 ${runs_url}/206$" "${find_prebuild[@]}"
+
+FAKE_GH_STATE="$(new_state)"
+touch "${FAKE_GH_STATE}/fail-api"
+check find-run-api-error fail 'cannot list the fork-ci.yml runs' "${find_ci[@]}"
+check find-run-bad-workflow fail 'invalid workflow file' \
+  "${release}" find-run --repo "${repo}" --workflow ../x --sha "${head}" --event push --branch codex/fork
+
+# reuse_state: a successful fork-ci push run 301 and a prebuild run 302 with
+# every part, both for HEAD.
+reuse_state() {
+  local dir
+  dir="$(new_state)"
+  runs_listing "$(run_json 301 "${ci_path}" push codex/fork "${head}" success 2026-10-28T01:00:00Z)" \
+    >"${dir}/runs-fork-ci.yml"
+  runs_listing "$(run_json 302 "${release_path}" push codex/fork "${head}" success 2026-10-28T01:00:00Z)" \
+    >"${dir}/runs-fork-rust-release.yml"
+  parts_listing >"${dir}/artifacts-302"
+  printf '%s\n' "${dir}"
+}
+FAKE_GH_STATE="$(reuse_state)"
+check preflight-reuses-runs ok 'reusing the parts of prebuild run' \
+  "${release}" preflight --version "${version}" --sha "${head}" --repo "${repo}" --output "${work}/reuse-output"
+expect preflight-reuse-ci-url grep -qx "ci_run_url=${runs_url}/301" "${work}/reuse-output"
+expect preflight-reuse-prebuilt-id grep -qx 'prebuilt_run_id=302' "${work}/reuse-output"
+expect preflight-reuse-prebuilt-url grep -qx "prebuilt_run_url=${runs_url}/302" "${work}/reuse-output"
+
+FAKE_GH_STATE="$(reuse_state)"
+check preflight-rebuild ok 'rebuild is true' \
+  "${release}" preflight --version "${version}" --sha "${head}" --repo "${repo}" --rebuild true \
+  --output "${work}/rebuild-output"
+expect preflight-rebuild-no-prebuild grep -qx 'prebuilt_run_id=' "${work}/rebuild-output"
+expect preflight-rebuild-no-lookup no_calls_match 'fork-rust-release.yml/runs|/artifacts'
+expect preflight-rebuild-keeps-ci grep -qx "ci_run_url=${runs_url}/301" "${work}/rebuild-output"
+
+FAKE_GH_STATE="$(reuse_state)"
+check preflight-partial-builds ok 'partial matrix: every bundle is built' \
+  "${release}" preflight --version "${version}" --sha "${head}" --repo "${repo}" \
+  --matrix '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"}]' --output "${work}/partial-reuse-output"
+expect preflight-partial-no-prebuild grep -qx 'prebuilt_run_id=' "${work}/partial-reuse-output"
+expect preflight-partial-no-lookup no_calls_match 'fork-rust-release.yml/runs|/artifacts'
+
+FAKE_GH_STATE="$(new_state)"
+check preflight-nothing-to-reuse ok 'the ci job runs fork-ci' \
+  "${release}" preflight --version "${version}" --sha "${head}" --repo "${repo}" --output "${work}/fresh-output"
+expect preflight-nothing-to-reuse-outputs test \
+  "$(grep -E '^(ci_run_url|prebuilt_run_id|prebuilt_run_url)=' "${work}/fresh-output" | tr '\n' ' ')" = \
+  "ci_run_url= prebuilt_run_id= prebuilt_run_url= "
 
 # --- provenance ------------------------------------------------------------
 
@@ -349,6 +596,20 @@ expect draft-create-six-assets test "$(wc -l <"${FAKE_GH_STATE}/assets-4243")" -
 expect draft-create-no-tags-or-publish no_calls_match 'git tag|-F draft=false|-X DELETE|-X PATCH'
 expect draft-notes-carry-marker grep -qF "${marker}" "${FAKE_GH_STATE}/notes"
 expect draft-summary-uses-created-id grep -q 'releases/4243 -F draft=false' "${work}/draft-create.log"
+
+# R3.1, UC4: the notes and the summary name the reused runs.
+FAKE_GH_STATE="$(new_state)"
+check draft-names-reused-runs ok "fork-ci passed for this commit in its push run ${runs_url}/301" \
+  "${draft[@]}" --dist "${dist}" --run-url "${runs_url}/1" \
+  --ci-run-url "${runs_url}/301" --parts-run-url "${runs_url}/302"
+expect draft-summary-names-prebuild grep -qF \
+  "Bundles built by the prebuild run ${runs_url}/302, assembled and verified in ${runs_url}/1." "${work}/draft-names-reused-runs.log"
+expect draft-notes-name-prebuild grep -qxF -- "- Bundles built by the prebuild run: ${runs_url}/302" "${FAKE_GH_STATE}/notes"
+expect draft-notes-name-ci grep -qxF -- "- fork-ci (push run of this commit): ${runs_url}/301" "${FAKE_GH_STATE}/notes"
+FAKE_GH_STATE="$(new_state)"
+check draft-empty-run-urls ok 'Publication stays manual' \
+  "${draft[@]}" --dist "${dist}" --run-url "${runs_url}/1" --ci-run-url "" --parts-run-url ""
+expect draft-notes-without-reuse bash -c "! grep -qE 'prebuild run|push run of this commit' '${FAKE_GH_STATE}/notes'"
 
 FAKE_GH_STATE="$(new_state)"
 release_line 77 false 2026-10-01T00:00:00Z "${head}" false >"${FAKE_GH_STATE}/releases"
@@ -532,6 +793,114 @@ expect workflow-draft-cancellable grep -q '!cancelled()' <<<"${draft_job}"
 expect workflow-draft-not-always bash -c "! grep -q 'always()' <<<'${draft_job//\'/}'"
 expect workflow-result-always grep -qE '^ +if: always\(\)$' <<<"$(job_block "${fork_ci}" result)"
 
+# top_block FILE KEY: the lines under a top-level KEY of a workflow.
+top_block() {
+  awk -v key="$2:" '$0 == key { inside = 1; next } inside && /^#/ { next } inside && /^[^ ]/ { exit } inside { print }' "$1"
+}
+# job_if FILE JOB: the job-level if expression of JOB, on one line.
+job_if() {
+  job_block "$1" "$2" | awk '
+    /^    if:/ { inside = 1; sub(/^    if: *(>-)? */, ""); if ($0 != "") print; next }
+    inside && /^      / { sub(/^ +/, ""); print; next }
+    inside { exit }
+  ' | tr '\n' ' '
+}
+# step_if BLOCK NAME: the if expression of the step named NAME in BLOCK.
+step_if() {
+  awk -v want="- name: $2" '
+    { line = $0; sub(/^ +/, "", line) }
+    line == want { inside = 1; next }
+    inside && line ~ /^- / { exit }
+    inside && line ~ /^if: / { sub(/^if: /, "", line); print line; exit }
+  ' <<<"$1"
+}
+# in_order BLOCK FIRST SECOND: FIRST occurs on an earlier line of BLOCK than SECOND.
+in_order() {
+  local first second
+  first="$(grep -m 1 -nF -- "$2" <<<"$1" | cut -d: -f1)"
+  second="$(grep -m 1 -nF -- "$3" <<<"$1" | cut -d: -f1)"
+  [[ -n "${first}" && -n "${second}" && "${first}" -lt "${second}" ]]
+}
+# contains TEXT FIXED: TEXT contains the fixed string FIXED.
+contains() { [[ "$1" == *"$2"* ]]; }
+# lacks TEXT ERE: no line of TEXT matches ERE.
+lacks() { ! grep -qE -- "$2" <<<"$1"; }
+
+release_jobs="$(awk '/^jobs:/ { inside = 1; next } inside && /^  [A-Za-z0-9_-]+:$/ { sub(/:$/, ""); print $1 }' "${fork_release}")"
+preflight_job="$(job_block "${fork_release}" preflight)"
+build_job="$(job_block "${fork_release}" build)"
+verify_job="$(job_block "${fork_release}" verify)"
+
+# R4.1, R4.2: pushes to codex/fork prebuild; only prebuilds cancel prebuilds.
+expect workflow-push-only-codex-fork test \
+  "$(awk '/^  push:$/ { inside = 1; next } inside && /^  [^ ]/ { exit } inside { print }' <<<"$(top_block "${fork_release}" on)")" = \
+  "    branches: [codex/fork]"
+expect workflow-dispatch-rebuild-input grep -qE '^      rebuild:$' <<<"$(top_block "${fork_release}" on)"
+expect workflow-prebuild-concurrency-group grep -qxF \
+  "  group: \${{ github.event_name == 'push' && 'fork-rust-prebuild' || format('fork-rust-release-{0}', inputs.release_version) }}" \
+  <<<"$(top_block "${fork_release}" concurrency)"
+expect workflow-prebuild-cancel-in-progress grep -qxF "  cancel-in-progress: \${{ github.event_name == 'push' }}" \
+  <<<"$(top_block "${fork_release}" concurrency)"
+expect workflow-top-permissions-read-only test "$(top_block "${fork_release}" permissions | grep .)" = "  contents: read"
+write_jobs=0
+push_writes=""
+for job in ${release_jobs}; do
+  if job_block "${fork_release}" "${job}" | grep -qE '^ +contents: write$'; then
+    write_jobs=$((write_jobs + 1))
+    contains "$(job_if "${fork_release}" "${job}")" "github.event_name != 'push'" || push_writes+=" ${job}"
+  fi
+done
+expect workflow-push-run-no-write-token test -z "${push_writes}" -a "${write_jobs}" -eq 2
+expect workflow-draft-precheck-skipped-on-push test "$(job_if "${fork_release}" draft-precheck)" = "github.event_name != 'push' "
+# shellcheck disable=SC2016 # ${SHA} is workflow shell text
+expect workflow-preflight-prebuild-mode grep -qF 'release.sh preflight --mode prebuild --sha "${SHA}"' <<<"${preflight_job}"
+expect workflow-preflight-reads-actions grep -qxF '      actions: read' <<<"${preflight_job}"
+expect workflow-uploads-kept-30-days-on-push test \
+  "$(grep -c 'uses: actions/upload-artifact@' "${fork_release}")" -eq \
+  "$(grep -cxF "          retention-days: \${{ github.event_name == 'push' && 30 || '' }}" "${fork_release}")"
+
+# R1.1-R1.6: one job per bundle, without debuginfo, bwrap first on Linux.
+build_if="$(job_if "${fork_release}" build)"
+expect workflow-build-after-cheap-checks contains "${build_if}" \
+  "!cancelled() && needs.preflight.result == 'success' && needs.draft-precheck.result != 'failure'"
+expect workflow-build-skipped-for-prebuild contains "${build_if}" "needs.preflight.outputs.prebuilt_run_id == ''"
+# shellcheck disable=SC2016 # ${{ }} is workflow syntax
+expect workflow-build-bundle-binaries grep -qxF '          BINARIES: ${{ matrix.binaries }}' <<<"${build_job}"
+expect workflow-build-no-debuginfo grep -qxF '      CARGO_PROFILE_RELEASE_DEBUG: "0"' <<<"${build_job}"
+# shellcheck disable=SC2016 # ${TARGET} is workflow shell text
+expect workflow-build-timings grep -qF 'cargo build --locked --target "${TARGET}" --release --timings' <<<"${build_job}"
+expect workflow-build-bwrap-linux-only test "$(step_if "${build_job}" 'Build bwrap and export digest')" = "runner.os == 'Linux'"
+expect workflow-build-bwrap-first in_order "${build_job}" 'name: Build bwrap and export digest' 'name: Build release binaries'
+expect workflow-build-part-after-cargo in_order "${build_job}" 'name: Build release binaries' 'release-package.sh part'
+# shellcheck disable=SC2016 # ${{ }} is workflow syntax
+expect workflow-build-uploads-part grep -qxF \
+  '          name: codex-parts-${{ needs.preflight.outputs.version }}-${{ matrix.target }}-${{ matrix.bundle }}' <<<"${build_job}"
+expect workflow-build-uploads-timings grep -qF 'path: codex-rs/target/cargo-timings/' <<<"${build_job}"
+
+# R3.1: a successful push run of fork-ci replaces the ci job.
+ci_if="$(job_if "${fork_release}" ci)"
+expect workflow-ci-skipped-when-reused contains "${ci_if}" "needs.preflight.outputs.ci_run_url == ''"
+expect workflow-ci-never-on-push contains "${ci_if}" "github.event_name != 'push'"
+draft_if="$(job_if "${fork_release}" draft)"
+expect workflow-draft-accepts-reused-ci contains "${draft_if}" \
+  "(needs.ci.result == 'success' || needs.preflight.outputs.ci_run_url != '' || !inputs.require_ci)"
+expect workflow-draft-never-on-push contains "${draft_if}" "github.event_name != 'push'"
+
+# R2.4, R4.3: verify assembles from this run's or the prebuild run's parts.
+expect workflow-verify-after-build-or-prebuild contains "$(job_if "${fork_release}" verify)" \
+  "(needs.build.result == 'success' || (needs.build.result == 'skipped' && needs.preflight.outputs.prebuilt_run_id != ''))"
+expect workflow-verify-reads-actions grep -qxF '      actions: read' <<<"${verify_job}"
+expect workflow-verify-no-write lacks "${verify_job}" '^ +[a-z-]+: write$'
+# shellcheck disable=SC2016 # ${{ }} is workflow syntax
+expect workflow-verify-downloads-prebuild grep -qxF '          run-id: ${{ needs.preflight.outputs.prebuilt_run_id }}' <<<"${verify_job}"
+expect workflow-verify-assembles-then-verifies in_order "${verify_job}" 'release-package.sh assemble' 'verify-release.sh --version'
+# shellcheck disable=SC2016 # ${{ }} is workflow syntax
+expect workflow-verify-uploads-packages grep -qxF '          name: codex-${{ needs.preflight.outputs.version }}-packages' <<<"${verify_job}"
+# shellcheck disable=SC2016 # ${{ }} is workflow syntax
+expect workflow-draft-downloads-verified-only test \
+  "$(grep -E '^ +(name|pattern): codex-' <<<"$(job_block "${fork_release}" draft)" | sed -E 's/^ +//' | tr '\n' ' ')" = \
+  'name: codex-${{ needs.preflight.outputs.version }}-packages name: codex-${{ needs.preflight.outputs.version }}-SHA256SUMS '
+
 # Third-party actions: full SHA plus a comment with the full version.
 pins_ok=1
 while IFS= read -r line; do
@@ -580,6 +949,9 @@ done < <(cat "${fork_ci}" "${fork_release}" "${setup_rust}" "${rust_toolchain}" 
   grep -oE 'uses: \./[A-Za-z0-9_./-]+' | sed 's/^uses: //' | sort -u)
 expect machinery-covers-local-actions test "${covered}" -eq 1
 expect machinery-covers-scripts grep -qx 'scripts/fork/' <<<"${machinery}"
+# shellcheck disable=SC2016 # awk fields, not shell expansions
+expect machinery-covers-release-package \
+  awk -v p=scripts/fork/release-package.sh 'index(p, $0) == 1 { found = 1 } END { exit !found }' <<<"${machinery}"
 
 echo "release.sh self-test: ${passed} passed, ${failures} failed"
 [[ ${failures} -eq 0 ]]

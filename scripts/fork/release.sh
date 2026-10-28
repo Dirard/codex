@@ -4,10 +4,16 @@
 #   scripts/fork/release.sh provenance --repo OWNER/NAME --sha SHA --base SHA
 #                                      [--repo-dir DIR]
 #   scripts/fork/release.sh preflight --version X.Y.Z --sha SHA [--repo OWNER/NAME]
-#                                     [--matrix JSON] [--output FILE]
+#                                     [--matrix JSON] [--create-draft true|false]
+#                                     [--rebuild true|false] [--output FILE]
+#   scripts/fork/release.sh preflight --mode prebuild --sha SHA [--output FILE]
+#   scripts/fork/release.sh find-run --repo OWNER/NAME --workflow FILE --sha SHA
+#                                    --event EVENT --branch BRANCH
+#                                    [--parts-version X.Y.Z]
 #   scripts/fork/release.sh draft-check --repo OWNER/NAME --version X.Y.Z --sha SHA
 #   scripts/fork/release.sh draft --repo OWNER/NAME --version X.Y.Z --sha SHA
-#                                 --dist DIR [--run-url URL] [--dry-run]
+#                                 --dist DIR [--run-url URL] [--ci-run-url URL]
+#                                 [--parts-run-url URL] [--dry-run]
 #   scripts/fork/release.sh machinery
 #
 # provenance   requires SHA to be the dispatched codex/fork commit --base or one
@@ -18,11 +24,26 @@
 # preflight    validates the dispatch inputs before hours of building: the
 #              version format, a full 40-character commit SHA that matches the
 #              checkout, the workspace version in codex-rs/Cargo.toml, and the
-#              build matrix (known targets, allowed runners). With --repo it also
-#              requires that rust-vX.Y.Z and sdk/go/vX.Y.Z are absent or point at
-#              SHA and that rust-vX.Y.Z is not published yet. Writes version, sha,
-#              matrix, targets and full_matrix as key=value lines to --output
-#              (for $GITHUB_OUTPUT) and to stdout.
+#              build matrix (known targets, allowed runners). The output matrix
+#              has one entry per target and bundle (release-package.sh bins);
+#              targets and full_matrix count targets. With --repo and
+#              --create-draft true (the default) it also requires that
+#              rust-vX.Y.Z and sdk/go/vX.Y.Z are absent or point at SHA and that
+#              rust-vX.Y.Z is not published yet; --create-draft false skips those
+#              checks, so a dispatch can rehearse a released version. With --repo
+#              it also looks for a successful push run of fork-ci.yml for SHA
+#              (ci_run_url) and, for the full matrix unless --rebuild true, for a
+#              successful prebuild run of fork-rust-release.yml for SHA with all
+#              ten parts (prebuilt_run_id, prebuilt_run_url).
+#              --mode prebuild (a push to codex/fork) takes the version from
+#              codex-rs/Cargo.toml, builds the default matrix and makes no GitHub
+#              calls. Writes version, sha, matrix, targets, full_matrix,
+#              ci_run_url, prebuilt_run_id and prebuilt_run_url as key=value lines
+#              to --output (for $GITHUB_OUTPUT) and to stdout.
+# find-run     prints "ID URL" of the newest completed, successful run of
+#              .github/workflows/FILE for SHA with that event and branch, or
+#              nothing. With --parts-version the run must also hold all ten part
+#              artifacts codex-parts-<version>-<target>-<bundle>, unexpired.
 # draft-check  read-only part of draft for the start of the run (needs a token
 #              that sees drafts): repeats the tag checks and fails when a
 #              release for rust-vX.Y.Z is published or exists as a draft that is
@@ -33,7 +54,9 @@
 #              every file of DIR as an asset, and compares the uploaded asset
 #              names, sizes and digests with SHA256SUMS. It never creates or
 #              deletes tags and never publishes or edits a release; the summary
-#              lists the manual publication steps. --dry-run performs only the
+#              lists the manual publication steps. --ci-run-url names a reused
+#              fork-ci run and --parts-run-url the prebuild run that built the
+#              bundles, in the notes and the summary. --dry-run performs only the
 #              read-only checks and prints the commands.
 # machinery    prints the release machinery paths, one per line.
 #
@@ -78,6 +101,16 @@ runner_allowlist='{
   "aarch64-apple-darwin": ["macos-15", "macos-14"],
   "x86_64-pc-windows-msvc": ["windows-2025", "windows-2022"]
 }'
+
+# Bundles every target is built in (R1.1); release-package.sh owns their
+# binaries, packs them on the build runner and merges them in verify.
+release_package="${repo_root}/scripts/fork/release-package.sh"
+bundles=(primary app-server)
+
+# Runs that a release dispatch reuses come from pushes to this branch (R3.1, R4.3).
+reuse_branch=codex/fork
+ci_workflow=fork-ci.yml
+release_workflow=fork-rust-release.yml
 
 # Files that decide what the release workflow builds, checks and runs with a
 # write token: the workflows, the local actions they use and these scripts.
@@ -240,6 +273,96 @@ release_id_for_url() {
   die "created draft ${url} for ${tag} is not visible in the release list; re-run the job: it replaces this draft"
 }
 
+# bundle_matrix MATRIX: expands the normalized [{runner, target}] matrix into
+# one {runner, target, bundle, binaries} entry per target and bundle, in order.
+bundle_matrix() {
+  local runner target bundle binaries entries=()
+  while IFS=$'\t' read -r runner target; do
+    for bundle in "${bundles[@]}"; do
+      binaries="$("${release_package}" bins --target "${target}" --bundle "${bundle}")"
+      entries+=("$(jq -cn --arg runner "${runner}" --arg target "${target}" \
+        --arg bundle "${bundle}" --arg binaries "${binaries}" \
+        '{runner: $runner, target: $target, bundle: $bundle, binaries: $binaries}')")
+    done
+  done < <(jq -r '.[] | [.runner, .target] | @tsv' <<<"$1")
+  printf '%s\n' "${entries[@]}" | jq -cs .
+}
+
+# expected_parts VERSION: the part artifact names of a full-matrix run, sorted.
+expected_parts() {
+  local target bundle
+  all_targets | while read -r target; do
+    for bundle in "${bundles[@]}"; do
+      printf 'codex-parts-%s-%s-%s\n' "$1" "${target}" "${bundle}"
+    done
+  done | LC_ALL=C sort
+}
+
+# run_has_parts REPO RUN_ID VERSION: succeeds when the run holds every part of
+# expected_parts as an unexpired artifact. It runs as an if condition, where
+# set -e does not apply, so every step checks its status.
+run_has_parts() {
+  local repo="$1" id="$2" version="$3" listing present missing
+  listing="$(gh api "repos/${repo}/actions/runs/${id}/artifacts?per_page=100")" ||
+    die "cannot list the artifacts of run ${id}"
+  present="$(jq -r '.artifacts[] | select(.expired == false) | .name' <<<"${listing}")" ||
+    die "cannot read the artifacts of run ${id}"
+  missing="$(LC_ALL=C comm -13 <(LC_ALL=C sort -u <<<"${present}") <(expected_parts "${version}"))" ||
+    die "cannot compare the artifacts of run ${id}"
+  if [[ -n "${missing}" ]]; then
+    log "run ${id} lacks unexpired parts: $(xargs <<<"${missing}")"
+    return 1
+  fi
+}
+
+# find_run REPO WORKFLOW SHA EVENT BRANCH [PARTS_VERSION]: see find-run.
+find_run() {
+  local repo="$1" workflow="$2" sha="$3" event="$4" branch="$5" parts_version="${6-}"
+  local runs candidates
+  runs="$(gh api "repos/${repo}/actions/workflows/${workflow}/runs?head_sha=${sha}&event=${event}&branch=${branch}&status=success&per_page=100")" ||
+    die "cannot list the ${workflow} runs of ${repo}"
+  # GitHub filters by the query; the same conditions are required here too.
+  candidates="$(jq -r --arg path ".github/workflows/${workflow}" --arg sha "${sha}" \
+    --arg event "${event}" --arg branch "${branch}" '
+    [.workflow_runs[]
+      | select(.path == $path and .head_sha == $sha and .event == $event
+          and .head_branch == $branch and .status == "completed"
+          and .conclusion == "success")]
+    | sort_by(.created_at) | reverse | .[] | "\(.id) \(.html_url)"
+  ' <<<"${runs}")" || die "cannot read the ${workflow} runs of ${repo}"
+  local id url
+  while read -r id url; do
+    [[ -n "${id}" ]] || continue
+    if [[ -z "${parts_version}" ]] || run_has_parts "${repo}" "${id}" "${parts_version}"; then
+      printf '%s %s\n' "${id}" "${url}"
+      return 0
+    fi
+  done <<<"${candidates}"
+}
+
+cmd_find_run() {
+  local repo="" workflow="" sha="" event="" branch="" parts_version=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo) repo="${2:?--repo requires a value}"; shift 2 ;;
+      --workflow) workflow="${2:?--workflow requires a file name}"; shift 2 ;;
+      --sha) sha="${2:?--sha requires a value}"; shift 2 ;;
+      --event) event="${2:?--event requires a value}"; shift 2 ;;
+      --branch) branch="${2:?--branch requires a value}"; shift 2 ;;
+      --parts-version) parts_version="${2:?--parts-version requires a value}"; shift 2 ;;
+      *) die "unknown find-run option: $1" ;;
+    esac
+  done
+  [[ "${repo}" =~ ${repo_re} ]] || die "invalid repository '${repo}'"
+  [[ "${workflow}" =~ ^[A-Za-z0-9_.-]+\.ya?ml$ ]] || die "invalid workflow file '${workflow}'"
+  [[ "${sha}" =~ ${sha_re} ]] || die "invalid commit SHA '${sha}'"
+  [[ "${event}" =~ ^[a-z_]+$ ]] || die "invalid event '${event}'"
+  [[ "${branch}" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || die "invalid branch '${branch}'"
+  [[ -z "${parts_version}" || "${parts_version}" =~ ${version_re} ]] ||
+    die "invalid release version '${parts_version}'"
+  find_run "${repo}" "${workflow}" "${sha}" "${event}" "${branch}" "${parts_version}"
+}
+
 cmd_machinery() {
   printf '%s\n' "${machinery_paths[@]}"
 }
@@ -284,17 +407,40 @@ cmd_provenance() {
 }
 
 cmd_preflight() {
-  local version="" sha="" repo="" matrix="" output=""
+  local mode=release version="" sha="" repo="" matrix="" output="" create_draft=true rebuild=false
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --mode) mode="${2:?--mode requires release or prebuild}"; shift 2 ;;
       --version) version="${2:?--version requires a value}"; shift 2 ;;
       --sha) sha="${2:?--sha requires a value}"; shift 2 ;;
       --repo) repo="${2:?--repo requires a value}"; shift 2 ;;
       --matrix) matrix="${2-}"; shift 2 ;;
+      --create-draft) create_draft="${2:?--create-draft requires true or false}"; shift 2 ;;
+      --rebuild) rebuild="${2:?--rebuild requires true or false}"; shift 2 ;;
       --output) output="${2:?--output requires a file}"; shift 2 ;;
       *) die "unknown preflight option: $1" ;;
     esac
   done
+  [[ "${create_draft}" == true || "${create_draft}" == false ]] ||
+    die "--create-draft must be true or false, got '${create_draft}'"
+  [[ "${rebuild}" == true || "${rebuild}" == false ]] || die "--rebuild must be true or false, got '${rebuild}'"
+
+  local workspace_version
+  workspace_version="$(awk '
+    /^\[workspace\.package\]/ { section = 1; next }
+    /^\[/ { section = 0 }
+    section && $1 == "version" { gsub(/"/, "", $3); print $3; exit }
+  ' "${repo_root}/codex-rs/Cargo.toml")"
+  case "${mode}" in
+    release) ;;
+    prebuild)
+      # A push to codex/fork (R4.1): no tags, releases or runs to look at.
+      [[ -z "${repo}" ]] || die "prebuild mode makes no GitHub calls; drop --repo"
+      [[ -z "${matrix}" ]] || die "prebuild mode builds the default matrix; drop --matrix"
+      [[ -n "${version}" ]] || version="${workspace_version}"
+      ;;
+    *) die "--mode must be release or prebuild, got '${mode}'" ;;
+  esac
   [[ "${version}" =~ ${version_re} ]] || die "invalid release version '${version}'"
   [[ "${sha}" =~ ${sha_re} ]] || die "checkout_ref must be a full 40-character lowercase commit SHA, got '${sha}'"
   [[ -z "${repo}" || "${repo}" =~ ${repo_re} ]] || die "invalid repository '${repo}'"
@@ -303,12 +449,6 @@ cmd_preflight() {
   head="$(git -C "${repo_root}" rev-parse HEAD)"
   [[ "${head}" == "${sha}" ]] || die "checkout is at ${head}, not ${sha}"
 
-  local workspace_version
-  workspace_version="$(awk '
-    /^\[workspace\.package\]/ { section = 1; next }
-    /^\[/ { section = 0 }
-    section && $1 == "version" { gsub(/"/, "", $3); print $3; exit }
-  ' "${repo_root}/codex-rs/Cargo.toml")"
   [[ "${workspace_version}" == "${version}" ]] ||
     die "codex-rs/Cargo.toml has workspace version '${workspace_version}', not '${version}'"
 
@@ -331,22 +471,57 @@ cmd_preflight() {
   if [[ "$(jq -r '.[].target' <<<"${matrix}" | LC_ALL=C sort)" == "$(all_targets)" ]]; then
     full_matrix=true
   fi
+  # targets and full_matrix count targets (R5.3); the build runs per bundle.
+  matrix="$(bundle_matrix "${matrix}")"
 
+  local ci_run_url="" prebuilt_run_id="" prebuilt_run_url=""
   if [[ -n "${repo}" ]]; then
     command -v gh >/dev/null 2>&1 || die "gh is required with --repo"
-    check_tags "${repo}" "${version}" "${sha}"
-    local err
-    if err="$(gh api "repos/${repo}/releases/tags/rust-v${version}" --jq .html_url 2>&1)"; then
-      die "rust-v${version} is already published: ${err}"
-    elif [[ "${err}" != *"HTTP 404"* ]]; then
-      die "cannot check for a published rust-v${version}: ${err}"
+    # R4.5: a build-only dispatch can rehearse a version that is out already.
+    if [[ "${create_draft}" == true ]]; then
+      check_tags "${repo}" "${version}" "${sha}"
+      local err
+      if err="$(gh api "repos/${repo}/releases/tags/rust-v${version}" --jq .html_url 2>&1)"; then
+        die "rust-v${version} is already published: ${err}"
+      elif [[ "${err}" != *"HTTP 404"* ]]; then
+        die "cannot check for a published rust-v${version}: ${err}"
+      fi
+      log "no published release rust-v${version}"
+    else
+      log "create_draft is false: tags and releases of ${version} are not checked"
     fi
-    log "no published release rust-v${version}"
+
+    # R3.1: fork-ci of this commit already passed on its push to codex/fork.
+    local found
+    found="$(find_run "${repo}" "${ci_workflow}" "${sha}" push "${reuse_branch}")"
+    if [[ -n "${found}" ]]; then
+      ci_run_url="${found#* }"
+      log "fork-ci passed for ${sha} in ${ci_run_url}; the ci job is skipped"
+    else
+      log "no successful push run of ${ci_workflow} for ${sha}; the ci job runs fork-ci"
+    fi
+
+    # R4.3, R4.4: reuse the parts of a successful prebuild of this commit.
+    if [[ "${full_matrix}" != true ]]; then
+      log "partial matrix: every bundle is built"
+    elif [[ "${rebuild}" == true ]]; then
+      log "rebuild is true: every bundle is built"
+    else
+      found="$(find_run "${repo}" "${release_workflow}" "${sha}" push "${reuse_branch}" "${version}")"
+      if [[ -n "${found}" ]]; then
+        prebuilt_run_id="${found%% *}"
+        prebuilt_run_url="${found#* }"
+        log "reusing the parts of prebuild run ${prebuilt_run_url}; the build job is skipped"
+      else
+        log "no successful prebuild of ${sha} with all parts; every bundle is built"
+      fi
+    fi
   fi
 
   local lines
-  lines="$(printf 'version=%s\nsha=%s\nmatrix=%s\ntargets=%s\nfull_matrix=%s\n' \
-    "${version}" "${sha}" "${matrix}" "${targets}" "${full_matrix}")"
+  lines="$(printf 'version=%s\nsha=%s\nmatrix=%s\ntargets=%s\nfull_matrix=%s\nci_run_url=%s\nprebuilt_run_id=%s\nprebuilt_run_url=%s\n' \
+    "${version}" "${sha}" "${matrix}" "${targets}" "${full_matrix}" \
+    "${ci_run_url}" "${prebuilt_run_id}" "${prebuilt_run_url}")"
   printf '%s\n' "${lines}"
   if [[ -n "${output}" ]]; then
     printf '%s\n' "${lines}" >>"${output}"
@@ -382,7 +557,7 @@ cmd_draft_check() {
 }
 
 cmd_draft() {
-  local repo="" version="" sha="" dist="" run_url="" dry_run=0
+  local repo="" version="" sha="" dist="" run_url="" ci_run_url="" parts_run_url="" dry_run=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --repo) repo="${2:?--repo requires a value}"; shift 2 ;;
@@ -390,6 +565,9 @@ cmd_draft() {
       --sha) sha="${2:?--sha requires a value}"; shift 2 ;;
       --dist) dist="${2:?--dist requires a directory}"; shift 2 ;;
       --run-url) run_url="${2:?--run-url requires a value}"; shift 2 ;;
+      # Empty when this run ran fork-ci or built the bundles itself.
+      --ci-run-url) ci_run_url="${2-}"; shift 2 ;;
+      --parts-run-url) parts_run_url="${2-}"; shift 2 ;;
       --dry-run) dry_run=1; shift ;;
       *) die "unknown draft option: $1" ;;
     esac
@@ -433,6 +611,12 @@ ${actual}"
     printf -- '- Commit: `%s`\n' "${sha}"
     if [[ -n "${run_url}" ]]; then
       printf -- '- Build and verification run: %s\n' "${run_url}"
+    fi
+    if [[ -n "${parts_run_url}" ]]; then
+      printf -- '- Bundles built by the prebuild run: %s\n' "${parts_run_url}"
+    fi
+    if [[ -n "${ci_run_url}" ]]; then
+      printf -- '- fork-ci (push run of this commit): %s\n' "${ci_run_url}"
     fi
     printf '\n| Asset | Bytes | SHA-256 |\n|---|---:|---|\n'
     local hash file
@@ -488,11 +672,18 @@ uploaded:
 ${uploaded}"
   log "draft ${id} has the verified assets: ${url}"
 
+  local runs=""
+  if [[ -n "${parts_run_url}" ]]; then
+    runs+=$'\n\n'"Bundles built by the prebuild run ${parts_run_url}, assembled and verified in ${run_url:-this run}."
+  fi
+  if [[ -n "${ci_run_url}" ]]; then
+    runs+=$'\n\n'"fork-ci passed for this commit in its push run ${ci_run_url}."
+  fi
   local summary
   summary="$(cat <<EOF
 ### Draft release ${tag}
 
-Draft: ${url} (id ${id}), target \`${sha}\`. Assets match SHA256SUMS (name, size, digest).
+Draft: ${url} (id ${id}), target \`${sha}\`. Assets match SHA256SUMS (name, size, digest).${runs}
 
 Publication stays manual:
 
@@ -522,7 +713,7 @@ main() {
   case "${command}" in
     machinery) cmd_machinery "$@" ;;
     -h | --help | help) usage ;;
-    provenance | preflight | draft-check | draft)
+    provenance | preflight | find-run | draft-check | draft)
       command -v jq >/dev/null 2>&1 || die "jq is required"
       case "${command}" in
         provenance)
@@ -530,6 +721,10 @@ main() {
           cmd_provenance "$@"
           ;;
         preflight) cmd_preflight "$@" ;;
+        find-run)
+          command -v gh >/dev/null 2>&1 || die "gh is required"
+          cmd_find_run "$@"
+          ;;
         draft-check)
           command -v gh >/dev/null 2>&1 || die "gh is required"
           cmd_draft_check "$@"
