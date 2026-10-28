@@ -55,6 +55,7 @@ use delegate::CodeModeDispatchBroker;
 use delegate::CodeModeDispatchWorker;
 pub(crate) use execute_handler::CodeModeExecuteHandler;
 use output::CodeModeToolOutput;
+pub(crate) use output_budget_fork::CodeModeOutputBudget;
 use response_adapter::into_function_call_output_content_items;
 pub(crate) use tool_definitions::prepare_code_mode_tool_definitions;
 pub(crate) use wait_handler::CodeModeWaitHandler;

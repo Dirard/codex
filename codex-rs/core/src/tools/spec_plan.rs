@@ -4,11 +4,11 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::image_preparation::unified_image_budget_enabled;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::tools::code_mode::CodeModeOutputBudget;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
 use crate::tools::effective_tool_mode;
 use crate::tools::handlers::ApplyPatchHandler;
 use crate::tools::handlers::CodeModeExecuteHandler;
-use crate::tools::handlers::CodeModeWaitHandler;
 use crate::tools::handlers::CurrentTimeHandler;
 use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
@@ -1117,13 +1117,15 @@ fn register_code_mode_executors(
         deferred_tool_discovery,
         model_messages.code_mode(),
     );
+    // Fork: `exec` and `wait` name the default cell output budget (output_budget_fork.rs).
+    let output_budget = CodeModeOutputBudget::new(turn_context, model_info);
     let execute_handler = CodeModeExecuteHandler::new(
-        create_code_mode_tool(exec_description),
+        create_code_mode_tool(output_budget.exec_description(exec_description)),
         code_mode_nested_tool_specs,
         fork_tools.direct_tool_stubs,
     );
 
-    registry.prepend_trusted(Arc::new(CodeModeWaitHandler::new(
+    registry.prepend_trusted(Arc::new(output_budget.wait_handler(
         model_messages.code_mode_wait_description_override(),
         model_messages.code_mode_wait_parameters_override(),
     )));

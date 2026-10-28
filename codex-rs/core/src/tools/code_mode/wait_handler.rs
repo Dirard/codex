@@ -23,7 +23,7 @@ use super::telemetry::trace_id;
 use super::wait_spec::create_wait_tool;
 
 pub struct CodeModeWaitHandler {
-    spec: ToolSpec,
+    pub(super) spec: ToolSpec, // Fork: `output_budget_fork` names the default output budget.
 }
 
 #[derive(Debug, Deserialize)]
