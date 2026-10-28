@@ -44,6 +44,37 @@ async fn budget_hard_overshoot_above_the_limit_is_rejected() -> anyhow::Result<(
     Ok(())
 }
 
+/// Workflows ultra mode: `[workflows] ultra_mode` is on by default, also with a
+/// `[workflows]` table that does not name it, and `false` turns it off.
+#[tokio::test]
+async fn workflows_ultra_mode_defaults_to_true() -> anyhow::Result<()> {
+    assert!(WorkflowsConfig::default().ultra_mode);
+    for (workflows, expected) in [
+        (None, true),
+        (Some(WorkflowsToml::default()), true),
+        (
+            Some(WorkflowsToml {
+                ultra_mode: Some(false),
+                ..Default::default()
+            }),
+            false,
+        ),
+    ] {
+        let codex_home = tempfile::tempdir()?;
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml {
+                workflows: workflows.map(Box::new),
+                ..Default::default()
+            },
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await?;
+        assert_eq!(config.workflows.ultra_mode, expected);
+    }
+    Ok(())
+}
+
 const EXEC_EXIT_NOTIFICATIONS_TABLE: &str = "[features.exec_exit_notifications]\nenabled = false\nexec_wait_timeout_ms = 1500\noutput_watch_quiet_ms = 2500\noutput_watch_first_match_ms = 3500\n";
 
 /// Fork-features-experimental R2.2: a boolean toggle of `exec_exit_notifications` (`--enable`,

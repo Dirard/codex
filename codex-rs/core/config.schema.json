@@ -7679,6 +7679,10 @@
             }
           ],
           "description": "How agents are asked for answers that match a JSON schema. Default: `auto`."
+        },
+        "ultra_mode": {
+          "description": "Whether reasoning effort `ultra` turns on workflow ultra mode, which tells the model to run a workflow for every substantive task. Approvals, budgets and limits are unchanged. Default: true.",
+          "type": "boolean"
         }
       },
       "type": "object"

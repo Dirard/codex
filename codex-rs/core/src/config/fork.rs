@@ -82,6 +82,9 @@ pub struct WorkflowsConfig {
     /// At least 1.0.
     pub budget_hard_overshoot: f64,
     pub structured_output: WorkflowStructuredOutput,
+    /// Reasoning effort `ultra` turns on workflow ultra mode
+    /// (`specs/fork-workflows-ultra-mode-2026-10-28.md`).
+    pub ultra_mode: bool,
 }
 
 impl WorkflowsConfig {
@@ -160,6 +163,7 @@ impl WorkflowsConfig {
                 WorkflowStructuredOutputToml::Native => WorkflowStructuredOutput::Native,
                 WorkflowStructuredOutputToml::Prompt => WorkflowStructuredOutput::Prompt,
             },
+            ultra_mode: toml.ultra_mode.unwrap_or(defaults.ultra_mode),
         })
     }
 
@@ -189,6 +193,7 @@ impl Default for WorkflowsConfig {
             budget_mode: WorkflowBudgetMode::Soft,
             budget_hard_overshoot: 1.0,
             structured_output: WorkflowStructuredOutput::Auto,
+            ultra_mode: true,
         }
     }
 }

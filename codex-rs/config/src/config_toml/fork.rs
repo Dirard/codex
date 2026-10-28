@@ -86,4 +86,28 @@ pub struct WorkflowsToml {
     pub budget_hard_overshoot: Option<f64>,
     /// How agents are asked for answers that match a JSON schema. Default: `auto`.
     pub structured_output: Option<WorkflowStructuredOutputToml>,
+    /// Whether reasoning effort `ultra` turns on workflow ultra mode, which tells the model
+    /// to run a workflow for every substantive task. Approvals, budgets and limits are
+    /// unchanged. Default: true.
+    pub ultra_mode: Option<bool>,
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    /// Workflows ultra mode: `[workflows] ultra_mode` is optional, and `false` is read.
+    #[test]
+    fn workflows_ultra_mode_is_optional() {
+        let ultra_mode = |text: &str| {
+            toml::from_str::<super::super::ConfigToml>(text)
+                .expect("config.toml parses")
+                .workflows
+                .and_then(|workflows| workflows.ultra_mode)
+        };
+        assert_eq!(ultra_mode(""), None);
+        assert_eq!(ultra_mode("[workflows]\nmax_active_runs = 2\n"), None);
+        assert_eq!(ultra_mode("[workflows]\nultra_mode = false\n"), Some(false));
+        assert_eq!(ultra_mode("[workflows]\nultra_mode = true\n"), Some(true));
+    }
 }
