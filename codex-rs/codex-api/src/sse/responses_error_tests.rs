@@ -47,10 +47,15 @@ async fn policy_capacity_classification_preserves_overload_retry_behavior() {
             }))
             .unwrap();
             let error = map_api_error(process_responses_event(event).unwrap_err().into_api_error());
+            // Fork: an overload without Retry-After backs off (docs/fork/02-compaction-context.md F6).
+            let fork_backoff =
+                expected == CodexErrorInfo::ServerOverloaded && retry_after.is_none();
+            let retry_delay = error.retry_delay(/*retry_count*/ 1);
+            assert_eq!(retry_delay.is_some(), fork_backoff || retry_after.is_some());
             assert_eq!(
                 (
                     error.to_codex_protocol_error(),
-                    error.retry_delay(/*retry_count*/ 1),
+                    retry_delay.filter(|_| !fork_backoff),
                     error.to_string()
                 ),
                 (

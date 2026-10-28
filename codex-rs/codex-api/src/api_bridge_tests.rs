@@ -34,11 +34,15 @@ async fn http_policy_capacity_preserves_retry_advice_and_terminal_behavior() {
                 ),
                 retry_after: advice,
             }));
+            // Fork: an overload without Retry-After backs off (docs/fork/02-compaction-context.md F6).
+            let fork_backoff = expected == CodexErrorInfo::ServerOverloaded && advice.is_none();
+            let retry_delay = error.retry_delay(/*retry_count*/ 1);
+            assert_eq!(retry_delay.is_some(), fork_backoff || advice.is_some());
             assert_eq!(
                 (
                     error.to_codex_protocol_error(),
                     error.retry_after(),
-                    error.retry_delay(/*retry_count*/ 1)
+                    retry_delay.filter(|_| !fork_backoff)
                 ),
                 (
                     expected.clone(),

@@ -2132,7 +2132,10 @@ async fn websocket_rate_limit_without_retry_after_is_terminal() -> Result<()> {
 
 /// When an overload stops giving advice, it is terminal even if the retry limit
 /// has been reached. The transport must not switch after that terminal error.
-#[test_case::test_case("policy_capacity_unavailable", "server_is_overloaded", CodexErrorInfo::ServerOverloaded; "prior_policy_failure_stays_on_its_attempt")]
+// Fork: `ServerOverloaded` retries on its own counter (docs/fork/02-compaction-context.md F6), so
+// after a policy failure the overloads restart at attempt 1 and the last, headerless one still
+// has budget for a backoff retry; this case asserts upstream's shared counter.
+#[test_case::test_case("policy_capacity_unavailable", "server_is_overloaded", CodexErrorInfo::ServerOverloaded => ignore["fork: separate overload retry counter (F6)"]; "prior_policy_failure_stays_on_its_attempt")]
 #[test_case::test_case("server_is_overloaded", "policy_capacity_unavailable", CodexErrorInfo::PolicyCapacityUnavailable; "terminal_policy_failure_is_preserved")]
 #[tokio::test(flavor = "current_thread")]
 async fn websocket_overload_retries_only_while_it_has_retry_after(
