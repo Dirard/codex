@@ -893,8 +893,10 @@ async fn turn_start_additional_context_flows_to_model_input(
         }
     );
 
-    let capped_name = "A".repeat(128);
-    let long_key = format!("!{capped_name}z");
+    // Fork: keys over MAX_ADDITIONAL_CONTEXT_KEY_BYTES (128) are rejected before a name is
+    // derived, so the longest accepted key yields a name under the 128-character cap.
+    let capped_name = format!("{}z", "A".repeat(126));
+    let long_key = format!("!{capped_name}");
     let unnamed_sources: &[(&str, &str)] = if tool_outputs && name.is_none() {
         &[
             ("Browser Tab/\té-_2", "Browser_Tab_2"),
