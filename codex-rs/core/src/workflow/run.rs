@@ -584,7 +584,7 @@ pub(crate) fn start_run(
 ) -> Result<Arc<WorkflowRun>, String> {
     let registry = WorkflowRegistry::for_session(session);
     let config = &step_context.turn.config;
-    let workflows = config.workflows;
+    let workflows = *config.workflows;
     let active = registry.active_run_ids();
     if active.len() >= workflows.max_active_runs {
         return Err(format!(

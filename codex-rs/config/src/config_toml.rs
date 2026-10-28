@@ -349,12 +349,12 @@ pub struct ConfigToml {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
-    // Fork: output truncation and workflow limits.
+    // Fork: output truncation and workflow limits; boxed to keep `ConfigToml` small in dev-build frames.
     /// Limits applied when formatting tool and command output for model and UI consumption.
-    pub output_truncation: Option<OutputTruncationToml>,
+    pub output_truncation: Option<Box<OutputTruncationToml>>,
 
     /// Fork: limits of background workflow runs.
-    pub workflows: Option<WorkflowsToml>,
+    pub workflows: Option<Box<WorkflowsToml>>,
 
     /// Fork: context tokens the auto-compactions of one turn may replace in total; once they
     /// did, the turn stops with an error instead of compacting again. Default: the larger of

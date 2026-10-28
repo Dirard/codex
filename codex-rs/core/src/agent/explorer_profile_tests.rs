@@ -51,7 +51,7 @@ async fn profile_config_defaults_and_rejects_tiny_result_limit() {
     let (_home, config) =
         config_with(&[("features.explorer_profile", TomlValue::Boolean(true))]).await;
     assert!(enabled(&config));
-    assert_eq!(config.explorer_profile, ExplorerProfileConfig::default());
+    assert_eq!(*config.explorer_profile, ExplorerProfileConfig::default());
     assert_eq!(config.explorer_profile.max_result_tokens, 2_000);
 
     let (_home, config) = config_with(&[
@@ -75,7 +75,7 @@ async fn profile_config_defaults_and_rejects_tiny_result_limit() {
     .await;
     assert!(enabled(&config));
     assert_eq!(
-        config.explorer_profile,
+        *config.explorer_profile,
         ExplorerProfileConfig {
             model: Some("cheap-model".to_string()),
             reasoning_effort: Some(ReasoningEffort::Low),
@@ -128,7 +128,7 @@ async fn profile_table_survives_boolean_toggles() {
         .expect("load test config");
     assert!(enabled(&config));
     assert_eq!(
-        config.explorer_profile,
+        *config.explorer_profile,
         ExplorerProfileConfig {
             model: Some("cheap-model".to_string()),
             reasoning_effort: Some(ReasoningEffort::Low),

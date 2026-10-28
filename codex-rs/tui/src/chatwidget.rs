@@ -795,8 +795,9 @@ pub(crate) struct ChatWidget {
     thread_usage: thread_usage::ThreadUsageState,
     // Current thread-goal status shown in the status line when plan mode is inactive.
     current_goal_status_indicator: Option<GoalStatusIndicator>,
-    /// Fork: active workflow runs of the shown thread and the `/workflows` screen.
-    workflows: workflow::WorkflowState,
+    /// Fork: active workflow runs of the shown thread and the `/workflows` screen; boxed to keep
+    /// `ChatWidget` small in the dev-build async frames that move it (tui `worktree_stack`).
+    workflows: Box<workflow::WorkflowState>,
     current_goal_status: Option<GoalStatusState>,
     external_editor_state: ExternalEditorState,
     last_rendered_user_message_display: Option<UserMessageDisplay>,

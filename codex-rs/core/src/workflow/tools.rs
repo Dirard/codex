@@ -91,7 +91,7 @@ pub(crate) fn add_workflow_tools(
     {
         return;
     }
-    let workflows = turn_context.config.workflows;
+    let workflows = *turn_context.config.workflows;
     registry.add_with_exposure(
         WorkflowStartHandler {
             max_concurrent_agents: workflows.max_concurrent_agents,

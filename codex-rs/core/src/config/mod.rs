@@ -1158,21 +1158,22 @@ pub struct Config {
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
 
-    // Fork: settings of the fork's features (config/fork.rs).
+    // Fork: settings of the fork's features (config/fork.rs). Boxed: dev builds copy `Config`
+    // by value in the TUI's async frames, which share a 16 MiB stack (tui `worktree_stack`).
     /// Limits applied when formatting tool and command output for model and UI consumption.
-    pub output_truncation: OutputTruncationConfig,
+    pub output_truncation: Box<OutputTruncationConfig>,
 
     /// Fork: limits of background workflow runs (`[workflows]`).
-    pub workflows: WorkflowsConfig,
+    pub workflows: Box<WorkflowsConfig>,
 
     /// Fork: settings applied to `explorer` children while `explorer_profile` is enabled.
-    pub explorer_profile: ExplorerProfileConfig,
+    pub explorer_profile: Box<ExplorerProfileConfig>,
 
     /// Fork: defaults for MultiAgentV2 children isolated in managed git worktrees.
     /// The `agent_worktree_isolation` feature flag gates the behavior itself.
-    pub agent_worktree_isolation: AgentWorktreeIsolationConfig,
+    pub agent_worktree_isolation: Box<AgentWorktreeIsolationConfig>,
     /// Fork: how long `codex exec` waits for background terminal notifications.
-    pub exec_exit_notifications: ExecExitNotificationsConfig,
+    pub exec_exit_notifications: Box<ExecExitNotificationsConfig>,
     /// Fork: context tokens the compactions of one turn may replace
     /// (`model_auto_compact_turn_token_limit`); `None` keeps the default, `Some(0)` is off.
     pub model_auto_compact_turn_token_limit: Option<u64>,
@@ -4754,13 +4755,15 @@ impl Config {
             ghost_snapshot,
             multi_agent_v2,
             // Fork: settings of the fork's features (config/fork.rs).
-            output_truncation: fork::output_truncation_config(cfg.output_truncation),
-            workflows: WorkflowsConfig::from_toml(cfg.workflows.as_ref())?,
-            explorer_profile,
-            agent_worktree_isolation,
-            exec_exit_notifications: ExecExitNotificationsConfig::from_features_toml(
+            output_truncation: Box::new(fork::output_truncation_config(
+                cfg.output_truncation.map(|toml| *toml),
+            )),
+            workflows: Box::new(WorkflowsConfig::from_toml(cfg.workflows.as_deref())?),
+            explorer_profile: Box::new(explorer_profile),
+            agent_worktree_isolation: Box::new(agent_worktree_isolation),
+            exec_exit_notifications: Box::new(ExecExitNotificationsConfig::from_features_toml(
                 cfg.features.as_ref(),
-            ),
+            )),
             model_auto_compact_turn_token_limit: cfg.model_auto_compact_turn_token_limit,
             // Fork end
             token_budget,

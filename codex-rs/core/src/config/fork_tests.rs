@@ -9,10 +9,10 @@ async fn load_overshoot(overshoot: f64) -> std::io::Result<Config> {
     let codex_home = tempfile::tempdir()?;
     Config::load_from_base_config_with_overrides(
         ConfigToml {
-            workflows: Some(WorkflowsToml {
+            workflows: Some(Box::new(WorkflowsToml {
                 budget_hard_overshoot: Some(overshoot),
                 ..Default::default()
-            }),
+            })),
             ..Default::default()
         },
         ConfigOverrides::default(),
@@ -71,7 +71,7 @@ async fn exec_exit_notifications_table_survives_boolean_toggles() -> anyhow::Res
         .await?;
     assert!(config.features.enabled(Feature::ExecExitNotifications));
     assert_eq!(
-        config.exec_exit_notifications,
+        *config.exec_exit_notifications,
         ExecExitNotificationsConfig {
             exec_wait_timeout_ms: 1500,
             output_watch_quiet_ms: 2500,
