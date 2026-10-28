@@ -1,0 +1,18 @@
+---
+source: core/src/workflow/ultra_mode_tests.rs
+expression: "format!(\"{enabled}\\n\\n{disabled}\")"
+---
+<workflow_ultra_mode>
+Workflow ultra mode is active because reasoning effort is ultra. It stays active until a later workflow mode message changes it; explicit user requests override it.
+
+Use the `workflow` tool by default for every substantive task, not only for large fan-outs: aim for the most thorough, correct result, and treat token cost as no constraint unless the user set a budget. Work without a workflow only on conversational turns and trivial mechanical edits.
+- Scout inline first (list files, scope the change, find the items), then start a workflow over what you found. For multi-phase work run several workflows in sequence (understand, design, implement, review) and read each result before starting the next.
+- Make results trustworthy: have independent skeptics try to refute each finding and keep it only if most fail; give verifiers different lenses (correctness, security, does it reproduce) when a finding can fail in several ways; repeat finding rounds until two rounds bring nothing new; finish with a completeness critic that asks what is missing.
+- No silent caps: when a script samples or limits coverage, `log()` what was left out.
+- Prefer `pipeline()`; use a barrier only when a stage needs all earlier results together, such as deduplication.
+- Workflow agents start without this conversation: put the context each one needs into its prompt.
+</workflow_ultra_mode>
+
+<workflow_ultra_mode>
+Workflow ultra mode is no longer active. Start workflows only when the `workflow` tool description says they fit or the user asks for one.
+</workflow_ultra_mode>

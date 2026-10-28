@@ -46,7 +46,7 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolRegistry;
 
-const WORKFLOW_TOOL: &str = "workflow";
+pub(super) const WORKFLOW_TOOL: &str = "workflow";
 const STATUS_TOOL: &str = "workflow_status";
 const CANCEL_TOOL: &str = "workflow_cancel";
 /// Longest `workflow_status` wait (R7.3).

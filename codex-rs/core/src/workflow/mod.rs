@@ -15,6 +15,7 @@ mod run;
 mod saved;
 mod thread_api;
 mod tools;
+mod ultra_mode;
 mod usage;
 mod world_state;
 
@@ -24,6 +25,7 @@ pub(crate) use tools::LocalAgentBackend;
 pub(crate) use tools::add_workflow_tools;
 use tools::cancel_run;
 pub(crate) use tools::workflows_available;
+pub(crate) use ultra_mode::WorkflowUltraModeState;
 pub(crate) use usage::fork_charge_child_usage;
 pub(crate) use world_state::WorkflowRunsState;
 
