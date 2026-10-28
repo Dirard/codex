@@ -45,10 +45,17 @@ impl ThreadManagerState {
 
     /// Spawn a new thread with optional history and register it with the manager; a resume
     /// of a running thread returns that thread.
-    pub(super) async fn spawn_thread(&self, request: ThreadSpawnRequest) -> CodexResult<NewThread> {
-        self.spawn_thread_outcome(request)
-            .await
-            .map(ThreadSpawnOutcome::into_new_thread)
+    ///
+    /// A combinator, not an `async fn`: a debug build would otherwise put another frame the
+    /// size of the spawn future on every thread start, resume and fork stack, and with Rust
+    /// 1.95 the app-server request path no longer fits the 8 MiB test thread stack.
+    pub(super) fn spawn_thread(
+        &self,
+        request: ThreadSpawnRequest,
+    ) -> impl std::future::Future<Output = CodexResult<NewThread>> + Send + '_ {
+        futures::FutureExt::map(self.spawn_thread_outcome(request), |outcome| {
+            outcome.map(ThreadSpawnOutcome::into_new_thread)
+        })
     }
 
     /// A child without its own dynamic tools inherits its parent's
