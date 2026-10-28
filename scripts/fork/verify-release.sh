@@ -83,8 +83,8 @@ require_tool_features() {
     die "requires GNU-compatible coreutils (stat -c): GNU or uutils coreutils, as on Linux"
 }
 
-# Binaries packaged for a target; mirrors the "Package runtime" step of
-# .github/workflows/fork-rust-release.yml.
+# Binaries packaged for a target: both bundles of scripts/fork/release-package.sh,
+# which assembles the packages that fork-rust-release.yml verifies.
 expected_bins() {
   local target="$1"
   local bins=(codex codex-app-server codex-code-mode-host codex-responses-api-proxy)

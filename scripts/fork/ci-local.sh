@@ -31,7 +31,8 @@
 #   go-auth-fixture       TestAuthFixture* (Linux only) against codex-app-server;
 #                         every test `go test -list` finds must pass
 #   scripts               shellcheck and the ci-local.sh / verify-release.sh /
-#                         release.sh / upstream-drift.sh self-tests
+#                         release-package.sh / release.sh / upstream-drift.sh
+#                         self-tests
 #   fork-coverage UPSTREAM_REF
 #                         fail when a package the fork changes since its merge
 #                         base with UPSTREAM_REF lacks strict clippy or tests
@@ -774,6 +775,8 @@ cmd_scripts() {
   "${repo_root}/scripts/fork/test-ci-local.sh"
   log "verify-release.sh self-test"
   "${selftest[@]}"
+  log "release-package.sh self-test (fake binaries, stub strip)"
+  "${repo_root}/scripts/fork/test-release-package.sh"
   log "release.sh self-test (stub gh)"
   "${repo_root}/scripts/fork/test-release.sh"
   log "upstream-drift.sh self-test (throwaway repository)"
