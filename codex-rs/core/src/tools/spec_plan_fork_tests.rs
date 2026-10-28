@@ -376,38 +376,52 @@ async fn apply_agent_worktree_is_offered_only_with_isolation() {
     }
 }
 
-/// Code Mode cell output budget R1.4 (specs/code-mode-cell-output-budget-2026-10-29.md): `exec`
-/// and `wait` name the step's output truncation in tokens, from the model policy (raised by
-/// `tool_output_token_limit`) and `[output_truncation] max_bytes`; the bundled 10 000-token
-/// policy of the bundled catalog keeps the bundled sentences.
+/// Code Mode cell output budget R1.3, R1.4 (specs/code-mode-cell-output-budget-2026-10-29.md):
+/// `exec` and `wait` name the step's output truncation in tokens once the user configured
+/// `tool_output_token_limit` or `[output_truncation] max_bytes`; without that they keep the
+/// bundled 10 000 tokens, also for a fallback model that cuts tool output at 10 000 bytes.
 #[tokio::test]
 async fn code_mode_descriptions_name_the_configured_output_budget() {
-    use codex_protocol::openai_models::TruncationPolicyConfig;
+    use codex_models_manager::ModelsManagerConfig;
+    use codex_models_manager::model_info::model_info_from_slug;
+    use codex_models_manager::model_info::with_config_overrides;
 
-    let bundled_policy = codex_models_manager::bundled_models_response()
+    let bundled = codex_models_manager::bundled_models_response()
         .expect("bundled model catalog should load")
         .models
         .into_iter()
         .find(|model| model.slug == "gpt-5.5")
-        .expect("bundled catalog should list gpt-5.5")
-        .truncation_policy;
-    for (model_policy, max_bytes, expected_tokens) in [
+        .expect("bundled catalog should list gpt-5.5");
+    let fallback = model_info_from_slug("unknown-fallback-model");
+    for (model, tool_output_token_limit, max_bytes, expected_tokens) in [
         // Default config: the bundled catalog cuts tool output at 10 000 tokens.
-        (bundled_policy, None, 10_000),
-        // `tool_output_token_limit = 400000`.
-        (TruncationPolicyConfig::tokens(400_000), None, 400_000),
-        // `[output_truncation] max_bytes = 8000` caps the raised limit.
-        (TruncationPolicyConfig::tokens(400_000), Some(8_000), 2_000),
-        // The fallback metadata of an unknown model cuts at 10 000 bytes.
-        (TruncationPolicyConfig::bytes(10_000), None, 2_500),
+        (&bundled, None, None, 10_000),
+        (&bundled, Some(400_000), None, 400_000),
+        // `[output_truncation] max_bytes = 8000` caps the raised limit, or the model policy.
+        (&bundled, Some(400_000), Some(8_000), 2_000),
+        (&bundled, None, Some(8_000), 2_000),
+        // The fallback metadata cuts tool output at 10 000 bytes; cells keep 10 000 tokens.
+        (&fallback, None, None, 10_000),
+        (&fallback, Some(400_000), None, 400_000),
     ] {
+        // The models manager applies `tool_output_token_limit` to the model policy.
+        let model_info = with_config_overrides(
+            model.clone(),
+            &ModelsManagerConfig {
+                tool_output_token_limit,
+                ..ModelsManagerConfig::default()
+            },
+        );
+        let case = format!("{} {tool_output_token_limit:?} {max_bytes:?}", model.slug);
         let plan = probe(|turn| {
             set_features(turn, &[Feature::CodeMode]);
             update_turn_settings_for_test(turn, |settings| {
-                Arc::make_mut(&mut settings.model_info).truncation_policy = model_policy;
+                Arc::make_mut(&mut settings.model_info).truncation_policy =
+                    model_info.truncation_policy;
             });
             update_config(turn, |config| {
-                config.output_truncation.max_bytes = max_bytes
+                config.tool_output_token_limit = tool_output_token_limit;
+                config.output_truncation.max_bytes = max_bytes;
             });
         })
         .await;
@@ -420,7 +434,7 @@ async fn code_mode_descriptions_name_the_configured_output_budget() {
             exec.description.contains(&format!(
                 "`max_output_tokens` sets the token budget for direct `exec` results. {defaults}"
             )),
-            "{expected_tokens}: {}",
+            "{case}: {}",
             exec.description
         );
         let ToolSpec::Function(wait) = plan.visible_spec(codex_code_mode::WAIT_TOOL_NAME) else {
@@ -430,7 +444,7 @@ async fn code_mode_descriptions_name_the_configured_output_budget() {
             wait.description.contains(&format!(
                 "`max_tokens` limits how much new output this wait call returns. {defaults}"
             )),
-            "{expected_tokens}: {}",
+            "{case}: {}",
             wait.description
         );
         let max_tokens = wait
@@ -441,7 +455,8 @@ async fn code_mode_descriptions_name_the_configured_output_budget() {
             .and_then(|parameter| parameter.description.as_deref());
         assert_eq!(
             max_tokens,
-            Some(format!("Output token budget for this wait call. {defaults}").as_str())
+            Some(format!("Output token budget for this wait call. {defaults}").as_str()),
+            "{case}"
         );
     }
 }

@@ -250,3 +250,60 @@ fn catalog_wait_description_stays() {
         "Output token budget for this wait call. Defaults to 400000 tokens."
     );
 }
+
+/// R1.1, R1.3: the step's policy cuts a cell only once the user configured output truncation;
+/// otherwise the upstream 10 000 tokens, also for a fallback model that cuts tool output at
+/// 10 000 bytes.
+#[tokio::test]
+async fn default_cell_policy_needs_configured_truncation() {
+    use codex_models_manager::ModelsManagerConfig;
+    use codex_models_manager::model_info::model_info_from_slug;
+    use codex_models_manager::model_info::with_config_overrides;
+
+    let bundled = codex_models_manager::bundled_models_response()
+        .expect("bundled model catalog should load")
+        .models
+        .into_iter()
+        .find(|model| model.slug == "gpt-5.5")
+        .expect("bundled catalog should list gpt-5.5");
+    let fallback = model_info_from_slug("unknown-fallback-model");
+    for (model, tool_output_token_limit, max_bytes, expected) in [
+        (&bundled, None, None, TruncationPolicy::Tokens(10_000)),
+        (
+            &bundled,
+            Some(400_000),
+            None,
+            TruncationPolicy::Tokens(400_000),
+        ),
+        (&bundled, None, Some(8_000), TruncationPolicy::Bytes(8_000)),
+        (&fallback, None, None, TruncationPolicy::Tokens(10_000)),
+        // A byte-mode model gets the limit as bytes, about four per token.
+        (
+            &fallback,
+            Some(400_000),
+            None,
+            TruncationPolicy::Bytes(1_600_000),
+        ),
+    ] {
+        let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
+        let mut config = (*turn.config).clone();
+        config.tool_output_token_limit = tool_output_token_limit;
+        config.output_truncation.max_bytes = max_bytes;
+        turn.config = std::sync::Arc::new(config);
+        // The models manager applies `tool_output_token_limit` to the model policy.
+        let model_info = with_config_overrides(
+            model.clone(),
+            &ModelsManagerConfig {
+                tool_output_token_limit,
+                ..ModelsManagerConfig::default()
+            },
+        );
+
+        assert_eq!(
+            default_cell_policy(&turn, &model_info),
+            expected,
+            "{} {tool_output_token_limit:?} {max_bytes:?}",
+            model.slug
+        );
+    }
+}

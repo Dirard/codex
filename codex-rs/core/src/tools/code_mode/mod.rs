@@ -295,7 +295,10 @@ fn handle_runtime_response(
     content_items = truncate_code_mode_result(
         content_items,
         max_output_tokens,
-        step_context.output_truncation().policy,
+        output_budget_fork::default_cell_policy(
+            &step_context.turn,
+            &step_context.settings.model_info,
+        ),
     );
     CodeModeToolOutput::new(
         FunctionToolOutput::from_content(content_items, Some(success)),
@@ -324,8 +327,9 @@ fn format_script_status(response: &RuntimeResponse) -> String {
 
 /// Fork: use case "Обрезать результат ячейки Code Mode по настроенной политике"
 /// (specs/code-mode-cell-output-budget-2026-10-29.md, UC1). The `max_output_tokens` pragma cuts
-/// to `Tokens(n)`; without it the cell follows the step's output truncation policy
-/// (`default_policy`), so `tool_output_token_limit` and `[output_truncation]` set its budget.
+/// to `Tokens(n)`; without it the cell is cut by `default_policy`
+/// (`output_budget_fork::default_cell_policy`): the step's output truncation when the user
+/// configured `tool_output_token_limit` or `[output_truncation] max_bytes`, else 10 000 tokens.
 fn truncate_code_mode_result(
     items: Vec<FunctionCallOutputContentItem>,
     max_output_tokens: Option<usize>,

@@ -1,17 +1,37 @@
-//! Fork: the default output budget of a Code Mode cell follows the configured output truncation
-//! (`tool_output_token_limit`, `[output_truncation]`), and the `exec` and `wait` descriptions name
-//! it (specs/code-mode-cell-output-budget-2026-10-29.md, docs/fork/03-tools-mcp-code-mode.md F1).
+//! Fork: the default output budget of a Code Mode cell follows the output truncation the user
+//! configured (`tool_output_token_limit`, `[output_truncation] max_bytes`), and the `exec` and
+//! `wait` descriptions name it (specs/code-mode-cell-output-budget-2026-10-29.md,
+//! docs/fork/03-tools-mcp-code-mode.md F1).
 //!
-//! The cell itself is cut by `truncate_code_mode_result` with the step's policy; this module only
-//! rewrites the bundled "Defaults to 10000 tokens." sentences after the descriptions are built, so
-//! the upstream builders keep their signatures. A catalog override without the bundled sentence
+//! [`default_cell_policy`] decides the budget for both `truncate_code_mode_result` and the
+//! descriptions, so they never disagree. The descriptions are rewritten after they are built, so
+//! the upstream builders keep their signatures; a catalog override without the bundled sentence
 //! stays as it is.
 
 use codex_protocol::openai_models::ModelInfo;
 use codex_tools::ToolSpec;
+use codex_utils_output_truncation::TruncationPolicy;
 
 use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::CodeModeWaitHandler;
+use crate::unified_exec::DEFAULT_MAX_OUTPUT_TOKENS;
+
+/// The budget of a Code Mode cell without the `max_output_tokens` pragma, on a step of
+/// `turn_context` with `model_info`. The step's output truncation policy applies only when the
+/// user configured output truncation (`tool_output_token_limit` or `[output_truncation]
+/// max_bytes`); otherwise the upstream `Tokens(DEFAULT_MAX_OUTPUT_TOKENS)`, whatever the model's
+/// own policy (R1.3: a fallback model cuts tool output at 10 000 bytes, its cells at 10 000
+/// tokens).
+pub(super) fn default_cell_policy(
+    turn_context: &TurnContext,
+    model_info: &ModelInfo,
+) -> TruncationPolicy {
+    let config = &turn_context.config;
+    if config.tool_output_token_limit.is_none() && config.output_truncation.max_bytes.is_none() {
+        return TruncationPolicy::Tokens(DEFAULT_MAX_OUTPUT_TOKENS);
+    }
+    turn_context.output_truncation_for_model(model_info).policy
+}
 
 /// The bundled default budget of every sentence below.
 const BUNDLED_DEFAULT: &str = "Defaults to 10000 tokens.";
@@ -25,23 +45,17 @@ const WAIT_MAX_TOKENS_DESCRIPTION: &str =
     "Output token budget for this wait call. Defaults to 10000 tokens.";
 const WAIT_MAX_TOKENS_PARAMETER: &str = "max_tokens";
 
-/// The default output budget of a Code Mode cell without the `max_output_tokens` pragma, in
-/// tokens: the step's output truncation policy (`Bytes(b)` counts about `b / 4` tokens).
+/// The budget of a Code Mode cell without the `max_output_tokens` pragma ([`default_cell_policy`])
+/// in tokens; `Bytes(b)` counts about `b / 4` tokens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CodeModeOutputBudget {
     default_tokens: usize,
 }
 
 impl CodeModeOutputBudget {
-    /// The budget of a step of `turn_context` on `model_info`; matches
-    /// `StepContext::output_truncation`, which cuts the cell.
+    /// The budget of a step of `turn_context` on `model_info`.
     pub(crate) fn new(turn_context: &TurnContext, model_info: &ModelInfo) -> Self {
-        Self::from_tokens(
-            turn_context
-                .output_truncation_for_model(model_info)
-                .policy
-                .token_budget(),
-        )
+        Self::from_tokens(default_cell_policy(turn_context, model_info).token_budget())
     }
 
     pub(crate) const fn from_tokens(default_tokens: usize) -> Self {
