@@ -111,3 +111,15 @@ mod tests {
         assert_eq!(ultra_mode("[workflows]\nultra_mode = true\n"), Some(true));
     }
 }
+
+/// Fork: where a standard (non-Lite) Responses request carries the base instructions
+/// (`model_instructions_placement`). Responses Lite requests always carry them in `input`.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelInstructionsPlacement {
+    /// The first `developer` message of `input`, as upstream sends it.
+    #[default]
+    Input,
+    /// The top-level `instructions` field, as Codex sent it before 0.162 (upstream #51156).
+    Instructions,
+}

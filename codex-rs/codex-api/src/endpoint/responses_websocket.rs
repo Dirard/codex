@@ -1050,6 +1050,7 @@ mod tests {
     fn direct_serialization_preserves_websocket_request_payload() {
         let api_request = ResponsesApiRequest {
             model: "gpt-test".to_string(),
+            instructions: String::new(),
             input: vec![ResponseItem::Message {
                 status: None,
                 encrypted_content: None,

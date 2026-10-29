@@ -29,6 +29,7 @@ use codex_config::apply_default_gcp_auth;
 use codex_config::config_toml::CircuitBreakAction;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
+use codex_config::config_toml::ModelInstructionsPlacement;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
@@ -1177,6 +1178,9 @@ pub struct Config {
     /// Fork: context tokens the compactions of one turn may replace
     /// (`model_auto_compact_turn_token_limit`); `None` keeps the default, `Some(0)` is off.
     pub model_auto_compact_turn_token_limit: Option<u64>,
+    /// Fork: where standard Responses requests carry the base instructions
+    /// (`model_instructions_placement`).
+    pub model_instructions_placement: ModelInstructionsPlacement,
     // Fork end
     /// Context-window token budget configuration, when enabled.
     pub token_budget: Option<TokenBudgetConfig>,
@@ -4765,6 +4769,7 @@ impl Config {
                 cfg.features.as_ref(),
             )),
             model_auto_compact_turn_token_limit: cfg.model_auto_compact_turn_token_limit,
+            model_instructions_placement: cfg.model_instructions_placement.unwrap_or_default(),
             // Fork end
             token_budget,
             token_budget_startup_config: None,

@@ -393,6 +393,7 @@ async fn new_config(
         agent_worktree_isolation: Default::default(),
         exec_exit_notifications: Default::default(),
         model_auto_compact_turn_token_limit: None,
+        model_instructions_placement: Default::default(),
         max_goal_token_budget: None,
         token_budget: None,
         token_budget_startup_config: None,

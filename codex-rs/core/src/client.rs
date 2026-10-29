@@ -308,6 +308,8 @@ pub struct ModelClient {
     restored_history: bool,
     request_contributors: Vec<Arc<dyn codex_extension_api::ModelRequestContributor>>,
     executed_tool_calls: Option<ExecutedToolCalls>,
+    /// Fork: `model_instructions_placement = "instructions"` (see `build_responses_request`).
+    fork_instructions_field: bool,
     // Resolved once when the session is created, like other session feature flags.
     api_key_cyber_access_programs: cyber_access_program::ApiKeyCyberAccessPrograms,
     runtime_auth: Option<(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
@@ -427,6 +429,7 @@ fn responses_request_properties_mismatch(
 ) -> Option<&'static str> {
     let ResponsesApiRequest {
         model: previous_model,
+        instructions: previous_instructions,
         input: _,
         tools: previous_tools,
         tool_choice: previous_tool_choice,
@@ -444,6 +447,7 @@ fn responses_request_properties_mismatch(
     } = previous;
     let ResponsesApiRequest {
         model: current_model,
+        instructions: current_instructions,
         input: _,
         tools: current_tools,
         tool_choice: current_tool_choice,
@@ -464,6 +468,8 @@ fn responses_request_properties_mismatch(
     // referenced by `previous_response_id`.
     let reason = if previous_model != current_model {
         "model_changed"
+    } else if previous_instructions != current_instructions {
+        "instructions_changed"
     } else if previous_tools != current_tools {
         "tools_changed"
     } else if previous_tool_choice != current_tool_choice {
@@ -647,6 +653,7 @@ impl ModelClient {
             restored_history: false,
             request_contributors,
             executed_tool_calls: None,
+            fork_instructions_field: false,
             api_key_cyber_access_programs:
                 cyber_access_program::ApiKeyCyberAccessPrograms::UnsupportedProvider,
         }
@@ -661,6 +668,18 @@ impl ModelClient {
         self.state.reasoning_effort_override_enabled
             && self.state.provider.info().is_openai()
             && model_info.supports_reasoning_effort_updates
+    }
+
+    /// Fork: where standard requests carry the base instructions (`model_instructions_placement`).
+    pub(crate) fn with_model_instructions_placement(
+        mut self,
+        placement: codex_config::config_toml::ModelInstructionsPlacement,
+    ) -> Self {
+        self.fork_instructions_field = matches!(
+            placement,
+            codex_config::config_toml::ModelInstructionsPlacement::Instructions
+        );
+        self
     }
 
     pub(crate) fn with_restored_history(mut self, restored_history: bool) -> Self {
@@ -1083,7 +1102,15 @@ impl ModelClient {
         } else {
             Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into())
         };
-        if !prompt.base_instructions.text.is_empty() {
+        // Fork: `model_instructions_placement = "instructions"` sends standard requests the
+        // base instructions in the top-level field, as before upstream #51156.
+        let instructions_field = self.fork_instructions_field && !model_info.use_responses_lite;
+        let top_level_instructions = if instructions_field {
+            prompt.base_instructions.text.clone()
+        } else {
+            String::new()
+        };
+        if !instructions_field && !prompt.base_instructions.text.is_empty() {
             let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
                 prompt.base_instructions.text.clone(),
             ));
@@ -1166,6 +1193,7 @@ impl ModelClient {
         let client_metadata = responses_metadata.client_metadata(include_internal);
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
+            instructions: top_level_instructions,
             input,
             tools,
             tool_choice: "auto".to_string(),

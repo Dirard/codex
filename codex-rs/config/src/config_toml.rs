@@ -360,6 +360,11 @@ pub struct ConfigToml {
     /// did, the turn stops with an error instead of compacting again. Default: the larger of
     /// 8000000 and 32 context windows of the model. 0 turns the limit off.
     pub model_auto_compact_turn_token_limit: Option<u64>,
+
+    /// Fork: where standard Responses requests carry the base instructions: `input` (default,
+    /// the first developer message) or `instructions` (the top-level field). Responses Lite
+    /// requests always use `input`.
+    pub model_instructions_placement: Option<ModelInstructionsPlacement>,
     // Fork end
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).

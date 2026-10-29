@@ -2359,3 +2359,7 @@ async fn inference_tools_changes_follow_full_specs_across_turns() {
         );
     }
 }
+
+// Fork: `model_instructions_placement`.
+#[path = "client_instructions_placement_fork_tests.rs"]
+mod instructions_placement_fork;
