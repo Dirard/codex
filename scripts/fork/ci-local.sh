@@ -95,6 +95,7 @@ fork_clippy_packages=(
   codex-exec-server
   codex-extension-items
   codex-features
+  codex-guardian-v2
   codex-history
   codex-linux-sandbox
   codex-mcp
@@ -138,6 +139,7 @@ default_test_packages=(
   codex-exec-server
   codex-extension-items
   codex-features
+  codex-guardian-v2
   codex-history
   codex-mcp
   codex-models-manager
