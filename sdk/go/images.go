@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/openai/codex/sdk/go/images"
 	"github.com/openai/codex/sdk/go/protocol"
 )
 
@@ -56,15 +57,11 @@ type GeneratedImage struct {
 	Failure *ImageGenerationFailure
 }
 
-// ImageGenerationFailure explains why an image was not generated.
-type ImageGenerationFailure struct {
-	// Type is the failure kind, for example "usageLimitExceeded".
-	Type string
-	// LimitID names the exhausted limit, for example "imagegen_premium".
-	LimitID string
-	// ResetsAt is when the limit resets, in UTC; zero when the server did not say.
-	ResetsAt time.Time
-}
+// ImageGenerationFailure explains why an image was not generated. It is the error the
+// images client returns for an exhausted limit, so both are handled by the same code:
+// Type ("usageLimitExceeded"), LimitID (for example "imagegen_premium") and ResetsAt (UTC,
+// zero when unknown) are set for turn items; the window fields stay empty there.
+type ImageGenerationFailure = images.UsageLimitError
 
 // Completed reports whether the image finished successfully.
 func (img GeneratedImage) Completed() bool {
@@ -78,6 +75,19 @@ func (img GeneratedImage) MediaType() string {
 		return ""
 	}
 	return http.DetectContentType(img.Data)
+}
+
+// Image returns the inline image as the images client describes its results: bytes, media
+// type, width, height, revised prompt and generation ID. It is the zero Image without
+// inline bytes; read them first with FileSystemClient.ReadGeneratedImage.
+func (img GeneratedImage) Image() images.Image {
+	if len(img.Data) == 0 {
+		return images.Image{}
+	}
+	out := images.ImageFromBytes(bytes.Clone(img.Data))
+	out.RevisedPrompt = img.RevisedPrompt
+	out.GenerationID = img.GenerationID
+	return out
 }
 
 // GeneratedImageFromItem decodes an imageGeneration thread item, from RunResult.Items or an
@@ -122,17 +132,17 @@ func GeneratedImageFromItem(item protocol.ThreadItem) (GeneratedImage, bool, err
 
 // GeneratedImages returns the images among items, in item order.
 func GeneratedImages(items []protocol.ThreadItem) ([]GeneratedImage, error) {
-	var images []GeneratedImage
+	var out []GeneratedImage
 	for _, item := range items {
 		img, ok, err := GeneratedImageFromItem(item)
 		if err != nil {
 			return nil, err
 		}
 		if ok {
-			images = append(images, img)
+			out = append(out, img)
 		}
 	}
-	return images, nil
+	return out, nil
 }
 
 // GeneratedImages returns the images the model generated in this turn, in item order.

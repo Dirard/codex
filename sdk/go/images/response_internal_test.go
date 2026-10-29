@@ -1,0 +1,72 @@
+package images
+
+import (
+	"encoding/binary"
+	"net/http"
+	"testing"
+	"time"
+)
+
+func TestWebPSize(t *testing.T) {
+	riff := func(chunk []byte) []byte {
+		data := append([]byte("RIFF\x00\x00\x00\x00WEBP"), chunk...)
+		return append(data, make([]byte, 32)...)
+	}
+	vp8x := append([]byte("VP8X\x0a\x00\x00\x00\x00\x00\x00\x00"), 0xff, 0x03, 0x00, 0x2b, 0x02, 0x00) // 1024 x 556
+	if w, h := webpSize(riff(vp8x)); w != 1024 || h != 556 {
+		t.Fatalf("VP8X = %dx%d", w, h)
+	}
+	vp8 := append([]byte("VP8 \x00\x00\x00\x00"), 0x00, 0x00, 0x00, 0x9d, 0x01, 0x2a)
+	vp8 = binary.LittleEndian.AppendUint16(vp8, 640)
+	vp8 = binary.LittleEndian.AppendUint16(vp8, 480)
+	if w, h := webpSize(riff(vp8)); w != 640 || h != 480 {
+		t.Fatalf("VP8 = %dx%d", w, h)
+	}
+	bits := uint32(800-1) | uint32(600-1)<<14
+	vp8l := append([]byte("VP8L\x00\x00\x00\x00\x2f"), binary.LittleEndian.AppendUint32(nil, bits)...)
+	if w, h := webpSize(riff(vp8l)); w != 800 || h != 600 {
+		t.Fatalf("VP8L = %dx%d", w, h)
+	}
+	if w, h := webpSize([]byte("not an image")); w != 0 || h != 0 {
+		t.Fatalf("garbage = %dx%d", w, h)
+	}
+}
+
+func TestUsageLimitFromSecondaryWindowAndRetryAfterDate(t *testing.T) {
+	header := http.Header{}
+	header.Set("x-codex-active-limit", "image_gen")
+	header.Set("x-image-gen-primary-used-percent", "40")
+	header.Set("x-image-gen-primary-window-minutes", "300")
+	header.Set("x-image-gen-secondary-used-percent", "100")
+	header.Set("x-image-gen-secondary-window-minutes", "10080")
+	header.Set("x-image-gen-secondary-reset-at", "1793900000")
+	err := errorFromResponse(429, header, []byte(`{"error":{"type":"usage_limit_reached","plan_type":"pro"}}`))
+	limit, ok := err.(*UsageLimitError)
+	if !ok {
+		t.Fatalf("err = %T %v", err, err)
+	}
+	if limit.LimitID != "image_gen" || limit.UsedPercent != 100 || limit.WindowMinutes != 10080 || !limit.ResetsAt.Equal(time.Unix(1793900000, 0)) || limit.PlanType != "pro" {
+		t.Fatalf("limit = %+v", limit)
+	}
+	if limit.Primary == nil || limit.Primary.UsedPercent != 40 || limit.Secondary == nil {
+		t.Fatalf("windows = %+v %+v", limit.Primary, limit.Secondary)
+	}
+
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	if got := parseRetryAfter(now.Add(90*time.Second).Format(http.TimeFormat), now); got != 90*time.Second {
+		t.Fatalf("Retry-After date = %v", got)
+	}
+	if got := parseRetryAfter("2", now); got != 2*time.Second {
+		t.Fatalf("Retry-After seconds = %v", got)
+	}
+
+	// codex-lb's own 429 caps are temporary.
+	capped := errorFromResponse(429, http.Header{"Retry-After": {"2"}}, []byte(`{"error":{"code":"account_stream_cap","type":"rate_limit_error","message":"busy"}}`))
+	if !IsRetryable(capped) {
+		t.Fatalf("codex-lb cap = %v, want retryable", capped)
+	}
+	quota := errorFromResponse(429, nil, []byte(`{"error":{"type":"insufficient_quota","message":"no credit"}}`))
+	if limit, ok := quota.(*UsageLimitError); !ok || limit.Type != "insufficientQuota" || IsRetryable(quota) {
+		t.Fatalf("quota = %v", quota)
+	}
+}
