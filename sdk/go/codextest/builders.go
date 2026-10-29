@@ -1,6 +1,12 @@
 package codextest
 
-import "github.com/openai/codex/sdk/go/protocol"
+import (
+	"encoding/base64"
+	"encoding/json"
+	"strconv"
+
+	"github.com/openai/codex/sdk/go/protocol"
+)
 
 // ThreadStartResponse returns a minimal valid thread/start response for an idle thread.
 func ThreadStartResponse(threadID string) protocol.ThreadStartResponse {
@@ -64,4 +70,49 @@ func (s *Server) CompleteTurn(threadID string, turnID string, finalResponse stri
 		return err
 	}
 	return s.Notify("turn/completed", TurnCompleted(threadID, turnID, protocol.TurnStatusCompleted))
+}
+
+// ImageGenerationCompleted returns an item/completed notification for an image the model
+// generated: image travels inline as base64, as Codex sends it with the local attachment
+// store; savedPath is the file Codex wrote, empty for none.
+func ImageGenerationCompleted(threadID string, turnID string, itemID string, image []byte, revisedPrompt string, savedPath string) protocol.ItemCompletedNotification {
+	item := protocol.ThreadItem{
+		ID:            protocol.SomeNonNull(itemID),
+		TypeValue:     "imageGeneration",
+		Status:        protocol.SomeNonNull(protocol.CommandExecutionStatus("completed")),
+		RevisedPrompt: protocol.Some(revisedPrompt),
+		Result:        json.RawMessage(strconv.Quote(base64.StdEncoding.EncodeToString(image))),
+		Failure:       protocol.Null[protocol.ImageGenerationFailure](),
+		GenerationID:  protocol.Null[string](),
+	}
+	if savedPath != "" {
+		item.SavedPath = protocol.Some(protocol.AbsolutePathBuf(savedPath))
+	}
+	return protocol.ItemCompletedNotification{ThreadID: threadID, TurnID: turnID, Item: item}
+}
+
+// ImageGenerationFailed returns an item/completed notification for an image generation that
+// hit a usage limit; resetsAt is in Unix seconds, 0 for unknown.
+func ImageGenerationFailed(threadID string, turnID string, itemID string, limitID string, resetsAt int64) protocol.ItemCompletedNotification {
+	failure := protocol.ImageGenerationFailure{
+		TypeValue: "usageLimitExceeded",
+		LimitID:   protocol.SomeNonNull(limitID),
+		ResetsAt:  protocol.Null[int64](),
+	}
+	if resetsAt != 0 {
+		failure.ResetsAt = protocol.Some(resetsAt)
+	}
+	return protocol.ItemCompletedNotification{
+		ThreadID: threadID,
+		TurnID:   turnID,
+		Item: protocol.ThreadItem{
+			ID:            protocol.SomeNonNull(itemID),
+			TypeValue:     "imageGeneration",
+			Status:        protocol.SomeNonNull(protocol.CommandExecutionStatus("failed")),
+			RevisedPrompt: protocol.Null[string](),
+			Result:        json.RawMessage(`""`),
+			Failure:       protocol.Some(failure),
+			GenerationID:  protocol.Null[string](),
+		},
+	}
 }
