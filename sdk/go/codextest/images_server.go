@@ -146,6 +146,23 @@ func (s *ImageServer) RespondStreamError(code string, message string) {
 	})
 }
 
+// RespondImageThenStreamError queues a stream that delivers the completed image and then
+// ends with an error event, as codex-lb sends usage_unavailable when its upstream reported no
+// usage. The image is valid: a client must not retry.
+func (s *ImageServer) RespondImageThenStreamError(final ImageResponse, code string, message string) {
+	s.enqueue(func(w http.ResponseWriter) {
+		writeImageHeaders(w, final)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		img := final.imagesOrDefault()[0]
+		writeEvent(w, "image_generation.completed", map[string]any{
+			"type": "image_generation.completed", "b64_json": base64.StdEncoding.EncodeToString(img), "created_at": time.Now().Unix(),
+			"generation_id": final.GenerationID, "quality": final.Quality, "size": final.Size,
+		})
+		writeEvent(w, "error", map[string]any{"type": "error", "error": map[string]any{"code": code, "message": message}})
+	})
+}
+
 // RespondResponsesImage queues a streamed /responses reply of a hosted image_generation
 // call: partial images, the completed image_generation_call, then response.completed.
 func (s *ImageServer) RespondResponsesImage(partials [][]byte, final ImageResponse) {

@@ -67,6 +67,10 @@ type imageStreamEvent struct {
 	GenerationID      string           `json:"generation_id"`
 	Usage             *wireUsage       `json:"usage"`
 	Error             *streamErrorBody `json:"error"`
+	// Code, Message and Param carry an error event sent flat, without the error envelope.
+	Code    json.RawMessage `json:"code"`
+	Message string          `json:"message"`
+	Param   string          `json:"param"`
 }
 
 // readImageStream reads the events of a streamed images response.
@@ -107,12 +111,15 @@ func readImageStream(r io.Reader, onPartial func(PartialImage)) (*Result, error)
 				result.Usage = ev.Usage.usage()
 			}
 		case kind == "error" || ev.Error != nil:
+			if ev.Error == nil {
+				ev.Error = flatStreamError(ev.Code, ev.Message, ev.Param)
+			}
 			return streamError(ev.Error)
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return keepDeliveredImages(result, err)
 	}
 	if len(result.Images) == 0 {
 		return nil, &UnavailableError{Message: "the image stream ended without an image"}
@@ -120,12 +127,37 @@ func readImageStream(r io.Reader, onPartial func(PartialImage)) (*Result, error)
 	return result, nil
 }
 
+// keepDeliveredImages ends a stream that failed: with no image yet it returns err, so the
+// client may retry; once an image has arrived the image is complete and already charged,
+// and a retry would generate and charge it again, so the result is returned with err in
+// StreamError. codex-lb, for example, sends usage_unavailable after the image when its
+// upstream reported no usage.
+func keepDeliveredImages(result *Result, err error) (*Result, error) {
+	if len(result.Images) == 0 {
+		return nil, err
+	}
+	result.StreamError = err
+	return result, nil
+}
+
 // streamErrorBody is an error reported inside an event stream.
 type streamErrorBody struct {
-	Type    string          `json:"type"`
-	Code    json.RawMessage `json:"code"`
-	Message string          `json:"message"`
-	Param   string          `json:"param"`
+	Type             string          `json:"type"`
+	Code             json.RawMessage `json:"code"`
+	Message          string          `json:"message"`
+	Param            string          `json:"param"`
+	SafetyIdentifier string          `json:"safety_identifier"`
+}
+
+// flatStreamError is an error event sent as {"type":"error","code":…,"message":…}, or nil
+// when the event carries neither.
+func flatStreamError(code json.RawMessage, message, param string) *streamErrorBody {
+	var text string
+	_ = json.Unmarshal(code, &text)
+	if text == "" && message == "" {
+		return nil
+	}
+	return &streamErrorBody{Code: code, Message: message, Param: param}
 }
 
 func streamError(e *streamErrorBody) error {

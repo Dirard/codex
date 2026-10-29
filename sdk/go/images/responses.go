@@ -35,7 +35,7 @@ func (c *Client) runResponses(ctx context.Context, op operation, start time.Time
 			result.ImagegenRequestID = resp.Header.Get("x-codex-imagegen-request-id")
 			result.ViaResponses = true
 		}
-		done(resp, err)
+		done(resp, attemptError(result, err))
 		return result, err
 	})
 	return finish(result, err, start, *attempts)
@@ -146,19 +146,19 @@ func readResponsesStream(r io.Reader, onPartial func(PartialImage)) (*Result, er
 			}
 		case kind == "response.failed" || kind == "response.incomplete":
 			if ev.Response != nil && ev.Response.Error != nil {
-				return streamError(&streamErrorBody{Code: ev.Response.Error.Code, Message: ev.Response.Error.Message})
+				return streamError(flatStreamError(ev.Response.Error.Code, ev.Response.Error.Message, ""))
 			}
 			return &UnavailableError{Message: "the Responses stream ended with " + kind}
 		case kind == "error" || strings.HasSuffix(kind, ".failed"):
 			if ev.Error != nil {
 				return streamError(ev.Error)
 			}
-			return streamError(&streamErrorBody{Code: ev.Code, Message: ev.Message})
+			return streamError(flatStreamError(ev.Code, ev.Message, ""))
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return keepDeliveredImages(result, err)
 	}
 	if len(result.Images) == 0 {
 		return nil, errNoImageCall

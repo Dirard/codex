@@ -209,6 +209,73 @@ func TestStreamWithoutFramesAndStreamErrors(t *testing.T) {
 	}
 }
 
+func TestStreamErrorAfterTheImageKeepsTheImage(t *testing.T) {
+	srv := codextest.NewImageServer(t)
+	var hookErrs []error
+	client := newClient(t, images.Config{
+		BaseURL: srv.URL(), Retry: images.RetryPolicy{MaxAttempts: 3, BaseDelay: time.Millisecond},
+		Hooks: images.Hooks{OnResponse: func(info images.ResponseInfo) { hookErrs = append(hookErrs, info.Err) }},
+	})
+	final := pngOf(t, 2, 2, false)
+	srv.RespondImageThenStreamError(codextest.ImageResponse{Images: [][]byte{final}, GenerationID: "gen_1"}, "usage_unavailable", "Upstream sent no usage")
+	result, err := client.Generate(context.Background(), images.GenerateRequest{Prompt: "p", Options: images.Options{PartialImages: 1, OnPartialImage: func(images.PartialImage) {}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unavailable *images.UnavailableError
+	if !bytes.Equal(result.Image().Data, final) || result.Image().GenerationID != "gen_1" || result.Attempts != 1 || result.Usage != (images.Usage{}) ||
+		!errors.As(result.StreamError, &unavailable) || unavailable.Code != "usage_unavailable" {
+		t.Fatalf("result = %+v, stream error %v", result, result.StreamError)
+	}
+	if got := len(srv.Requests()); got != 1 {
+		t.Fatalf("requests = %d, want 1 (no retry after the image)", got)
+	}
+	if len(hookErrs) != 1 || !errors.As(hookErrs[0], &unavailable) {
+		t.Fatalf("hook errors = %v", hookErrs)
+	}
+}
+
+func TestStreamedRequestLimitsAndRefusals(t *testing.T) {
+	srv := codextest.NewImageServer(t)
+	client := newClient(t, images.Config{
+		BaseURL: srv.URL(), Retry: images.RetryPolicy{MaxAttempts: 3, BaseDelay: time.Millisecond},
+		ResponsesFallback: &images.ResponsesFallback{Model: "gpt-6.1-sol"},
+	})
+	streamed := images.GenerateRequest{Prompt: "p", Options: images.Options{PartialImages: 1, OnPartialImage: func(images.PartialImage) {}}}
+
+	// codex-lb answers a limit before the stream starts: HTTP 429, even to stream: true.
+	reset := time.Unix(1793394000, 0).UTC()
+	srv.RespondUsageLimit("imagegen_premium", reset, 100, 1440)
+	_, err := client.Generate(context.Background(), streamed)
+	var limit *images.UsageLimitError
+	if !errors.As(err, &limit) || limit.LimitID != "imagegen_premium" || !limit.ResetsAt.Equal(reset) || images.IsRetryable(err) {
+		t.Fatalf("err = %v, want the usage limit", err)
+	}
+	if requests := srv.Requests(); len(requests) != 1 || requests[0].Body["stream"] != true {
+		t.Fatalf("requests = %+v, want one streamed request and no Responses fallback", requests)
+	}
+
+	// A refusal inside the stream, in the envelope or flat, is not retried.
+	srv.RespondStreamError("moderation_blocked", "Your request was rejected by the safety system.")
+	_, err = client.Generate(context.Background(), streamed)
+	var refusal *images.RefusalError
+	if !errors.As(err, &refusal) || refusal.Code != "moderation_blocked" || images.IsRetryable(err) {
+		t.Fatalf("err = %v, want a refusal", err)
+	}
+	if got := len(srv.Requests()); got != 2 {
+		t.Fatalf("requests = %d, want 2", got)
+	}
+	flat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: error\ndata: {\"type\":\"error\",\"code\":\"moderation_blocked\",\"message\":\"blocked\"}\n\n"))
+	}))
+	defer flat.Close()
+	_, err = newClient(t, images.Config{BaseURL: flat.URL, Retry: images.RetryPolicy{MaxAttempts: 3, BaseDelay: time.Millisecond}}).Generate(context.Background(), streamed)
+	if !errors.As(err, &refusal) || refusal.Message != "blocked" {
+		t.Fatalf("flat error event = %v, want a refusal", err)
+	}
+}
+
 func TestStreamToleratesDoneMarker(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

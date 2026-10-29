@@ -202,6 +202,13 @@ type Result struct {
 	// frames: codex-lb from go-v1.7.0 accepts stream: true for subscription accounts but sends
 	// only keepalives and the final image.
 	PartialImages int
+	// StreamError is the error that ended a stream after at least one image had arrived.
+	// Those images are complete and already charged, so the client returns them instead of
+	// retrying (a retry would generate and charge them again). codex-lb, for example, sends
+	// usage_unavailable after the image when its upstream reported no usage; Usage is then
+	// zero. With N above 1, fewer images than asked may have arrived. Nil when the stream
+	// ended cleanly and for non-streamed results.
+	StreamError error
 }
 
 // Image returns the first image, or the zero Image when there is none.

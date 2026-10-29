@@ -96,7 +96,9 @@ type ResponseInfo struct {
 	// RateLimitHeaders are the response headers about limits and retries
 	// (x-codex-*, x-*-primary-*, x-*-secondary-*, Retry-After), lower-case.
 	RateLimitHeaders map[string]string
-	Err              error
+	// Err is the attempt's error, or the error that ended a stream after its images
+	// (Result.StreamError), which is not retried.
+	Err error
 }
 
 // Client generates and edits images. It is safe for concurrent use.
@@ -323,8 +325,17 @@ func (c *Client) attemptImages(ctx context.Context, op operation, attempt int, s
 		result.RequestID = requestIDFrom(resp.Header)
 		result.ImagegenRequestID = resp.Header.Get("x-codex-imagegen-request-id")
 	}
-	done(resp, err)
+	done(resp, attemptError(result, err))
 	return result, err
+}
+
+// attemptError is what the hooks see as an attempt's error: err, or the error that ended a
+// stream after its images.
+func attemptError(result *Result, err error) error {
+	if err == nil && result != nil {
+		return result.StreamError
+	}
+	return err
 }
 
 func (c *Client) pathOf(path string) string {
