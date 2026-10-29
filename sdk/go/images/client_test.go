@@ -334,7 +334,7 @@ func TestHooksSeeEveryAttemptWithoutContent(t *testing.T) {
 		t.Fatalf("rate-limit headers = %v", got.RateLimitHeaders)
 	}
 	for name := range got.RateLimitHeaders {
-		if strings.Contains(name, "authorization") {
+		if strings.Contains(name, "authorization") || name == "x-codex-imagegen-request-id" {
 			t.Fatalf("hook saw %s", name)
 		}
 	}

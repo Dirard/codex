@@ -202,6 +202,49 @@ for _, img := range images {
 
 `GeneratedImage.Data` holds the inline bytes (Codex's local attachment store sends them base64). `ReadGeneratedImage` returns them, or reads `SavedPath` through `fs/readFile` on the app-server host when an item carries no bytes, for example with `omit_app_server_notification_media`; an item with only an attachment-store `FileID` returns `ErrGeneratedImageUnavailable`. Image statuses are `ImageGenerationStatusInProgress`, `…Completed` and `…Failed`; they are not the command-execution statuses that share `ThreadItem.Status`. Codex chooses the image model, quality and size itself; with a ChatGPT subscription the backend also ignores any such fields. `codextest.ImageGenerationCompleted` and `codextest.ImageGenerationFailed` build the notifications for tests.
 
+### Images Client
+
+The `images` package generates and edits images over HTTP, without an app-server process: `{BaseURL}/images/generations` and `/images/edits` of codex-lb, the ChatGPT Codex backend or the OpenAI platform, with one surface.
+
+```go
+client, err := images.NewClient(images.Config{
+    BaseURL: "https://codex-lb.example/backend-api/codex",
+    Auth:    images.BearerFromEnv("CODEX_LB_API_KEY"),
+})
+result, err := client.Generate(ctx, images.GenerateRequest{
+    Prompt:  "A lighthouse at dusk",
+    Options: images.Options{Quality: images.QualityHigh, Size: "1536x1024"},
+})
+var limit *images.UsageLimitError
+switch {
+case errors.As(err, &limit):
+    log.Printf("image limit %s is used up until %s", limit.LimitID, limit.ResetsAt.Local().Format("15:04"))
+case err != nil:
+    return err
+}
+img := result.Image() // Data, MediaType, Width, Height, GenerationID
+```
+
+- **Credentials.** `images.BearerToken`, `images.BearerFromEnv` (read on every request), or `client.ImagesAuth()` of a running `codex.Client`, which uses the app-server's own login (ChatGPT or API key) and asks it to refresh after a 401. `codexClient.ImagesConfig(ctx)` builds the whole `images.Config` from the provider the app-server runs with: its `base_url`, `http_headers`, `env_http_headers`, and `env_key` from this process's environment, or the app-server login.
+- **Edits.** `EditRequest.Images` go in order, the first is the base: `images.ImageBytes`, `images.ImageURL` (https or data URL) or `images.ImageFileID`. A `Mask` must match the base image's size and have alpha; the client checks both before sending when it can decode the images.
+- **Result.** Besides the images (bytes, media type, width, height, revised prompt, generation ID): the quality, size, background and format the backend actually produced, token usage, `RequestID` (`x-request-id`), `ImagegenRequestID` (`x-codex-imagegen-request-id`), `Attempts` and `Duration`.
+- **Errors**, for `errors.As`: `*UsageLimitError` (429 `usage_limit_reached`: `LimitID` such as `image_gen` or `imagegen_premium`, `ResetsAt`, `UsedPercent`, `WindowMinutes`, `Primary`/`Secondary` windows; also `usageNotIncluded` and `insufficientQuota`), `*RefusalError` (`moderation_blocked`, `invalid_prompt`, `cyber_policy`, `bio_policy`; `SafetyIdentifier`), `*UnavailableError` (5xx, codex-lb `no_available_accounts` and its 429 rate caps, timeouts, connection errors; `RetryAfter`) and `*InvalidRequestError` (`Param`, `Code`). `images.IsRetryable` is true only for `*UnavailableError`. `codex.ImageGenerationFailure` of turn items is the same type as `*UsageLimitError`, and `GeneratedImage.Image()` returns an `images.Image`.
+- **Retries and time.** Only temporary failures are retried (`Config.Retry`, default 3 attempts, exponential backoff with jitter, `Retry-After` honored up to `MaxDelay`); refusals, limits and invalid requests never are. `Config.Timeout` bounds each attempt (default 180 s); ctx bounds the whole call. `Options.IdempotencyKey` is sent as `Idempotency-Key`.
+- **Partial images.** `Options.PartialImages` (1–3) with `OnPartialImage` streams draft frames where the images route can stream (the OpenAI platform). Where it cannot (the ChatGPT backend and codex-lb answer 400), `Generate` returns `images.ErrStreamingUnsupported` — unless `Config.ResponsesFallback{Model}` is set: then the client generates through a hosted `image_generation` tool on `{BaseURL}/responses` and delivers the frames. That path spends tokens of the host model and, behind codex-lb, the account's model quota; `Result.ViaResponses` reports it, and its `Usage` counts the host model.
+- **Observability.** `Config.Hooks.OnRequest` and `OnResponse` see every attempt: operation, path, attempt, status, duration, request IDs and the limit headers (`x-codex-*`, `x-<limit>-primary-*`, `Retry-After`) — never the prompt, images or credentials.
+- **Tests.** `codextest.NewImageServer(t)` scripts replies (`RespondImage`, `RespondPartialImages`, `RespondResponsesImage`, `RespondUsageLimit`, `RespondRefusal`, `RespondUnavailable`, `RespondInvalidRequest`, `RespondStreamingUnsupported`, `RespondUnauthorized`) and records requests with credentials redacted and image data replaced by its size.
+
+What each backend honors (the subscription column was measured through codex-lb and chatgpt.com in October 2026; the platform column follows the OpenAI API documentation and was not measured):
+
+| | ChatGPT subscription (chatgpt.com Codex backend, codex-lb) | OpenAI platform (`/v1`) |
+|---|---|---|
+| `Model` | ignored: `gpt-image-2-codex` | honored |
+| `Quality`, `Size` | ignored: the backend picks (usually `low`, 1254×1254 or a landscape/portrait size) | honored |
+| `Background: transparent` | honored | honored |
+| `Mask` | accepted, not honored | honored |
+| Partial images | not streamed: `ErrStreamingUnsupported` or the Responses fallback | streamed |
+| Limit | a separate daily image limit (`image_gen`, `imagegen_premium`) | billing and rate limits |
+
 ## Handle Lifecycle And Cancellation
 
 - **One outcome per handle.** A `TurnHandle` or `ReviewHandle` subscribes to its turn once, on the first `Stream`/`Events` or `Wait`, and records the outcome. Repeated and concurrent `Wait` calls return the same result or error, `Wait` still returns the result after a stream consumed every event, and a stream requested after the turn finished is already closed (with no error after `turn/completed`). The handle's first `Stream` or `Wait` gets the events buffered since the turn started. Once the handle had a stream, or a `Wait` of it returned because its ctx ended, a stream opened while no other stream of the handle is open first gets the events that arrived meanwhile. The handle keeps at most the smaller of `PendingTurnQueue` and `ResourceStreamQueue` of them, within `ResourceStreamQueueBytes`; all handles together share the `PendingNotificationBytes` budget with the client's buffer of unsubscribed events, and kept events expire after `LifecycleInactivityTimeout`. When some had to be dropped, the next stream gets the newest kept events and then `*OverflowError`. The handle receives its turn's events as the client routes them, without a goroutine or queue of its own: a stream that is not read fast enough closes with `*OverflowError` by itself, while the handle keeps following the turn and `Wait` still returns its result. Each `Wait` gets its own `Items` slice, but values nested in the items are shared and must be treated as read-only. The handle keeps the collected result, bounded by `MaxRunResultItems` and `MaxRunResultBytes`, while it is referenced. `LoginHandle.Wait` and `MCPOAuthHandle.Wait` also record their outcome. `CommandHandle.Wait` and `GatewayOAuthHandle.Wait` already did.

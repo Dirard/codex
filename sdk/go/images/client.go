@@ -430,6 +430,9 @@ func rateLimitHeaders(header http.Header) map[string]string {
 	out := map[string]string{}
 	for name, values := range header {
 		lower := strings.ToLower(name)
+		if lower == "x-codex-imagegen-request-id" {
+			continue
+		}
 		if lower == "retry-after" || strings.HasPrefix(lower, "x-codex-") ||
 			(strings.HasPrefix(lower, "x-") && (strings.Contains(lower, "-primary-") || strings.Contains(lower, "-secondary-"))) ||
 			strings.HasPrefix(lower, "x-ratelimit-") {
