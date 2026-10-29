@@ -176,6 +176,32 @@ for delta, err := range codex.Payloads[protocol.AgentMessageDeltaNotification](c
 result, err := turn.Wait(ctx)
 ```
 
+### Generated Images
+
+When the model generates an image, the turn contains an `imageGeneration` item. `RunResult.GeneratedImages()` decodes them in item order; `codex.GeneratedImageFromItem` does the same for one item, for example from an `item/completed` notification:
+
+```go
+images, err := result.GeneratedImages()
+if err != nil {
+    return err
+}
+for _, img := range images {
+    if !img.Completed() {
+        if img.Failure != nil { // e.g. usageLimitExceeded, LimitID "imagegen_premium"
+            log.Printf("no image: %s %s until %s", img.Failure.Type, img.Failure.LimitID, img.Failure.ResetsAt)
+        }
+        continue
+    }
+    data, err := client.FileSystem.ReadGeneratedImage(ctx, img)
+    if err != nil {
+        return err
+    }
+    _ = os.WriteFile(img.ItemID+".png", data, 0o644) // img.MediaType() sniffs the type
+}
+```
+
+`GeneratedImage.Data` holds the inline bytes (Codex's local attachment store sends them base64). `ReadGeneratedImage` returns them, or reads `SavedPath` through `fs/readFile` on the app-server host when an item carries no bytes, for example with `omit_app_server_notification_media`; an item with only an attachment-store `FileID` returns `ErrGeneratedImageUnavailable`. Image statuses are `ImageGenerationStatusInProgress`, `…Completed` and `…Failed`; they are not the command-execution statuses that share `ThreadItem.Status`. Codex chooses the image model, quality and size itself; with a ChatGPT subscription the backend also ignores any such fields. `codextest.ImageGenerationCompleted` and `codextest.ImageGenerationFailed` build the notifications for tests.
+
 ## Handle Lifecycle And Cancellation
 
 - **One outcome per handle.** A `TurnHandle` or `ReviewHandle` subscribes to its turn once, on the first `Stream`/`Events` or `Wait`, and records the outcome. Repeated and concurrent `Wait` calls return the same result or error, `Wait` still returns the result after a stream consumed every event, and a stream requested after the turn finished is already closed (with no error after `turn/completed`). The handle's first `Stream` or `Wait` gets the events buffered since the turn started. Once the handle had a stream, or a `Wait` of it returned because its ctx ended, a stream opened while no other stream of the handle is open first gets the events that arrived meanwhile. The handle keeps at most the smaller of `PendingTurnQueue` and `ResourceStreamQueue` of them, within `ResourceStreamQueueBytes`; all handles together share the `PendingNotificationBytes` budget with the client's buffer of unsubscribed events, and kept events expire after `LifecycleInactivityTimeout`. When some had to be dropped, the next stream gets the newest kept events and then `*OverflowError`. The handle receives its turn's events as the client routes them, without a goroutine or queue of its own: a stream that is not read fast enough closes with `*OverflowError` by itself, while the handle keeps following the turn and `Wait` still returns its result. Each `Wait` gets its own `Items` slice, but values nested in the items are shared and must be treated as read-only. The handle keeps the collected result, bounded by `MaxRunResultItems` and `MaxRunResultBytes`, while it is referenced. `LoginHandle.Wait` and `MCPOAuthHandle.Wait` also record their outcome. `CommandHandle.Wait` and `GatewayOAuthHandle.Wait` already did.
