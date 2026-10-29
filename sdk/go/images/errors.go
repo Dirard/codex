@@ -225,9 +225,17 @@ func usageLimitFrom(status int, header http.Header, parsed apiErrorBody, message
 		RequestID: requestID,
 		PlanType:  parsed.Error.PlanType,
 	}
-	prefix := "x-" + strings.ReplaceAll(strings.ToLower(firstNonEmpty(out.LimitID, "codex")), "_", "-")
-	out.Primary = rateLimitWindow(header, prefix+"-primary")
-	out.Secondary = rateLimitWindow(header, prefix+"-secondary")
+	// The windows: the limit's own headers (x-imagegen-premium-*), else codex-lb's image
+	// headers (x-image-gen-*), else the generic ones (x-codex-*), which codex-lb fills with the
+	// image limit's windows when the active limit is an image limit.
+	now := time.Now()
+	for _, prefix := range windowPrefixes(out.LimitID) {
+		out.Primary = rateLimitWindow(header, prefix+"-primary", now)
+		out.Secondary = rateLimitWindow(header, prefix+"-secondary", now)
+		if out.Primary != nil || out.Secondary != nil {
+			break
+		}
+	}
 	if parsed.Error.ResetsAt != nil {
 		out.ResetsAt = time.Unix(*parsed.Error.ResetsAt, 0).UTC()
 	}
@@ -248,19 +256,40 @@ func usageLimitFrom(status int, header http.Header, parsed apiErrorBody, message
 	if out.WindowMinutes == 0 && parsed.Error.LimitWindowMinutes != nil {
 		out.WindowMinutes = *parsed.Error.LimitWindowMinutes
 	}
+	if out.ResetsAt.IsZero() {
+		if wait := parseRetryAfter(header.Get("Retry-After"), now); wait > 0 {
+			out.ResetsAt = now.Add(wait).UTC().Truncate(time.Second)
+		}
+	}
 	return out
 }
 
-func rateLimitWindow(header http.Header, prefix string) *RateLimitWindow {
+// windowPrefixes lists the header prefixes that may carry the windows of limitID.
+func windowPrefixes(limitID string) []string {
+	var prefixes []string
+	if limitID != "" {
+		prefixes = append(prefixes, "x-"+strings.ReplaceAll(strings.ToLower(limitID), "_", "-"))
+	}
+	if strings.Contains(strings.ToLower(limitID), "image") {
+		prefixes = append(prefixes, "x-image-gen")
+	}
+	return append(prefixes, "x-codex")
+}
+
+func rateLimitWindow(header http.Header, prefix string, now time.Time) *RateLimitWindow {
 	used, okUsed := parseFloat(header.Get(prefix + "-used-percent"))
 	minutes, okMinutes := parseInt(header.Get(prefix + "-window-minutes"))
 	resetAt, okReset := parseInt(header.Get(prefix + "-reset-at"))
-	if !okUsed && !okMinutes && !okReset {
+	resetAfter, okResetAfter := parseFloat(header.Get(prefix + "-reset-after-seconds"))
+	if !okUsed && !okMinutes && !okReset && !okResetAfter {
 		return nil
 	}
 	window := &RateLimitWindow{UsedPercent: used, WindowMinutes: int(minutes)}
-	if okReset {
+	switch {
+	case okReset:
 		window.ResetsAt = time.Unix(resetAt, 0).UTC()
+	case okResetAfter && resetAfter >= 0:
+		window.ResetsAt = now.Add(time.Duration(resetAfter * float64(time.Second))).UTC().Truncate(time.Second)
 	}
 	return window
 }

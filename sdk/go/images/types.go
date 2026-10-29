@@ -198,6 +198,10 @@ type Result struct {
 	Duration time.Duration
 	// ViaResponses reports that the images came through the Responses fallback.
 	ViaResponses bool
+	// PartialImages counts the draft frames the server streamed. A server may stream without
+	// frames: codex-lb from go-v1.7.0 accepts stream: true for subscription accounts but sends
+	// only keepalives and the final image.
+	PartialImages int
 }
 
 // Image returns the first image, or the zero Image when there is none.

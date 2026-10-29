@@ -117,6 +117,35 @@ func (s *ImageServer) RespondPartialImages(partials [][]byte, final ImageRespons
 	})
 }
 
+// RespondStreamWithoutFrames queues a stream as codex-lb (from go-v1.7.0) sends it for
+// subscription accounts: a keepalive event, then the completed image, no partial frames and
+// no [DONE].
+func (s *ImageServer) RespondStreamWithoutFrames(final ImageResponse) {
+	s.enqueue(func(w http.ResponseWriter) {
+		writeImageHeaders(w, final)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeEvent(w, "keepalive", map[string]any{"type": "keepalive"})
+		img := final.imagesOrDefault()[0]
+		writeEvent(w, "image_generation.completed", map[string]any{
+			"type": "image_generation.completed", "b64_json": base64.StdEncoding.EncodeToString(img), "created_at": time.Now().Unix(),
+			"generation_id": final.GenerationID, "quality": final.Quality, "size": final.Size, "background": final.Background,
+			"output_format": final.OutputFormat, "usage": final.usage(),
+		})
+	})
+}
+
+// RespondStreamError queues a stream that ends with an error event instead of an image, as
+// codex-lb sends {"type":"error","error":{"code":"invalid_upstream_response",…}}.
+func (s *ImageServer) RespondStreamError(code string, message string) {
+	s.enqueue(func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeEvent(w, "keepalive", map[string]any{"type": "keepalive"})
+		writeEvent(w, "error", map[string]any{"type": "error", "error": map[string]any{"code": code, "message": message}})
+	})
+}
+
 // RespondResponsesImage queues a streamed /responses reply of a hosted image_generation
 // call: partial images, the completed image_generation_call, then response.completed.
 func (s *ImageServer) RespondResponsesImage(partials [][]byte, final ImageResponse) {

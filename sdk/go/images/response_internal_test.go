@@ -60,6 +60,28 @@ func TestUsageLimitFromSecondaryWindowAndRetryAfterDate(t *testing.T) {
 		t.Fatalf("Retry-After seconds = %v", got)
 	}
 
+	// codex-lb from go-v1.7.0: an image limit with its windows in x-codex-*, reset-after only.
+	lb := http.Header{}
+	lb.Set("x-codex-active-limit", "imagegen_premium")
+	lb.Set("Retry-After", "3600")
+	lb.Set("x-codex-primary-used-percent", "100")
+	lb.Set("x-codex-primary-window-minutes", "1440")
+	lb.Set("x-codex-primary-reset-after-seconds", "3600")
+	before := time.Now()
+	lbErr := errorFromResponse(429, lb, []byte(`{"error":{"type":"usage_limit_reached","code":"usage_limit_reached","message":"The image generation limit was reached"}}`))
+	lbLimit, ok := lbErr.(*UsageLimitError)
+	if !ok || lbLimit.LimitID != "imagegen_premium" || lbLimit.UsedPercent != 100 || lbLimit.WindowMinutes != 1440 {
+		t.Fatalf("codex-lb limit = %+v", lbErr)
+	}
+	if lbLimit.ResetsAt.Before(before.Add(3599*time.Second)) || lbLimit.ResetsAt.After(time.Now().Add(3601*time.Second)) {
+		t.Fatalf("codex-lb reset = %v", lbLimit.ResetsAt)
+	}
+	// Only Retry-After: it still gives the reset time.
+	onlyRetry := errorFromResponse(429, http.Header{"Retry-After": {"120"}, "X-Codex-Active-Limit": {"image_gen"}}, []byte(`{"error":{"type":"usage_limit_reached"}}`))
+	if limit := onlyRetry.(*UsageLimitError); limit.ResetsAt.IsZero() || limit.Primary != nil {
+		t.Fatalf("Retry-After only = %+v", limit)
+	}
+
 	// codex-lb's own 429 caps are temporary.
 	capped := errorFromResponse(429, http.Header{"Retry-After": {"2"}}, []byte(`{"error":{"code":"account_stream_cap","type":"rate_limit_error","message":"busy"}}`))
 	if !IsRetryable(capped) {

@@ -17,8 +17,9 @@ func readSSE(r io.Reader, handle func(event string, data []byte) error) error {
 	var event string
 	var data bytes.Buffer
 	dispatch := func() error {
-		if data.Len() == 0 {
+		if data.Len() == 0 || bytes.Equal(bytes.TrimSpace(data.Bytes()), []byte("[DONE]")) {
 			event = ""
+			data.Reset()
 			return nil
 		}
 		err := handle(event, bytes.TrimSuffix(data.Bytes(), []byte("\n")))
@@ -86,6 +87,7 @@ func readImageStream(r io.Reader, onPartial func(PartialImage)) (*Result, error)
 				}
 				onPartial(PartialImage{Index: ev.PartialImageIndex, Data: img.Data, MediaType: img.MediaType})
 			}
+			result.PartialImages++
 		case strings.HasSuffix(kind, ".completed"):
 			img, err := imageFromBase64(ev.B64JSON)
 			if err != nil {
@@ -135,19 +137,19 @@ func streamError(e *streamErrorBody) error {
 }
 
 // statusForStreamError maps an in-stream error to the HTTP status it would have had, so
-// the same classification applies.
+// the same classification applies: limits are 429, refusals and invalid requests 400, and
+// anything else — the server or its upstream failing mid-stream, for example codex-lb's
+// invalid_upstream_response — a temporary 502.
 func statusForStreamError(kind string, rawCode json.RawMessage) int {
 	var code string
 	_ = json.Unmarshal(rawCode, &code)
 	switch {
-	case kind == "usage_limit_reached" || code == "usage_limit_reached" || code == "rate_limit_exceeded":
+	case kind == "usage_limit_reached" || code == "usage_limit_reached":
 		return 429
-	case refusalCodes[code] || kind == "invalid_request_error":
+	case refusalCodes[code] || kind == "invalid_request_error" || code == "invalid_request":
 		return 400
-	case kind == "server_error" || code == "server_error" || code == "" && kind == "":
-		return 500
 	}
-	return 400
+	return 502
 }
 
 var errNoImageCall = errors.New("images: the Responses stream ended without an image_generation_call")

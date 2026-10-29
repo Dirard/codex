@@ -125,6 +125,7 @@ func readResponsesStream(r io.Reader, onPartial func(PartialImage)) (*Result, er
 				}
 				onPartial(PartialImage{Index: ev.PartialImageIndex, Data: img.Data, MediaType: img.MediaType})
 			}
+			result.PartialImages++
 		case kind == "response.output_item.done" && ev.Item != nil && ev.Item.Type == "image_generation_call":
 			if ev.Item.Result == "" {
 				return &UnavailableError{Message: "the image_generation_call ended with status " + ev.Item.Status + " and no image"}

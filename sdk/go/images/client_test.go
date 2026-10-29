@@ -161,12 +161,64 @@ func TestPartialImagesStreamFromTheImagesRoute(t *testing.T) {
 	if len(got) != 2 || got[0].Index != 0 || got[1].Index != 1 || !bytes.Equal(got[1].Data, frames[1]) || got[0].MediaType != "image/png" {
 		t.Fatalf("partials = %+v", got)
 	}
-	if !bytes.Equal(result.Image().Data, final) || result.Quality != images.QualityHigh || result.Usage.OutputTokens != 9 || result.ViaResponses {
+	if !bytes.Equal(result.Image().Data, final) || result.Quality != images.QualityHigh || result.Usage.OutputTokens != 9 || result.ViaResponses || result.PartialImages != 2 {
 		t.Fatalf("result = %+v", result)
 	}
 	body := srv.Requests()[0].Body
 	if body["stream"] != true || body["partial_images"] != float64(2) {
 		t.Fatalf("body = %v", body)
+	}
+}
+
+func TestStreamWithoutFramesAndStreamErrors(t *testing.T) {
+	srv := codextest.NewImageServer(t)
+	client := newClient(t, images.Config{BaseURL: srv.URL(), Retry: images.RetryPolicy{MaxAttempts: 2, BaseDelay: time.Millisecond}})
+	called := false
+	onPartial := func(images.PartialImage) { called = true }
+
+	// codex-lb from go-v1.7.0: keepalive, then the image, no frames.
+	final := pngOf(t, 2, 2, false)
+	srv.RespondStreamWithoutFrames(codextest.ImageResponse{Images: [][]byte{final}, Quality: "low", Size: "1254x1254", GenerationID: "gen_9"})
+	result, err := client.Generate(context.Background(), images.GenerateRequest{Prompt: "p", Options: images.Options{PartialImages: 2, OnPartialImage: onPartial}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called || result.PartialImages != 0 || !bytes.Equal(result.Image().Data, final) || result.Image().GenerationID != "gen_9" || result.Size != "1254x1254" {
+		t.Fatalf("result = %+v, frames called %v", result, called)
+	}
+
+	// A stream that ends with an upstream error is temporary and retried.
+	srv.RespondStreamError("invalid_upstream_response", "Upstream ended without an image")
+	srv.RespondStreamWithoutFrames(codextest.ImageResponse{})
+	result, err = client.Generate(context.Background(), images.GenerateRequest{Prompt: "p", Options: images.Options{PartialImages: 1, OnPartialImage: onPartial}})
+	if err != nil || result.Attempts != 2 {
+		t.Fatalf("after stream error: result %+v, err %v", result, err)
+	}
+	srv.RespondStreamError("invalid_upstream_response", "Upstream ended without an image")
+	srv.RespondStreamError("invalid_upstream_response", "Upstream ended without an image")
+	_, err = client.Generate(context.Background(), images.GenerateRequest{Prompt: "p", Options: images.Options{PartialImages: 1, OnPartialImage: onPartial}})
+	var unavailable *images.UnavailableError
+	if !errors.As(err, &unavailable) || unavailable.Code != "invalid_upstream_response" {
+		t.Fatalf("stream error = %v", err)
+	}
+
+	// An edit asked to stream may get plain JSON.
+	srv.RespondImage(codextest.ImageResponse{})
+	if _, err := client.Edit(context.Background(), images.EditRequest{Prompt: "p", Images: []images.InputImage{images.ImageBytes(final)}, Options: images.Options{PartialImages: 1, OnPartialImage: onPartial}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStreamToleratesDoneMarker(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: image_generation.completed\ndata: {\"type\":\"image_generation.completed\",\"b64_json\":\"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==\"}\n\ndata: [DONE]\n\n"))
+	}))
+	defer server.Close()
+	client := newClient(t, images.Config{BaseURL: server.URL})
+	result, err := client.Generate(context.Background(), images.GenerateRequest{Prompt: "p", Options: images.Options{PartialImages: 1, OnPartialImage: func(images.PartialImage) {}}})
+	if err != nil || len(result.Images) != 1 {
+		t.Fatalf("result %+v, err %v", result, err)
 	}
 }
 
@@ -194,7 +246,7 @@ func TestPartialImagesWithoutStreamingFailOrUseTheResponsesFallback(t *testing.T
 	if len(partials) != 1 || !bytes.Equal(partials[0].Data, frame) {
 		t.Fatalf("partials = %+v", partials)
 	}
-	if !result.ViaResponses || !bytes.Equal(result.Image().Data, final) || result.Image().RevisedPrompt != "a red apple, studio light" || result.Usage.OutputTokens != 600 {
+	if !result.ViaResponses || result.PartialImages != 1 || !bytes.Equal(result.Image().Data, final) || result.Image().RevisedPrompt != "a red apple, studio light" || result.Usage.OutputTokens != 600 {
 		t.Fatalf("result = %+v", result)
 	}
 	requests := srv.Requests()
