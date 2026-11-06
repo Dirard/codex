@@ -7,6 +7,7 @@ use super::*;
 use crate::agent::worktree_isolation::AgentWorktreeBinding;
 use crate::agent::worktree_isolation::Discovery;
 use crate::agent::worktree_isolation::WorktreeUse;
+use crate::agent::worktree_isolation::bound_by_parent_authority;
 use crate::agent::worktree_isolation::discover_binding_or_missing;
 use crate::agent::worktree_isolation::ensure_worktree_present;
 use crate::agent::worktree_isolation::prepare_reload;
@@ -15,6 +16,7 @@ use crate::codex_thread::CodexThread;
 use crate::context::DeveloperInstructions;
 use crate::thread_manager::StartThreadOptions;
 use codex_history::RolloutItem;
+use codex_protocol::models::PermissionProfile;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -177,11 +179,36 @@ impl LocalAgentControl {
                         "cannot resume multi-agent v2 child {thread_id}: {err}"
                     ))
                 })?;
+                // R5.5: a sender's reload keeps the child's own permissions, bounded by the
+                // parent's current ones; an owner's reload takes the parent's settings anyway.
+                if let Some(authority) = self.parent_authority(session_source).await {
+                    bound_by_parent_authority(config, binding, &authority).map_err(|err| {
+                        CodexErr::InvalidRequest(format!(
+                            "cannot resume multi-agent v2 child {thread_id}: {err}"
+                        ))
+                    })?;
+                }
                 None
             }
             (None, parent) => parent,
         };
         Ok((ReloadWorktree(worktree), parent))
+    }
+
+    /// The current materialized permissions of a reloaded child's parent: its live settings
+    /// while it is loaded, else those it was evicted with (R5.5). Without either the child
+    /// keeps the permissions its parent bounded at the spawn.
+    async fn parent_authority(&self, session_source: &SessionSource) -> Option<PermissionProfile> {
+        let parent_thread_id = session_source.parent_thread_id()?;
+        if let Ok(state) = self.runtime.upgrade()
+            && let Ok(parent) = state.get_thread(parent_thread_id).await
+        {
+            return Some(parent.config_snapshot().await.permission_profile);
+        }
+        self.runtime
+            .registry
+            .evicted_environments(parent_thread_id)
+            .map(|evicted| evicted.config.permissions.effective_permission_profile())
     }
 
     /// The worktree binding of a child being reloaded, recovered from its stored cwd after a

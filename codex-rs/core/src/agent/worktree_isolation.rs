@@ -16,6 +16,7 @@ use codex_features::AgentWorktreeBase;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::intersect_effective_permission_profiles;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
@@ -887,6 +888,41 @@ pub(crate) fn rebase_child_config(
             .map_err(|err| format!("worktree permissions are invalid: {err}"))?;
     }
     Ok(())
+}
+
+/// Bounds a reloaded child's own permissions by its parent's current ones moved onto the
+/// worktree (R5.5). A reload without the owner keeps the permissions the child was evicted
+/// with, so without this a parent that narrowed its permissions since the spawn would not
+/// reach the reloaded child. `authority` is the parent's materialized profile in its checkout.
+pub(crate) fn bound_by_parent_authority(
+    config: &mut Config,
+    binding: &AgentWorktreeBinding,
+    authority: &PermissionProfile,
+) -> Result<(), String> {
+    let authority = rebase_permission_profile(authority, &binding.source_root, &binding.root)?;
+    let requested = config
+        .permissions
+        .permission_profile()
+        .clone()
+        .materialize_project_roots_with_workspace_roots(&config.workspace_roots);
+    if authority == requested {
+        return Ok(());
+    }
+    let bounded =
+        intersect_effective_permission_profiles(&authority, &requested, binding.cwd.as_path())
+            .map_err(|err| {
+                format!("its parent's current permissions cannot bound it safely: {err}")
+            })?;
+    // Keep the child's own profile, and its name, when the parent does not narrow it.
+    if bounded.file_system_sandbox_policy() == requested.file_system_sandbox_policy()
+        && bounded.network_sandbox_policy() == requested.network_sandbox_policy()
+    {
+        return Ok(());
+    }
+    config
+        .permissions
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::legacy(bounded))
+        .map_err(|err| format!("worktree permissions are invalid: {err}"))
 }
 
 /// Whether the child's sandbox keeps the parent's checkout read-only (R3.4).

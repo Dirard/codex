@@ -1616,3 +1616,53 @@ fn restore_texts_name_where_the_work_is() {
         known.source
     );
 }
+
+/// R5.5: a reload without the owner keeps the child's own permissions, bounded by the
+/// parent's current ones moved onto the worktree; a parent that does not narrow them leaves
+/// the child's profile as it was.
+#[tokio::test]
+async fn a_reloaded_childs_permissions_are_bounded_by_its_parent() {
+    let home = tempfile::TempDir::new().expect("create temp dir");
+    // The intersection resolves concrete grants, so the checkout and the worktree must exist.
+    let base = dunce::canonicalize(home.path()).expect("canonical temp dir");
+    let mut binding = binding(/*protected*/ true);
+    binding.source_root = abs(&base.join("work/demo").to_string_lossy());
+    binding.root = abs(&base.join("worktrees/6d88/demo").to_string_lossy());
+    binding.cwd = abs(&base.join("worktrees/6d88/demo/sub").to_string_lossy());
+    for dir in [&binding.source_root, &binding.cwd] {
+        std::fs::create_dir_all(dir.as_path()).expect("create checkout");
+    }
+    let mut config = load_config(&home, "", None).await.expect("default config");
+    config.workspace_roots = vec![binding.root.clone()];
+    config
+        .permissions
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::legacy(
+            PermissionProfile::workspace_write(),
+        ))
+        .expect("workspace-write child");
+    let child = config.permissions.permission_profile().clone();
+    let can_write_worktree = |config: &Config| {
+        config
+            .permissions
+            .permission_profile()
+            .clone()
+            .materialize_project_roots_with_workspace_roots(&config.workspace_roots)
+            .file_system_sandbox_policy()
+            .can_write_local_path_with_cwd(binding.root.as_path(), binding.cwd.as_path())
+    };
+    assert!(can_write_worktree(&config));
+
+    for parent in [
+        PermissionProfile::Disabled,
+        PermissionProfile::workspace_write()
+            .materialize_project_roots_with_workspace_roots(&[binding.source_root.clone()]),
+    ] {
+        let mut unchanged = config.clone();
+        bound_by_parent_authority(&mut unchanged, &binding, &parent).expect("bound");
+        assert_eq!(unchanged.permissions.permission_profile(), &child);
+    }
+
+    bound_by_parent_authority(&mut config, &binding, &PermissionProfile::read_only())
+        .expect("bound by a read-only parent");
+    assert!(!can_write_worktree(&config));
+}
