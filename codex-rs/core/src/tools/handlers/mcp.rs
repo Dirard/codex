@@ -137,7 +137,12 @@ impl McpHandler {
     }
 
     fn hook_tool_name(&self) -> HookToolName {
-        HookToolName::new(ensure_mcp_prefix(&join_tool_name(&self.tool_name())))
+        Self::hook_tool_name_for(self.tool_info())
+    }
+
+    pub(crate) fn hook_tool_name_for(tool_info: &ToolInfo) -> HookToolName {
+        let name = tool_info.canonical_tool_name();
+        HookToolName::new(ensure_mcp_prefix(&join_tool_name(&name)))
     }
 }
 
@@ -356,8 +361,8 @@ impl CoreToolRuntime for McpHandler {
         true
     }
 
-    fn mcp_server_name(&self) -> Option<&str> {
-        Some(&self.definition.tool_info.server_name)
+    fn mcp_tool_info(&self) -> Option<&ToolInfo> {
+        Some(self.tool_info())
     }
 
     fn on_tool_result_accepted(&self, invocation: &ToolInvocation, result: &dyn ToolOutput) {
@@ -692,6 +697,7 @@ mod tests {
                 tool_name: codex_tools::ToolName::namespaced("memory", "create_entities"),
                 source: ToolCallSource::Direct,
                 payload,
+                native_call: None,
                 environments: Default::default(),
             }),
             Some(PreToolUsePayload {
@@ -727,6 +733,7 @@ mod tests {
                 tool_name: codex_tools::ToolName::namespaced("mcp__foo", "exec_command"),
                 source: ToolCallSource::Direct,
                 payload,
+                native_call: None,
                 environments: Default::default(),
             }),
             Some(PreToolUsePayload {
@@ -758,6 +765,7 @@ mod tests {
                     tool_name: codex_tools::ToolName::namespaced("mcp__foo", "exec_command"),
                     source: ToolCallSource::Direct,
                     payload,
+                    native_call: None,
                     environments: Default::default(),
                 },
                 json!({ "message": "rewritten" }),
@@ -820,6 +828,7 @@ mod tests {
             tool_name: codex_tools::ToolName::namespaced("filesystem", "read_file"),
             source: ToolCallSource::Direct,
             payload,
+            native_call: None,
             environments: Default::default(),
         };
         assert_eq!(
@@ -860,6 +869,7 @@ mod tests {
                 call_id: invocation.call_id.clone(),
                 payload: invocation.payload.clone(),
                 encrypted_function_args: None,
+                native_call: None,
             },
             &invocation.source,
             &invocation.step_context,

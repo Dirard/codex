@@ -52,6 +52,8 @@ mod image_cancellation_tests;
 mod large_tool_delegate;
 #[path = "grpc/network_policy_tests.rs"]
 mod network_policy_tests;
+#[path = "grpc/process_metrics_tests.rs"]
+mod process_metrics_tests;
 #[path = "support/recording_delegate.rs"]
 mod recording_delegate;
 #[path = "grpc/session_recovery_tests.rs"]
@@ -976,7 +978,7 @@ async fn large_unary_tool_completion_does_not_block_an_independent_session() -> 
     .await?;
     assert_eq!(
         actual,
-        text_response("1", "fast-before", actual.code_mode_host_duration())
+        text_response("g2:1", "fast-before", actual.code_mode_host_duration())
     );
 
     delegate.release.add_permits(/*n*/ 1);
@@ -991,7 +993,7 @@ async fn large_unary_tool_completion_does_not_block_an_independent_session() -> 
     let actual = fast_response?;
     assert_eq!(
         actual,
-        text_response("2", "fast-during", actual.code_mode_host_duration())
+        text_response("g2:2", "fast-during", actual.code_mode_host_duration())
     );
     let actual = slow_response
         .context("large unary tool response did not complete")?
@@ -1128,7 +1130,7 @@ async fn sessions_enforce_independent_yield_limits() -> Result<()> {
     .await?;
     assert_eq!(
         actual,
-        text_response("1", "isolated", actual.code_mode_host_duration())
+        text_response("g2:1", "isolated", actual.code_mode_host_duration())
     );
     let actual = limited
         .terminate(cell_id("1").into())
@@ -1169,6 +1171,7 @@ async fn dropping_a_grpc_lease_retires_its_server_session() -> Result<()> {
         .context("connect raw gRPC client")?;
     let mut lease = client
         .open_session(grpc::OpenSessionRequest {
+            max_pending_delegate_calls: None,
             cell_execution_limits: None,
             output_truncation: None,
         })
@@ -1221,6 +1224,24 @@ async fn cached_session_recovers_after_a_remote_host_restarts() -> Result<()> {
         .await
         .map_err(anyhow::Error::msg)?;
 
+    let actual = execute(
+        &session,
+        request(r#"text("before reload");"#),
+        Arc::new(NoopCodeModeSessionDelegate),
+    )
+    .await?;
+    assert_eq!(
+        actual,
+        text_response("1", "before reload", actual.code_mode_host_duration())
+    );
+    session.shutdown().await.map_err(anyhow::Error::msg)?;
+    // Reloading a thread creates a new session through the same shared provider.
+    let session = provider
+        .clone()
+        .create_session()
+        .await
+        .map_err(anyhow::Error::msg)?;
+
     let saved = execute(
         &session,
         request(r#"store("saved", "before restart"); text(load("saved"));"#),
@@ -1229,7 +1250,7 @@ async fn cached_session_recovers_after_a_remote_host_restarts() -> Result<()> {
     .await?;
     assert_eq!(
         saved,
-        text_response("1", "before restart", saved.code_mode_host_duration())
+        text_response("g2:1", "before restart", saved.code_mode_host_duration())
     );
 
     let mut pending = request("await tools.echo({generation: 1}); await new Promise(() => {});");
@@ -1240,7 +1261,7 @@ async fn cached_session_recovers_after_a_remote_host_restarts() -> Result<()> {
         .await
         .map_err(anyhow::Error::msg)?;
     let old_cell_id = started.cell_id.clone();
-    assert_eq!(old_cell_id, cell_id("2"));
+    assert_eq!(old_cell_id, cell_id("g2:2"));
     assert!(matches!(
         started.initial_response().await,
         Ok(RuntimeResponse::Yielded { .. })
@@ -1372,7 +1393,7 @@ async fn cached_session_recovers_after_a_remote_host_restarts() -> Result<()> {
     );
     let mut replacement_cell_ids = [callback_cell_id.as_str(), concurrent_cell_id.as_str()];
     replacement_cell_ids.sort_unstable();
-    assert_eq!(replacement_cell_ids, ["g2:1", "g2:2"]);
+    assert_eq!(replacement_cell_ids, ["g3:1", "g3:2"]);
     assert_eq!(
         delegate
             .invocations
@@ -1405,7 +1426,7 @@ async fn cached_session_recovers_after_a_remote_host_restarts() -> Result<()> {
         .await
         .map_err(anyhow::Error::msg)?;
     let replacement_cell_id = started.cell_id.clone();
-    assert_eq!(replacement_cell_id, cell_id("g2:3"));
+    assert_eq!(replacement_cell_id, cell_id("g3:3"));
     let actual = started
         .initial_response()
         .await
