@@ -1,0 +1,16 @@
+---
+source: tui/src/app/workflows_fork_tests.rs
+expression: "render_bottom_popup(&app.chat_widget, 150)"
+---
+  Subagents
+  Select an agent to watch. ⌥← previous, ⌥→ next.
+
+
+› 1. ● Workflow find-bugs               wf-1a2b3c4d · running · 2 agents
+  2.   • #2 verify (needs approval)     00000000-0000-0000-0000-000000000103 · worktree 1f2e/demo · clean
+  3.   • #1 find_src_a_py               00000000-0000-0000-0000-000000000102
+  4. • /root/reviewer (needs approval)  00000000-0000-0000-0000-000000000104 · worktree codex/agents/review-8a1b2c3d4e5f6071 · changed
+  5. • /root/worker                     00000000-0000-0000-0000-000000000101
+  6. • Main [default]                   00000000-0000-0000-0000-000000000100
+
+  enter select · esc back

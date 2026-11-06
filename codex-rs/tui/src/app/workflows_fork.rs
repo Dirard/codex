@@ -29,6 +29,7 @@ use super::thread_events::ThreadBufferedEvent;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::bottom_pane::SelectionItem;
+use crate::bottom_pane::SelectionViewParams;
 use crate::workflows::RunLoadOrigin;
 use crate::workflows::WorkflowsEvent;
 use crate::workflows::picker::PickerLayout;
@@ -198,84 +199,95 @@ impl App {
         });
     }
 
-    /// R8.6.7: the grouped `/subagents` layout, or `None` when the upstream rows stay as they
-    /// are (feature disabled or no workflow agents).
+    /// R8.6.7: the grouped layout of the rows `agent_picker_selection_view_params` just recorded
+    /// in `picker_row_ids`, or `None` when the upstream rows stay as they are (feature disabled
+    /// or no workflow agents).
     fn fork_workflow_picker_layout(&self) -> Option<PickerLayout> {
         if !self.config.features.enabled(Feature::Workflows) {
             return None;
         }
         PickerLayout::build(
             self.agent_navigation
-                .visible_threads()
-                .into_iter()
-                .map(|(_, entry)| entry.agent_path.as_deref()),
+                .picker_row_ids
+                .iter()
+                .map(|thread_id| {
+                    self.agent_navigation
+                        .get(thread_id)
+                        .and_then(|entry| entry.agent_path.as_deref())
+                }),
         )
     }
 
-    /// Hook of `agent_picker_selection_view_params`: reorder the rows (one per visible thread)
-    /// into the grouped layout and translate the selection. `selected` is the caller's row
-    /// number; `initial` is the upstream choice, a `visible_threads()` index when `selected`
-    /// was `None`.
+    /// Hook of `agent_picker_selection_view_params`, after it recorded `picker_row_ids`: reorder
+    /// the rows (one per `picker_row_ids` entry) into the grouped layout and translate the
+    /// upstream selection, a `picker_row_ids` index, into its display row. The layout is kept
+    /// as the one of the rendered picker: an agent path that arrives while the picker is open
+    /// does not move the rows until the next rebuild, and the hooks of `refresh_agent_picker`
+    /// must read the cursor through the rows on screen.
     pub(super) fn fork_group_workflow_picker_items(
-        &self,
+        &mut self,
         items: Vec<SelectionItem>,
-        selected: Option<usize>,
         initial: Option<usize>,
     ) -> (Vec<SelectionItem>, Option<usize>) {
         let Some(layout) = self.fork_workflow_picker_layout() else {
+            self.agent_navigation.fork_picker_layout = None;
             return (items, initial);
         };
         let labels = self.workflow_run_labels();
         let primary_thread_id = self.primary_thread_id;
-        let items = layout.group_items(items, |run_id, children| {
-            workflow_run_row(primary_thread_id, run_id, children, labels.get(run_id))
-        });
-        let initial = match selected {
-            Some(display) => Some(display),
-            None => initial.and_then(|visible| layout.display_index(visible)),
-        };
+        let row_ids = &self.agent_navigation.picker_row_ids;
+        let pending = &self.agent_navigation.pending_approvals;
+        let items = layout.group_items(
+            items,
+            |row| row_ids.get(row).is_some_and(|id| pending.contains(id)),
+            |run_id, children| {
+                workflow_run_row(primary_thread_id, run_id, children, labels.get(run_id))
+            },
+        );
+        let initial = initial.and_then(|row| layout.display_index(row));
+        self.agent_navigation.fork_picker_layout = Some(layout);
         (items, initial)
     }
 
-    /// Hook of `selected_agent_picker_thread_id`: the `visible_threads()` index shown at a
-    /// picker row; `None` for a run row.
+    /// Hook of `refresh_agent_picker`: the `picker_row_ids` index shown at row `display` of the
+    /// rendered picker; `None` for a run row.
     pub(super) fn fork_picker_visible_index(&self, display: usize) -> Option<usize> {
-        match self.fork_workflow_picker_layout() {
+        match &self.agent_navigation.fork_picker_layout {
             Some(layout) => layout.visible_index(display),
             None => Some(display),
         }
     }
 
-    /// Hook of `replace_agent_picker_view`: the picker row of a `visible_threads()` index.
-    pub(super) fn fork_picker_display_index(&self, visible: usize) -> Option<usize> {
-        match self.fork_workflow_picker_layout() {
-            Some(layout) => layout.display_index(visible),
-            None => Some(visible),
-        }
-    }
-
-    /// Hook before a picker refresh changes the threads: the run whose row has the cursor.
-    /// `selected_agent_picker_thread_id` keeps only thread rows (review 2026-10-27, item 8).
+    /// Hook of `refresh_agent_picker`, before it rebuilds the rows: the run whose row has the
+    /// cursor. Upstream keeps the cursor by thread id, which a run row has not (review
+    /// 2026-10-27, item 8).
     pub(super) fn fork_selected_picker_run(&self) -> Option<String> {
         let display = self
             .chat_widget
             .selected_index_for_present_view(AGENT_PICKER_VIEW_ID)?;
-        self.fork_workflow_picker_layout()?
+        self.agent_navigation
+            .fork_picker_layout
+            .as_ref()?
             .run_at(display)
             .map(str::to_string)
     }
 
-    /// Hook after `replace_agent_picker_view`: put the cursor back on the run row it was on,
-    /// while the picker still holds an agent of that run.
-    pub(super) fn fork_reselect_picker_run(&mut self, run_id: Option<String>) {
-        let Some(display) =
-            run_id.and_then(|run_id| self.fork_workflow_picker_layout()?.run_row(&run_id))
-        else {
-            return;
-        };
-        let params = self.agent_picker_selection_view_params(Some(display));
-        self.chat_widget
-            .replace_selection_view_if_present(AGENT_PICKER_VIEW_ID, params);
+    /// Hook of `refresh_agent_picker`, after it rebuilt the rows: put the cursor back on the run
+    /// row it was on, while the picker still holds an agent of that run.
+    pub(super) fn fork_reselect_picker_run(
+        &self,
+        mut params: SelectionViewParams,
+        run_id: Option<String>,
+    ) -> SelectionViewParams {
+        if let Some(row) = run_id.and_then(|run_id| {
+            self.agent_navigation
+                .fork_picker_layout
+                .as_ref()?
+                .run_row(&run_id)
+        }) {
+            params.initial_selected_idx = Some(row);
+        }
+        params
     }
 
     /// Q38: run names and statuses from the primary thread's stored events, then from the

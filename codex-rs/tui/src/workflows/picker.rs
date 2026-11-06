@@ -1,10 +1,11 @@
 //! Fork: `/subagents` rows of workflow agents grouped under their run
 //! (`specs/dynamic-workflow-2026-10-25.md`, UC 8.1, R8.6.7).
 //!
-//! The upstream picker shows `visible_threads()` one row per thread and maps a row number to a
-//! thread positionally. `PickerLayout` is the display order with run rows inserted; it exists
-//! only when the picker holds workflow agents, so without them the upstream path runs
-//! unchanged.
+//! The upstream picker builds one row per thread, threads waiting for approval first, and records
+//! the thread of each row in `AgentNavigationState::picker_row_ids`. `PickerLayout` is the display
+//! order of those rows with run rows inserted; it exists only when the picker holds workflow
+//! agents, so without them the upstream path runs unchanged. A "row index" below is an index into
+//! `picker_row_ids` (the upstream order), a "display row" a row of the grouped picker.
 
 use std::collections::HashSet;
 
@@ -64,7 +65,7 @@ pub(crate) fn parse_workflow_child(agent_path: &str) -> Option<WorkflowChild> {
 /// One row of the grouped picker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PickerRow {
-    /// The thread at this index of `visible_threads()`.
+    /// The thread at this row index (into `picker_row_ids`).
     Thread(usize),
     /// A run and how many of its agents the picker holds.
     Run { run_id: String, children: usize },
@@ -78,9 +79,10 @@ pub(crate) struct PickerLayout {
 }
 
 impl PickerLayout {
-    /// Groups the workflow agents among `agent_paths` (in `visible_threads()` order) under a
-    /// run row placed where the run's first agent was; other rows keep their order. Returns
-    /// `None` when no path names a workflow agent.
+    /// Groups the workflow agents among `agent_paths` (one per row index, in upstream order)
+    /// under a run row placed where the run's first agent was; other rows keep their order, so
+    /// a run with an agent waiting for approval moves up with that agent. Returns `None` when no
+    /// path names a workflow agent.
     pub(crate) fn build<'a>(
         agent_paths: impl IntoIterator<Item = Option<&'a str>>,
     ) -> Option<Self> {
@@ -125,7 +127,7 @@ impl PickerLayout {
         &self.rows
     }
 
-    /// The `visible_threads()` index shown at row `display`; `None` for a run row.
+    /// The row index shown at display row `display`; `None` for a run row.
     pub(crate) fn visible_index(&self, display: usize) -> Option<usize> {
         match self.rows.get(display)? {
             PickerRow::Thread(index) => Some(*index),
@@ -133,14 +135,14 @@ impl PickerLayout {
         }
     }
 
-    /// The row that shows `visible_threads()[visible]`.
+    /// The display row of row index `visible`.
     pub(crate) fn display_index(&self, visible: usize) -> Option<usize> {
         self.rows
             .iter()
             .position(|row| *row == PickerRow::Thread(visible))
     }
 
-    /// The run shown at row `display`; `None` for a thread row.
+    /// The run shown at display row `display`; `None` for a thread row.
     pub(crate) fn run_at(&self, display: usize) -> Option<&str> {
         match self.rows.get(display)? {
             PickerRow::Run { run_id, .. } => Some(run_id),
@@ -148,19 +150,20 @@ impl PickerLayout {
         }
     }
 
-    /// The row of run `run_id`, if the picker still holds one of its agents.
+    /// The display row of run `run_id`, if the picker still holds one of its agents.
     pub(crate) fn run_row(&self, run_id: &str) -> Option<usize> {
         self.rows
             .iter()
             .position(|row| matches!(row, PickerRow::Run { run_id: id, .. } if id == run_id))
     }
 
-    /// Reorders `items` (one per visible thread, in `visible_threads()` order) into display
-    /// order: run rows come from `run_row`, workflow agents are indented and named
-    /// `#<seq> <label>`.
+    /// Reorders `items` (one per row index) into display order: run rows come from `run_row`,
+    /// workflow agents are indented and named `#<seq> <label>`, keeping the upstream
+    /// `(needs approval)` mark of the rows for which `needs_approval` holds.
     pub(crate) fn group_items(
         &self,
         items: Vec<SelectionItem>,
+        needs_approval: impl Fn(usize) -> bool,
         mut run_row: impl FnMut(&str, usize) -> SelectionItem,
     ) -> Vec<SelectionItem> {
         let mut slots: Vec<Option<SelectionItem>> = items.into_iter().map(Some).collect();
@@ -173,6 +176,9 @@ impl PickerLayout {
                     };
                     if let Some(child) = self.children.get(*index).and_then(Option::as_ref) {
                         item.name = child.row_name();
+                        if needs_approval(*index) {
+                            item.name.push_str(" (needs approval)");
+                        }
                         let mut prefix: Vec<Span<'static>> = vec!["  ".into()];
                         prefix.append(&mut item.name_prefix_spans);
                         item.name_prefix_spans = prefix;

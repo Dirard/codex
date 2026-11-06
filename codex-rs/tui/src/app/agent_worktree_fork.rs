@@ -28,7 +28,8 @@ impl App {
     }
 
     /// Hook of `agent_picker_selection_view_params`: appends the worktree to the description
-    /// of each row whose agent has one. `items` follow `visible_threads()`.
+    /// of each row whose agent has one. `items` follow `picker_row_ids`, the thread of each
+    /// upstream row (threads waiting for approval first).
     pub(super) fn fork_annotate_agent_worktrees(
         &self,
         mut items: Vec<SelectionItem>,
@@ -37,11 +38,8 @@ impl App {
         if worktrees.is_empty() {
             return items;
         }
-        for (item, (thread_id, _)) in items
-            .iter_mut()
-            .zip(self.agent_navigation.visible_threads())
-        {
-            if let Some(worktree) = worktrees.get(&thread_id) {
+        for (item, thread_id) in items.iter_mut().zip(&self.agent_navigation.picker_row_ids) {
+            if let Some(worktree) = worktrees.get(thread_id) {
                 let label = worktree_label(worktree);
                 item.description = Some(match item.description.take() {
                     Some(description) => format!("{description} · {label}"),

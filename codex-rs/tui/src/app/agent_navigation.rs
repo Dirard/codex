@@ -58,6 +58,8 @@ pub(crate) struct AgentNavigationState {
     pub(super) picker_refresh: Option<AgentPickerRefreshState>,
     /// Fork: the last reported worktree of isolated agents (agent-worktree-isolation, R9.5).
     pub(super) fork_worktrees: HashMap<ThreadId, codex_app_server_protocol::ThreadAgentWorktree>,
+    /// Fork: run rows of the rendered picker over `picker_row_ids` (dynamic-workflow, R8.6.7).
+    pub(super) fork_picker_layout: Option<crate::workflows::picker::PickerLayout>,
 }
 
 /// Direction of keyboard traversal through the first-seen order.
@@ -276,6 +278,7 @@ impl AgentNavigationState {
         self.picker_excluded_threads.clear();
         self.pending_approvals.clear();
         self.picker_row_ids.clear();
+        self.fork_picker_layout = None; // Fork: R8.6.7
         self.picker_refresh = None;
     }
 

@@ -115,9 +115,13 @@ fn workflow_agents_follow_their_run_row_at_the_first_agent() {
         item("/root/wf_0000bbbb_1"),
         item("/root/wf_0000aaaa_2_verify"),
     ];
-    let grouped = layout.group_items(items, |run_id, children| {
-        item(&format!("Workflow {run_id} ({children})"))
-    });
+    // Rows 3 and 5 wait for approval. Upstream already marked the name of row 3; the renamed
+    // workflow agent of row 5 keeps the mark.
+    let grouped = layout.group_items(
+        items,
+        |row| matches!(row, 3 | 5),
+        |run_id, children| item(&format!("Workflow {run_id} ({children})")),
+    );
     assert_eq!(
         grouped
             .iter()
@@ -135,7 +139,7 @@ fn workflow_agents_follow_their_run_row_at_the_first_agent() {
             "• /root/worker",
             "• Workflow wf-0000aaaa (2)",
             "  • #1 find",
-            "  • #2 verify",
+            "  • #2 verify (needs approval)",
             "• /root/reviewer",
             "• Workflow wf-0000bbbb (1)",
             "  • #1",
