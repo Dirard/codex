@@ -166,7 +166,7 @@ untested_fork_packages=(
 # executables (codex_utils_cargo_bin::cargo_bin falls back to target/debug).
 # Some tests skip instead of failing when one is missing, so rust-test also
 # rejects the skip messages below. Inventory: specs/fork-ci-2026-10-25.md, UC3.
-test_helper_bins=(codex codex-code-mode-host test_stdio_server test_streamable_http_server)
+test_helper_bins=(codex codex-code-mode-host codex-message-board-mcp test_stdio_server test_streamable_http_server)
 
 # A passed test whose output matches this extended regular expression ran
 # without a helper binary: the skip text the tests print, or an error of
@@ -288,6 +288,7 @@ cmd_rust_helpers() {
   cargo_rs build --locked \
     -p codex-cli --bin codex \
     -p codex-code-mode-host --bin codex-code-mode-host \
+    -p codex-message-board-mcp --bin codex-message-board-mcp \
     -p codex-rmcp-client --bin test_stdio_server --bin test_streamable_http_server
   local bin dir
   dir="$(target_dir)/debug"

@@ -6318,7 +6318,8 @@ async fn auto_compact_accounts_for_unreported_reasoning(
             ev_completed_with_tokens(id, /*total_tokens*/ 15)["response"]["usage"].clone()
         });
         responses.push(sse(vec![
-            ev_reasoning_item(id, &["partial"], &[&"r".repeat(12_000)]),
+            // Fork: scaled with the limit below (F1 headroom).
+            ev_reasoning_item(id, &["partial"], &[&"r".repeat(240_000)]),
             json!({
                 "type": event_type,
                 "response": {
@@ -6342,7 +6343,9 @@ async fn auto_compact_accounts_for_unreported_reasoning(
         })
         .with_config(|config| {
             set_test_compact_prompt(config);
-            config.model_auto_compact_token_limit = Some(5_000);
+            // Fork: the replacement needs headroom below the limit (F1); at 5,000 tokens the
+            // instructions and tool declarations alone leave none.
+            config.model_auto_compact_token_limit = Some(100_000);
             config.model_provider.stream_max_retries = Some(0);
         })
         .build_with_auto_env(&server)
@@ -6353,8 +6356,8 @@ async fn auto_compact_accounts_for_unreported_reasoning(
         test.submit_text_turn(user).await.expect("submit user turn");
     }
 
-    // The saved count is 80. Each partial response retains about 3,000 tokens:
-    // one stays below the 5,000-token limit, but two must compact before CONTINUE.
+    // The saved count is 80. Each partial response retains about 60,000 tokens:
+    // one stays below the 100,000-token limit, but two must compact before CONTINUE.
     assert_eq!(
         request_log
             .requests()
