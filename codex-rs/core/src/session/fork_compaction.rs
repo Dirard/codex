@@ -67,9 +67,10 @@ impl Session {
     /// records its usage. A response whose usage does not tell the context size still grows
     /// the context, but the token check would keep the last reported usage and add only the
     /// items after the latest model output, leaving auto-compaction blind to a context over
-    /// the limit. So the context is estimated as the next request sends it. Like server usage,
-    /// the recorded usage covers the history up to the latest model output; the token check
-    /// adds the items after it, such as tool outputs recorded later, exactly once.
+    /// the limit. So the context is estimated as the next request sends it. Like upstream's
+    /// `recompute_token_usage`, the estimate covers the whole history at this point: it moves
+    /// the usage boundary there, and the token check adds the items recorded after it, such as
+    /// tool outputs, exactly once.
     ///
     /// The usage tells the context size unless it is missing, or, from a provider other than
     /// the first-party one, it reports no input (no real request has zero input, so zero
@@ -123,15 +124,11 @@ impl Session {
             estimate(&items)
         };
         let mut state = self.state.lock().await;
-        let context_tokens = estimate(state.history.annotated_items())
-            .saturating_sub(
-                state
-                    .history
-                    .estimated_tokens_after_last_model_generated_item(),
-            )
-            .max(0);
+        let covered_item_count = state.history.raw_items().len();
+        let context_tokens = estimate(state.history.annotated_items());
         let mut info = state.token_info().unwrap_or(TokenUsageInfo {
             total_token_usage: TokenUsage::default(),
+            last_usage_includes_reasoning: None,
             last_token_usage: TokenUsage::default(),
             model_context_window: None,
         });
@@ -143,15 +140,19 @@ impl Session {
             }
             None => context_tokens,
         };
+        if reported_input.is_none() {
+            // The local estimate already includes every retained reasoning item.
+            info.last_usage_includes_reasoning = Some(true);
+        }
         if let Some(model_context_window) = turn_context.model_context_window() {
             info.model_context_window = Some(model_context_window);
         }
-        state.set_token_info(Some(info));
+        state
+            .history
+            .set_token_info_with_boundary(Some(info), covered_item_count);
         if reported_input.is_some() {
             return;
         }
-        // The local estimate already includes every retained reasoning item.
-        state.set_server_reasoning_included(/*included*/ true);
         if matches!(
             turn_context.config.model_auto_compact_token_limit_scope,
             AutoCompactTokenLimitScope::BodyAfterPrefix

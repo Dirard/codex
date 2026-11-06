@@ -59,7 +59,11 @@ async fn session(scope: AutoCompactTokenLimitScope) -> (Arc<Session>, Arc<StepCo
 async fn request_input(sess: &Session, step: &StepContext) -> Vec<ResponseItem> {
     sess.clone_history()
         .await
-        .for_prompt(&step.settings.model_info.input_modalities)
+        .for_prompt(
+            &step.settings.model_info.input_modalities,
+            sess.services.image_store.as_ref(),
+        )
+        .await
 }
 
 /// The estimate of a request with these items, base instructions and tools.
@@ -105,13 +109,17 @@ async fn sample(
     usage: Option<TokenUsage>,
 ) -> Vec<ResponseItem> {
     let request = request_input(sess, step).await;
+    let input_item_count = sess.clone_history().await.raw_items().len();
     sess.record_conversation_items(&step.turn, &step.settings.model_info, items)
         .await;
     sess.record_token_usage_info(
         &step.turn,
         &step.settings,
         usage.as_ref(),
-        TokenUsageContext::Sampling,
+        TokenUsageContext::Sampling {
+            includes_reasoning: false,
+            input_item_count,
+        },
     )
     .await
     .expect("record usage");

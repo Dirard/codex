@@ -121,6 +121,7 @@ fn direct_source_uses_configured_plaintext_policy_without_marker() {
             arguments: "{}".to_string(),
         },
         encrypted_function_args: None,
+        native_call: None,
     };
     let plaintext = MultiAgentV2Config {
         tool_namespace: Some("agents".to_string()),
@@ -147,6 +148,7 @@ fn direct_source_preserves_legacy_collaboration_empty_marker() {
             arguments: "{}".to_string(),
         },
         encrypted_function_args: Some(Vec::new()),
+        native_call: None,
     };
 
     assert_eq!(

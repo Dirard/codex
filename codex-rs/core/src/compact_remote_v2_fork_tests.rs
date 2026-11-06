@@ -207,7 +207,11 @@ fn candidate_request_estimate_counts_tools_outside_history() {
     let mut model_info = codex_models_manager::model_info::model_info_from_slug("gpt-5.4");
     model_info.use_responses_lite = false;
     let plain = vec![user.clone()];
-    let history_tokens = ContextManager::estimate_history_token_count(&plain, &base_instructions);
+    let history_tokens = ContextManager::estimate_history_token_count(
+        &plain,
+        &base_instructions,
+        &crate::session::FileAudioDurations::default(),
+    );
 
     assert_eq!(
         estimate_candidate_request_tokens(&plain, &base_instructions, &model_info, 700),
@@ -215,8 +219,11 @@ fn candidate_request_estimate_counts_tools_outside_history() {
     );
     // Only Responses Lite sends no top-level tools when history already declares them.
     let incremental = vec![declared_tools, user];
-    let incremental_tokens =
-        ContextManager::estimate_history_token_count(&incremental, &base_instructions);
+    let incremental_tokens = ContextManager::estimate_history_token_count(
+        &incremental,
+        &base_instructions,
+        &crate::session::FileAudioDurations::default(),
+    );
     assert_eq!(
         estimate_candidate_request_tokens(&incremental, &base_instructions, &model_info, 700),
         incremental_tokens + 700
@@ -278,7 +285,12 @@ fn retained_history_budget_uses_full_item_estimator_for_image_only_message() {
         .expect("positive image estimate");
 
     assert_eq!(
-        truncate_retained_messages(vec![image_only], budget, RetainedImageBudget::Enabled),
+        truncate_retained_messages(
+            vec![image_only],
+            budget,
+            RetainedImageBudget::Enabled,
+            &FileAudioDurations::default()
+        ),
         Vec::<ResponseItemEnvelope>::new(),
     );
 }
@@ -290,7 +302,11 @@ fn retained_history_truncates_text_only_message_to_full_item_budget() {
     let budget = usize::try_from(estimate_item_token_count(&item.item) - 1)
         .expect("positive message estimate");
 
-    let retained = truncate_retained_messages_for_remote_compaction(vec![item], budget);
+    let retained = truncate_retained_messages_for_remote_compaction(
+        vec![item],
+        budget,
+        &FileAudioDurations::default(),
+    );
 
     let [
         ResponseItemEnvelope {
@@ -321,8 +337,12 @@ fn retained_history_keeps_mixed_fixed_content_that_exactly_fits() {
         .expect("the image remains after text is removed");
     let fixed_cost = usize::try_from(estimate_item_token_count(&text_free.item))
         .expect("positive fixed-content estimate");
-    let retained =
-        truncate_retained_messages(vec![mixed], fixed_cost, RetainedImageBudget::Enabled);
+    let retained = truncate_retained_messages(
+        vec![mixed],
+        fixed_cost,
+        RetainedImageBudget::Enabled,
+        &FileAudioDurations::default(),
+    );
 
     assert_eq!(retained, vec![text_free]);
 }
@@ -332,8 +352,11 @@ fn retained_history_truncation_rechecks_final_item_cost() {
     let item = ResponseItemEnvelope::new(mixed_text_image_message(
         "text that crosses the estimator rounding boundary",
     ));
-    let retained =
-        truncate_retained_messages_for_remote_compaction(vec![item], /*max_tokens*/ 1);
+    let retained = truncate_retained_messages_for_remote_compaction(
+        vec![item],
+        /*max_tokens*/ 1,
+        &FileAudioDurations::default(),
+    );
 
     assert!(retained.is_empty());
 }

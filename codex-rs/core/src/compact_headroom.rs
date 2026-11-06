@@ -79,7 +79,12 @@ pub(crate) fn estimate_candidate_request_tokens(
     model_info: &ModelInfo,
     tool_declaration_tokens: i64,
 ) -> i64 {
-    let history_tokens = ContextManager::estimate_history_token_count(items, base_instructions);
+    // Audio durations are unknown here; audio inputs count at the estimate without them.
+    let history_tokens = ContextManager::estimate_history_token_count(
+        items,
+        base_instructions,
+        &crate::session::FileAudioDurations::default(),
+    );
     let tools_in_history = model_info.use_responses_lite
         && items
             .iter()

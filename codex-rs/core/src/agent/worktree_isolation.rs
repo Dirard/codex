@@ -1007,7 +1007,7 @@ pub(crate) fn isolation_environment_unavailable(environments: &TurnEnvironmentSn
 pub(crate) fn isolation_environment_reason(environments: &TurnEnvironmentSnapshot) -> String {
     let remote = environments
         .turn_environments()
-        .filter(|environment| environment.environment.is_remote())
+        .filter(|environment| environment.environment().is_remote())
         .map(|environment| format!("`{}`", environment.selection.environment_id))
         .collect::<Vec<_>>();
     let ready = environments.turn_environments().count();

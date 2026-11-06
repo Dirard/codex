@@ -137,6 +137,7 @@ fn rollouts_keep_workflow_items() {
         })),
         started_at_ms: Some(1),
         completed_at_ms: 2,
+        content_token_count: None,
     });
 
     for mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {

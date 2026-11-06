@@ -830,7 +830,7 @@ pub(crate) async fn run_turn(
                 // the turn; if they block all of it, the answer completes the turn below.
                 let needs_follow_up = fork_loop
                     .settle_queued_input(&sess, &turn_context, has_pending_input, needs_follow_up)
-                    .await;
+                    .await?;
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
                     let stop_outcome = run_turn_stop_hooks(

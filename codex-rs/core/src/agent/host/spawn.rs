@@ -182,6 +182,8 @@ pub(super) async fn create_spawn(
         },
         config,
         task_name,
+        // Fork: children a host creates get no agent worktree.
+        worktree: None,
     })
 }
 

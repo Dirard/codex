@@ -843,12 +843,14 @@ impl ContextManager {
         Some(Self::estimate_history_token_count(
             &self.items,
             base_instructions,
+            &self.file_audio_durations,
         ))
     }
 
     pub(crate) fn estimate_history_token_count(
         items: &[ResponseItemEnvelope],
         base_instructions: &BaseInstructions,
+        file_audio_durations: &FileAudioDurations,
     ) -> i64 {
         // Incremental windows supply instructions through history, including an empty base.
         let has_recorded_instructions = items.iter().any(|envelope| {
@@ -864,7 +866,7 @@ impl ContextManager {
         let items_tokens = items
             .iter()
             .map(|envelope| {
-                estimate_item_token_count_with_audio(&envelope.item, &self.file_audio_durations)
+                estimate_item_token_count_with_audio(&envelope.item, file_audio_durations)
             })
             .fold(0i64, i64::saturating_add);
 

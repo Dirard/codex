@@ -186,6 +186,8 @@ pub(crate) mod web_search;
 pub(crate) mod windows_sandbox_read_grants;
 // Fork: background workflow runs (specs/dynamic-workflow-2026-10-25.md).
 mod workflow;
+// Fork: who can post to a thread's message board, for wait_agent.
+pub mod agent_message_board_fork;
 pub use agent::control::ThreadEvictionOutcome;
 // Fork: agent worktrees for app-server threads (specs/agent-worktree-isolation-2026-10-25.md).
 pub use agent::worktree_isolation::AgentWorktreeView;

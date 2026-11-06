@@ -243,6 +243,7 @@ async fn thread_read_reports_the_isolated_child_worktree() -> Result<()> {
                 sort_key: None,
                 sort_direction: None,
                 model_providers: Some(Vec::new()),
+                current_account_only: false,
                 source_kinds: Some(vec![ThreadSourceKind::SubAgentThreadSpawn]),
                 archived: None,
                 section_id: None,

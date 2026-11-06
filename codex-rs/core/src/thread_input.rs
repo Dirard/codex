@@ -60,5 +60,9 @@ pub(crate) async fn wait_for_activity(
     match activity {
         InputQueueActivity::Mailbox => InputWaitOutcome::MailboxActivity,
         InputQueueActivity::Steer => InputWaitOutcome::Steered,
+        // Fork: background terminal exits and workflow results are other notifying input.
+        InputQueueActivity::BackgroundTerminal | InputQueueActivity::Workflow => {
+            InputWaitOutcome::Steered
+        }
     }
 }

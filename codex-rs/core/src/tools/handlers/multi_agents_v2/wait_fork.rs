@@ -124,8 +124,8 @@ pub(super) async fn board_posts_may_arrive(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
 ) -> Result<bool, FunctionCallError> {
-    use crate::agent_message_board::BoardAudience;
-    match crate::agent_message_board::board_audience(&session.services.thread_extension_data) {
+    use crate::agent_message_board_fork::BoardAudience;
+    match crate::agent_message_board_fork::board_audience(&session.services.thread_extension_data) {
         BoardAudience::None => Ok(false),
         BoardAudience::External => Ok(true),
         BoardAudience::Tree => Ok(

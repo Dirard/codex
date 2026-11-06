@@ -4,6 +4,7 @@
 use super::super::*;
 use super::*;
 use codex_protocol::AgentPath;
+use codex_protocol::protocol::InterAgentCommunication;
 use pretty_assertions::assert_eq;
 
 // Copy of the upstream test helper in `input_queue.rs`.

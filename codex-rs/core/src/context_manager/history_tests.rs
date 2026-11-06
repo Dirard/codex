@@ -2620,7 +2620,7 @@ fn record_items_truncates_custom_tool_call_output_content() {
 
 #[test]
 fn record_items_applies_configured_line_limit_to_dynamic_tool_output() {
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
     let item = custom_tool_call_output("dynamic-1", "one\ntwo\nthree\nfour\nfive");
 
     history.record_items(
@@ -2675,7 +2675,7 @@ fn record_items_respects_custom_token_limit() {
 
 #[test]
 fn record_items_applies_configured_line_limit() {
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
     let policy =
         OutputTruncation::new(TruncationPolicy::Bytes(100_000), /*max_lines*/ Some(3));
     let item = ResponseItem::FunctionCallOutput {
@@ -2704,7 +2704,7 @@ fn record_items_applies_configured_line_limit() {
 
 #[test]
 fn dynamic_tool_output_uses_general_line_limit_not_mcp_limit() {
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
     let truncation = OutputTruncation::new_with_mcp_max_lines(
         TruncationPolicy::Bytes(100_000),
         /*max_lines*/ Some(3),

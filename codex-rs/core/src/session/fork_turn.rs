@@ -246,16 +246,17 @@ impl TurnLoop {
 
     /// Only the hooks can tell whether input queued behind a finished answer continues the
     /// turn, so they run now. If they block all of it, nothing is left to sample and the
-    /// answer completes the turn like any other. Returns whether the turn needs a follow-up.
+    /// answer completes the turn like any other. Returns whether the turn needs a follow-up;
+    /// a failure to record the input fails the turn, as it does for upstream's steered input.
     pub(super) async fn settle_queued_input(
         &mut self,
         sess: &Arc<Session>,
         turn_context: &Arc<TurnContext>,
         has_pending_input: bool,
         needs_follow_up: bool,
-    ) -> bool {
+    ) -> CodexResult<bool> {
         if self.model_follow_up_pending || !has_pending_input {
-            return needs_follow_up;
+            return Ok(needs_follow_up);
         }
         let pending_input = sess
             .input_queue
@@ -271,7 +272,7 @@ impl TurnLoop {
                 &pending_input,
                 PersistContext::SteeredUserInput,
             )
-            .await;
+            .await?;
         if !blocked {
             self.accepted_pending_input = Some(pending_input);
         } else if self.answered {
@@ -282,7 +283,7 @@ impl TurnLoop {
                 .defer_mailbox_delivery_to_next_turn(&sess.active_turn, &turn_context.sub_id)
                 .await;
         }
-        !blocked
+        Ok(!blocked)
     }
 }
 
@@ -361,7 +362,7 @@ pub(super) async fn maybe_start_async_compaction(
     phase: CompactionPhase,
     turn_cancellation: &CancellationToken,
     token_status: &ContextWindowTokenStatus,
-    turn_state: (Option<String>, Option<u64>),
+    turn_state: (Option<String>, Option<codex_login::AuthOwner>),
 ) {
     if !turn_loop.allows_optional_compaction(TurnCompactionLimit::of_turn(
         &step_context.turn.config,

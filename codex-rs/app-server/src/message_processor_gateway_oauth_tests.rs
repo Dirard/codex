@@ -259,9 +259,11 @@ delivery = {{ kind = "header", name = "X-Gateway-Authorization" }}
         .account_processor
         .admit_gateway_oauth_login(TEST_CONNECTION_ID, &session.rpc_gate)
         .expect("first login should be admitted");
-    let dropped_login = processor
-        .account_processor
-        .gateway_oauth_login(TEST_CONNECTION_ID, dropped);
+    let dropped_login = processor.account_processor.gateway_oauth_login(
+        Default::default(),
+        TEST_CONNECTION_ID,
+        dropped,
+    );
     drop(dropped_login);
 
     send_request(

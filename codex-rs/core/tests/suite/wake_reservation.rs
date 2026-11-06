@@ -26,6 +26,7 @@ use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelOrigin;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
@@ -228,7 +229,11 @@ async fn interrupt_during_wake_context_construction_keeps_mail_for_the_next_turn
     let server = responses::start_mock_server().await;
     let initial = responses::mount_sse_once(&server, responses::sse_completed("initial")).await;
     let models = Arc::new(GatedModelsManager {
-        inner: StaticModelsManager::new(/*auth_manager*/ None, bundled_models_response()?),
+        inner: StaticModelsManager::new(
+            /*auth_manager*/ None,
+            bundled_models_response()?,
+            ModelOrigin::Bundled,
+        ),
         gate_next_lookup: AtomicBool::new(/*v*/ false),
         context_build: Gate::default(),
     });

@@ -118,7 +118,8 @@ pub(crate) async fn review_tool_call(
                 "unsupported tool for direct review".into(),
             ));
         }
-        let source = parsed_call.direct_source();
+        // Fork: direct calls follow the configured plaintext policy of MultiAgentV2.
+        let source = parsed_call.direct_source(&step.turn.config.multi_agent_v2);
         let mut invocation = ToolInvocation {
             session: Arc::clone(session),
             turn: Arc::clone(&step.turn),

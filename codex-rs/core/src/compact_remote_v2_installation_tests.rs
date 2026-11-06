@@ -278,11 +278,12 @@ async fn prepared_prefix_with_live_suffix_stays_installed() {
         prefix: CompactionPrefix {
             generation: history.history_version(),
             len: history.annotated_items().len(),
-            auth_owner_generation: sess.services.model_client.auth_owner_generation(),
+            auth_owner: sess.services.model_client.auth_owner(),
         },
         model_info: Arc::clone(&step.settings.model_info),
         cutoff_world_state: Arc::new(WorldState::default()),
         attempt: RemoteCompactV2Attempt {
+            rejected_audio_file_ids: Default::default(),
             input_goal_ids: Default::default(),
             trace_input_history: None,
             prompt_input: vec![original],
@@ -425,11 +426,12 @@ async fn prepared_prefix_counts_tool_declarations_in_headroom() {
         prefix: CompactionPrefix {
             generation: history.history_version(),
             len: history.annotated_items().len(),
-            auth_owner_generation: sess.services.model_client.auth_owner_generation(),
+            auth_owner: sess.services.model_client.auth_owner(),
         },
         model_info: Arc::clone(&step.settings.model_info),
         cutoff_world_state: Arc::new(WorldState::default()),
         attempt: RemoteCompactV2Attempt {
+            rejected_audio_file_ids: Default::default(),
             input_goal_ids: Default::default(),
             trace_input_history: None,
             prompt_input: vec![original],

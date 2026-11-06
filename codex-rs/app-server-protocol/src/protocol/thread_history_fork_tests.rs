@@ -30,6 +30,7 @@ fn rebuilds_workflow_items_from_persisted_completions() {
             item: CoreTurnItem::Extension(CoreExtensionItem::Workflow(item.clone())),
             started_at_ms: Some(0),
             completed_at_ms: 0,
+            content_token_count: None,
         }))
     };
     let turn_complete = |turn_id: &str| {

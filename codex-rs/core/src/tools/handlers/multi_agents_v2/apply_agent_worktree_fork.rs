@@ -647,7 +647,7 @@ async fn verified_action(
     let args = codex_apply_patch::parse_patch(patch)
         .map_err(|err| refuse("the merged files", &format!("this change ({err})")))?;
     let cwd = PathUri::from_abs_path(&binding.source_root);
-    let fs = environment.environment.get_filesystem();
+    let fs = environment.environment().get_filesystem();
     let sandbox = environment.sandbox_context(/*additional_permissions*/ None);
     let action =
         match codex_apply_patch::verify_apply_patch_args(args, &cwd, fs.as_ref(), Some(&sandbox))

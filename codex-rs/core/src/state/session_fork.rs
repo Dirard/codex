@@ -62,7 +62,8 @@ impl SessionState {
     }
 
     pub(crate) fn prepare_auto_compact_window(&self) -> PreparedAutoCompactWindow {
-        self.auto_compact_window.prepare_advance()
+        self.auto_compact_window
+            .prepare_advance((self.context_window_id_generator)())
     }
 
     pub(crate) fn commit_prepared_auto_compact_window(

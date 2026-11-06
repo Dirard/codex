@@ -7,13 +7,15 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn advance_starts_with_a_fresh_prefill_baseline() {
-    let mut window = AutoCompactWindow::new_with_ids(AutoCompactWindowIds::new_initial());
+    let mut window = AutoCompactWindow::new_with_ids(AutoCompactWindowIds::new_initial(
+        ContextWindowId::new_uuid_v7(),
+    ));
     window.ensure_server_observed_prefill_from_usage(&TokenUsage {
         input_tokens: 100_000,
         ..Default::default()
     });
 
-    window.advance();
+    window.advance(ContextWindowId::new_uuid_v7());
     window.set_estimated_prefill(/*tokens*/ 20_000);
 
     assert_eq!(
@@ -26,12 +28,14 @@ fn advance_starts_with_a_fresh_prefill_baseline() {
 
 #[test]
 fn committing_prepared_window_starts_with_a_fresh_prefill_baseline() {
-    let mut window = AutoCompactWindow::new_with_ids(AutoCompactWindowIds::new_initial());
+    let mut window = AutoCompactWindow::new_with_ids(AutoCompactWindowIds::new_initial(
+        ContextWindowId::new_uuid_v7(),
+    ));
     window.ensure_server_observed_prefill_from_usage(&TokenUsage {
         input_tokens: 100_000,
         ..Default::default()
     });
-    let prepared = window.prepare_advance();
+    let prepared = window.prepare_advance(ContextWindowId::new_uuid_v7());
 
     assert!(window.commit_prepared(prepared));
     window.set_estimated_prefill(/*tokens*/ 20_000);
@@ -46,9 +50,11 @@ fn committing_prepared_window_starts_with_a_fresh_prefill_baseline() {
 
 #[test]
 fn stale_prepared_window_does_not_clear_current_prefill() {
-    let mut window = AutoCompactWindow::new_with_ids(AutoCompactWindowIds::new_initial());
-    let stale = window.prepare_advance();
-    window.advance();
+    let mut window = AutoCompactWindow::new_with_ids(AutoCompactWindowIds::new_initial(
+        ContextWindowId::new_uuid_v7(),
+    ));
+    let stale = window.prepare_advance(ContextWindowId::new_uuid_v7());
+    window.advance(ContextWindowId::new_uuid_v7());
     window.set_estimated_prefill(/*tokens*/ 20_000);
 
     assert!(!window.commit_prepared(stale));

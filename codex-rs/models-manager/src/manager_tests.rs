@@ -1905,3 +1905,31 @@ fn bundled_models_json_roundtrips() {
         "bundled models.json should contain at least one model"
     );
 }
+
+// Fork: an explicit window is not clamped to the guessed maximum of synthetic metadata, while
+// catalog metadata keeps its clamp.
+#[test]
+fn synthetic_model_context_window_override_is_not_clamped_to_guessed_maximum() {
+    let config = ModelsManagerConfig {
+        model_context_window: Some(1_000_000),
+        ..Default::default()
+    };
+
+    let synthetic =
+        construct_model_info_from_candidates("unknown-model", &[], ModelOrigin::Bundled, &config);
+
+    assert_eq!(synthetic.origin, ModelOrigin::Synthetic);
+    assert_eq!(synthetic.context_window, Some(1_000_000));
+
+    let mut catalog_entry = model_info::model_info_from_slug("catalog-model");
+    catalog_entry.max_context_window = Some(400_000);
+    let catalog = construct_model_info_from_candidates(
+        "catalog-model",
+        &[catalog_entry],
+        ModelOrigin::Bundled,
+        &config,
+    );
+
+    assert_eq!(catalog.origin, ModelOrigin::Bundled);
+    assert_eq!(catalog.context_window, Some(400_000));
+}

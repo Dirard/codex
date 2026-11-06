@@ -1148,6 +1148,13 @@ fn construct_model_info(
     let mut metadata = Arc::unwrap_or_clone(resolved.model);
     metadata.slug = model.to_owned();
     resolved.model = model_info::with_config_overrides(metadata, config).into();
+    // Fork: synthetic metadata only guesses its maximum window, so an explicit
+    // `model_context_window` is not clamped to it (uncatalogued models with 1M windows).
+    if resolved.origin == ModelOrigin::Synthetic
+        && let Some(context_window) = config.model_context_window
+    {
+        resolved.context_window = Some(context_window);
+    }
     resolved
 }
 

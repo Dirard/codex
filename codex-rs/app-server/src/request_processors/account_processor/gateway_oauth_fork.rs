@@ -24,9 +24,10 @@ impl AccountRequestProcessor {
         connection_id: ConnectionId,
         session: &ConnectionSessionState,
     ) -> Result<Option<GatewayOAuthLoginFuture>, JSONRPCErrorError> {
-        let ClientRequest::GatewayOAuthLogin { .. } = request else {
+        let ClientRequest::GatewayOAuthLogin { params, .. } = request else {
             return Ok(None);
         };
+        let params = params.clone().unwrap_or_default();
         if session
             .opted_out_notification_methods()
             .contains("account/gatewayOAuth/changed")
@@ -39,7 +40,7 @@ impl AccountRequestProcessor {
         let account_processor = Arc::clone(self);
         Ok(Some(Box::pin(async move {
             account_processor
-                .gateway_oauth_login(connection_id, admission)
+                .gateway_oauth_login(params, connection_id, admission)
                 .await
                 .map(|response| Some(response.into()))
         })))

@@ -213,7 +213,7 @@ async fn assembled(
         .into_iter()
         .filter_map(|update| match update.content {
             WorldStateUpdateContent::Fragment(fragment) => Some(text(fragment.as_ref())),
-            WorldStateUpdateContent::Item(_) => None,
+            WorldStateUpdateContent::Item(_) | WorldStateUpdateContent::Environment(_) => None,
         })
         .filter(|text| text.contains(OPEN_MARKER))
         .collect();

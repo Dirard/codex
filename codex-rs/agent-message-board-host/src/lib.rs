@@ -40,17 +40,8 @@ use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::sync::Weak;
 
-/// Fork: who can post to the message board bound to a thread. `wait_agent` without active
-/// agents keeps waiting while posts can still arrive (`docs/fork/01-multi-agent-runtime.md`).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BoardAudience {
-    /// No board is bound to the thread.
-    None,
-    /// A local or in-memory board, which only agents of this session tree can post to.
-    Tree,
-    /// A remote or host-connected board, whose authors can be outside this runtime.
-    External,
-}
+// Fork: `wait_agent` asks core who can post to a thread's board (`board_audience`).
+pub use codex_core::agent_message_board_fork::BoardAudience;
 
 /// Fork: classifies the board bound to a thread by the store its factory filled.
 pub fn board_audience(thread_store: &ExtensionData) -> BoardAudience {
@@ -71,6 +62,7 @@ pub fn install_agent_message_board(
     registry: &mut ExtensionRegistryBuilder<Config>,
     manager: Weak<ThreadManager>,
 ) {
+    codex_core::agent_message_board_fork::register_board_audience(board_audience); // Fork
     codex_agent_message_board_client::install_notifications(registry, |input| {
         let board = input.thread_store.get::<RemoteAgentMessageBoard>()?;
         let host = input.thread_store.get::<LocalBoardHost>()?;

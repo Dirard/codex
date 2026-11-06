@@ -87,6 +87,9 @@ pub(crate) struct CompactedHistoryMetadata {
 }
 
 /// Renders the window prefix and ordinary context with their comparison baseline.
+// Fork: remote installation builds its window with `build_compaction_context_for_window`,
+// so only tests call this upstream helper.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn build_compaction_replacement_history(
     sess: &Session,
     step_context: &StepContext,

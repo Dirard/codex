@@ -18,20 +18,13 @@ impl LocalAgentControl {
     pub(crate) async fn enqueue_inter_agent_communication(
         &self,
         agent_id: ThreadId,
-        mut communication: InterAgentCommunication,
+        communication: InterAgentCommunication,
         context: AgentCommunicationContext,
     ) -> CodexResult<String> {
         let state = self.runtime.upgrade()?;
         let observers = state.extensions.message_lifecycle_contributors();
-        let delivery = (!observers.is_empty()).then(|| {
-            let message_id = communication
-                .id
-                .take()
-                .filter(|id| !id.is_empty())
-                .unwrap_or_else(|| ResponseItemId::new("amsg"));
-            communication.id = Some(message_id.clone());
-            MessageDelivery::publish(context.sender_thread_id, message_id, observers)
-        });
+        let delivery = (!observers.is_empty())
+            .then(|| MessageDelivery::publish(context.sender_thread_id, observers));
         let log_content = crate::agent_communication::send_log_content(&communication);
         // A second attempt observes the registry after an eviction that raced the pin.
         let mut attempts_left = 2;
@@ -64,7 +57,7 @@ impl LocalAgentControl {
                 .session
                 .services
                 .local_agent_runtime
-                .pin_v2_residency(&state, &thread)
+                .pin_v2_residency(&thread)
                 .await
             {
                 Ok(guard) => guard,

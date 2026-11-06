@@ -35,8 +35,6 @@ use crate::session::TurnInput;
 use crate::session::step_context::StepContext;
 use crate::thread_manager::ForkSnapshot;
 use crate::thread_manager::StartThreadOptions;
-use crate::thread_manager::build_models_manager;
-use crate::thread_manager::thread_store_from_config;
 use crate::tools::handlers::multi_agents_common::thread_spawn_source;
 use assert_matches::assert_matches;
 use codex_extension_api::ExtensionDataInit;
@@ -1685,8 +1683,12 @@ async fn cancelled_cold_resume_finishes_residency_accounting() {
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
     let manager = Arc::new(ThreadManager::new(
         &config,
-        Arc::clone(&auth_manager),
-        build_models_manager(&config, auth_manager),
+        crate::build_startup_models(
+            &config,
+            auth_manager,
+            uuid::Uuid::new_v4().to_string(),
+            Arc::new(ModelCatalogSettings::disk(config.codex_home.to_path_buf())),
+        ),
         crate::CodexAppsToolsCache::default(),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
@@ -1694,9 +1696,8 @@ async fn cancelled_cold_resume_finishes_residency_accounting() {
         Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         crate::thread_manager::passthrough_image_store(),
-        thread_store_from_config(&config, state_db),
+        crate::ThreadStoreBuilder::from_config(&config, state_db).build(),
         /*agent_graph_store*/ None,
-        uuid::Uuid::new_v4().to_string(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     ));
@@ -5075,6 +5076,7 @@ async fn multi_agent_v2_terminal_error_is_published_after_parent_mailbox() {
                 misalignment: None,
                 message: "terminal-error-marker".to_string(),
                 codex_error_info: Some(CodexErrorInfo::InternalServerError),
+                rejected_audio_file_ids: Vec::new(),
             }),
         )
         .await;
@@ -5214,6 +5216,7 @@ async fn multi_agent_v2_terminal_error_status_waits_for_blocked_parent_delivery(
                 misalignment: None,
                 message: "terminal-error-marker".to_string(),
                 codex_error_info: Some(CodexErrorInfo::InternalServerError),
+                rejected_audio_file_ids: Vec::new(),
             }),
         )
         .await;

@@ -30,9 +30,9 @@ fn recorded_mcp_output(output: McpToolOutput) -> FunctionCallOutputPayload {
     }
     .into_response();
     let mut response = response;
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
     history.record_annotated_items(std::slice::from_mut(&mut response), truncation);
-    let mut replay = ContextManager::new();
+    let mut replay = ContextManager::default();
     replay.replay_annotated_item(
         &response,
         OutputTruncation::new(TruncationPolicy::Bytes(1), /*max_lines*/ Some(0)),
@@ -776,7 +776,7 @@ fn exec_command_tool_output_applies_line_limit_once_when_recorded() {
     }
     .to_response_item("call-42", &payload);
     let item = ResponseItem::from(response);
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
 
     history.record_items(
         [&item],
