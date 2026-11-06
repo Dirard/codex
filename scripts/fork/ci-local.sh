@@ -78,6 +78,7 @@ go_dir="${repo_root}/sdk/go"
 fork_clippy_packages=(
   app_test_support
   codex-agent-message-board-extension
+  codex-agent-message-board-host
   codex-analytics
   codex-api
   codex-app-server
@@ -156,7 +157,10 @@ default_test_packages=(
 
 # Fork-touched packages whose tests do not run in fork CI yet, one per line with
 # a comment giving the reason. fork-coverage accepts them and prints them.
-untested_fork_packages=()
+untested_fork_packages=(
+  # No tests of its own; codex-core's scenarios_agent_message_board suite drives it.
+  codex-agent-message-board-host
+)
 
 # Binaries that codex-core integration tests locate next to their test
 # executables (codex_utils_cargo_bin::cargo_bin falls back to target/debug).
