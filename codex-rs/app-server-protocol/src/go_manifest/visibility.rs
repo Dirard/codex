@@ -235,6 +235,15 @@ fn request_param_experimental_fields(method: &'static str) -> Vec<ExperimentalFi
                 ("ancestor_thread_id", "thread/list.ancestorThreadId"),
             ],
         ),
+        // `defer_output` is `#[experimental(nested)]`; only `ThreadItemOutputDeferral::
+        // command_execution` carries the gate, so an empty `deferOutput` object stays stable.
+        "thread/items/list" => experimental_fields(
+            "ThreadItemsListParams",
+            &[(
+                "defer_output.command_execution",
+                "thread/items/list.deferOutput.commandExecution",
+            )],
+        ),
         "thread/metadata/update" => experimental_fields(
             "ThreadMetadataUpdateParams",
             &[
@@ -336,6 +345,11 @@ fn request_response_experimental_fields(method: &'static str) -> Vec<Experimenta
                 ),
                 ("multi_agent_mode", "thread/fork.multiAgentMode"),
             ],
+        ),
+        // Set only for entries whose output the experimental `deferOutput` request omitted.
+        "thread/items/list" => experimental_response_fields(
+            "ThreadItemEntry",
+            &[("data.*.output_deferred", "thread/items/list.outputDeferred")],
         ),
         "account/read" => experimental_response_fields(
             "GetAccountResponse",

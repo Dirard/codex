@@ -391,6 +391,56 @@ func TestRawStableModeRejectsPresenceBasedExperimentalFieldBeforeWrite(t *testin
 	}
 }
 
+func TestRawStableModeGatesOnlyDeferredCommandOutputOfThreadItemsList(t *testing.T) {
+	transport := newScriptedInitializedTransport(t, stableInitializePayload())
+	transport.responses["thread/items/list"] = json.RawMessage(`{"data":[],"nextCursor":null,"backwardsCursor":null}`)
+	client, err := NewClient(context.Background(), ClientConfig{
+		Transport:    transport,
+		ProtocolMode: ProtocolModeStable,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	stableParams := []protocol.ThreadItemsListParams{
+		{ThreadID: "thread-1"},
+		{
+			ThreadID:    "thread-1",
+			TurnID:      protocol.Some("turn-1"),
+			DeferOutput: protocol.Some(protocol.ThreadItemOutputDeferral{}),
+		},
+	}
+	for _, params := range stableParams {
+		before := len(transport.sentFrames())
+		if _, err := client.Raw().ThreadItemsList(context.Background(), params); err != nil {
+			t.Fatal(err)
+		}
+		if len(transport.sentFrames()) != before+1 {
+			t.Fatal("stable thread/items/list did not reach transport")
+		}
+	}
+
+	before := len(transport.sentFrames())
+	_, err = client.Raw().ThreadItemsList(context.Background(), protocol.ThreadItemsListParams{
+		ThreadID: "thread-1",
+		TurnID:   protocol.Some("turn-1"),
+		DeferOutput: protocol.Some(protocol.ThreadItemOutputDeferral{
+			CommandExecution: protocol.SomeNonNull(true),
+		}),
+	})
+	var configErr *ConfigError
+	if !errors.As(err, &configErr) {
+		t.Fatalf("err = %T, want *ConfigError", err)
+	}
+	if !strings.Contains(configErr.Reason, "defer_output.command_execution") {
+		t.Fatalf("reason = %q, want the deferred command output field", configErr.Reason)
+	}
+	if len(transport.sentFrames()) != before {
+		t.Fatal("deferred command output request reached transport")
+	}
+}
+
 func TestRawInitializeIsNotExposedButTypesExist(t *testing.T) {
 	raw := protocol.NewRawClient(noopSender{})
 	_ = raw

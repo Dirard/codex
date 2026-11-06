@@ -36,6 +36,8 @@ func TestNotificationRouterRoutesCurrentDomains(t *testing.T) {
 		{name: "model", method: "model/rerouted", domain: "model", identity: "turn-1", params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1"}`)},
 		{name: "warning", method: "warning", domain: "warning", identity: "thread-1", params: json.RawMessage(`{"threadId":"thread-1","message":"careful"}`)},
 		{name: "thread-attachment", method: "thread/attachment/updated", domain: "thread", identity: "thread-1", params: json.RawMessage(`{"threadId":"thread-1","attachmentType":"test","identityKey":"attachment-1","attachmentId":"id-1","operation":"created"}`)},
+		{name: "thread-section", method: "thread/section/changed", domain: "thread", identity: "thread-1", params: json.RawMessage(`{"threadId":"thread-1","sectionId":"section-1"}`)},
+		{name: "thread-section-removed", method: "thread/section/changed", domain: "thread", identity: "thread-1", params: json.RawMessage(`{"threadId":"thread-1","sectionId":null}`)},
 		{name: "realtime-thread", method: "thread/realtime/started", domain: "thread", identity: "thread-1", params: json.RawMessage(`{"threadId":"thread-1"}`)},
 	}
 	for _, tt := range tests {

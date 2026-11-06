@@ -1410,6 +1410,24 @@ fn field_level_experimental_inventory_covers_current_client_and_server_payloads(
     );
 
     assert_experimental_fields_exact(
+        client_request(&manifest.experimental.client_requests, "thread/items/list"),
+        &[
+            (
+                "defer_output.command_execution",
+                "thread/items/list.deferOutput.commandExecution",
+                "ThreadItemsListParams",
+                true,
+            ),
+            (
+                "data.*.output_deferred",
+                "thread/items/list.outputDeferred",
+                "ThreadItemEntry",
+                false,
+            ),
+        ],
+    );
+
+    assert_experimental_fields_exact(
         client_request(
             &manifest.experimental.client_requests,
             "thread/metadata/update",
@@ -2313,6 +2331,10 @@ fn expected_server_notification_routes() -> Vec<(&'static str, ExpectedRouting)>
         ("skills/changed", ExpectedRouting::Global),
         (
             "thread/name/updated",
+            ExpectedRouting::Routed(&["threadId"]),
+        ),
+        (
+            "thread/section/changed",
             ExpectedRouting::Routed(&["threadId"]),
         ),
         (

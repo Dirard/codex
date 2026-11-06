@@ -70,6 +70,9 @@ pub(crate) fn notification_routing_strategy(method: &'static str) -> Notificatio
         | "thread/realtime/sdp"
         | "thread/realtime/error"
         | "thread/realtime/closed" => routed_notification(method, &[("threadId", false)]),
+        // `sectionId` names the destination section and is null when the thread leaves its
+        // section, so it is payload, not a stream identity: the move belongs to the thread.
+        "thread/section/changed" => routed_notification(method, &[("threadId", false)]),
         "project/changed" => routed_notification(method, &[("projectId", false)]),
         "thread/project/updated" => {
             routed_notification(method, &[("threadId", false), ("projectId", true)])

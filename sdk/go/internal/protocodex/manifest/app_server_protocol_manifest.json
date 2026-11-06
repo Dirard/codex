@@ -2663,7 +2663,22 @@
         "direction": "clientToServer",
         "exception": null,
         "experimental": null,
-        "experimentalFields": [],
+        "experimentalFields": [
+          {
+            "containingType": "ThreadItemsListParams",
+            "discriminator": null,
+            "fieldPath": "defer_output.command_execution",
+            "inspectParams": true,
+            "reason": "thread/items/list.deferOutput.commandExecution"
+          },
+          {
+            "containingType": "ThreadItemEntry",
+            "discriminator": null,
+            "fieldPath": "data.*.output_deferred",
+            "inspectParams": false,
+            "reason": "thread/items/list.outputDeferred"
+          }
+        ],
         "inspectParams": true,
         "manualPayloadConversion": null,
         "method": "thread/items/list",
@@ -6225,8 +6240,8 @@
       }
     ],
     "digests": {
-      "manifestDigest": "fae839ef72a6c85c1d4eaf8fb731e0dcfc6f4c7f982e9f5213ad662c3263154f",
-      "protocolDigest": "27c8a929bc5e019e4a1c5d3711458587effc3223b424193d14cbc4edc9eeef1e",
+      "manifestDigest": "68f83dd41024b651b7cdb1383d1af6b8ddb94171199c3e9353383c5f63aa4511",
+      "protocolDigest": "a8ed4bb3f512fbaae4d616dd2dd5c4a6b06941dd3bf5ecb3a80762b136befec2",
       "schemaDigest": "4e58fcbe0f926659f4ea47ea79aedb2eaa71d3ac75aec673f84096626d1f9a43"
     },
     "protocolMode": "experimental",
@@ -27723,8 +27738,21 @@
         "payloadSchemaRef": "#/definitions/ThreadSectionChangedNotification",
         "payloadType": "ThreadSectionChangedNotification",
         "routingStrategy": {
-          "kind": "internalOnly",
-          "reason": "notification routing must be reviewed before SDK exposure"
+          "kind": "routed",
+          "routes": [
+            {
+              "identityExtractors": [
+                {
+                  "fieldPath": "threadId",
+                  "identityName": "threadId",
+                  "optional": false,
+                  "terminalPredicate": null
+                }
+              ],
+              "resourceDomain": "thread",
+              "wireIdentitySource": "thread/section/changed"
+            }
+          ]
         },
         "schemaExcludedReason": null,
         "sdkVisibility": "public",
@@ -32097,7 +32125,22 @@
         "direction": "clientToServer",
         "exception": null,
         "experimental": null,
-        "experimentalFields": [],
+        "experimentalFields": [
+          {
+            "containingType": "ThreadItemsListParams",
+            "discriminator": null,
+            "fieldPath": "defer_output.command_execution",
+            "inspectParams": true,
+            "reason": "thread/items/list.deferOutput.commandExecution"
+          },
+          {
+            "containingType": "ThreadItemEntry",
+            "discriminator": null,
+            "fieldPath": "data.*.output_deferred",
+            "inspectParams": false,
+            "reason": "thread/items/list.outputDeferred"
+          }
+        ],
         "inspectParams": true,
         "manualPayloadConversion": null,
         "method": "thread/items/list",
@@ -34428,8 +34471,8 @@
       }
     ],
     "digests": {
-      "manifestDigest": "be43d6bb4e5cff048dedbc30175ded6a62eed50398399892fce5eafcc420a733",
-      "protocolDigest": "b8e1c1434e0b54ef78862a49577442a2c446922d4d55a23e9aa6c69e8ee60cd4",
+      "manifestDigest": "74dee940a646b5e0c6afe5950288038c628808e7fc77d78329913abfd14975d5",
+      "protocolDigest": "370322fdec28293bdc101ceaaadc03d1ffd3dcc8f9d5039f25a4b5675f3c7417",
       "schemaDigest": "92564b558f51c6bca1a622cb0c88ec28f03923ad59283be203ded09f3ef0700e"
     },
     "protocolMode": "stable",
@@ -49880,8 +49923,21 @@
         "payloadSchemaRef": "#/definitions/ThreadSectionChangedNotification",
         "payloadType": "ThreadSectionChangedNotification",
         "routingStrategy": {
-          "kind": "internalOnly",
-          "reason": "notification routing must be reviewed before SDK exposure"
+          "kind": "routed",
+          "routes": [
+            {
+              "identityExtractors": [
+                {
+                  "fieldPath": "threadId",
+                  "identityName": "threadId",
+                  "optional": false,
+                  "terminalPredicate": null
+                }
+              ],
+              "resourceDomain": "thread",
+              "wireIdentitySource": "thread/section/changed"
+            }
+          ]
         },
         "schemaExcludedReason": null,
         "sdkVisibility": "public",
