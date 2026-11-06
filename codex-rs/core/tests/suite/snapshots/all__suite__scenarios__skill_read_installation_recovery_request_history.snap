@@ -6,15 +6,15 @@ Scenario: Astra reads Cloud instructions, discovers an omitted deployment instal
 
 ## Window 1
 -- request 1 (request) --
-00:additional_tools/developer (3; hash=c989fc4f95fb6f22):
-        - namespace/functions; hash=80f0e6670cf933cc
+00:additional_tools/developer (3; hash=a826ab4cfe099352):
+        - namespace/functions; hash=be0d5d727adfaa3d
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=db3ab187547b8354
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
