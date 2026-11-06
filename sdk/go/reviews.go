@@ -20,10 +20,9 @@ type ReviewStartOptions struct {
 type ReviewTarget = protocol.ReviewTarget
 type ReviewDelivery = protocol.ReviewDelivery
 
-const (
-	ReviewDeliveryInline   ReviewDelivery = protocol.ReviewDeliveryInline
-	ReviewDeliveryDetached ReviewDelivery = protocol.ReviewDeliveryDetached
-)
+// ReviewDeliveryInline is the only delivery the runtime accepts: upstream removed detached
+// reviews from `review/start` (#57667).
+const ReviewDeliveryInline ReviewDelivery = protocol.ReviewDeliveryInline
 
 // ReviewHandle follows one review turn; like TurnHandle, it records one outcome and can
 // be released early.

@@ -436,6 +436,12 @@ func (c RawClient) ThreadItemsRead(ctx context.Context, params ThreadItemsReadPa
 	return result, err
 }
 
+func (c RawClient) ThreadGuardianReview(ctx context.Context, params ThreadGuardianReviewParams) (ThreadGuardianReviewResponse, error) {
+	var result ThreadGuardianReviewResponse
+	err := c.sender.Call(ctx, "thread/guardianReview", params, &result, MethodMetadataByMethod["thread/guardianReview"])
+	return result, err
+}
+
 func (c RawClient) ThreadInjectItems(ctx context.Context, params ThreadInjectItemsParams) (ThreadInjectItemsResponse, error) {
 	var result ThreadInjectItemsResponse
 	err := c.sender.Call(ctx, "thread/inject_items", params, &result, MethodMetadataByMethod["thread/inject_items"])
@@ -712,21 +718,41 @@ func (c RawClient) ModelList(ctx context.Context, params ModelListParams) (Model
 	return result, err
 }
 
-func (c RawClient) AccountGatewayOAuthRead(ctx context.Context) (GatewayOAuthReadResponse, error) {
+func (c RawClient) AccountGatewayOAuthRead(ctx context.Context, params NullableGatewayOAuthReadParams) (GatewayOAuthReadResponse, error) {
 	var result GatewayOAuthReadResponse
-	err := c.sender.Call(ctx, "account/gatewayOAuth/read", nil, &result, MethodMetadataByMethod["account/gatewayOAuth/read"])
+	var callParams any
+	if params.IsSet() {
+		callParams = params
+	}
+	err := c.sender.Call(ctx, "account/gatewayOAuth/read", callParams, &result, MethodMetadataByMethod["account/gatewayOAuth/read"])
 	return result, err
 }
 
-func (c RawClient) AccountGatewayOAuthLogin(ctx context.Context) (GatewayOAuthLoginResponse, error) {
+func (c RawClient) AccountGatewayOAuthLogin(ctx context.Context, params NullableGatewayOAuthLoginParams) (GatewayOAuthLoginResponse, error) {
 	var result GatewayOAuthLoginResponse
-	err := c.sender.Call(ctx, "account/gatewayOAuth/login", nil, &result, MethodMetadataByMethod["account/gatewayOAuth/login"])
+	var callParams any
+	if params.IsSet() {
+		callParams = params
+	}
+	err := c.sender.Call(ctx, "account/gatewayOAuth/login", callParams, &result, MethodMetadataByMethod["account/gatewayOAuth/login"])
 	return result, err
 }
 
 func (c RawClient) AccountGatewayOAuthCancel(ctx context.Context) (GatewayOAuthCancelResponse, error) {
 	var result GatewayOAuthCancelResponse
 	err := c.sender.Call(ctx, "account/gatewayOAuth/cancel", nil, &result, MethodMetadataByMethod["account/gatewayOAuth/cancel"])
+	return result, err
+}
+
+func (c RawClient) ModelProviderList(ctx context.Context, params ModelProviderListParams) (ModelProviderListResponse, error) {
+	var result ModelProviderListResponse
+	err := c.sender.Call(ctx, "modelProvider/list", params, &result, MethodMetadataByMethod["modelProvider/list"])
+	return result, err
+}
+
+func (c RawClient) ModelProviderConfigWrite(ctx context.Context, params ModelProviderConfigWriteParams) (ModelProviderConfigWriteResponse, error) {
+	var result ModelProviderConfigWriteResponse
+	err := c.sender.Call(ctx, "modelProvider/config/write", params, &result, MethodMetadataByMethod["modelProvider/config/write"])
 	return result, err
 }
 

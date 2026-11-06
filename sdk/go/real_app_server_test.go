@@ -330,7 +330,7 @@ func TestRealAppServerSafeResourceWorkflows(t *testing.T) {
 			TypeValue:    "custom",
 			Instructions: protocol.SomeNonNull("Review the fixture without changing files."),
 		},
-		Delivery: ReviewDeliveryDetached,
+		Delivery: ReviewDeliveryInline,
 	})
 	if err != nil {
 		t.Fatal(err)

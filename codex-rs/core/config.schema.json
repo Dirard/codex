@@ -6,6 +6,25 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AgentIsolation": {
+      "description": "Where a MultiAgentV2 child runs relative to its parent's checkout.",
+      "oneOf": [
+        {
+          "description": "The child shares its parent's checkout.",
+          "enum": [
+            "none"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The child works in its own managed git worktree.",
+          "enum": [
+            "worktree"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -27,6 +46,67 @@
             "type": "string"
           },
           "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "AgentWorktreeBase": {
+      "description": "The commit an isolated child's worktree starts from.",
+      "oneOf": [
+        {
+          "description": "The parent's HEAD plus tracked modifications and untracked, non-ignored files. Those files are written to the repository's object store and become part of the agent branch's history, as with `git stash --include-untracked`; keep secrets in ignored files or use `head`, and do not push `codex/agents/*` branches.",
+          "enum": [
+            "working_tree"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The parent's HEAD commit.",
+          "enum": [
+            "head"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "AgentWorktreeIsolationConfigToml": {
+      "additionalProperties": false,
+      "description": "`[features.agent_worktree_isolation]` settings for isolated MultiAgentV2 children. While the feature is enabled, MultiAgentV2 tools use the namespace `agents` unless `features.multi_agent_v2.tool_namespace` is set; the reserved namespace `collaboration` turns the feature off with a startup warning. Agent worktrees share the managed root with Codex Desktop, whose automatic cleanup removes them like the worktrees of inactive threads once the root holds more than `[desktop] worktree-keep-count`. Codex restores such a worktree before the agent's next turn from what it recorded on the agent's branch at the end of each turn; edits made after the agent's last turn ended survive only in Desktop's own snapshot ref, and ignored files such as build output are lost. Raise `worktree-keep-count` or set `worktree-auto-cleanup-enabled = false` to keep them.",
+      "properties": {
+        "base": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AgentWorktreeBase"
+            }
+          ],
+          "description": "Commit an isolated child's worktree starts from."
+        },
+        "cleanup": {
+          "description": "Remove forgotten unchanged agent worktrees of the repository when a session starts and when an agent tree stops (default `true`). Changed worktrees and agent branches are never removed.",
+          "type": "boolean"
+        },
+        "cleanup_keep_count": {
+          "description": "Unchanged agent worktrees of a repository kept among the most recently active ones (default 15); older ones beyond the count are removed after an hour without activity.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "cleanup_max_idle_hours": {
+          "description": "Hours without activity after which an unchanged agent worktree is removed (default 24, at least 1).",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "default_isolation": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AgentIsolation"
+            }
+          ],
+          "description": "Isolation used when `spawn_agent` omits `isolation`. Role config files may set it."
+        },
+        "enabled": {
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -58,7 +138,7 @@
           "description": "Default reasoning effort for spawned subagents when the spawn call does not select one."
         },
         "enabled": {
-          "description": "Whether multi-agent tools are enabled. Defaults to true. An enabled `features.multi_agent_v2` setting takes precedence.",
+          "description": "Whether multi-agent tools are enabled. Defaults to true. Setting this to false is an absolute runtime gate for all multi-agent tools.",
           "type": "boolean"
         },
         "interrupt_message": {
@@ -813,6 +893,9 @@
             "agent_message_board_mcp": {
               "type": "boolean"
             },
+            "agent_worktree_isolation": {
+              "$ref": "#/definitions/FeatureToml_for_AgentWorktreeIsolationConfigToml"
+            },
             "analytics_plan_history": {
               "type": "boolean"
             },
@@ -1006,6 +1089,9 @@
             "enable_request_compression": {
               "type": "boolean"
             },
+            "exec_exit_notifications": {
+              "$ref": "#/definitions/FeatureToml_for_ExecExitNotificationsConfigToml"
+            },
             "exec_permission_approvals": {
               "type": "boolean"
             },
@@ -1023,6 +1109,9 @@
             },
             "experimental_windows_sandbox": {
               "type": "boolean"
+            },
+            "explorer_profile": {
+              "$ref": "#/definitions/FeatureToml_for_ExplorerProfileConfigToml"
             },
             "external_agent_memory_import": {
               "type": "boolean"
@@ -1471,6 +1560,9 @@
             "windows_sandbox_service": {
               "type": "boolean"
             },
+            "workflows": {
+              "type": "boolean"
+            },
             "workspace_dependencies": {
               "type": "boolean"
             },
@@ -1751,12 +1843,68 @@
       ],
       "type": "string"
     },
+    "ExecExitNotificationsConfigToml": {
+      "additionalProperties": false,
+      "description": "Fork: settings of background exec notifications (`specs/background-exec-notifications-2026-10-25.md`, UC7).",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "exec_wait_timeout_ms": {
+          "description": "How long `codex exec` waits for background terminals whose exit or matching output is still owed to the model before it stops them and exits with code 1, in milliseconds. Defaults to 1800000 (30 minutes).",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "output_watch_first_match_ms": {
+          "description": "How long an output watch alone keeps `codex exec`, `wait_agent` and agent residency waiting for its first matching line, such as a server's \"ready\", counted from the end of the turn that started the watch, in milliseconds. Defaults to 300000 (5 minutes).",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "output_watch_quiet_ms": {
+          "description": "How long an output watch alone keeps `codex exec`, `wait_agent` and agent residency waiting after its process last printed a matching line, in milliseconds; `notify_on_exit` waits for the exit instead. Defaults to 60000.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "ExperimentalRequestUserInput": {
       "additionalProperties": false,
       "properties": {
         "enabled": {
           "default": true,
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ExplorerProfileConfigToml": {
+      "additionalProperties": false,
+      "description": "Fork: settings for `explorer` children (read-only, cheaper, capped result).",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "max_result_tokens": {
+          "description": "Largest explorer final answer, in tokens, delivered to the parent. Defaults to 2000.",
+          "format": "uint",
+          "minimum": 200.0,
+          "type": "integer"
+        },
+        "model": {
+          "description": "Model for explorer children. Defaults to the parent's model.",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Reasoning effort for explorer children. Defaults to the cheapest effort, not below `low`, that the selected model supports."
         }
       },
       "type": "object"
@@ -1803,6 +1951,16 @@
         }
       },
       "type": "object"
+    },
+    "FeatureToml_for_AgentWorktreeIsolationConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/AgentWorktreeIsolationConfigToml"
+        }
+      ]
     },
     "FeatureToml_for_AsyncCompactionConfigToml": {
       "anyOf": [
@@ -1851,6 +2009,26 @@
         },
         {
           "$ref": "#/definitions/CurrentTimeReminderConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_ExecExitNotificationsConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/ExecExitNotificationsConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_ExplorerProfileConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/ExplorerProfileConfigToml"
         }
       ]
     },
@@ -3084,6 +3262,25 @@
       },
       "type": "object"
     },
+    "ModelInstructionsPlacement": {
+      "description": "Fork: where a standard (non-Lite) Responses request carries the base instructions (`model_instructions_placement`). Responses Lite requests always carry them in `input`.",
+      "oneOf": [
+        {
+          "description": "The first `developer` message of `input`, as upstream sends it.",
+          "enum": [
+            "input"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The top-level `instructions` field, as Codex sent it before 0.162 (upstream #51156).",
+          "enum": [
+            "instructions"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "ModelProviderAuthInfo": {
       "additionalProperties": false,
       "description": "Configuration for obtaining a provider bearer token from a command.",
@@ -3327,6 +3524,25 @@
       },
       "type": "object"
     },
+    "MultiAgentMessageDelivery": {
+      "description": "How multi-agent V2 task and message arguments are delivered to child agents.",
+      "oneOf": [
+        {
+          "description": "Keep OpenAI's encrypted collaboration arguments.",
+          "enum": [
+            "encrypted"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Deliver provider-neutral plain text for cross-provider agents.",
+          "enum": [
+            "plaintext"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "MultiAgentV2ConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -3376,6 +3592,14 @@
             }
           ],
           "description": "Use a session-scoped remote board instead of local storage."
+        },
+        "message_delivery": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MultiAgentMessageDelivery"
+            }
+          ],
+          "description": "Plaintext delivery requires a non-reserved tool namespace such as `agents`."
         },
         "min_wait_timeout_ms": {
           "format": "int64",
@@ -4099,6 +4323,31 @@
         },
         "client-private-key": {
           "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      },
+      "type": "object"
+    },
+    "OutputTruncationToml": {
+      "additionalProperties": false,
+      "description": "Limits applied when formatting tool and command output for model and UI consumption.",
+      "properties": {
+        "max_bytes": {
+          "description": "Maximum bytes retained in formatted output.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_lines": {
+          "description": "Maximum lines retained in formatted output.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "mcp_max_lines": {
+          "description": "Overrides max_lines for MCP tool output and entire emitted Code Mode cells.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
         }
       },
       "type": "object"
@@ -7646,6 +7895,159 @@
         }
       ]
     },
+    "WorkflowApprovalToml": {
+      "description": "Approval of a workflow run before it starts.",
+      "oneOf": [
+        {
+          "enum": [
+            "always",
+            "never"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Ask unless the approval policy is `never`.",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "WorkflowBudgetModeToml": {
+      "description": "What a workflow run does when its agents spend the token budget.",
+      "oneOf": [
+        {
+          "description": "Calls that have not started resolve to null; running agents finish their turn.",
+          "enum": [
+            "soft"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "As `soft`, and running agents are interrupted once the run spends more than its budget times `budget_hard_overshoot`.",
+          "enum": [
+            "hard"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "WorkflowStructuredOutputToml": {
+      "description": "How workflow agents are asked for answers that match a JSON schema.",
+      "oneOf": [
+        {
+          "description": "Native structured output until the provider rejects it, then the schema in the task.",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Native structured output (`text.format` with a JSON schema).",
+          "enum": [
+            "native"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The schema in the agent's task, for providers without JSON schema output.",
+          "enum": [
+            "prompt"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "WorkflowsToml": {
+      "additionalProperties": false,
+      "description": "Fork: limits and defaults of background workflow runs (`features.workflows`).",
+      "properties": {
+        "budget_hard_overshoot": {
+          "description": "In `hard` budget mode, the multiple of the budget at which running agents are interrupted, at most 100; values below 1.0 count as 1.0, larger values are a configuration error. Default: 1.0.",
+          "format": "double",
+          "maximum": 100.0,
+          "type": "number"
+        },
+        "budget_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkflowBudgetModeToml"
+            }
+          ],
+          "description": "What happens when a run spends its token budget. Default: `soft`."
+        },
+        "capacity_wait_ms": {
+          "description": "How long a call waits for agent capacity before resolving to null, in milliseconds. Default: 600000.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "default_budget_tokens": {
+          "description": "Token budget of a run without `budget_tokens`, as non-cached input plus output.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "exec_wait_timeout_ms": {
+          "description": "How long `codex exec` waits for active runs before cancelling them, in milliseconds. Default: 7200000.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_active_runs": {
+          "description": "Non-terminal runs allowed per thread. Default: 3.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_agents_per_run": {
+          "description": "Agents one run may start. Default: 1000.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_concurrent_agents": {
+          "description": "Agents of one run that work at the same time. Default: min(16, CPUs - 2).",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_heap_bytes": {
+          "description": "V8 heap limit of a run's script cell, in bytes. Default: 268435456.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "notification_max_tokens": {
+          "description": "Token limit of the result preview in the completion notification. Default: 2000.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "require_approval": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkflowApprovalToml"
+            }
+          ],
+          "description": "Whether the user approves a run before it starts. Default: `auto`."
+        },
+        "structured_output": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkflowStructuredOutputToml"
+            }
+          ],
+          "description": "How agents are asked for answers that match a JSON schema. Default: `auto`."
+        },
+        "ultra_mode": {
+          "description": "Whether reasoning effort `ultra` turns on workflow ultra mode, which tells the model to run a workflow for every substantive task. Approvals, budgets and limits are unchanged. Default: true.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "WorkspaceRootsToml": {
       "type": "object"
     }
@@ -7835,6 +8237,9 @@
         },
         "agent_message_board_mcp": {
           "type": "boolean"
+        },
+        "agent_worktree_isolation": {
+          "$ref": "#/definitions/FeatureToml_for_AgentWorktreeIsolationConfigToml"
         },
         "analytics_plan_history": {
           "type": "boolean"
@@ -8029,6 +8434,9 @@
         "enable_request_compression": {
           "type": "boolean"
         },
+        "exec_exit_notifications": {
+          "$ref": "#/definitions/FeatureToml_for_ExecExitNotificationsConfigToml"
+        },
         "exec_permission_approvals": {
           "type": "boolean"
         },
@@ -8046,6 +8454,9 @@
         },
         "experimental_windows_sandbox": {
           "type": "boolean"
+        },
+        "explorer_profile": {
+          "$ref": "#/definitions/FeatureToml_for_ExplorerProfileConfigToml"
         },
         "external_agent_memory_import": {
           "type": "boolean"
@@ -8494,6 +8905,9 @@
         "windows_sandbox_service": {
           "type": "boolean"
         },
+        "workflows": {
+          "type": "boolean"
+        },
         "workspace_dependencies": {
           "type": "boolean"
         },
@@ -8692,6 +9106,12 @@
       ],
       "description": "Controls whether the auto-compaction limit applies to the full context or only to tokens after the carried prefix in the current compaction window."
     },
+    "model_auto_compact_turn_token_limit": {
+      "description": "Fork: context tokens the auto-compactions of one turn may replace in total; once they did, the turn stops with an error instead of compacting again. Default: the larger of 8000000 and 32 context windows of the model. 0 turns the limit off.",
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    },
     "model_catalog_json": {
       "allOf": [
         {
@@ -8712,6 +9132,14 @@
         }
       ],
       "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Codex will likely degrade model performance."
+    },
+    "model_instructions_placement": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ModelInstructionsPlacement"
+        }
+      ],
+      "description": "Fork: where standard Responses requests carry the base instructions: `input` (default, the first developer message) or `instructions` (the top-level field). Responses Lite requests always use `input`."
     },
     "model_post_turn_compact_threshold_percent": {
       "description": "Percentage of the usable context window that triggers compaction after a final response. Existing auto-compaction limits still apply. Omitted or zero disables turn-end compaction; valid values are 0–100.",
@@ -8785,6 +9213,14 @@
         }
       ],
       "description": "OTEL configuration."
+    },
+    "output_truncation": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/OutputTruncationToml"
+        }
+      ],
+      "description": "Limits applied when formatting tool and command output for model and UI consumption."
     },
     "permissions": {
       "allOf": [
@@ -8988,6 +9424,14 @@
       ],
       "default": null,
       "description": "Windows-specific configuration."
+    },
+    "workflows": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/WorkflowsToml"
+        }
+      ],
+      "description": "Fork: limits of background workflow runs."
     }
   },
   "title": "ConfigToml",

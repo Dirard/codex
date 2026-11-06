@@ -1183,6 +1183,20 @@ func (v ClientRequest) ThreadItemsReadParams() (ThreadItemsReadParams, bool, err
 	return params, true, nil
 }
 
+func (v ClientRequest) ThreadGuardianReviewParams() (ThreadGuardianReviewParams, bool, error) {
+	if v.Method != "thread/guardianReview" {
+		return ThreadGuardianReviewParams{}, false, nil
+	}
+	var params ThreadGuardianReviewParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
 func (v ClientRequest) ThreadInjectItemsParams() (ThreadInjectItemsParams, bool, error) {
 	if v.Method != "thread/inject_items" {
 		return ThreadInjectItemsParams{}, false, nil
@@ -1818,6 +1832,62 @@ func (v ClientRequest) ModelListParams() (ModelListParams, bool, error) {
 		return ModelListParams{}, false, nil
 	}
 	var params ModelListParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) AccountGatewayOAuthReadParams() (NullableGatewayOAuthReadParams, bool, error) {
+	if v.Method != "account/gatewayOAuth/read" {
+		return NullableGatewayOAuthReadParams{}, false, nil
+	}
+	var params NullableGatewayOAuthReadParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, nil
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) AccountGatewayOAuthLoginParams() (NullableGatewayOAuthLoginParams, bool, error) {
+	if v.Method != "account/gatewayOAuth/login" {
+		return NullableGatewayOAuthLoginParams{}, false, nil
+	}
+	var params NullableGatewayOAuthLoginParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, nil
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) ModelProviderListParams() (ModelProviderListParams, bool, error) {
+	if v.Method != "modelProvider/list" {
+		return ModelProviderListParams{}, false, nil
+	}
+	var params ModelProviderListParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) ModelProviderConfigWriteParams() (ModelProviderConfigWriteParams, bool, error) {
+	if v.Method != "modelProvider/config/write" {
+		return ModelProviderConfigWriteParams{}, false, nil
+	}
+	var params ModelProviderConfigWriteParams
 	if len(bytes.TrimSpace(v.Params)) == 0 {
 		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
 	}
@@ -2705,12 +2775,7 @@ func (v *CommandExecutionApprovalDecision) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type CommandExecutionApprovalKind string
-
-const (
-	CommandExecutionApprovalKindCommand    CommandExecutionApprovalKind = "command"
-	CommandExecutionApprovalKindWriteStdin CommandExecutionApprovalKind = "writeStdin"
-)
+type CommandExecutionApprovalKind = json.RawMessage
 
 type CommandExecutionRequestApprovalParams struct {
 	AdditionalPermissions           Optional[AdditionalPermissionProfile]         `json:"additionalPermissions,omitzero"`
@@ -3317,6 +3382,7 @@ type InitializeCapabilities struct {
 	McpServerOpenaiFormElicitation OptionalNonNull[bool]                `json:"mcpServerOpenaiFormElicitation,omitzero"`
 	OptOutNotificationMethods      Optional[[]string]                   `json:"optOutNotificationMethods,omitzero"`
 	RequestAttestation             OptionalNonNull[bool]                `json:"requestAttestation,omitzero"`
+	RequiredHumanApproval          OptionalNonNull[bool]                `json:"requiredHumanApproval,omitzero"`
 }
 
 var initializeCapabilitiesSpec = objectSpec{
@@ -3327,6 +3393,7 @@ var initializeCapabilitiesSpec = objectSpec{
 		{name: "mcpServerOpenaiFormElicitation", flags: fieldNonNullOptional, defaultJSON: "false"},
 		{name: "optOutNotificationMethods"},
 		{name: "requestAttestation", flags: fieldNonNullOptional, defaultJSON: "false"},
+		{name: "requiredHumanApproval", flags: fieldNonNullOptional},
 	},
 }
 
@@ -5332,6 +5399,20 @@ func (v ServerNotification) ThreadNameUpdatedParams() (ThreadNameUpdatedNotifica
 	return params, true, nil
 }
 
+func (v ServerNotification) ThreadSectionChangedParams() (ThreadSectionChangedNotification, bool, error) {
+	if v.Method != "thread/section/changed" {
+		return ThreadSectionChangedNotification{}, false, nil
+	}
+	var params ThreadSectionChangedNotification
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
 func (v ServerNotification) ThreadAttachmentUpdatedParams() (ThreadAttachmentUpdatedNotification, bool, error) {
 	if v.Method != "thread/attachment/updated" {
 		return ThreadAttachmentUpdatedNotification{}, false, nil
@@ -7286,6 +7367,26 @@ func (v *AgentMessageInputContent) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type AgentMessageModeration struct {
+	Moderated bool `json:"moderated"`
+}
+
+var agentMessageModerationSpec = objectSpec{
+	fields: []objectField{
+		{name: "moderated", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v AgentMessageModeration) MarshalJSON() ([]byte, error) {
+	type wire AgentMessageModeration
+	return json.Marshal(wire(v))
+}
+
+func (v *AgentMessageModeration) UnmarshalJSON(data []byte) error {
+	type wire AgentMessageModeration
+	return decodeObject(data, &agentMessageModerationSpec, (*wire)(v))
+}
+
 type AgentPath string
 
 type AllowDenyRequirement string
@@ -8402,6 +8503,13 @@ func (v *BedrockEnvironmentCredential) UnmarshalJSON(data []byte) error {
 	type wire BedrockEnvironmentCredential
 	return decodeObject(data, &bedrockEnvironmentCredentialSpec, (*wire)(v))
 }
+
+type BedrockProviderID string
+
+const (
+	BedrockProviderIdAmazonBedrock        BedrockProviderID = "amazon-bedrock"
+	BedrockProviderIdAmazonBedrockRuntime BedrockProviderID = "amazon-bedrock-runtime"
+)
 
 type BedrockSetupParams struct {
 	Profile   OptionalNonNull[string] `json:"profile,omitzero"`
@@ -9814,6 +9922,7 @@ type Config struct {
 	ApprovalsReviewer               Optional[ApprovalsReviewer]          `json:"approvals_reviewer,omitzero"`
 	Apps                            Optional[AppsConfig]                 `json:"apps,omitzero"`
 	BrowserUse                      Optional[BrowserUseConfig]           `json:"browser_use,omitzero"`
+	ClientSearchProvider            Optional[WebSearchProvider]          `json:"client_search_provider,omitzero"`
 	CompactPrompt                   Optional[string]                     `json:"compact_prompt,omitzero"`
 	ComputerUse                     Optional[ComputerUseConfig]          `json:"computer_use,omitzero"`
 	Desktop                         Optional[map[string]json.RawMessage] `json:"desktop,omitzero"`
@@ -9845,6 +9954,7 @@ var configSpec = objectSpec{
 		{name: "approvals_reviewer"},
 		{name: "apps", defaultJSON: "null"},
 		{name: "browser_use"},
+		{name: "client_search_provider"},
 		{name: "compact_prompt"},
 		{name: "computer_use"},
 		{name: "desktop"},
@@ -9888,6 +9998,9 @@ func (v Config) MarshalJSON() ([]byte, error) {
 	}
 	if v.BrowserUse.IsSet() {
 		out["browser_use"] = v.BrowserUse
+	}
+	if v.ClientSearchProvider.IsSet() {
+		out["client_search_provider"] = v.ClientSearchProvider
 	}
 	if v.CompactPrompt.IsSet() {
 		out["compact_prompt"] = v.CompactPrompt
@@ -10319,6 +10432,7 @@ type ConfigRequirements struct {
 	ModelProviders                       Optional[map[string]json.RawMessage]     `json:"modelProviders,omitzero"`
 	Models                               Optional[ModelsRequirements]             `json:"models,omitzero"`
 	Network                              Optional[NetworkRequirements]            `json:"network,omitzero"`
+	Otel                                 Optional[OtelRequirements]               `json:"otel,omitzero"`
 	SqliteHome                           Optional[string]                         `json:"sqliteHome,omitzero"`
 }
 
@@ -10356,6 +10470,7 @@ var configRequirementsSpec = objectSpec{
 		{name: "modelProviders"},
 		{name: "models"},
 		{name: "network"},
+		{name: "otel"},
 		{name: "sqliteHome"},
 	},
 }
@@ -10748,9 +10863,9 @@ type ContentItem struct {
 var contentItemSpec = objectSpec{
 	fields: []objectField{
 		{name: "annotations"},
-		{name: "audio_url", flags: fieldNonNullOptional},
+		{name: "audio_url", flags: fieldNonNullOptional, anyOfTags: []string{"\"input_audio\""}},
 		{name: "detail"},
-		{name: "file_id", flags: fieldNonNullOptional, anyOfTags: []string{"\"input_image\""}},
+		{name: "file_id", flags: fieldNonNullOptional, anyOfTags: []string{"\"input_image\"", "\"input_audio\""}},
 		{name: "image_url", flags: fieldNonNullOptional, anyOfTags: []string{"\"input_image\""}},
 		{name: "logprobs"},
 		{name: "text", flags: fieldNonNullOptional},
@@ -10774,8 +10889,9 @@ func (v ContentItem) MarshalJSON() ([]byte, error) {
 			return nil, DecodeError{Field: "", Reason: "does not match any anyOf variant for type input_image"}
 		}
 	case "input_audio":
-		if !v.AudioURL.IsSet() {
-			return nil, DecodeError{Field: "audio_url", Reason: "missing required field for type input_audio"}
+		taggedAnyOfVariant2Matches := (w.AudioURL.IsSet() && marshalsNonNull(w.AudioURL)) || (w.FileID.IsSet() && marshalsNonNull(w.FileID))
+		if !taggedAnyOfVariant2Matches {
+			return nil, DecodeError{Field: "", Reason: "does not match any anyOf variant for type input_audio"}
 		}
 	case "output_text":
 		if !v.Text.IsSet() {
@@ -10820,11 +10936,9 @@ func (v *ContentItem) UnmarshalJSON(data []byte) error {
 			return DecodeError{Field: "", Reason: "does not match any anyOf variant for type input_image"}
 		}
 	case "input_audio":
-		if !s.has("audio_url") {
-			return DecodeError{Field: "audio_url", Reason: "missing required field for type input_audio"}
-		}
-		if s.isNull("audio_url") {
-			return DecodeError{Field: "audio_url", Reason: "cannot be null"}
+		taggedAnyOfVariant2Matches := (v.AudioURL.IsSet()) || (v.FileID.IsSet())
+		if !taggedAnyOfVariant2Matches {
+			return DecodeError{Field: "", Reason: "does not match any anyOf variant for type input_audio"}
 		}
 	case "output_text":
 		if !s.has("text") {
@@ -13062,6 +13176,149 @@ func (v *FunctionCallOutputContentItem) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type GatewayAuth struct {
+	EnvKey  Optional[string]        `json:"envKey,omitzero"`
+	Mode    OptionalNonNull[string] `json:"mode,omitzero"`
+	RawJSON json.RawMessage         `json:"-"`
+}
+
+var gatewayAuthSpec = objectSpec{
+	fields: []objectField{
+		{name: "envKey"},
+		{name: "mode", flags: fieldNonNullOptional},
+	},
+}
+
+func (v GatewayAuth) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if v.EnvKey.IsSet() {
+		out["envKey"] = v.EnvKey
+	}
+	if v.Mode.IsSet() {
+		out["mode"] = v.Mode
+	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	untaggedOneOfVariant0Matches := true
+	untaggedOneOfVariant0ConstMatches := true
+	if _, ok := out["mode"]; !ok {
+		untaggedOneOfVariant0Matches = false
+	}
+	if rawValue, ok := out["mode"]; !ok {
+		untaggedOneOfVariant0Matches = false
+		untaggedOneOfVariant0ConstMatches = false
+	} else if rawJSON, err := json.Marshal(rawValue); err != nil || !bytes.Equal(bytes.TrimSpace(rawJSON), []byte("\"none\"")) {
+		untaggedOneOfVariant0Matches = false
+		untaggedOneOfVariant0ConstMatches = false
+	}
+	if untaggedOneOfVariant0ConstMatches {
+		untaggedOneOfKnownVariantMatches = true
+	}
+	if untaggedOneOfVariant0Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant1Matches := true
+	untaggedOneOfVariant1ConstMatches := true
+	if _, ok := out["envKey"]; !ok {
+		untaggedOneOfVariant1Matches = false
+	}
+	if rawValue, ok := out["envKey"]; ok {
+		if rawJSON, err := json.Marshal(rawValue); err != nil || bytes.Equal(bytes.TrimSpace(rawJSON), []byte("null")) {
+			untaggedOneOfVariant1Matches = false
+		}
+	}
+	if _, ok := out["mode"]; !ok {
+		untaggedOneOfVariant1Matches = false
+	}
+	if rawValue, ok := out["mode"]; !ok {
+		untaggedOneOfVariant1Matches = false
+		untaggedOneOfVariant1ConstMatches = false
+	} else if rawJSON, err := json.Marshal(rawValue); err != nil || !bytes.Equal(bytes.TrimSpace(rawJSON), []byte("\"environmentVariable\"")) {
+		untaggedOneOfVariant1Matches = false
+		untaggedOneOfVariant1ConstMatches = false
+	}
+	if untaggedOneOfVariant1ConstMatches {
+		untaggedOneOfKnownVariantMatches = true
+	}
+	if untaggedOneOfVariant1Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant2Matches := true
+	untaggedOneOfVariant2ConstMatches := true
+	if _, ok := out["mode"]; !ok {
+		untaggedOneOfVariant2Matches = false
+	}
+	if rawValue, ok := out["mode"]; !ok {
+		untaggedOneOfVariant2Matches = false
+		untaggedOneOfVariant2ConstMatches = false
+	} else if rawJSON, err := json.Marshal(rawValue); err != nil || !bytes.Equal(bytes.TrimSpace(rawJSON), []byte("\"externallyConfigured\"")) {
+		untaggedOneOfVariant2Matches = false
+		untaggedOneOfVariant2ConstMatches = false
+	}
+	if untaggedOneOfVariant2ConstMatches {
+		untaggedOneOfKnownVariantMatches = true
+	}
+	if untaggedOneOfVariant2Matches {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches && len(bytes.TrimSpace(v.RawJSON)) > 0 {
+			if !json.Valid(v.RawJSON) {
+				return nil, fmt.Errorf("invalid GatewayAuth raw fallback")
+			}
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
+	return json.Marshal(out)
+}
+
+func (v *GatewayAuth) UnmarshalJSON(data []byte) error {
+	type wire GatewayAuth
+	var s objectScan
+	if _, err := s.begin(data, &gatewayAuthSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	if s.rawEquals("mode", "\"none\"") {
+		untaggedOneOfKnownVariantMatches = true
+	}
+	if s.nonNull("mode") && s.rawEquals("mode", "\"none\"") {
+		untaggedOneOfMatches++
+	}
+	if s.rawEquals("mode", "\"environmentVariable\"") {
+		untaggedOneOfKnownVariantMatches = true
+	}
+	if s.nonNull("envKey") && s.nonNull("mode") && s.rawEquals("mode", "\"environmentVariable\"") {
+		untaggedOneOfMatches++
+	}
+	if s.rawEquals("mode", "\"externallyConfigured\"") {
+		untaggedOneOfKnownVariantMatches = true
+	}
+	if s.nonNull("mode") && s.rawEquals("mode", "\"externallyConfigured\"") {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches {
+			v.RawJSON = append(v.RawJSON[:0], data...)
+			return nil
+		}
+		return DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
+	v.RawJSON = nil
+	return nil
+}
+
 type GatewayOAuthCancelResponse map[string]json.RawMessage
 
 func (v GatewayOAuthCancelResponse) MarshalJSON() ([]byte, error) {
@@ -13109,6 +13366,26 @@ func (v *GatewayOAuthChangedNotification) UnmarshalJSON(data []byte) error {
 	return decodeObject(data, &gatewayOAuthChangedNotificationSpec, (*wire)(v))
 }
 
+type GatewayOAuthLoginParams struct {
+	ModelProvider Optional[string] `json:"modelProvider,omitzero"`
+}
+
+var gatewayOAuthLoginParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "modelProvider"},
+	},
+}
+
+func (v GatewayOAuthLoginParams) MarshalJSON() ([]byte, error) {
+	type wire GatewayOAuthLoginParams
+	return json.Marshal(wire(v))
+}
+
+func (v *GatewayOAuthLoginParams) UnmarshalJSON(data []byte) error {
+	type wire GatewayOAuthLoginParams
+	return decodeObject(data, &gatewayOAuthLoginParamsSpec, (*wire)(v))
+}
+
 type GatewayOAuthLoginResponse map[string]json.RawMessage
 
 func (v GatewayOAuthLoginResponse) MarshalJSON() ([]byte, error) {
@@ -13128,6 +13405,26 @@ func (v *GatewayOAuthLoginResponse) UnmarshalJSON(data []byte) error {
 	}
 	*v = GatewayOAuthLoginResponse(raw)
 	return nil
+}
+
+type GatewayOAuthReadParams struct {
+	ModelProvider Optional[string] `json:"modelProvider,omitzero"`
+}
+
+var gatewayOAuthReadParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "modelProvider"},
+	},
+}
+
+func (v GatewayOAuthReadParams) MarshalJSON() ([]byte, error) {
+	type wire GatewayOAuthReadParams
+	return json.Marshal(wire(v))
+}
+
+func (v *GatewayOAuthReadParams) UnmarshalJSON(data []byte) error {
+	type wire GatewayOAuthReadParams
+	return decodeObject(data, &gatewayOAuthReadParamsSpec, (*wire)(v))
 }
 
 type GatewayOAuthReadResponse struct {
@@ -13165,6 +13462,12 @@ const (
 	GatewayOAuthStatusStarted   GatewayOAuthStatus = "started"
 	GatewayOAuthStatusSucceeded GatewayOAuthStatus = "succeeded"
 	GatewayOAuthStatusFailed    GatewayOAuthStatus = "failed"
+)
+
+type GcpProviderID string
+
+const (
+	GcpProviderIdGcp GcpProviderID = "gcp"
 )
 
 type GcpSetupParams struct {
@@ -13724,6 +14027,13 @@ const (
 	GuardianApprovalReviewStatusDenied     GuardianApprovalReviewStatus = "denied"
 	GuardianApprovalReviewStatusTimedOut   GuardianApprovalReviewStatus = "timedOut"
 	GuardianApprovalReviewStatusAborted    GuardianApprovalReviewStatus = "aborted"
+)
+
+type GuardianAssessmentOutcome string
+
+const (
+	GuardianAssessmentOutcomeAllow GuardianAssessmentOutcome = "allow"
+	GuardianAssessmentOutcomeDeny  GuardianAssessmentOutcome = "deny"
 )
 
 type GuardianCommandSource string
@@ -14525,15 +14835,17 @@ func (v *InternalChatMessageMetadataPassthrough) UnmarshalJSON(data []byte) erro
 }
 
 type ItemCompletedNotification struct {
-	CompletedAtMs int64      `json:"completedAtMs"`
-	Item          ThreadItem `json:"item"`
-	ThreadID      string     `json:"threadId"`
-	TurnID        string     `json:"turnId"`
+	CompletedAtMs     int64            `json:"completedAtMs"`
+	ContentTokenCount Optional[uint64] `json:"contentTokenCount,omitzero"`
+	Item              ThreadItem       `json:"item"`
+	ThreadID          string           `json:"threadId"`
+	TurnID            string           `json:"turnId"`
 }
 
 var itemCompletedNotificationSpec = objectSpec{
 	fields: []objectField{
 		{name: "completedAtMs", flags: fieldRequired | fieldRejectNull},
+		{name: "contentTokenCount"},
 		{name: "item", flags: fieldRequired | fieldRejectNull},
 		{name: "threadId", flags: fieldRequired | fieldRejectNull},
 		{name: "turnId", flags: fieldRequired | fieldRejectNull},
@@ -14547,7 +14859,19 @@ func (v ItemCompletedNotification) MarshalJSON() ([]byte, error) {
 
 func (v *ItemCompletedNotification) UnmarshalJSON(data []byte) error {
 	type wire ItemCompletedNotification
-	return decodeObject(data, &itemCompletedNotificationSpec, (*wire)(v))
+	var s objectScan
+	if _, err := s.begin(data, &itemCompletedNotificationSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if valueContentTokenCount, ok := v.ContentTokenCount.Value(); ok {
+		if valueContentTokenCount < 0 {
+			return DecodeError{Field: "contentTokenCount", Reason: "below minimum 0"}
+		}
+	}
+	return nil
 }
 
 type ItemGuardianApprovalReviewCompletedNotification struct {
@@ -15373,16 +15697,18 @@ const (
 )
 
 type McpResourceReadParams struct {
-	ConnectorID  Optional[string]                `json:"connectorId,omitzero"`
-	OriginCallID Optional[string]                `json:"originCallId,omitzero"`
-	Server       string                          `json:"server"`
-	Target       Optional[McpResourceReadTarget] `json:"target,omitzero"`
-	ThreadID     Optional[string]                `json:"threadId,omitzero"`
-	Uri          string                          `json:"uri"`
+	Meta         Optional[map[string]json.RawMessage] `json:"_meta,omitzero"`
+	ConnectorID  Optional[string]                     `json:"connectorId,omitzero"`
+	OriginCallID Optional[string]                     `json:"originCallId,omitzero"`
+	Server       string                               `json:"server"`
+	Target       Optional[McpResourceReadTarget]      `json:"target,omitzero"`
+	ThreadID     Optional[string]                     `json:"threadId,omitzero"`
+	Uri          string                               `json:"uri"`
 }
 
 var mcpResourceReadParamsSpec = objectSpec{
 	fields: []objectField{
+		{name: "_meta"},
 		{name: "connectorId"},
 		{name: "originCallId"},
 		{name: "server", flags: fieldRequired | fieldRejectNull},
@@ -16358,6 +16684,7 @@ type ModelListParams struct {
 	Cursor        Optional[string] `json:"cursor,omitzero"`
 	IncludeHidden Optional[bool]   `json:"includeHidden,omitzero"`
 	Limit         Optional[uint32] `json:"limit,omitzero"`
+	ModelProvider Optional[string] `json:"modelProvider,omitzero"`
 }
 
 var modelListParamsSpec = objectSpec{
@@ -16365,6 +16692,7 @@ var modelListParamsSpec = objectSpec{
 		{name: "cursor"},
 		{name: "includeHidden"},
 		{name: "limit"},
+		{name: "modelProvider"},
 	},
 }
 
@@ -16453,6 +16781,224 @@ func (v ModelProviderCapabilitiesReadResponse) MarshalJSON() ([]byte, error) {
 func (v *ModelProviderCapabilitiesReadResponse) UnmarshalJSON(data []byte) error {
 	type wire ModelProviderCapabilitiesReadResponse
 	return decodeObject(data, &modelProviderCapabilitiesReadResponseSpec, (*wire)(v))
+}
+
+type ModelProviderConfigWriteParams struct {
+	Settings ProviderSettingsPatch `json:"settings"`
+}
+
+var modelProviderConfigWriteParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "settings", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ModelProviderConfigWriteParams) MarshalJSON() ([]byte, error) {
+	type wire ModelProviderConfigWriteParams
+	return json.Marshal(wire(v))
+}
+
+func (v *ModelProviderConfigWriteParams) UnmarshalJSON(data []byte) error {
+	type wire ModelProviderConfigWriteParams
+	return decodeObject(data, &modelProviderConfigWriteParamsSpec, (*wire)(v))
+}
+
+type ModelProviderConfigWriteResponse struct {
+	Provider ModelProviderSummary `json:"provider"`
+}
+
+var modelProviderConfigWriteResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "provider", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ModelProviderConfigWriteResponse) MarshalJSON() ([]byte, error) {
+	type wire ModelProviderConfigWriteResponse
+	return json.Marshal(wire(v))
+}
+
+func (v *ModelProviderConfigWriteResponse) UnmarshalJSON(data []byte) error {
+	type wire ModelProviderConfigWriteResponse
+	return decodeObject(data, &modelProviderConfigWriteResponseSpec, (*wire)(v))
+}
+
+type ModelProviderError struct {
+	CurrentModelProvider  OptionalNonNull[string] `json:"currentModelProvider,omitzero"`
+	ModelProvider         OptionalNonNull[string] `json:"modelProvider,omitzero"`
+	RequiredModelProvider OptionalNonNull[string] `json:"requiredModelProvider,omitzero"`
+	TypeValue             string                  `json:"type"`
+	RawJSON               json.RawMessage         `json:"-"`
+}
+
+var modelProviderErrorSpec = objectSpec{
+	fields: []objectField{
+		{name: "currentModelProvider", flags: fieldNonNullOptional},
+		{name: "modelProvider", flags: fieldNonNullOptional},
+		{name: "requiredModelProvider", flags: fieldNonNullOptional},
+		{name: "type", flags: fieldRequired | fieldRejectNull},
+	},
+	tag:  3,
+	tags: []string{"modelProviderMismatch", "modelProviderNotConfigured", "modelProviderPolicyConflict"},
+}
+
+func (v ModelProviderError) MarshalJSON() ([]byte, error) {
+	switch v.TypeValue {
+	case "modelProviderMismatch":
+		if !v.CurrentModelProvider.IsSet() {
+			return nil, DecodeError{Field: "currentModelProvider", Reason: "missing required field for type modelProviderMismatch"}
+		}
+		if !v.ModelProvider.IsSet() {
+			return nil, DecodeError{Field: "modelProvider", Reason: "missing required field for type modelProviderMismatch"}
+		}
+	case "modelProviderNotConfigured":
+		if !v.ModelProvider.IsSet() {
+			return nil, DecodeError{Field: "modelProvider", Reason: "missing required field for type modelProviderNotConfigured"}
+		}
+	case "modelProviderPolicyConflict":
+		if !v.ModelProvider.IsSet() {
+			return nil, DecodeError{Field: "modelProvider", Reason: "missing required field for type modelProviderPolicyConflict"}
+		}
+		if !v.RequiredModelProvider.IsSet() {
+			return nil, DecodeError{Field: "requiredModelProvider", Reason: "missing required field for type modelProviderPolicyConflict"}
+		}
+	default:
+		if len(v.RawJSON) > 0 {
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "type", Reason: fmt.Sprintf("unsupported discriminator value %q", v.TypeValue)}
+	}
+	type wire ModelProviderError
+	return json.Marshal(wire(v))
+}
+
+func (v *ModelProviderError) UnmarshalJSON(data []byte) error {
+	type wire ModelProviderError
+	var s objectScan
+	known, err := s.begin(data, &modelProviderErrorSpec)
+	if err != nil {
+		return err
+	}
+	if !known {
+		v.TypeValue = s.tag
+		v.RawJSON = append(v.RawJSON[:0], data...)
+		return nil
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	v.RawJSON = nil
+	switch v.TypeValue {
+	case "modelProviderMismatch":
+		if !s.has("currentModelProvider") {
+			return DecodeError{Field: "currentModelProvider", Reason: "missing required field for type modelProviderMismatch"}
+		}
+		if s.isNull("currentModelProvider") {
+			return DecodeError{Field: "currentModelProvider", Reason: "cannot be null"}
+		}
+		if !s.has("modelProvider") {
+			return DecodeError{Field: "modelProvider", Reason: "missing required field for type modelProviderMismatch"}
+		}
+		if s.isNull("modelProvider") {
+			return DecodeError{Field: "modelProvider", Reason: "cannot be null"}
+		}
+	case "modelProviderNotConfigured":
+		if !s.has("modelProvider") {
+			return DecodeError{Field: "modelProvider", Reason: "missing required field for type modelProviderNotConfigured"}
+		}
+		if s.isNull("modelProvider") {
+			return DecodeError{Field: "modelProvider", Reason: "cannot be null"}
+		}
+	case "modelProviderPolicyConflict":
+		if !s.has("modelProvider") {
+			return DecodeError{Field: "modelProvider", Reason: "missing required field for type modelProviderPolicyConflict"}
+		}
+		if s.isNull("modelProvider") {
+			return DecodeError{Field: "modelProvider", Reason: "cannot be null"}
+		}
+		if !s.has("requiredModelProvider") {
+			return DecodeError{Field: "requiredModelProvider", Reason: "missing required field for type modelProviderPolicyConflict"}
+		}
+		if s.isNull("requiredModelProvider") {
+			return DecodeError{Field: "requiredModelProvider", Reason: "cannot be null"}
+		}
+	default:
+		v.RawJSON = append(v.RawJSON[:0], data...)
+	}
+	return nil
+}
+
+type ModelProviderListParams map[string]json.RawMessage
+
+func (v ModelProviderListParams) MarshalJSON() ([]byte, error) {
+	if v == nil {
+		return []byte("{}"), nil
+	}
+	return json.Marshal(map[string]json.RawMessage(v))
+}
+
+func (v *ModelProviderListParams) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*v = ModelProviderListParams(raw)
+	return nil
+}
+
+type ModelProviderListResponse struct {
+	CanChangeDefault  bool                   `json:"canChangeDefault"`
+	Data              []ModelProviderSummary `json:"data"`
+	DefaultProviderID string                 `json:"defaultProviderId"`
+}
+
+var modelProviderListResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "canChangeDefault", flags: fieldRequired | fieldRejectNull},
+		{name: "data", flags: fieldRequired | fieldRejectNull},
+		{name: "defaultProviderId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ModelProviderListResponse) MarshalJSON() ([]byte, error) {
+	type wire ModelProviderListResponse
+	return json.Marshal(wire(v))
+}
+
+func (v *ModelProviderListResponse) UnmarshalJSON(data []byte) error {
+	type wire ModelProviderListResponse
+	return decodeObject(data, &modelProviderListResponseSpec, (*wire)(v))
+}
+
+type ModelProviderSummary struct {
+	BaseURL  Optional[string] `json:"baseUrl,omitzero"`
+	CanEdit  bool             `json:"canEdit"`
+	ID       string           `json:"id"`
+	Name     string           `json:"name"`
+	Settings ProviderSettings `json:"settings"`
+}
+
+var modelProviderSummarySpec = objectSpec{
+	fields: []objectField{
+		{name: "baseUrl"},
+		{name: "canEdit", flags: fieldRequired | fieldRejectNull},
+		{name: "id", flags: fieldRequired | fieldRejectNull},
+		{name: "name", flags: fieldRequired | fieldRejectNull},
+		{name: "settings", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ModelProviderSummary) MarshalJSON() ([]byte, error) {
+	type wire ModelProviderSummary
+	return json.Marshal(wire(v))
+}
+
+func (v *ModelProviderSummary) UnmarshalJSON(data []byte) error {
+	type wire ModelProviderSummary
+	return decodeObject(data, &modelProviderSummarySpec, (*wire)(v))
 }
 
 type ModelRerouteReason string
@@ -16847,6 +17393,10 @@ const (
 	NonSteerableTurnKindCompact NonSteerableTurnKind = "compact"
 )
 
+type NullableGatewayOAuthLoginParams = Optional[GatewayOAuthLoginParams]
+
+type NullableGatewayOAuthReadParams = Optional[GatewayOAuthReadParams]
+
 type NullableGetAccountRateLimitsParams = Optional[GetAccountRateLimitsParams]
 
 type NullableGetAccountTokenUsageParams = Optional[GetAccountTokenUsageParams]
@@ -16854,6 +17404,227 @@ type NullableGetAccountTokenUsageParams = Optional[GetAccountTokenUsageParams]
 type NullableRemoteControlDisableParams = Optional[RemoteControlDisableParams]
 
 type NullableRemoteControlEnableParams = Optional[RemoteControlEnableParams]
+
+type OtelExporter struct {
+	StringValue string                                      `json:"-"`
+	OtlpGrpc    OptionalNonNull[map[string]json.RawMessage] `json:"otlp-grpc,omitzero"`
+	OtlpHttp    OptionalNonNull[map[string]json.RawMessage] `json:"otlp-http,omitzero"`
+	RawJSON     json.RawMessage                             `json:"-"`
+}
+
+var (
+	OtelExporterNone    = OtelExporter{StringValue: "none"}
+	OtelExporterStatsig = OtelExporter{StringValue: "statsig"}
+)
+
+func (v OtelExporter) IsSet() bool {
+	return v.StringValue != "" || len(bytes.TrimSpace(v.RawJSON)) > 0 || v.OtlpGrpc.IsSet() || v.OtlpHttp.IsSet()
+}
+
+var otelExporterSpec = objectSpec{
+	fields: []objectField{
+		{name: "otlp-grpc", flags: fieldNonNullOptional},
+		{name: "otlp-http", flags: fieldNonNullOptional},
+	},
+	fieldOffset: 1,
+}
+
+func (v OtelExporter) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if v.OtlpGrpc.IsSet() {
+		out["otlp-grpc"] = v.OtlpGrpc
+	}
+	if v.OtlpHttp.IsSet() {
+		out["otlp-http"] = v.OtlpHttp
+	}
+	if v.StringValue != "" {
+		if len(out) > 0 || len(bytes.TrimSpace(v.RawJSON)) > 0 {
+			return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+		}
+		switch v.StringValue {
+		case "none", "statsig":
+			return json.Marshal(v.StringValue)
+		default:
+			return nil, DecodeError{Field: "", Reason: fmt.Sprintf("unsupported OtelExporter string value %q", v.StringValue)}
+		}
+	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	untaggedOneOfVariant0Matches := true
+	if _, ok := out["otlp-http"]; !ok {
+		untaggedOneOfVariant0Matches = false
+	}
+	if untaggedOneOfVariant0Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant1Matches := true
+	if _, ok := out["otlp-grpc"]; !ok {
+		untaggedOneOfVariant1Matches = false
+	}
+	if untaggedOneOfVariant1Matches {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches && len(bytes.TrimSpace(v.RawJSON)) > 0 {
+			if !json.Valid(v.RawJSON) {
+				return nil, fmt.Errorf("invalid OtelExporter raw fallback")
+			}
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
+	return json.Marshal(out)
+}
+
+func (v *OtelExporter) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var stringValue string
+	if err := json.Unmarshal(trimmed, &stringValue); err == nil {
+		switch stringValue {
+		case "none", "statsig":
+			*v = OtelExporter{StringValue: stringValue}
+		default:
+			*v = OtelExporter{RawJSON: append(json.RawMessage(nil), data...)}
+		}
+		return nil
+	}
+	v.StringValue = ""
+	type wire OtelExporter
+	var s objectScan
+	if _, err := s.begin(data, &otelExporterSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	if s.nonNull("otlp-http") {
+		untaggedOneOfMatches++
+	}
+	if s.nonNull("otlp-grpc") {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches {
+			v.RawJSON = append(v.RawJSON[:0], data...)
+			return nil
+		}
+		return DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
+	v.RawJSON = nil
+	return nil
+}
+
+type OtelHttpProtocol string
+
+const (
+	OtelHttpProtocolBinary OtelHttpProtocol = "binary"
+	OtelHttpProtocolJson   OtelHttpProtocol = "json"
+)
+
+type OtelRequirements struct {
+	Environment            Optional[string]                       `json:"environment,omitzero"`
+	Exporter               Optional[OtelExporter]                 `json:"exporter,omitzero"`
+	LogAgentResponses      Optional[bool]                         `json:"log_agent_responses,omitzero"`
+	LogGuardianAssessments Optional[bool]                         `json:"log_guardian_assessments,omitzero"`
+	LogSseDeltas           Optional[bool]                         `json:"log_sse_deltas,omitzero"`
+	LogUserPrompt          Optional[bool]                         `json:"log_user_prompt,omitzero"`
+	MetricsExporter        Optional[OtelExporter]                 `json:"metrics_exporter,omitzero"`
+	SpanAttributes         Optional[map[string]string]            `json:"span_attributes,omitzero"`
+	ToolResult             Optional[OtelToolResultLogConfig]      `json:"tool_result,omitzero"`
+	TraceExporter          Optional[OtelExporter]                 `json:"trace_exporter,omitzero"`
+	Tracestate             Optional[map[string]map[string]string] `json:"tracestate,omitzero"`
+}
+
+var otelRequirementsSpec = objectSpec{
+	fields: []objectField{
+		{name: "environment"},
+		{name: "exporter"},
+		{name: "log_agent_responses"},
+		{name: "log_guardian_assessments"},
+		{name: "log_sse_deltas"},
+		{name: "log_user_prompt"},
+		{name: "metrics_exporter"},
+		{name: "span_attributes"},
+		{name: "tool_result"},
+		{name: "trace_exporter"},
+		{name: "tracestate"},
+	},
+}
+
+func (v OtelRequirements) MarshalJSON() ([]byte, error) {
+	type wire OtelRequirements
+	return json.Marshal(wire(v))
+}
+
+func (v *OtelRequirements) UnmarshalJSON(data []byte) error {
+	type wire OtelRequirements
+	return decodeObject(data, &otelRequirementsSpec, (*wire)(v))
+}
+
+type OtelTlsConfig struct {
+	CaCertificate     Optional[string] `json:"ca-certificate,omitzero"`
+	ClientCertificate Optional[string] `json:"client-certificate,omitzero"`
+	ClientPrivateKey  Optional[string] `json:"client-private-key,omitzero"`
+}
+
+var otelTlsConfigSpec = objectSpec{
+	fields: []objectField{
+		{name: "ca-certificate"},
+		{name: "client-certificate"},
+		{name: "client-private-key"},
+	},
+}
+
+func (v OtelTlsConfig) MarshalJSON() ([]byte, error) {
+	type wire OtelTlsConfig
+	return json.Marshal(wire(v))
+}
+
+func (v *OtelTlsConfig) UnmarshalJSON(data []byte) error {
+	type wire OtelTlsConfig
+	return decodeObject(data, &otelTlsConfigSpec, (*wire)(v))
+}
+
+type OtelToolResultLogConfig struct {
+	MaxBytes uint64 `json:"max_bytes"`
+}
+
+var otelToolResultLogConfigSpec = objectSpec{
+	fields: []objectField{
+		{name: "max_bytes", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v OtelToolResultLogConfig) MarshalJSON() ([]byte, error) {
+	type wire OtelToolResultLogConfig
+	return json.Marshal(wire(v))
+}
+
+func (v *OtelToolResultLogConfig) UnmarshalJSON(data []byte) error {
+	type wire OtelToolResultLogConfig
+	var s objectScan
+	if _, err := s.begin(data, &otelToolResultLogConfigSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if v.MaxBytes < 0 {
+		return DecodeError{Field: "max_bytes", Reason: "below minimum 0"}
+	}
+	return nil
+}
 
 type OverriddenMetadata struct {
 	EffectiveValue  json.RawMessage     `json:"effectiveValue"`
@@ -19060,10 +19831,184 @@ func (v *ProjectUpdateResponse) UnmarshalJSON(data []byte) error {
 	return decodeObject(data, &projectUpdateResponseSpec, (*wire)(v))
 }
 
+type ProviderSettings struct {
+	Auth           OptionalNonNull[GatewayAuth] `json:"auth,omitzero"`
+	CredentialFile Optional[string]             `json:"credentialFile,omitzero"`
+	Location       Optional[string]             `json:"location,omitzero"`
+	Profile        Optional[string]             `json:"profile,omitzero"`
+	ProjectID      Optional[string]             `json:"projectId,omitzero"`
+	Region         Optional[string]             `json:"region,omitzero"`
+	TypeValue      string                       `json:"type"`
+	RawJSON        json.RawMessage              `json:"-"`
+}
+
+var providerSettingsSpec = objectSpec{
+	fields: []objectField{
+		{name: "auth", flags: fieldNonNullOptional},
+		{name: "credentialFile"},
+		{name: "location"},
+		{name: "profile"},
+		{name: "projectId"},
+		{name: "region"},
+		{name: "type", flags: fieldRequired | fieldRejectNull},
+	},
+	tag:  6,
+	tags: []string{"openai", "customGateway", "bedrock", "gcp"},
+}
+
+func (v ProviderSettings) MarshalJSON() ([]byte, error) {
+	switch v.TypeValue {
+	case "openai":
+	case "customGateway":
+		if !v.Auth.IsSet() {
+			return nil, DecodeError{Field: "auth", Reason: "missing required field for type customGateway"}
+		}
+	case "bedrock":
+	case "gcp":
+	default:
+		if len(v.RawJSON) > 0 {
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "type", Reason: fmt.Sprintf("unsupported discriminator value %q", v.TypeValue)}
+	}
+	type wire ProviderSettings
+	return json.Marshal(wire(v))
+}
+
+func (v *ProviderSettings) UnmarshalJSON(data []byte) error {
+	type wire ProviderSettings
+	var s objectScan
+	known, err := s.begin(data, &providerSettingsSpec)
+	if err != nil {
+		return err
+	}
+	if !known {
+		v.TypeValue = s.tag
+		v.RawJSON = append(v.RawJSON[:0], data...)
+		return nil
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	v.RawJSON = nil
+	switch v.TypeValue {
+	case "openai":
+	case "customGateway":
+		if !s.has("auth") {
+			return DecodeError{Field: "auth", Reason: "missing required field for type customGateway"}
+		}
+		if s.isNull("auth") {
+			return DecodeError{Field: "auth", Reason: "cannot be null"}
+		}
+	case "bedrock":
+	case "gcp":
+	default:
+		v.RawJSON = append(v.RawJSON[:0], data...)
+	}
+	return nil
+}
+
+type ProviderSettingsPatch struct {
+	BaseURL        Optional[string]        `json:"baseUrl,omitzero"`
+	CredentialFile Optional[string]        `json:"credentialFile,omitzero"`
+	EnvKey         Optional[string]        `json:"envKey,omitzero"`
+	Location       Optional[string]        `json:"location,omitzero"`
+	Name           OptionalNonNull[string] `json:"name,omitzero"`
+	Profile        Optional[string]        `json:"profile,omitzero"`
+	ProjectID      Optional[string]        `json:"projectId,omitzero"`
+	ProviderID     Optional[string]        `json:"providerId,omitzero"`
+	Region         Optional[string]        `json:"region,omitzero"`
+	TypeValue      string                  `json:"type"`
+	RawJSON        json.RawMessage         `json:"-"`
+}
+
+var providerSettingsPatchSpec = objectSpec{
+	fields: []objectField{
+		{name: "baseUrl"},
+		{name: "credentialFile"},
+		{name: "envKey"},
+		{name: "location"},
+		{name: "name", flags: fieldNonNullOptional},
+		{name: "profile"},
+		{name: "projectId"},
+		{name: "providerId"},
+		{name: "region"},
+		{name: "type", flags: fieldRequired | fieldRejectNull},
+	},
+	tag:  9,
+	tags: []string{"customGateway", "bedrock", "gcp"},
+}
+
+func (v ProviderSettingsPatch) MarshalJSON() ([]byte, error) {
+	switch v.TypeValue {
+	case "customGateway":
+	case "bedrock":
+		if !v.ProviderID.IsSet() {
+			return nil, DecodeError{Field: "providerId", Reason: "missing required field for type bedrock"}
+		}
+		if v.ProviderID.IsNull() {
+			return nil, DecodeError{Field: "providerId", Reason: "cannot be null"}
+		}
+	case "gcp":
+		if !v.ProviderID.IsSet() {
+			return nil, DecodeError{Field: "providerId", Reason: "missing required field for type gcp"}
+		}
+		if v.ProviderID.IsNull() {
+			return nil, DecodeError{Field: "providerId", Reason: "cannot be null"}
+		}
+	default:
+		if len(v.RawJSON) > 0 {
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "type", Reason: fmt.Sprintf("unsupported discriminator value %q", v.TypeValue)}
+	}
+	type wire ProviderSettingsPatch
+	return json.Marshal(wire(v))
+}
+
+func (v *ProviderSettingsPatch) UnmarshalJSON(data []byte) error {
+	type wire ProviderSettingsPatch
+	var s objectScan
+	known, err := s.begin(data, &providerSettingsPatchSpec)
+	if err != nil {
+		return err
+	}
+	if !known {
+		v.TypeValue = s.tag
+		v.RawJSON = append(v.RawJSON[:0], data...)
+		return nil
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	v.RawJSON = nil
+	switch v.TypeValue {
+	case "customGateway":
+	case "bedrock":
+		if !s.has("providerId") {
+			return DecodeError{Field: "providerId", Reason: "missing required field for type bedrock"}
+		}
+		if s.isNull("providerId") {
+			return DecodeError{Field: "providerId", Reason: "cannot be null"}
+		}
+	case "gcp":
+		if !s.has("providerId") {
+			return DecodeError{Field: "providerId", Reason: "missing required field for type gcp"}
+		}
+		if s.isNull("providerId") {
+			return DecodeError{Field: "providerId", Reason: "cannot be null"}
+		}
+	default:
+		v.RawJSON = append(v.RawJSON[:0], data...)
+	}
+	return nil
+}
+
 type QueuedSubmission struct {
-	ClientUserMessageID string      `json:"clientUserMessageId"`
-	ID                  string      `json:"id"`
-	Input               []UserInput `json:"input"`
+	ClientUserMessageID        string                      `json:"clientUserMessageId"`
+	ID                         string                      `json:"id"`
+	Input                      []UserInput                 `json:"input"`
+	ResponsesapiClientMetadata Optional[map[string]string] `json:"responsesapiClientMetadata,omitzero"`
 }
 
 var queuedSubmissionSpec = objectSpec{
@@ -19071,6 +20016,7 @@ var queuedSubmissionSpec = objectSpec{
 		{name: "clientUserMessageId", flags: fieldRequired | fieldRejectNull},
 		{name: "id", flags: fieldRequired | fieldRejectNull},
 		{name: "input", flags: fieldRequired | fieldRejectNull},
+		{name: "responsesapiClientMetadata"},
 	},
 }
 
@@ -20568,8 +21514,7 @@ func (v *ResponsesAPIWebSearchAction) UnmarshalJSON(data []byte) error {
 type ReviewDelivery string
 
 const (
-	ReviewDeliveryInline   ReviewDelivery = "inline"
-	ReviewDeliveryDetached ReviewDelivery = "detached"
+	ReviewDeliveryInline ReviewDelivery = "inline"
 )
 
 type ReviewStartParams struct {
@@ -23369,6 +24314,74 @@ func (v *ThreadGoalUpdatedNotification) UnmarshalJSON(data []byte) error {
 	return decodeObject(data, &threadGoalUpdatedNotificationSpec, (*wire)(v))
 }
 
+type ThreadGuardianAssessment struct {
+	Outcome           GuardianAssessmentOutcome `json:"outcome"`
+	Rationale         string                    `json:"rationale"`
+	RiskLevel         GuardianRiskLevel         `json:"riskLevel"`
+	UserAuthorization GuardianUserAuthorization `json:"userAuthorization"`
+}
+
+var threadGuardianAssessmentSpec = objectSpec{
+	fields: []objectField{
+		{name: "outcome", flags: fieldRequired | fieldRejectNull},
+		{name: "rationale", flags: fieldRequired | fieldRejectNull},
+		{name: "riskLevel", flags: fieldRequired | fieldRejectNull},
+		{name: "userAuthorization", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadGuardianAssessment) MarshalJSON() ([]byte, error) {
+	type wire ThreadGuardianAssessment
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadGuardianAssessment) UnmarshalJSON(data []byte) error {
+	type wire ThreadGuardianAssessment
+	return decodeObject(data, &threadGuardianAssessmentSpec, (*wire)(v))
+}
+
+type ThreadGuardianReviewParams struct {
+	ThreadID string `json:"threadId"`
+}
+
+var threadGuardianReviewParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "threadId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadGuardianReviewParams) MarshalJSON() ([]byte, error) {
+	type wire ThreadGuardianReviewParams
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadGuardianReviewParams) UnmarshalJSON(data []byte) error {
+	type wire ThreadGuardianReviewParams
+	return decodeObject(data, &threadGuardianReviewParamsSpec, (*wire)(v))
+}
+
+type ThreadGuardianReviewResponse struct {
+	Assessment Optional[ThreadGuardianAssessment] `json:"assessment,omitzero"`
+	CallID     string                             `json:"callId"`
+}
+
+var threadGuardianReviewResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "assessment"},
+		{name: "callId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadGuardianReviewResponse) MarshalJSON() ([]byte, error) {
+	type wire ThreadGuardianReviewResponse
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadGuardianReviewResponse) UnmarshalJSON(data []byte) error {
+	type wire ThreadGuardianReviewResponse
+	return decodeObject(data, &threadGuardianReviewResponseSpec, (*wire)(v))
+}
+
 type ThreadHistoryMode string
 
 const (
@@ -23494,6 +24507,7 @@ type ThreadItem struct {
 	McpAppUi              Optional[McpAppUi]                           `json:"mcpAppUi,omitzero"`
 	MemoryCitation        Optional[MemoryCitation]                     `json:"memoryCitation,omitzero"`
 	Model                 Optional[string]                             `json:"model,omitzero"`
+	Moderation            Optional[AgentMessageModeration]             `json:"moderation,omitzero"`
 	Name                  OptionalNonNull[string]                      `json:"name,omitzero"`
 	Namespace             Optional[string]                             `json:"namespace,omitzero"`
 	Notification          Optional[string]                             `json:"notification,omitzero"`
@@ -23561,6 +24575,7 @@ var threadItemSpec = objectSpec{
 		{name: "mcpAppUi"},
 		{name: "memoryCitation"},
 		{name: "model"},
+		{name: "moderation"},
 		{name: "name", flags: fieldNonNullOptional},
 		{name: "namespace"},
 		{name: "notification"},
@@ -23594,7 +24609,7 @@ var threadItemSpec = objectSpec{
 		{name: "transparentBackground"},
 		{name: "type", flags: fieldRequired | fieldRejectNull},
 	},
-	tag:  61,
+	tag:  62,
 	tags: []string{"userMessage", "hookPrompt", "agentMessage", "functionCallOutput", "plan", "reasoning", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "subAgentActivity", "webSearch", "imageView", "sleep", "imageGeneration", "workflow", "enteredReviewMode", "exitedReviewMode", "contextCompaction"},
 }
 
@@ -24190,16 +25205,18 @@ func (v *ThreadItem) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadItemEntry struct {
-	CompletedAtMs Optional[int64] `json:"completedAtMs,omitzero"`
-	Item          ThreadItem      `json:"item"`
-	StartedAtMs   Optional[int64] `json:"startedAtMs,omitzero"`
-	TurnID        string          `json:"turnId"`
+	CompletedAtMs  Optional[int64]       `json:"completedAtMs,omitzero"`
+	Item           ThreadItem            `json:"item"`
+	OutputDeferred OptionalNonNull[bool] `json:"outputDeferred,omitzero"`
+	StartedAtMs    Optional[int64]       `json:"startedAtMs,omitzero"`
+	TurnID         string                `json:"turnId"`
 }
 
 var threadItemEntrySpec = objectSpec{
 	fields: []objectField{
 		{name: "completedAtMs"},
 		{name: "item", flags: fieldRequired | fieldRejectNull},
+		{name: "outputDeferred", flags: fieldNonNullOptional},
 		{name: "startedAtMs"},
 		{name: "turnId", flags: fieldRequired | fieldRejectNull},
 	},
@@ -24213,6 +25230,26 @@ func (v ThreadItemEntry) MarshalJSON() ([]byte, error) {
 func (v *ThreadItemEntry) UnmarshalJSON(data []byte) error {
 	type wire ThreadItemEntry
 	return decodeObject(data, &threadItemEntrySpec, (*wire)(v))
+}
+
+type ThreadItemOutputDeferral struct {
+	CommandExecution OptionalNonNull[bool] `json:"commandExecution,omitzero"`
+}
+
+var threadItemOutputDeferralSpec = objectSpec{
+	fields: []objectField{
+		{name: "commandExecution", flags: fieldNonNullOptional},
+	},
+}
+
+func (v ThreadItemOutputDeferral) MarshalJSON() ([]byte, error) {
+	type wire ThreadItemOutputDeferral
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadItemOutputDeferral) UnmarshalJSON(data []byte) error {
+	type wire ThreadItemOutputDeferral
+	return decodeObject(data, &threadItemOutputDeferralSpec, (*wire)(v))
 }
 
 type ThreadItemsListAnchor struct {
@@ -24342,16 +25379,18 @@ func (v *ThreadItemsListCursor) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadItemsListParams struct {
-	Cursor        Optional[ThreadItemsListCursor] `json:"cursor,omitzero"`
-	Limit         Optional[uint32]                `json:"limit,omitzero"`
-	SortDirection Optional[SortDirection]         `json:"sortDirection,omitzero"`
-	ThreadID      string                          `json:"threadId"`
-	TurnID        Optional[string]                `json:"turnId,omitzero"`
+	Cursor        Optional[ThreadItemsListCursor]    `json:"cursor,omitzero"`
+	DeferOutput   Optional[ThreadItemOutputDeferral] `json:"deferOutput,omitzero"`
+	Limit         Optional[uint32]                   `json:"limit,omitzero"`
+	SortDirection Optional[SortDirection]            `json:"sortDirection,omitzero"`
+	ThreadID      string                             `json:"threadId"`
+	TurnID        Optional[string]                   `json:"turnId,omitzero"`
 }
 
 var threadItemsListParamsSpec = objectSpec{
 	fields: []objectField{
 		{name: "cursor"},
+		{name: "deferOutput"},
 		{name: "limit"},
 		{name: "sortDirection"},
 		{name: "threadId", flags: fieldRequired | fieldRejectNull},
@@ -24455,6 +25494,7 @@ type ThreadListParams struct {
 	AncestorThreadID   Optional[string]              `json:"ancestorThreadId,omitzero"`
 	Archived           Optional[bool]                `json:"archived,omitzero"`
 	AttachedToThreadID Optional[string]              `json:"attachedToThreadId,omitzero"`
+	CurrentAccountOnly OptionalNonNull[bool]         `json:"currentAccountOnly,omitzero"`
 	Cursor             Optional[string]              `json:"cursor,omitzero"`
 	Cwd                Optional[ThreadListCwdFilter] `json:"cwd,omitzero"`
 	ExcludedThreadIDs  Optional[[]string]            `json:"excludedThreadIds,omitzero"`
@@ -24476,6 +25516,7 @@ var threadListParamsSpec = objectSpec{
 		{name: "ancestorThreadId"},
 		{name: "archived"},
 		{name: "attachedToThreadId"},
+		{name: "currentAccountOnly", flags: fieldNonNullOptional},
 		{name: "cursor"},
 		{name: "cwd"},
 		{name: "excludedThreadIds"},
@@ -24927,15 +25968,17 @@ func (v *ThreadProjectUpdatedNotification) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadQueueAddParams struct {
-	ClientUserMessageID string      `json:"clientUserMessageId"`
-	Input               []UserInput `json:"input"`
-	ThreadID            string      `json:"threadId"`
+	ClientUserMessageID        string                      `json:"clientUserMessageId"`
+	Input                      []UserInput                 `json:"input"`
+	ResponsesapiClientMetadata Optional[map[string]string] `json:"responsesapiClientMetadata,omitzero"`
+	ThreadID                   string                      `json:"threadId"`
 }
 
 var threadQueueAddParamsSpec = objectSpec{
 	fields: []objectField{
 		{name: "clientUserMessageId", flags: fieldRequired | fieldRejectNull},
 		{name: "input", flags: fieldRequired | fieldRejectNull},
+		{name: "responsesapiClientMetadata"},
 		{name: "threadId", flags: fieldRequired | fieldRejectNull},
 	},
 }
@@ -25176,15 +26219,17 @@ func (v *ThreadQueueStartResponse) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadQueueUpdateParams struct {
-	Input              []UserInput `json:"input"`
-	QueuedSubmissionID string      `json:"queuedSubmissionId"`
-	ThreadID           string      `json:"threadId"`
+	Input                      []UserInput                 `json:"input"`
+	QueuedSubmissionID         string                      `json:"queuedSubmissionId"`
+	ResponsesapiClientMetadata Optional[map[string]string] `json:"responsesapiClientMetadata,omitzero"`
+	ThreadID                   string                      `json:"threadId"`
 }
 
 var threadQueueUpdateParamsSpec = objectSpec{
 	fields: []objectField{
 		{name: "input", flags: fieldRequired | fieldRejectNull},
 		{name: "queuedSubmissionId", flags: fieldRequired | fieldRejectNull},
+		{name: "responsesapiClientMetadata"},
 		{name: "threadId", flags: fieldRequired | fieldRejectNull},
 	},
 }
@@ -26582,6 +27627,7 @@ type ThreadSampleParams struct {
 	DisableMcp                 OptionalNonNull[bool]       `json:"disableMcp,omitzero"`
 	Effort                     Optional[ReasoningEffort]   `json:"effort,omitzero"`
 	ExpectedTurnID             string                      `json:"expectedTurnId"`
+	InterruptOnCancel          Optional[bool]              `json:"interruptOnCancel,omitzero"`
 	Prompt                     string                      `json:"prompt"`
 	ResponsesapiClientMetadata Optional[map[string]string] `json:"responsesapiClientMetadata,omitzero"`
 	ThreadID                   string                      `json:"threadId"`
@@ -26594,6 +27640,7 @@ var threadSampleParamsSpec = objectSpec{
 		{name: "disableMcp", flags: fieldNonNullOptional},
 		{name: "effort"},
 		{name: "expectedTurnId", flags: fieldRequired | fieldRejectNull},
+		{name: "interruptOnCancel"},
 		{name: "prompt", flags: fieldRequired | fieldRejectNull},
 		{name: "responsesapiClientMetadata"},
 		{name: "threadId", flags: fieldRequired | fieldRejectNull},
@@ -26731,18 +27778,20 @@ func (v *ThreadSearchOccurrencesResponse) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadSearchParams struct {
-	Archived      Optional[bool]                `json:"archived,omitzero"`
-	Cursor        Optional[string]              `json:"cursor,omitzero"`
-	Limit         Optional[uint32]              `json:"limit,omitzero"`
-	SearchTerm    string                        `json:"searchTerm"`
-	SortDirection Optional[SortDirection]       `json:"sortDirection,omitzero"`
-	SortKey       Optional[ThreadSearchSortKey] `json:"sortKey,omitzero"`
-	SourceKinds   Optional[[]ThreadSourceKind]  `json:"sourceKinds,omitzero"`
+	Archived           Optional[bool]                `json:"archived,omitzero"`
+	CurrentAccountOnly OptionalNonNull[bool]         `json:"currentAccountOnly,omitzero"`
+	Cursor             Optional[string]              `json:"cursor,omitzero"`
+	Limit              Optional[uint32]              `json:"limit,omitzero"`
+	SearchTerm         string                        `json:"searchTerm"`
+	SortDirection      Optional[SortDirection]       `json:"sortDirection,omitzero"`
+	SortKey            Optional[ThreadSearchSortKey] `json:"sortKey,omitzero"`
+	SourceKinds        Optional[[]ThreadSourceKind]  `json:"sourceKinds,omitzero"`
 }
 
 var threadSearchParamsSpec = objectSpec{
 	fields: []objectField{
 		{name: "archived"},
+		{name: "currentAccountOnly", flags: fieldNonNullOptional},
 		{name: "cursor"},
 		{name: "limit"},
 		{name: "searchTerm", flags: fieldRequired | fieldRejectNull},
@@ -26907,6 +27956,28 @@ func (v ThreadSectionAppearance) MarshalJSON() ([]byte, error) {
 func (v *ThreadSectionAppearance) UnmarshalJSON(data []byte) error {
 	type wire ThreadSectionAppearance
 	return decodeObject(data, &threadSectionAppearanceSpec, (*wire)(v))
+}
+
+type ThreadSectionChangedNotification struct {
+	SectionID Optional[string] `json:"sectionId,omitzero"`
+	ThreadID  string           `json:"threadId"`
+}
+
+var threadSectionChangedNotificationSpec = objectSpec{
+	fields: []objectField{
+		{name: "sectionId", flags: fieldRequired},
+		{name: "threadId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadSectionChangedNotification) MarshalJSON() ([]byte, error) {
+	type wire ThreadSectionChangedNotification
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadSectionChangedNotification) UnmarshalJSON(data []byte) error {
+	type wire ThreadSectionChangedNotification
+	return decodeObject(data, &threadSectionChangedNotificationSpec, (*wire)(v))
 }
 
 type ThreadSectionCreateParams struct {
@@ -29030,13 +30101,13 @@ type UserInput struct {
 var userInputSpec = objectSpec{
 	fields: []objectField{
 		{name: "detail"},
-		{name: "fileId", flags: fieldNonNullOptional, anyOfTags: []string{"\"image\""}},
+		{name: "fileId", flags: fieldNonNullOptional, anyOfTags: []string{"\"image\"", "\"audio\""}},
 		{name: "name", flags: fieldNonNullOptional},
 		{name: "path", flags: fieldNonNullOptional},
 		{name: "text", flags: fieldNonNullOptional},
 		{name: "text_elements", flags: fieldNonNullOptional},
 		{name: "type", flags: fieldRequired | fieldRejectNull},
-		{name: "url", flags: fieldNonNullOptional, anyOfTags: []string{"\"image\""}},
+		{name: "url", flags: fieldNonNullOptional, anyOfTags: []string{"\"image\"", "\"audio\""}},
 	},
 	tag:  6,
 	tags: []string{"text", "image", "localImage", "audio", "localAudio", "skill", "mention"},
@@ -29060,8 +30131,9 @@ func (v UserInput) MarshalJSON() ([]byte, error) {
 			return nil, DecodeError{Field: "path", Reason: "missing required field for type localImage"}
 		}
 	case "audio":
-		if !v.URL.IsSet() {
-			return nil, DecodeError{Field: "url", Reason: "missing required field for type audio"}
+		taggedAnyOfVariant3Matches := (w.URL.IsSet() && marshalsNonNull(w.URL)) || (w.FileID.IsSet() && marshalsNonNull(w.FileID))
+		if !taggedAnyOfVariant3Matches {
+			return nil, DecodeError{Field: "", Reason: "does not match any anyOf variant for type audio"}
 		}
 	case "localAudio":
 		if !v.Path.IsSet() {
@@ -29127,11 +30199,9 @@ func (v *UserInput) UnmarshalJSON(data []byte) error {
 			return DecodeError{Field: "path", Reason: "cannot be null"}
 		}
 	case "audio":
-		if !s.has("url") {
-			return DecodeError{Field: "url", Reason: "missing required field for type audio"}
-		}
-		if s.isNull("url") {
-			return DecodeError{Field: "url", Reason: "cannot be null"}
+		taggedAnyOfVariant3Matches := (v.URL.IsSet()) || (v.FileID.IsSet())
+		if !taggedAnyOfVariant3Matches {
+			return DecodeError{Field: "", Reason: "does not match any anyOf variant for type audio"}
 		}
 	case "localAudio":
 		if !s.has("path") {
@@ -29682,6 +30752,13 @@ const (
 	WebSearchModeCached   WebSearchMode = "cached"
 	WebSearchModeIndexed  WebSearchMode = "indexed"
 	WebSearchModeLive     WebSearchMode = "live"
+)
+
+type WebSearchProvider string
+
+const (
+	WebSearchProviderStandalone WebSearchProvider = "standalone"
+	WebSearchProviderSearchMcp  WebSearchProvider = "search_mcp"
 )
 
 type WebSearchToolConfig struct {

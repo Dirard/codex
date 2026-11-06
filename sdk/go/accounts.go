@@ -122,7 +122,8 @@ func (c *AccountsClient) GatewayOAuthRead(ctx context.Context) (protocol.Gateway
 	if c == nil || c.client == nil {
 		return protocol.GatewayOAuthReadResponse{}, &ClosedError{}
 	}
-	return c.client.Raw().AccountGatewayOAuthRead(ctx)
+	// No params: the runtime reads the current provider.
+	return c.client.Raw().AccountGatewayOAuthRead(ctx, protocol.NullableGatewayOAuthReadParams{})
 }
 
 func (c *AccountsClient) StartGatewayOAuthLogin(ctx context.Context) (*GatewayOAuthHandle, error) {
