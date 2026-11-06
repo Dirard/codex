@@ -47,6 +47,7 @@ async fn invocation_for_payload(
         tool_name: codex_tools::ToolName::plain(tool_name),
         source: ToolCallSource::Direct,
         payload,
+        native_call: None,
         environments: Default::default(),
     }
 }
@@ -358,6 +359,7 @@ async fn exec_command_rejects_login_when_selected_environment_disallows_it() {
         call_id: "login-disallowed".to_string(),
         tool_name: codex_tools::ToolName::plain("exec_command"),
         source: ToolCallSource::Direct,
+        native_call: None,
         environments: Default::default(),
         payload: ToolPayload::Function {
             arguments: serde_json::json!({ "cmd": "echo hello", "login": true }).to_string(),
@@ -378,6 +380,7 @@ async fn exec_command_rejects_login_when_selected_environment_disallows_it() {
 #[tokio::test]
 #[cfg(not(windows))]
 async fn exec_command_reuses_foreign_windows_grant() {
+    use crate::environment_selection::EnvironmentAttachment;
     use crate::session::tests::make_session_and_context_with_auth_and_config_and_rx;
     use codex_features::Feature;
     use codex_protocol::models::AdditionalPermissionProfile;
@@ -407,6 +410,13 @@ async fn exec_command_reuses_foreign_windows_grant() {
         )),
         ..Default::default()
     };
+    let (attachment, _guard, _) = EnvironmentAttachment::new(
+        codex_exec_server::REMOTE_ENVIRONMENT_ID,
+        Arc::new(
+            Environment::create_for_tests(Some("ws://127.0.0.1:1/remote-exec-server".to_string()))
+                .expect("remote environment"),
+        ),
+    );
     {
         let turn = Arc::get_mut(&mut turn).expect("turn should be uniquely owned");
         let TurnEnvironmentState::Ready(environment) = turn
@@ -421,10 +431,7 @@ async fn exec_command_reuses_foreign_windows_grant() {
         environment.selection.cwd = cwd.clone();
         environment.selection.workspace_roots = vec![cwd.clone()];
         environment.config_mut().workspace_roots = vec![cwd];
-        environment.environment = Arc::new(
-            Environment::create_for_tests(Some("ws://127.0.0.1:1/remote-exec-server".to_string()))
-                .expect("remote environment"),
-        );
+        environment.attachment = attachment;
     }
 
     let step_context = StepContext::for_test(Arc::clone(&turn));
@@ -443,6 +450,7 @@ async fn exec_command_reuses_foreign_windows_grant() {
             call_id: "foreign-windows-grant".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
             source: ToolCallSource::Direct,
+            native_call: None,
             environments: Default::default(),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
@@ -485,6 +493,7 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
             tool_name: codex_tools::ToolName::plain("exec_command"),
             source: crate::tools::context::ToolCallSource::Direct,
             payload,
+            native_call: None,
             environments: Default::default(),
         }),
         Some(crate::tools::registry::PreToolUsePayload {
@@ -517,6 +526,7 @@ async fn exec_command_pre_tool_use_cwd_resolves_selected_environment() {
         payload: ToolPayload::Function {
             arguments: String::new(),
         },
+        native_call: None,
         environments: Default::default(),
     };
     for (workdir, expected) in [
@@ -587,6 +597,7 @@ async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
             tool_name: codex_tools::ToolName::plain("write_stdin"),
             source: crate::tools::context::ToolCallSource::Direct,
             payload,
+            native_call: None,
             environments: Default::default(),
         }),
         None
@@ -838,6 +849,7 @@ async fn exec_command_telemetry_records_configured_snapshot_mode(
         payload: ToolPayload::Function {
             arguments: r#"{"cmd":"true","login":false}"#.to_string(),
         },
+        native_call: None,
         environments: Default::default(),
     };
     assert_eq!(

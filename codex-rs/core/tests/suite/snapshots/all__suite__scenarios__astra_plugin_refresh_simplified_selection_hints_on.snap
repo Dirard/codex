@@ -16,15 +16,15 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=036d0cf1a6d23309):
-        - namespace/functions; hash=1009b8dbfeedb6a4
+00:additional_tools/developer (3; hash=e019c949fc483f83):
+        - namespace/functions; hash=03340277aa23936f
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=db3ab187547b8354
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
@@ -102,7 +102,7 @@ Settings:
     Check whether the Notes plugin echo tool is available.
 07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-08:custom_tool_call/exec:text(EXEC_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
+08:custom_tool_call/exec:text(ALL_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
 09:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
@@ -110,15 +110,19 @@ Settings:
 -- request 3 (turn) --
 10:message/assistant:
     The Notes tool is not installed yet.
-11:message/developer:
-    <skills_instructions>
-    ## Skills
-    A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
-    ### Skill roots
-    - `r0` = `<PLUGINS_CACHE>/test`
-    ### Available skills
-    - notes:summarize: Summarize team notes (file: r0/notes/local/skills/summarize/SKILL.md)
-    </skills_instructions>
+11:message/developer[2]:
+    [01] <skills_instructions>
+        ## Skills
+        A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
+        ### Skill roots
+        - `r0` = `<PLUGINS_CACHE>/test`
+        ### Available skills
+        - notes:summarize: Summarize team notes (file: r0/notes/local/skills/summarize/SKILL.md)
+        </skills_instructions>
+    [02] <tools>
+        Deferred tool namespaces:
+        - mcp__notes: Use these tools to exercise the rmcp test server.
+        </tools>
 12:message/user:
     I installed Notes. Use $notes:summarize and the Notes tool to check that Mira owns the kickoff.
 13:message/user:
@@ -136,7 +140,7 @@ Settings:
 14:message/developer:
     The user selected the `notes` plugin. Use its available skills and tools to complete this request.
 -- request 4 (turn) --
-15:custom_tool_call/exec:text(EXEC_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
+15:custom_tool_call/exec:text(ALL_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
 16:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:

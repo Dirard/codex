@@ -1481,7 +1481,7 @@ store("healthy", {[keys[0]]: "null"});
                 vec![FunctionCallOutputContentItem::InputText {
                     text: expected_text.to_string()
                 }],
-                expected_error.map(str::to_string)
+                expected_error.map(str::to_string),
             )
         );
     }

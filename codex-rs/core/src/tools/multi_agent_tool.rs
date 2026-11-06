@@ -5,7 +5,6 @@ use crate::session::session::Session;
 use crate::tools::context::ToolInvocation;
 use crate::tools::registry::CoreToolRuntime;
 use codex_features::MultiAgentMessageDelivery;
-use codex_protocol::openai_models::GuardianScope;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -17,7 +16,8 @@ use codex_tools::ToolSpec;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 
-pub(crate) const MULTI_AGENT_V2_NAMESPACE_DESCRIPTION: &str =
+/// Shared namespace description for native tools and host extensions.
+pub const MULTI_AGENT_V2_NAMESPACE_DESCRIPTION: &str =
     "Tools for spawning and managing sub-agents.";
 
 pub(super) fn multi_agent_v2_handler(
@@ -136,16 +136,6 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2ToolOverrides {
 }
 
 impl CoreToolRuntime for MultiAgentV2ToolOverrides {
-    fn requires_guardian_review(&self, invocation: &ToolInvocation) -> bool {
-        invocation
-            .turn
-            .config
-            .features
-            .enabled(codex_features::Feature::GuardianNativeMultiAgentHistory)
-            && GuardianScope::for_multi_agent_tool(&self.tool_name(), self.namespace.as_deref())
-                .is_some()
-    }
-
     fn wait_until_ready<'a>(&'a self, session: &'a Arc<Session>) -> Option<BoxFuture<'a, ()>> {
         self.handler.wait_until_ready(session)
     }

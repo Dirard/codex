@@ -238,6 +238,7 @@ pub struct DeliveryReceipt {
     pub submission_id: String,
 }
 
+#[derive(Clone)]
 pub struct AgentTurnOutcome {
     pub thread_id: ThreadId,
     pub turn_id: String,

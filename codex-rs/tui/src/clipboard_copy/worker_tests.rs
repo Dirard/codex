@@ -41,6 +41,7 @@ async fn blocked_copy_allows_overlay_exit_rejects_backlog_and_wakes_completion()
                 String::new(),
                 "turn-1".into(),
                 codex_app_server_protocol::ThreadItemPayload::AgentMessage {
+                    moderation: None,
                     id: "msg-1".into(),
                     text: "café\nsecond line".into(),
                     phase: None,
@@ -254,7 +255,7 @@ fn drop_waits_for_response_channel_disconnect() {
             outgoing
                 .send(Response {
                     result: Ok(CopyStatus::Confirmed),
-                    terminal_text: None,
+                    terminal_sequence: None,
                 })
                 .unwrap();
         }
@@ -522,7 +523,7 @@ fn latest_primary_is_published_before_read_but_does_not_preempt_explicit_copy() 
         outgoing
             .send(Response {
                 result: Ok(CopyStatus::Confirmed),
-                terminal_text: None,
+                terminal_sequence: None,
             })
             .unwrap();
     };
@@ -625,7 +626,7 @@ fn cancelling_owners_after_poll_drops_deferred_work_without_releasing_worker_ear
     outgoing
         .send(Response {
             result: Ok(CopyStatus::Confirmed),
-            terminal_text: None,
+            terminal_sequence: None,
         })
         .unwrap();
     worker.poll();

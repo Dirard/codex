@@ -1,5 +1,6 @@
 use super::*;
 use crate::session::InputQueueActivity;
+use crate::thread_input::subscribe_input_activity;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
 use codex_tools::ToolSpec;
@@ -72,14 +73,13 @@ impl Handler {
         let wait_started = Instant::now();
         let deadline = wait_started + Duration::from_millis(timeout_ms as u64);
 
+        // Fork: the fork rechecks this turn's input activity after its agent snapshot.
         let turn_state = session
             .input_queue
             .turn_state_for_sub_id(&session.active_turn, &turn.sub_id)
             .await;
-        let (mut activity_rx, pending_activity) = session
-            .input_queue
-            .subscribe_activity(turn_state.as_deref())
-            .await;
+        let (mut activity_rx, pending_activity) =
+            subscribe_input_activity(&session, &turn.sub_id).await;
 
         session
             .emit_turn_item_started(

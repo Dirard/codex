@@ -40,6 +40,7 @@ impl App {
                             .request_typed::<ThreadListResponse>(ClientRequest::ThreadList {
                                 request_id: RequestId::String(Uuid::new_v4().to_string()),
                                 params: ThreadListParams {
+                                    current_account_only: false,
                                     excluded_thread_ids: None,
                                     attached_to_thread_id: None,
                                     originators: None,
@@ -129,8 +130,6 @@ impl App {
                 return;
             }
         };
-        let selected_thread_id = self.selected_agent_picker_thread_id();
-        let selected_run = self.fork_selected_picker_run(); // Fork: R8.6.7
         for thread in refresh.threads {
             let Ok(thread_id) = ThreadId::from_string(&thread.id) else {
                 continue;
@@ -179,8 +178,7 @@ impl App {
         }
         self.agent_navigation.prune_untracked_picker_exclusions();
 
-        self.replace_agent_picker_view(selected_thread_id);
-        self.fork_reselect_picker_run(selected_run); // Fork: R8.6.7
+        self.refresh_agent_picker();
         if completion.follow_up_requested {
             self.refresh_agent_picker_threads(app_server, root);
         }
@@ -191,11 +189,8 @@ impl App {
         thread_id: ThreadId,
         visibility: AgentPickerThreadVisibility,
     ) {
-        let selected_thread_id = self.selected_agent_picker_thread_id();
-        let selected_run = self.fork_selected_picker_run(); // Fork: R8.6.7
         self.update_agent_picker_thread_visibility(thread_id, visibility);
-        self.replace_agent_picker_view(selected_thread_id);
-        self.fork_reselect_picker_run(selected_run); // Fork: R8.6.7
+        self.refresh_agent_picker();
     }
 
     fn update_agent_picker_thread_visibility(
@@ -241,27 +236,28 @@ impl App {
         }
     }
 
-    fn selected_agent_picker_thread_id(&self) -> Option<ThreadId> {
+    /// Keep the approval notice and any open picker in sync with the same navigation state.
+    pub(super) fn refresh_agent_picker(&mut self) -> bool {
+        self.sync_active_agent_label();
+        let pending = self
+            .agent_navigation
+            .pending_approval_threads()
+            .map(|id| self.thread_label(id))
+            .collect();
+        self.chat_widget.set_pending_thread_approvals(pending);
+        if !self.chat_widget.has_active_modal() {
+            return false;
+        }
+        // Fork: a run row of the grouped picker keeps the cursor across rebuilds (R8.6.7).
+        let selected_run = self.fork_selected_picker_run();
         let selected = self
             .chat_widget
-            .selected_index_for_present_view(AGENT_PICKER_VIEW_ID)?;
-        let selected = self.fork_picker_visible_index(selected)?; // Fork: R8.6.7
-        self.agent_navigation
-            .visible_threads()
-            .get(selected)
-            .map(|(thread_id, _)| *thread_id)
-    }
-
-    fn replace_agent_picker_view(&mut self, selected_thread_id: Option<ThreadId>) {
-        let selected = selected_thread_id.and_then(|selected_thread_id| {
-            self.agent_navigation
-                .visible_threads()
-                .iter()
-                .position(|(thread_id, _)| *thread_id == selected_thread_id)
-        });
-        let selected = selected.and_then(|visible| self.fork_picker_display_index(visible)); // Fork: R8.6.7
+            .selected_index_for_present_view(AGENT_PICKER_VIEW_ID)
+            .and_then(|index| self.fork_picker_visible_index(index)) // Fork: run rows, R8.6.7
+            .and_then(|index| self.agent_navigation.picker_row_ids.get(index).copied());
         let params = self.agent_picker_selection_view_params(selected);
+        let params = self.fork_reselect_picker_run(params, selected_run); // Fork: R8.6.7
         self.chat_widget
-            .replace_selection_view_if_present(AGENT_PICKER_VIEW_ID, params);
+            .replace_selection_view_if_present(AGENT_PICKER_VIEW_ID, params)
     }
 }

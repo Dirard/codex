@@ -210,6 +210,7 @@ async fn build_and_install_compaction(
         (attempt, compaction_turn_context, None)
     };
     let RemoteCompactV2Attempt {
+        rejected_audio_file_ids,
         input_goal_ids,
         trace_input_history,
         prompt_input,
@@ -222,7 +223,8 @@ async fn build_and_install_compaction(
     if prefix.is_none()
         && let Some(token_usage) = token_usage.as_ref()
     {
-        sess.record_rollout_budget_usage(token_usage).await?;
+        sess.record_rollout_budget_usage(&compaction_turn_context.sub_id, token_usage)
+            .await?;
         analytics_details.active_context_tokens_before = Some(token_usage.input_tokens);
     }
     let retained_image_budget = if sess.enabled(Feature::CompactionImageBudget) {
@@ -230,6 +232,7 @@ async fn build_and_install_compaction(
     } else {
         RetainedImageBudget::Disabled
     };
+    let audio_durations = crate::session::file_audio::snapshot(sess).await;
     let mut retained_message_token_budget = RETAINED_MESSAGE_TOKEN_BUDGET;
     let (mut compacted_history, mut retained_images) = build_v2_compacted_history(
         &prompt_input,
@@ -238,6 +241,7 @@ async fn build_and_install_compaction(
         sess.features().get(),
         retained_message_token_budget,
         retained_image_budget,
+        audio_durations.as_ref(),
     );
     let mut soft_headroom = None;
     let complete_replacement = if prefix.is_none() {
@@ -246,7 +250,7 @@ async fn build_and_install_compaction(
             sess.as_ref(),
             replacement_step_context,
             world_state,
-            Some(prepared_window.ids),
+            Some(prepared_window.ids.clone()),
         )
         .await;
         let base_instructions = sess.get_base_instructions().await;
@@ -304,12 +308,13 @@ async fn build_and_install_compaction(
             }
             attempts += 1;
             // Shrink from what was actually retained; a larger budget rebuilds the same
-            // candidate.
+            // candidate. Pending mail can follow the summary, so the summary is skipped by value.
             let retained_tokens = compacted_history
-                .split_last()
-                .map_or(&[][..], |(_compaction_output, retained)| retained)
                 .iter()
-                .map(|envelope| estimate_item_token_count(&envelope.item))
+                .filter(|envelope| envelope.item != compaction_output)
+                .map(|envelope| {
+                    estimate_item_token_count_with_audio(&envelope.item, audio_durations.as_ref())
+                })
                 .fold(0i64, i64::saturating_add);
             retained_message_token_budget = if attempts >= 3 {
                 0
@@ -325,6 +330,7 @@ async fn build_and_install_compaction(
                 sess.features().get(),
                 retained_message_token_budget,
                 retained_image_budget,
+                audio_durations.as_ref(),
             );
         };
         Some((new_history, world_state_baseline, prepared_window))
@@ -345,10 +351,15 @@ async fn build_and_install_compaction(
             compacted_history,
             replacement_step_context.to_turn_context_item(),
             world_state_baseline,
+            rejected_audio_file_ids,
             CompactedHistoryInstallation::Prefix {
                 prefix,
                 prefix_context,
                 initial_context,
+                reset_world_state_sections: world_state
+                    .full_context_excluded_section_ids()
+                    .chain(cutoff_world_state.full_context_excluded_section_ids())
+                    .collect(),
                 model_info: &model_info,
                 compaction_response_id,
                 reviewer_compaction_hash,
@@ -365,6 +376,8 @@ async fn build_and_install_compaction(
                 "foreground compaction must have a validated history".to_string(),
             ));
         };
+        let window_number = prepared_window.window_number;
+        let window_ids = prepared_window.ids.clone();
         if !sess
             .commit_prepared_auto_compact_window(prepared_window)
             .await
@@ -376,8 +389,8 @@ async fn build_and_install_compaction(
         let installation = CompactedHistoryMetadata {
             input_goal_ids,
             message: String::new(),
-            window_number: prepared_window.window_number,
-            window_ids: prepared_window.ids,
+            window_number,
+            window_ids,
             compaction_response_id: Some(compaction_response_id),
             compaction_model_hash: compaction_turn_context.model_info().comp_hash.clone(),
             reviewer_compaction_hash,
@@ -386,6 +399,7 @@ async fn build_and_install_compaction(
             new_history,
             replacement_step_context.to_turn_context_item(),
             world_state_baseline,
+            rejected_audio_file_ids,
             installation,
         )
         .await

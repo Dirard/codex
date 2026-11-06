@@ -48,6 +48,7 @@ pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 pub(crate) struct ToolCallState {
     pub(crate) terminal_outcome_reached: AtomicBool,
     pub(crate) delivered_assistant_message: OnceLock<String>,
+    pub(crate) invocation: crate::agent::host::InvocationReservation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -117,6 +118,8 @@ pub struct ToolInvocation {
     pub tool_name: ToolName,
     pub source: ToolCallSource,
     pub payload: ToolPayload,
+    /// Original function-call evidence owned by this invocation, independent of live history.
+    pub native_call: Option<Arc<ResponseItem>>,
     /// Captured before PreToolUse and retained across input rewrites.
     pub(crate) environments: ToolEnvironments,
 }

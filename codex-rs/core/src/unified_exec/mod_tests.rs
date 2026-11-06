@@ -123,7 +123,7 @@ async fn exec_command_with_tty(
                 turn.initial_environments
                     .primary()
                     .expect("turn environment")
-                    .environment
+                    .environment()
                     .as_ref(),
             )
             .await?,

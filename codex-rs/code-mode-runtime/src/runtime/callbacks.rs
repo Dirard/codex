@@ -1,4 +1,4 @@
-use codex_code_mode_protocol::FunctionCallOutputContentItem;
+use crate::session_runtime::OutputItem;
 use std::sync::Arc;
 
 use super::RuntimeEvent;
@@ -68,7 +68,7 @@ pub(super) fn tool_callback(
     state.next_tool_call_id = state.next_tool_call_id.saturating_add(1);
     let event_tx = state.event_tx.clone();
     state.pending_tool_calls.insert(id.clone(), resolver);
-    let _ = event_tx.send(RuntimeEvent::ToolCall {
+    let _ = event_tx.blocking_send(RuntimeEvent::ToolCall {
         id,
         name: tool_name,
         kind: tool_kind,
@@ -100,7 +100,7 @@ pub(super) fn text_callback(
         }
         let result = send_runtime_event(
             &state.event_tx,
-            RuntimeEvent::ContentItem(FunctionCallOutputContentItem::InputText { text }),
+            RuntimeEvent::ContentItem(OutputItem::InputText { text }),
         );
         if result.is_ok() {
             state.clear_settled_tool_outcomes();
@@ -218,7 +218,7 @@ pub(super) fn generated_image_callback(
         if let Some(text) = output_hint {
             send_runtime_event(
                 &state.event_tx,
-                RuntimeEvent::ContentItem(FunctionCallOutputContentItem::InputText { text }),
+                RuntimeEvent::ContentItem(OutputItem::InputText { text }),
             )?;
         }
         state.clear_settled_tool_outcomes();
@@ -399,7 +399,7 @@ pub(super) fn yield_control_callback(
     if let Some(state) = scope.get_slot::<RuntimeState>()
         && !state.exit_requested
     {
-        let _ = state.event_tx.send(RuntimeEvent::YieldRequested);
+        let _ = state.event_tx.blocking_send(RuntimeEvent::YieldRequested);
     }
 }
 

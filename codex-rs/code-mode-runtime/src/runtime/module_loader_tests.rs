@@ -22,7 +22,7 @@ fn discarded_tool_response_is_collectible_before_cell_ends() {
     let (event_tx, _event_rx) = mpsc::unbounded_channel();
     let (runtime_command_tx, _runtime_command_rx) = std_mpsc::channel();
     scope.set_slot(RuntimeState {
-        event_tx,
+        event_tx: event_tx.into(),
         pending_tool_calls: HashMap::new(),
         settled_tool_outcomes_since_sink: 0,
         pending_timeouts: HashMap::new(),

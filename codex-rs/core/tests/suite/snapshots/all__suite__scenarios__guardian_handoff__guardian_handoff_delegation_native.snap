@@ -7,8 +7,8 @@ Scenario: Complete Guardian request history: root delegates through alpha to lea
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (1; hash=a8d4491aab796b3e):
-        - namespace/functions; hash=b9ac307378645f28
+00:additional_tools/developer (1; hash=7758f662cd124827):
+        - namespace/functions; hash=70d14ec929ba5cd7
           - custom/exec
           - function/wait
 01:message/developer:
