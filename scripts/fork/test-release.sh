@@ -47,8 +47,10 @@ marker="Draft staged by fork-rust-release."
 # Stub gh: answers the calls release.sh makes with the post---jq output, using
 # files under $FAKE_GH_STATE. Releases are lines of
 #   id <TAB> draft <TAB> published_at <TAB> target <TAB> marker <TAB> html_url
-# in $FAKE_GH_STATE/releases. Workflow runs and run artifacts are raw API JSON
-# (release.sh filters them with jq): runs-<workflow file> and artifacts-<run id>.
+# in $FAKE_GH_STATE/releases. Workflow runs, run artifacts and commit
+# comparisons are raw API JSON (release.sh filters them with jq):
+# runs-<workflow file>, artifacts-<run id> and compare-<base>...<head>;
+# contents-<ref> is a raw file, and `gh run download` writes <name>.tar.
 # Unknown calls fail loudly.
 mkdir -p "${work}/bin"
 cat >"${work}/bin/gh" <<'GH'
@@ -75,7 +77,10 @@ case "${args}" in
   " api repos/"*"/actions/runs/"*"/artifacts?"*)
     id="${args#*/actions/runs/}"
     id="${id%%/artifacts*}"
-    if [[ -f "${state}/artifacts-${id}" ]]; then
+    if [[ -f "${state}/fail-artifacts-${id}" ]]; then
+      echo "gh: Server Error (HTTP 502)" >&2
+      exit 1
+    elif [[ -f "${state}/artifacts-${id}" ]]; then
       cat "${state}/artifacts-${id}"
     else
       echo '{"total_count":0,"artifacts":[]}'
@@ -99,8 +104,49 @@ case "${args}" in
       exit 1
     fi
     ;;
-  *"/compare/"*)
+  *"/compare/"*" --jq "*)
     cat "${state}/compare-status" 2>/dev/null || echo ahead
+    ;;
+  " api repos/"*"/compare/"*)
+    basehead="${args#*/compare/}"
+    basehead="${basehead%% *}"
+    if [[ -f "${state}/compare-${basehead}" ]]; then
+      cat "${state}/compare-${basehead}"
+    else
+      echo "gh: Not Found (HTTP 404)" >&2
+      exit 1
+    fi
+    ;;
+  " api -H "*"/contents/"*)
+    ref="${args##*\?ref=}"
+    ref="${ref%% *}"
+    if [[ -f "${state}/contents-${ref}" ]]; then
+      cat "${state}/contents-${ref}"
+    else
+      echo "gh: Not Found (HTTP 404)" >&2
+      exit 1
+    fi
+    ;;
+  " run download "*)
+    shift 2 # run download
+    id="$1" name="" dir=""
+    shift
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --name) name="$2"; shift 2 ;;
+        --dir) dir="$2"; shift 2 ;;
+        --repo) shift 2 ;;
+        *) echo "stub gh: unexpected run download option $1" >&2; exit 99 ;;
+      esac
+    done
+    if [[ -f "${state}/download-fail-${name}" ]]; then
+      echo "gh: no valid artifacts found to download" >&2
+      exit 1
+    fi
+    mkdir -p "${dir}"
+    if [[ ! -f "${state}/download-empty-${name}" ]]; then
+      printf 'part %s of run %s\n' "${name}" "${id}" >"${dir}/${name}.tar"
+    fi
     ;;
   *" api --paginate "*"/releases?per_page=100 "*)
     lag=0
@@ -274,8 +320,9 @@ expect preflight-bundle-matrix-full \
 expect preflight-targets-per-target test \
   "$(output_value "${work}/github-output" targets)" = \
   "x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin x86_64-pc-windows-msvc"
-expect preflight-offline-no-reuse test -z \
-  "$(output_value "${work}/github-output" ci_run_url)$(output_value "${work}/github-output" prebuilt_run_id)"
+expect preflight-offline-no-reuse test \
+  "$(grep -E '^(ci_run_url|build|reused_parts|reused_runs)=' "${work}/github-output" | tr '\n' ' ')" = \
+  "ci_run_url= build=true reused_parts=[] reused_runs= "
 
 check preflight-partial-matrix ok '^full_matrix=false$' \
   "${release}" preflight --version "${version}" --sha "${head}" \
@@ -337,10 +384,9 @@ check preflight-prebuild ok "^version=${version//./\\.}$" \
 expect preflight-prebuild-no-gh-calls test ! -s "${FAKE_GH_STATE}/calls"
 expect preflight-prebuild-full-matrix grep -qx 'full_matrix=true' "${work}/prebuild-output"
 expect preflight-prebuild-bundles bundle_matrix_ok "$(output_value "${work}/prebuild-output" matrix)" 10
-expect preflight-prebuild-no-reuse test -z \
-  "$(output_value "${work}/prebuild-output" ci_run_url)$(output_value "${work}/prebuild-output" prebuilt_run_id)"
-check preflight-prebuild-no-repo fail 'prebuild mode makes no GitHub calls' \
-  "${release}" preflight --mode prebuild --sha "${head}" --repo "${repo}"
+expect preflight-prebuild-no-reuse test \
+  "$(grep -E '^(ci_run_url|build|reused_parts)=' "${work}/prebuild-output" | tr '\n' ' ')" = \
+  "ci_run_url= build=true reused_parts=[] "
 check preflight-prebuild-no-matrix fail 'prebuild mode builds the default matrix' \
   "${release}" preflight --mode prebuild --sha "${head}" \
   --matrix '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"}]'
@@ -367,7 +413,7 @@ FAKE_GH_STATE="$(released_state)"
 check preflight-draft-of-released fail "rust-v${version} is already published" \
   "${release}" preflight --version "${version}" --sha "${head}" --repo "${repo}" --create-draft true
 
-# --- find-run and reuse (R3.1, R3.2, R4.3, R4.4) ---------------------------
+# --- find-run (R3.1, R3.2) ----------------------------------------------------
 
 ci_path=.github/workflows/fork-ci.yml
 release_path=.github/workflows/fork-rust-release.yml
@@ -382,23 +428,6 @@ run_json() {
 }
 # runs_listing RUN_JSON...: a workflow runs API response.
 runs_listing() { printf '%s\n' "$@" | jq -cs '{total_count: length, workflow_runs: .}'; }
-# parts_listing [DROP [EXPIRED]]: a run artifacts API response with the ten
-# parts of ${version} (without DROP, with EXPIRED expired) and other artifacts.
-parts_listing() {
-  local target bundle
-  {
-    for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin \
-      aarch64-apple-darwin x86_64-pc-windows-msvc; do
-      for bundle in primary app-server; do
-        printf 'codex-parts-%s-%s-%s\n' "${version}" "${target}" "${bundle}"
-        printf 'codex-timings-%s-%s-%s\n' "${version}" "${target}" "${bundle}"
-      done
-    done
-    printf 'codex-%s-packages\ncodex-%s-SHA256SUMS\n' "${version}" "${version}"
-  } | jq -Rn --arg drop "${1-}" --arg expired "${2-}" '
-    [inputs | select(. != $drop) | {name: ., expired: (. == $expired)}]
-    | {total_count: length, artifacts: .}'
-}
 # finds_nothing WORKFLOW [find-run options...]: find-run succeeds without a run.
 finds_nothing() {
   local workflow="$1" out
@@ -407,9 +436,6 @@ finds_nothing() {
     --event push --branch codex/fork "$@" 2>/dev/null)" && [[ -z "${out}" ]]
 }
 find_ci=("${release}" find-run --repo "${repo}" --workflow fork-ci.yml --sha "${head}" --event push --branch codex/fork)
-find_prebuild=("${release}" find-run --repo "${repo}" --workflow fork-rust-release.yml --sha "${head}"
-  --event push --branch codex/fork --parts-version "${version}")
-x86_part="codex-parts-${version}-x86_64-apple-darwin-primary"
 
 FAKE_GH_STATE="$(new_state)"
 runs_listing "$(run_json 101 "${ci_path}" push codex/fork "${head}" success 2026-10-28T01:00:00Z)" \
@@ -436,45 +462,233 @@ runs_listing "$(run_json 106 "${ci_path}" push codex/fork "${head}" success 2026
 check find-run-newest ok "^107 ${runs_url}/107$" "${find_ci[@]}"
 
 FAKE_GH_STATE="$(new_state)"
-runs_listing "$(run_json 201 "${release_path}" push codex/fork "${head}" success 2026-10-28T01:00:00Z)" \
-  >"${FAKE_GH_STATE}/runs-fork-rust-release.yml"
-parts_listing >"${FAKE_GH_STATE}/artifacts-201"
-check find-run-prebuild-ten-parts ok "^201 ${runs_url}/201$" "${find_prebuild[@]}"
-
-FAKE_GH_STATE="$(new_state)"
-runs_listing "$(run_json 202 "${release_path}" push codex/fork "${head}" success 2026-10-28T01:00:00Z)" \
-  >"${FAKE_GH_STATE}/runs-fork-rust-release.yml"
-parts_listing "${x86_part}" >"${FAKE_GH_STATE}/artifacts-202"
-expect find-run-prebuild-nine-parts finds_nothing fork-rust-release.yml --parts-version "${version}"
-
-FAKE_GH_STATE="$(new_state)"
-runs_listing "$(run_json 203 "${release_path}" push codex/fork "${head}" success 2026-10-28T01:00:00Z)" \
-  >"${FAKE_GH_STATE}/runs-fork-rust-release.yml"
-parts_listing "" "${x86_part}" >"${FAKE_GH_STATE}/artifacts-203"
-expect find-run-prebuild-expired-part finds_nothing fork-rust-release.yml --parts-version "${version}"
-
-FAKE_GH_STATE="$(new_state)"
-runs_listing "$(run_json 204 .github/workflows/rust-release.yml push codex/fork "${head}" success 2026-10-28T01:00:00Z)" \
-  >"${FAKE_GH_STATE}/runs-fork-rust-release.yml"
-parts_listing >"${FAKE_GH_STATE}/artifacts-204"
-expect find-run-prebuild-other-workflow finds_nothing fork-rust-release.yml --parts-version "${version}"
-
-FAKE_GH_STATE="$(new_state)"
-runs_listing "$(run_json 205 "${release_path}" push codex/fork "${head}" success 2026-10-28T03:00:00Z)" \
-  "$(run_json 206 "${release_path}" push codex/fork "${head}" success 2026-10-28T01:00:00Z)" \
-  >"${FAKE_GH_STATE}/runs-fork-rust-release.yml"
-parts_listing "${x86_part}" >"${FAKE_GH_STATE}/artifacts-205"
-parts_listing >"${FAKE_GH_STATE}/artifacts-206"
-check find-run-prebuild-older-complete ok "^206 ${runs_url}/206$" "${find_prebuild[@]}"
-
-FAKE_GH_STATE="$(new_state)"
 touch "${FAKE_GH_STATE}/fail-api"
 check find-run-api-error fail 'cannot list the fork-ci.yml runs' "${find_ci[@]}"
 check find-run-bad-workflow fail 'invalid workflow file' \
   "${release}" find-run --repo "${repo}" --workflow ../x --sha "${head}" --event push --branch codex/fork
+check find-run-no-parts-version fail 'unknown find-run option: --parts-version' \
+  "${release}" find-run --repo "${repo}" --workflow fork-rust-release.yml --sha "${head}" \
+  --event push --branch codex/fork --parts-version "${version}"
 
-# reuse_state: a successful fork-ci push run 301 and a prebuild run 302 with
-# every part, both for HEAD.
+# --- reuse of bundle parts (R6.1-R6.5) ----------------------------------------
+
+all_targets=(x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin
+  aarch64-apple-darwin x86_64-pc-windows-msvc)
+part() { printf 'codex-parts-%s-%s-%s\n' "${PARTS_VERSION:-${version}}" "$1" "$2"; }
+win_primary="$(part x86_64-pc-windows-msvc primary)"
+win_app="$(part x86_64-pc-windows-msvc app-server)"
+arm_primary="$(part aarch64-unknown-linux-gnu primary)"
+sha_b="$(printf '%040d' 0 | tr 0 b)"
+
+# parts_listing [--expired NAME] [DROP...]: a run artifacts API response with
+# the ten parts of ${PARTS_VERSION:-version} but DROP (NAME expired), their
+# timings and the packages.
+parts_listing() {
+  local expired="" target bundle
+  if [[ "${1-}" == --expired ]]; then
+    expired="$2"
+    shift 2
+  fi
+  {
+    for target in "${all_targets[@]}"; do
+      for bundle in primary app-server; do
+        part "${target}" "${bundle}"
+        printf 'codex-timings-%s-%s-%s\n' "${version}" "${target}" "${bundle}"
+      done
+    done
+    printf 'codex-%s-packages\ncodex-%s-SHA256SUMS\n' "${version}" "${version}"
+  } | jq -Rn --arg expired "${expired}" --args '
+    [inputs | select(. as $n | $ARGS.positional | index($n) | not)
+      | {name: ., expired: (. == $expired)}]
+    | {total_count: length, artifacts: .}' "$@"
+}
+# compare_json STATUS FILE...: a compare API response; FILE is NAME or
+# NAME<PREVIOUS for a rename.
+compare_json() {
+  local status="$1"
+  shift
+  printf '%s\n' "$@" | jq -Rn --arg status "${status}" '
+    {status: $status, files: [inputs | select(. != "") | split("<")
+      | {filename: .[0]} + (if length > 1 then {previous_filename: .[1]} else {} end)]}'
+}
+# prebuild_reuse NAME OUTPUT [PATTERN]: preflight in prebuild mode with --repo
+# succeeds with an output line matching PATTERN.
+prebuild_reuse() {
+  check "$1" ok "${3:-^build=}" "${release}" preflight --mode prebuild --sha "${head}" --repo "${repo}" \
+    --output "${work}/$2"
+}
+# reused_from OUTPUT: "name=run_id" of each reused part, sorted, space-separated.
+reused_from() {
+  output_value "${work}/$1" reused_parts | jq -r '[.[] | "\(.name)=\(.run_id)"] | sort | join(" ")'
+}
+# built OUTPUT: "target bundle" of each part left to build, sorted.
+built() {
+  output_value "${work}/$1" matrix | jq -r '[.[] | "\(.target) \(.bundle)"] | sort | join(", ")'
+}
+# all_from RUN [EXCEPT...]: the reused_from line for every part from RUN.
+all_from() {
+  local run="$1" target bundle name out=()
+  shift
+  for target in "${all_targets[@]}"; do
+    for bundle in primary app-server; do
+      name="$(part "${target}" "${bundle}")"
+      [[ " $* " == *" ${name} "* ]] || out+=("${name}=${run}")
+    done
+  done
+  printf '%s\n' "${out[@]}" | LC_ALL=C sort | jq -Rrs 'split("\n") | map(select(. != "")) | join(" ")'
+}
+# release_runs RUN_JSON...: the fork-rust-release.yml runs of the stub.
+release_runs() { runs_listing "$@" >"${FAKE_GH_STATE}/runs-fork-rust-release.yml"; }
+
+# A failed run of the same commit: its seven built parts are reused, the three
+# that failed are built (the prebuild of a968c301d1).
+FAKE_GH_STATE="$(new_state)"
+release_runs "$(run_json 401 "${release_path}" push codex/fork "${head}" failure 2026-11-07T10:00:00Z)"
+parts_listing "${win_primary}" "${win_app}" "${arm_primary}" >"${FAKE_GH_STATE}/artifacts-401"
+prebuild_reuse reuse-failed-run reuse-401 'reusing 7 of 10 parts'
+expect reuse-failed-run-parts test "$(reused_from reuse-401)" = \
+  "$(all_from 401 "${win_primary}" "${win_app}" "${arm_primary}")"
+expect reuse-failed-run-builds-rest test "$(built reuse-401)" = \
+  "aarch64-unknown-linux-gnu primary, x86_64-pc-windows-msvc app-server, x86_64-pc-windows-msvc primary"
+expect reuse-failed-run-build-true grep -qx 'build=true' "${work}/reuse-401"
+expect reuse-failed-run-runs grep -qx "reused_runs=${runs_url}/401" "${work}/reuse-401"
+expect reuse-failed-run-query calls_match \
+  "^gh api repos/${repo}/actions/workflows/fork-rust-release.yml/runs\?event=push&branch=codex/fork&per_page=20 $"
+expect reuse-same-commit-no-compare no_calls_match '/compare/'
+expect reuse-prebuild-no-release-checks no_calls_match 'fork-ci.yml|matching-refs|/releases'
+
+FAKE_GH_STATE="$(new_state)"
+release_runs "$(run_json 402 "${release_path}" push codex/fork "${head}" success 2026-11-07T10:00:00Z)"
+parts_listing >"${FAKE_GH_STATE}/artifacts-402"
+prebuild_reuse reuse-all reuse-402 'every part is reused; the build job is skipped'
+expect reuse-all-build-false grep -qx 'build=false' "${work}/reuse-402"
+expect reuse-all-empty-matrix grep -qx 'matrix=\[\]' "${work}/reuse-402"
+expect reuse-all-targets-kept test "$(output_value "${work}/reuse-402" targets | wc -w)" -eq 5
+expect reuse-all-parts test "$(reused_from reuse-402)" = "$(all_from 402)"
+
+# candidate_state STATUS FILE...: a fresh stub state with run 403 of commit
+# sha_b holding every part, and the compare of sha_b...HEAD as STATUS with FILE
+# changed.
+candidate_state() {
+  FAKE_GH_STATE="$(new_state)"
+  release_runs "$(run_json 403 "${release_path}" push codex/fork "${sha_b}" success 2026-11-07T10:00:00Z)"
+  parts_listing >"${FAKE_GH_STATE}/artifacts-403"
+  compare_json "$@" >"${FAKE_GH_STATE}/compare-${sha_b}...${head}"
+}
+
+candidate_state ahead docs/fork/README.md .github/workflows/fork-ci.yml scripts/fork/release.sh
+prebuild_reuse reuse-ancestor-docs-only reuse-403 'every part is reused'
+expect reuse-ancestor-docs-only-parts test "$(reused_from reuse-403)" = "$(all_from 403)"
+expect reuse-ancestor-compare-query calls_match "^gh api repos/${repo}/compare/${sha_b}\.\.\.${head} $"
+
+for spec in "source codex-rs/core/src/lib.rs" "package-script scripts/fork/release-package.sh" \
+  "toolchain-action .github/actions/fork-rust-toolchain/action.yml" \
+  "rusty-v8-script .github/scripts/rusty_v8_bazel.py" "rename-out docs/moved.rs<codex-rs/core/src/x.rs"; do
+  read -r name file <<<"${spec}"
+  candidate_state ahead docs/a.md "${file}"
+  prebuild_reuse "reuse-inputs-${name}" "reuse-${name}" 'build inputs differ'
+  expect "reuse-inputs-${name}-builds-all" test "$(output_value "${work}/reuse-${name}" reused_parts)" = '[]'
+done
+
+mapfile -t many < <(seq -f 'docs/f%g.md' 1 300)
+candidate_state ahead "${many[@]}"
+prebuild_reuse reuse-truncated-compare reuse-truncated 'lists 300 files, possibly truncated'
+expect reuse-truncated-builds-all test "$(built reuse-truncated | tr ',' '\n' | wc -l)" -eq 10
+
+candidate_state diverged docs/a.md
+prebuild_reuse reuse-diverged reuse-diverged 'not in one line of history \(compare: diverged\)'
+expect reuse-diverged-builds-all test "$(output_value "${work}/reuse-diverged" reused_parts)" = '[]'
+
+candidate_state ahead docs/a.md
+rm "${FAKE_GH_STATE}/compare-${sha_b}...${head}"
+prebuild_reuse reuse-compare-error reuse-compare-error "cannot compare ${sha_b} with ${head}"
+expect reuse-compare-error-builds-all test "$(output_value "${work}/reuse-compare-error" build)" = true
+
+# A newer commit with the same inputs (a dispatch of an older SHA).
+candidate_state behind
+compare_json ahead docs/a.md >"${FAKE_GH_STATE}/compare-${head}...${sha_b}"
+prebuild_reuse reuse-newer-commit reuse-newer 'every part is reused'
+expect reuse-newer-commit-reverse-compare calls_match "^gh api repos/${repo}/compare/${head}\.\.\.${sha_b} $"
+candidate_state behind
+compare_json ahead codex-rs/Cargo.lock >"${FAKE_GH_STATE}/compare-${head}...${sha_b}"
+prebuild_reuse reuse-newer-other-inputs reuse-newer-other 'build inputs differ'
+
+# The release workflow changed: the build job's recipe decides.
+for spec in "absent reused x" "same reused 1" "other differ 2"; do
+  read -r name verdict value <<<"${spec}"
+  candidate_state ahead "${release_path}"
+  if [[ "${value}" == x ]]; then
+    printf 'jobs:\n  build:\n    env:\n      CARGO_PROFILE_RELEASE_DEBUG: "0"\n' >"${FAKE_GH_STATE}/contents-${sha_b}"
+  else
+    printf 'jobs:\n  build:\n    env:\n      FORK_BUILD_RECIPE: "%s"\n' "${value}" >"${FAKE_GH_STATE}/contents-${sha_b}"
+  fi
+  if [[ "${verdict}" == reused ]]; then
+    prebuild_reuse "reuse-recipe-${name}" "reuse-recipe-${name}" 'every part is reused'
+  else
+    prebuild_reuse "reuse-recipe-${name}" "reuse-recipe-${name}" "build recipe ${value} of ${sha_b} is not 1"
+  fi
+  expect "reuse-recipe-${name}-contents-query" calls_match \
+    "^gh api -H Accept: application/vnd.github.raw\+json repos/${repo}/contents/${release_path}\?ref=${sha_b} $"
+done
+candidate_state ahead "${release_path}"
+prebuild_reuse reuse-recipe-unreadable reuse-recipe-unreadable "cannot read the fork-rust-release.yml of ${sha_b}"
+expect reuse-workflow-recipe-is-1 grep -qxF '      FORK_BUILD_RECIPE: "1"' "${repo_root}/${release_path}"
+
+# Each part comes from the newest run that has it.
+FAKE_GH_STATE="$(new_state)"
+release_runs "$(run_json 411 "${release_path}" push codex/fork "${head}" success 2026-11-07T09:00:00Z)" \
+  "$(run_json 410 "${release_path}" push codex/fork "${sha_b}" failure 2026-11-07T11:00:00Z)"
+parts_listing >"${FAKE_GH_STATE}/artifacts-411"
+jq '.artifacts |= map(select(.name | test("windows")))' <(parts_listing) >"${FAKE_GH_STATE}/artifacts-410"
+compare_json ahead docs/a.md >"${FAKE_GH_STATE}/compare-${sha_b}...${head}"
+prebuild_reuse reuse-newest-per-part reuse-newest 'every part is reused'
+expect reuse-newest-per-part-parts test "$(reused_from reuse-newest)" = \
+  "$({ all_from 411 "${win_primary}" "${win_app}" | tr ' ' '\n'; printf '%s=410\n' "${win_app}" "${win_primary}"; } |
+    LC_ALL=C sort | paste -sd ' ')"
+expect reuse-newest-per-part-runs grep -qx "reused_runs=${runs_url}/410 ${runs_url}/411" "${work}/reuse-newest"
+
+# A prebuild still running (a newer push cancels it) gives its finished parts.
+FAKE_GH_STATE="$(new_state)"
+release_runs "$(run_json 420 "${release_path}" push codex/fork "${head}" "" 2026-11-07T10:00:00Z | jq -c '.status = "in_progress"')"
+parts_listing "${win_primary}" >"${FAKE_GH_STATE}/artifacts-420"
+prebuild_reuse reuse-running-run reuse-running 'reusing 9 of 10 parts'
+
+# Expired parts, parts of another version and runs that do not qualify.
+FAKE_GH_STATE="$(new_state)"
+release_runs "$(run_json 412 "${release_path}" push codex/fork "${head}" success 2026-11-07T10:00:00Z)"
+parts_listing --expired "${win_primary}" >"${FAKE_GH_STATE}/artifacts-412"
+prebuild_reuse reuse-expired reuse-expired 'reusing 9 of 10 parts'
+expect reuse-expired-builds-it test "$(built reuse-expired)" = "x86_64-pc-windows-msvc primary"
+
+FAKE_GH_STATE="$(new_state)"
+release_runs "$(run_json 413 "${release_path}" push codex/fork "${head}" success 2026-11-07T10:00:00Z)"
+PARTS_VERSION=0.0.1 parts_listing >"${FAKE_GH_STATE}/artifacts-413"
+prebuild_reuse reuse-other-version reuse-other-version 'no part to reuse'
+
+FAKE_GH_STATE="$(new_state)"
+release_runs "$(run_json 414 .github/workflows/rust-release.yml push codex/fork "${head}" success 2026-11-07T10:00:00Z)" \
+  "$(run_json 415 "${release_path}" push main "${head}" success 2026-11-07T10:00:00Z)" \
+  "$(run_json 416 "${release_path}" workflow_dispatch codex/fork "${head}" success 2026-11-07T10:00:00Z)"
+for id in 414 415 416; do parts_listing >"${FAKE_GH_STATE}/artifacts-${id}"; done
+prebuild_reuse reuse-ignored-runs reuse-ignored 'no part to reuse'
+expect reuse-ignored-runs-no-artifacts no_calls_match '/artifacts'
+
+FAKE_GH_STATE="$(new_state)"
+touch "${FAKE_GH_STATE}/fail-api"
+prebuild_reuse reuse-listing-error reuse-listing-error 'cannot list the fork-rust-release.yml runs of'
+expect reuse-listing-error-builds-all test "$(output_value "${work}/reuse-listing-error" build)" = true
+
+FAKE_GH_STATE="$(new_state)"
+release_runs "$(run_json 419 "${release_path}" push codex/fork "${head}" success 2026-11-07T11:00:00Z)" \
+  "$(run_json 418 "${release_path}" push codex/fork "${head}" success 2026-11-07T10:00:00Z)"
+parts_listing >"${FAKE_GH_STATE}/artifacts-418"
+parts_listing >"${FAKE_GH_STATE}/artifacts-419"
+touch "${FAKE_GH_STATE}/fail-artifacts-419"
+prebuild_reuse reuse-artifacts-error reuse-artifacts-error 'cannot list the artifacts of run 419'
+expect reuse-artifacts-error-older-run test "$(reused_from reuse-artifacts-error)" = "$(all_from 418)"
+
+# A release dispatch (R6.5): reuse_state has a successful fork-ci push run 301
+# and a prebuild run 302 with every part, both for HEAD.
 reuse_state() {
   local dir
   dir="$(new_state)"
@@ -486,17 +700,19 @@ reuse_state() {
   printf '%s\n' "${dir}"
 }
 FAKE_GH_STATE="$(reuse_state)"
-check preflight-reuses-runs ok 'reusing the parts of prebuild run' \
+check preflight-reuses-runs ok 'every part is reused; the build job is skipped' \
   "${release}" preflight --version "${version}" --sha "${head}" --repo "${repo}" --output "${work}/reuse-output"
 expect preflight-reuse-ci-url grep -qx "ci_run_url=${runs_url}/301" "${work}/reuse-output"
-expect preflight-reuse-prebuilt-id grep -qx 'prebuilt_run_id=302' "${work}/reuse-output"
-expect preflight-reuse-prebuilt-url grep -qx "prebuilt_run_url=${runs_url}/302" "${work}/reuse-output"
+expect preflight-reuse-build-false grep -qx 'build=false' "${work}/reuse-output"
+expect preflight-reuse-parts test "$(reused_from reuse-output)" = "$(all_from 302)"
+expect preflight-reuse-runs grep -qx "reused_runs=${runs_url}/302" "${work}/reuse-output"
 
 FAKE_GH_STATE="$(reuse_state)"
 check preflight-rebuild ok 'rebuild is true' \
   "${release}" preflight --version "${version}" --sha "${head}" --repo "${repo}" --rebuild true \
   --output "${work}/rebuild-output"
-expect preflight-rebuild-no-prebuild grep -qx 'prebuilt_run_id=' "${work}/rebuild-output"
+expect preflight-rebuild-no-reuse grep -qx 'reused_parts=\[\]' "${work}/rebuild-output"
+expect preflight-rebuild-builds-all test "$(built rebuild-output | tr ',' '\n' | wc -l)" -eq 10
 expect preflight-rebuild-no-lookup no_calls_match 'fork-rust-release.yml/runs|/artifacts'
 expect preflight-rebuild-keeps-ci grep -qx "ci_run_url=${runs_url}/301" "${work}/rebuild-output"
 
@@ -504,15 +720,42 @@ FAKE_GH_STATE="$(reuse_state)"
 check preflight-partial-builds ok 'partial matrix: every bundle is built' \
   "${release}" preflight --version "${version}" --sha "${head}" --repo "${repo}" \
   --matrix '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"}]' --output "${work}/partial-reuse-output"
-expect preflight-partial-no-prebuild grep -qx 'prebuilt_run_id=' "${work}/partial-reuse-output"
+expect preflight-partial-no-reuse grep -qx 'reused_parts=\[\]' "${work}/partial-reuse-output"
 expect preflight-partial-no-lookup no_calls_match 'fork-rust-release.yml/runs|/artifacts'
 
 FAKE_GH_STATE="$(new_state)"
 check preflight-nothing-to-reuse ok 'the ci job runs fork-ci' \
   "${release}" preflight --version "${version}" --sha "${head}" --repo "${repo}" --output "${work}/fresh-output"
 expect preflight-nothing-to-reuse-outputs test \
-  "$(grep -E '^(ci_run_url|prebuilt_run_id|prebuilt_run_url)=' "${work}/fresh-output" | tr '\n' ' ')" = \
-  "ci_run_url= prebuilt_run_id= prebuilt_run_url= "
+  "$(grep -E '^(ci_run_url|build|reused_parts|reused_runs)=' "${work}/fresh-output" | tr '\n' ' ')" = \
+  "ci_run_url= build=true reused_parts=[] reused_runs= "
+
+# --- fetch-parts (R6.4) ------------------------------------------------------
+
+fetch=("${release}" fetch-parts --repo "${repo}")
+fetch_json="$(jq -cn --arg a "${win_primary}" --arg b "${arm_primary}" \
+  '[{name: $a, run_id: 401, run_url: "u"}, {name: $b, run_id: 402, run_url: "u"}]')"
+FAKE_GH_STATE="$(new_state)"
+check fetch-parts ok "fetched ${arm_primary} from run 402" "${fetch[@]}" --parts "${fetch_json}" --dir "${work}/fetched"
+expect fetch-parts-files test "$(cat "${work}/fetched/${win_primary}.tar" "${work}/fetched/${arm_primary}.tar")" = \
+  "part ${win_primary} of run 401"$'\n'"part ${arm_primary} of run 402"
+expect fetch-parts-query calls_match "^gh run download 401 --repo ${repo} --name ${win_primary} --dir "
+FAKE_GH_STATE="$(new_state)"
+touch "${FAKE_GH_STATE}/download-fail-${arm_primary}"
+check fetch-parts-download-error fail "cannot download part ${arm_primary} of run 402" \
+  "${fetch[@]}" --parts "${fetch_json}" --dir "${work}/fetched-error"
+FAKE_GH_STATE="$(new_state)"
+touch "${FAKE_GH_STATE}/download-empty-${win_primary}"
+check fetch-parts-empty-artifact fail "does not hold exactly one ${win_primary}.tar" \
+  "${fetch[@]}" --parts "${fetch_json}" --dir "${work}/fetched-empty"
+FAKE_GH_STATE="$(new_state)"
+check fetch-parts-none ok 'no reused parts to fetch' "${fetch[@]}" --parts '[]' --dir "${work}/fetched-none"
+expect fetch-parts-none-no-calls test ! -s "${FAKE_GH_STATE}/calls"
+check fetch-parts-bad-json fail '--parts must be' "${fetch[@]}" --parts '{' --dir "${work}/fetched-bad"
+check fetch-parts-bad-name fail '--parts must be' \
+  "${fetch[@]}" --parts '[{"name":"../codex-parts-x","run_id":1}]' --dir "${work}/fetched-bad"
+check fetch-parts-bad-run fail '--parts must be' \
+  "${fetch[@]}" --parts "[{\"name\":\"${win_primary}\",\"run_id\":\"1\"}]" --dir "${work}/fetched-bad"
 
 # --- provenance ------------------------------------------------------------
 
@@ -601,15 +844,18 @@ expect draft-summary-uses-created-id grep -q 'releases/4243 -F draft=false' "${w
 FAKE_GH_STATE="$(new_state)"
 check draft-names-reused-runs ok "fork-ci passed for this commit in its push run ${runs_url}/301" \
   "${draft[@]}" --dist "${dist}" --run-url "${runs_url}/1" \
-  --ci-run-url "${runs_url}/301" --parts-run-url "${runs_url}/302"
+  --ci-run-url "${runs_url}/301" --reused-runs "${runs_url}/302 ${runs_url}/303"
 expect draft-summary-names-prebuild grep -qF \
-  "Bundles built by the prebuild run ${runs_url}/302, assembled and verified in ${runs_url}/1." "${work}/draft-names-reused-runs.log"
-expect draft-notes-name-prebuild grep -qxF -- "- Bundles built by the prebuild run: ${runs_url}/302" "${FAKE_GH_STATE}/notes"
+  "Bundle parts reused from prebuild runs ${runs_url}/302, ${runs_url}/303, assembled and verified in ${runs_url}/1." \
+  "${work}/draft-names-reused-runs.log"
+expect draft-notes-name-prebuild grep -qxF -- \
+  "- Bundle parts reused from prebuild runs with the same build inputs: ${runs_url}/302, ${runs_url}/303" \
+  "${FAKE_GH_STATE}/notes"
 expect draft-notes-name-ci grep -qxF -- "- fork-ci (push run of this commit): ${runs_url}/301" "${FAKE_GH_STATE}/notes"
 FAKE_GH_STATE="$(new_state)"
 check draft-empty-run-urls ok 'Publication stays manual' \
-  "${draft[@]}" --dist "${dist}" --run-url "${runs_url}/1" --ci-run-url "" --parts-run-url ""
-expect draft-notes-without-reuse bash -c "! grep -qE 'prebuild run|push run of this commit' '${FAKE_GH_STATE}/notes'"
+  "${draft[@]}" --dist "${dist}" --run-url "${runs_url}/1" --ci-run-url "" --reused-runs ""
+expect draft-notes-without-reuse bash -c "! grep -qE 'prebuild runs|push run of this commit' '${FAKE_GH_STATE}/notes'"
 
 FAKE_GH_STATE="$(new_state)"
 release_line 77 false 2026-10-01T00:00:00Z "${head}" false >"${FAKE_GH_STATE}/releases"
@@ -853,7 +1099,7 @@ done
 expect workflow-push-run-no-write-token test -z "${push_writes}" -a "${write_jobs}" -eq 2
 expect workflow-draft-precheck-skipped-on-push test "$(job_if "${fork_release}" draft-precheck)" = "github.event_name != 'push' "
 # shellcheck disable=SC2016 # ${SHA} is workflow shell text
-expect workflow-preflight-prebuild-mode grep -qF 'release.sh preflight --mode prebuild --sha "${SHA}"' <<<"${preflight_job}"
+expect workflow-preflight-prebuild-mode grep -qF 'release.sh preflight --mode prebuild --sha "${SHA}" --repo "${REPO}"' <<<"${preflight_job}"
 expect workflow-preflight-reads-actions grep -qxF '      actions: read' <<<"${preflight_job}"
 expect workflow-uploads-kept-30-days-on-push test \
   "$(grep -c 'uses: actions/upload-artifact@' "${fork_release}")" -eq \
@@ -863,7 +1109,8 @@ expect workflow-uploads-kept-30-days-on-push test \
 build_if="$(job_if "${fork_release}" build)"
 expect workflow-build-after-cheap-checks contains "${build_if}" \
   "!cancelled() && needs.preflight.result == 'success' && needs.draft-precheck.result != 'failure'"
-expect workflow-build-skipped-for-prebuild contains "${build_if}" "needs.preflight.outputs.prebuilt_run_id == ''"
+expect workflow-build-only-missing-parts contains "${build_if}" "needs.preflight.outputs.build == 'true'"
+expect workflow-build-recipe grep -qxF '      FORK_BUILD_RECIPE: "1"' <<<"${build_job}"
 # shellcheck disable=SC2016 # ${{ }} is workflow syntax
 expect workflow-build-bundle-binaries grep -qxF '          BINARIES: ${{ matrix.binaries }}' <<<"${build_job}"
 expect workflow-build-no-debuginfo grep -qxF '      CARGO_PROFILE_RELEASE_DEBUG: "0"' <<<"${build_job}"
@@ -886,13 +1133,18 @@ expect workflow-draft-accepts-reused-ci contains "${draft_if}" \
   "(needs.ci.result == 'success' || needs.preflight.outputs.ci_run_url != '' || !inputs.require_ci)"
 expect workflow-draft-never-on-push contains "${draft_if}" "github.event_name != 'push'"
 
-# R2.4, R4.3: verify assembles from this run's or the prebuild run's parts.
-expect workflow-verify-after-build-or-prebuild contains "$(job_if "${fork_release}" verify)" \
-  "(needs.build.result == 'success' || (needs.build.result == 'skipped' && needs.preflight.outputs.prebuilt_run_id != ''))"
+# R2.4, R6.3, R6.4: verify assembles from this run's and the reused parts.
+expect workflow-verify-after-build-or-full-reuse contains "$(job_if "${fork_release}" verify)" \
+  "(needs.build.result == 'success' || (needs.build.result == 'skipped' && needs.preflight.outputs.build == 'false'))"
 expect workflow-verify-reads-actions grep -qxF '      actions: read' <<<"${verify_job}"
 expect workflow-verify-no-write lacks "${verify_job}" '^ +[a-z-]+: write$'
-# shellcheck disable=SC2016 # ${{ }} is workflow syntax
-expect workflow-verify-downloads-prebuild grep -qxF '          run-id: ${{ needs.preflight.outputs.prebuilt_run_id }}' <<<"${verify_job}"
+# shellcheck disable=SC2016 # ${REPO} and friends are workflow shell text
+expect workflow-verify-fetches-reused-parts grep -qxF \
+  '        run: scripts/fork/release.sh fetch-parts --repo "${REPO}" --parts "${REUSED_PARTS}" --dir "${PARTS}"' <<<"${verify_job}"
+expect workflow-verify-own-parts-when-built test \
+  "$(step_if "${verify_job}" 'Download the bundle parts built by this run')" = "needs.preflight.outputs.build == 'true'"
+expect workflow-verify-fetch-before-assemble in_order "${verify_job}" 'release.sh fetch-parts' 'release-package.sh assemble'
+expect workflow-verify-no-run-id lacks "${verify_job}" 'run-id:' 
 expect workflow-verify-assembles-then-verifies in_order "${verify_job}" 'release-package.sh assemble' 'verify-release.sh --version'
 # shellcheck disable=SC2016 # ${{ }} is workflow syntax
 expect workflow-verify-uploads-packages grep -qxF '          name: codex-${{ needs.preflight.outputs.version }}-packages' <<<"${verify_job}"

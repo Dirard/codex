@@ -14,19 +14,28 @@ name: fork-rust-release
 # touches tags, drafts or releases, and no job of a push run holds a write
 # token; a newer push cancels an older prebuild.
 #
+# Each bundle part is built once per build inputs (scripts/fork/release.sh
+# build_input_paths and FORK_BUILD_RECIPE of the build job): a push, and a
+# full-matrix dispatch unless rebuild=true, takes every part that an earlier
+# push run built from the same inputs, of any outcome, and builds only the
+# rest. A push that changes only the workflow, docs or other non-inputs builds
+# just the parts that are missing or failed before.
+#
 # Dispatch a release from codex/fork; the commit must be on codex/fork and
 # carry the same workflows and scripts as its tip (scripts/fork/release.sh
 # machinery):
 #   gh workflow run fork-rust-release.yml --ref codex/fork \
 #     -f release_version=X.Y.Z -f checkout_ref=<full SHA>
-# A full-matrix dispatch skips the build when a successful prebuild of the
-# commit has all ten parts (rebuild=true builds anyway), and skips fork-ci when
-# its push run for the commit succeeded. Dispatch once the prebuild is green:
+# A full-matrix dispatch reuses the prebuilt parts (and skips the build when
+# all ten exist), and skips fork-ci when its push run for the commit succeeded.
+# Dispatch once the prebuild is green:
 #   gh run list --workflow fork-rust-release.yml --event push
 # create_draft=false skips the tag and release checks, so a dispatch can
 # rehearse the pipeline for a released version. A failed bundle job re-runs
-# alone (gh run rerun --failed); re-running a failed draft job replaces the
-# partial draft it left.
+# alone (gh run rerun --failed), with the workflow of the run's commit; when the
+# workflow needed a fix, push the fix instead, and the new prebuild builds only
+# the parts still missing. Re-running a failed draft job replaces the partial
+# draft it left.
 on:
   push:
     branches: [codex/fork]
@@ -74,7 +83,8 @@ jobs:
     name: Validate inputs
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # actions: read lists the fork-ci and prebuild runs of the release commit.
+    # actions: read lists the fork-ci and prebuild runs and their parts;
+    # contents: read compares commits for reusable parts (R6.2).
     permissions:
       contents: read
       actions: read
@@ -85,8 +95,9 @@ jobs:
       targets: ${{ steps.validate.outputs.targets }}
       full_matrix: ${{ steps.validate.outputs.full_matrix }}
       ci_run_url: ${{ steps.validate.outputs.ci_run_url }}
-      prebuilt_run_id: ${{ steps.validate.outputs.prebuilt_run_id }}
-      prebuilt_run_url: ${{ steps.validate.outputs.prebuilt_run_url }}
+      build: ${{ steps.validate.outputs.build }}
+      reused_parts: ${{ steps.validate.outputs.reused_parts }}
+      reused_runs: ${{ steps.validate.outputs.reused_runs }}
     steps:
       - name: Require a full commit SHA and a codex/fork dispatch
         if: github.event_name != 'push'
@@ -140,8 +151,10 @@ jobs:
           REBUILD: ${{ inputs.rebuild }}
         run: |
           if [[ "${EVENT}" == push ]]; then
-            # Prebuild: version from codex-rs/Cargo.toml, no GitHub calls (R4.1).
-            scripts/fork/release.sh preflight --mode prebuild --sha "${SHA}" --output "${GITHUB_OUTPUT}"
+            # Prebuild: version from codex-rs/Cargo.toml, no tag, release or
+            # fork-ci checks (R4.1); reads earlier runs for reusable parts (R6.1).
+            scripts/fork/release.sh preflight --mode prebuild --sha "${SHA}" --repo "${REPO}" \
+              --output "${GITHUB_OUTPUT}"
           else
             scripts/fork/release.sh preflight --repo "${REPO}" --version "${VERSION}" \
               --sha "${SHA}" --matrix "${BUILD_MATRIX}" --create-draft "${CREATE_DRAFT}" \
@@ -181,8 +194,8 @@ jobs:
           SHA: ${{ needs.preflight.outputs.sha }}
         run: scripts/fork/release.sh draft-check --repo "${REPO}" --version "${VERSION}" --sha "${SHA}"
 
-  # One job per target and bundle (R1.1). The parts of a successful prebuild of
-  # the release commit replace this job on a full-matrix dispatch (R4.3).
+  # One job per target and bundle (R1.1) that preflight found no reusable part
+  # for (R6.1); none at all skips the job.
   build:
     name: Build ${{ matrix.target }} ${{ matrix.bundle }}
     needs: [preflight, draft-precheck]
@@ -190,7 +203,7 @@ jobs:
       !cancelled()
       && needs.preflight.result == 'success'
       && needs.draft-precheck.result != 'failure'
-      && needs.preflight.outputs.prebuilt_run_id == ''
+      && needs.preflight.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
     # macOS arm64 took 201 minutes for 0.164.0 in one job; hosted jobs stop at 360.
     timeout-minutes: 330
@@ -198,6 +211,11 @@ jobs:
       run:
         working-directory: codex-rs
     env:
+      # Raise when a change to this job can change what it builds (toolchain,
+      # flags, steps that produce or package files): parts built with another
+      # recipe are not reused (R6.2). A change that only lets a build run, such
+      # as long paths, keeps it.
+      FORK_BUILD_RECIPE: "1"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       # No debuginfo (R1.2): packaging strips it anyway, and the final link
       # takes less time and memory. [profile.release] stays upstream's.
@@ -334,11 +352,11 @@ jobs:
       !cancelled()
       && needs.preflight.result == 'success'
       && (needs.build.result == 'success'
-        || (needs.build.result == 'skipped' && needs.preflight.outputs.prebuilt_run_id != ''))
+        || (needs.build.result == 'skipped' && needs.preflight.outputs.build == 'false'))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    # actions: read downloads the parts of a prebuild run (R4.3). The job runs
-    # the packaged binaries, so it holds no write permission.
+    # actions: read downloads the parts reused from earlier runs (R6.4). The job
+    # runs the packaged binaries, so it holds no write permission.
     permissions:
       contents: read
       actions: read
@@ -354,22 +372,21 @@ jobs:
           cache-dependency-path: sdk/go/go.mod
 
       - name: Download the bundle parts built by this run
-        if: needs.preflight.outputs.prebuilt_run_id == ''
+        if: needs.preflight.outputs.build == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: codex-parts-${{ needs.preflight.outputs.version }}-*
           path: ${{ runner.temp }}/parts
           merge-multiple: true
 
-      - name: Download the bundle parts of the prebuild run
-        if: needs.preflight.outputs.prebuilt_run_id != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: codex-parts-${{ needs.preflight.outputs.version }}-*
-          path: ${{ runner.temp }}/parts
-          merge-multiple: true
-          run-id: ${{ needs.preflight.outputs.prebuilt_run_id }}
-          github-token: ${{ github.token }}
+      - name: Download the bundle parts reused from earlier runs
+        if: needs.preflight.outputs.reused_parts != '[]'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REUSED_PARTS: ${{ needs.preflight.outputs.reused_parts }}
+          PARTS: ${{ runner.temp }}/parts
+        run: scripts/fork/release.sh fetch-parts --repo "${REPO}" --parts "${REUSED_PARTS}" --dir "${PARTS}"
 
       - name: Assemble the packages from the bundle parts
         env:
@@ -388,16 +405,19 @@ jobs:
           DIST: ${{ runner.temp }}/dist
         run: scripts/fork/verify-release.sh --version "${VERSION}" --dist "${DIST}" --targets "${TARGETS}"
 
-      - name: Name the run that built the bundle parts
+      - name: Name the runs that built the bundle parts
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PARTS_RUN_URL: ${{ needs.preflight.outputs.prebuilt_run_url }}
+          REUSED_PARTS: ${{ needs.preflight.outputs.reused_parts }}
         run: |
-          if [[ -n "${PARTS_RUN_URL}" ]]; then
-            echo "Bundle parts: prebuild run ${PARTS_RUN_URL}, assembled and verified in ${RUN_URL}." >>"${GITHUB_STEP_SUMMARY}"
-          else
-            echo "Bundle parts: built by this run, ${RUN_URL}." >>"${GITHUB_STEP_SUMMARY}"
-          fi
+          {
+            echo "Bundle parts assembled and verified in ${RUN_URL}:"
+            echo
+            jq -r '.[] | "- \(.name): reused from \(.run_url)"' <<<"${REUSED_PARTS}"
+            if [[ "$(jq length <<<"${REUSED_PARTS}")" -eq 0 ]]; then
+              echo "- every part was built by this run"
+            fi
+          } >>"${GITHUB_STEP_SUMMARY}"
 
       - name: Upload the verified packages
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -463,8 +483,8 @@ jobs:
           DIST: ${{ runner.temp }}/dist
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           CI_RUN_URL: ${{ needs.preflight.outputs.ci_run_url }}
-          PARTS_RUN_URL: ${{ needs.preflight.outputs.prebuilt_run_url }}
+          REUSED_RUNS: ${{ needs.preflight.outputs.reused_runs }}
         run: |
           scripts/fork/release.sh draft --repo "${REPO}" --version "${VERSION}" \
             --sha "${SHA}" --dist "${DIST}" --run-url "${RUN_URL}" \
-            --ci-run-url "${CI_RUN_URL}" --parts-run-url "${PARTS_RUN_URL}"
+            --ci-run-url "${CI_RUN_URL}" --reused-runs "${REUSED_RUNS}"
