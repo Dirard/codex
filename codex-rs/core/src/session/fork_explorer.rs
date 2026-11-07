@@ -75,7 +75,11 @@ mod tests {
             .expect("load test config");
         let fork_features = [
             Feature::ExecExitNotifications,
+            Feature::ToolOutputSpill,
             Feature::Workflows,
+            Feature::BuiltinWorkflows,
+            Feature::ScheduledWakeups,
+            Feature::OutputStyles,
             Feature::ExplorerProfile,
             Feature::AgentWorktreeIsolation,
             Feature::DefaultModeRequestUserInput,

@@ -44,6 +44,14 @@ const KEYWORDS: &[&str] = &[
 /// structured output: every object lists all properties in `required` and sets
 /// `additionalProperties: false`, every array has `items`, every node has a type.
 pub fn check_strict_compatible(schema: &Value) -> Result<(), String> {
+    check_schema(schema, /*strict*/ true)
+}
+
+/// Checks a schema of the workflow subset. `strict` adds the rules of strict structured
+/// output (every property in `required`, `additionalProperties: false`, typed nodes, `items`
+/// on arrays); without it the subset, the size, the depth and an object root with
+/// `properties` are checked, as for `meta.args` (builtin-workflows UC3, R3.1).
+pub(crate) fn check_schema(schema: &Value, strict: bool) -> Result<(), String> {
     let size = serde_json::to_string(schema).map_or(usize::MAX, |text| text.len());
     if size > MAX_SCHEMA_BYTES {
         return Err(format!(
@@ -56,10 +64,18 @@ pub fn check_strict_compatible(schema: &Value) -> Result<(), String> {
     if root.get("type") != Some(&Value::String("object".to_string())) {
         return Err("the root schema must have `type: \"object\"`".to_string());
     }
-    check_node(root, "$", /*depth*/ 0)
+    if !strict && !matches!(root.get("properties"), Some(Value::Object(_))) {
+        return Err("the root schema must have `properties`".to_string());
+    }
+    check_node(root, "$", /*depth*/ 0, strict)
 }
 
-fn check_node(node: &Map<String, Value>, path: &str, depth: usize) -> Result<(), String> {
+fn check_node(
+    node: &Map<String, Value>,
+    path: &str,
+    depth: usize,
+    strict: bool,
+) -> Result<(), String> {
     if depth > MAX_SCHEMA_DEPTH {
         return Err(format!(
             "{path}: schema is nested deeper than {MAX_SCHEMA_DEPTH} levels"
@@ -72,7 +88,8 @@ fn check_node(node: &Map<String, Value>, path: &str, depth: usize) -> Result<(),
         ));
     }
     let types = node_types(node, path)?;
-    if types.is_empty()
+    if strict
+        && types.is_empty()
         && !node.contains_key("anyOf")
         && !node.contains_key("enum")
         && !node.contains_key("const")
@@ -81,11 +98,17 @@ fn check_node(node: &Map<String, Value>, path: &str, depth: usize) -> Result<(),
             "{path}: every schema needs `type`, `anyOf`, `enum` or `const`"
         ));
     }
-    if types.contains(&"object") || node.contains_key("properties") {
+    if !strict
+        && let Some(additional) = node.get("additionalProperties")
+        && !additional.is_boolean()
+    {
+        return Err(format!("{path}: `additionalProperties` must be a boolean"));
+    }
+    if (strict && types.contains(&"object")) || node.contains_key("properties") {
         let Some(Value::Object(properties)) = node.get("properties") else {
             return Err(format!("{path}: an object schema needs `properties`"));
         };
-        if node.get("additionalProperties") != Some(&Value::Bool(false)) {
+        if strict && node.get("additionalProperties") != Some(&Value::Bool(false)) {
             return Err(format!(
                 "{path}: strict schemas need `additionalProperties: false` on every object"
             ));
@@ -95,9 +118,10 @@ fn check_node(node: &Map<String, Value>, path: &str, depth: usize) -> Result<(),
             None => Vec::new(),
             Some(_) => return Err(format!("{path}: `required` must be an array of names")),
         };
-        if let Some(missing) = properties
-            .keys()
-            .find(|key| !required.contains(&key.as_str()))
+        if strict
+            && let Some(missing) = properties
+                .keys()
+                .find(|key| !required.contains(&key.as_str()))
         {
             return Err(format!(
                 "{path}: strict schemas list every property in `required`; `{missing}` is missing (use a type like [\"string\", \"null\"] for optional values)"
@@ -109,14 +133,15 @@ fn check_node(node: &Map<String, Value>, path: &str, depth: usize) -> Result<(),
             ));
         }
         for (key, child) in properties {
-            check_child(child, &format!("{path}.{key}"), depth)?;
+            check_child(child, &format!("{path}.{key}"), depth, strict)?;
         }
     }
-    if types.contains(&"array") {
-        let Some(items) = node.get("items") else {
-            return Err(format!("{path}: an array schema needs `items`"));
-        };
-        check_child(items, &format!("{path}[]"), depth)?;
+    if types.contains(&"array") || (!strict && node.contains_key("items")) {
+        match node.get("items") {
+            Some(items) => check_child(items, &format!("{path}[]"), depth, strict)?,
+            None if strict => return Err(format!("{path}: an array schema needs `items`")),
+            None => {}
+        }
     }
     if let Some(any_of) = node.get("anyOf") {
         let Value::Array(variants) = any_of else {
@@ -126,7 +151,7 @@ fn check_node(node: &Map<String, Value>, path: &str, depth: usize) -> Result<(),
             return Err(format!("{path}: `anyOf` must not be empty"));
         }
         for (index, variant) in variants.iter().enumerate() {
-            check_child(variant, &format!("{path}.anyOf[{index}]"), depth)?;
+            check_child(variant, &format!("{path}.anyOf[{index}]"), depth, strict)?;
         }
     }
     if let Some(enum_values) = node.get("enum")
@@ -137,11 +162,11 @@ fn check_node(node: &Map<String, Value>, path: &str, depth: usize) -> Result<(),
     Ok(())
 }
 
-fn check_child(child: &Value, path: &str, depth: usize) -> Result<(), String> {
+fn check_child(child: &Value, path: &str, depth: usize, strict: bool) -> Result<(), String> {
     let Value::Object(child) = child else {
         return Err(format!("{path}: subschemas must be objects"));
     };
-    check_node(child, path, depth + 1)
+    check_node(child, path, depth + 1, strict)
 }
 
 fn node_types<'a>(node: &'a Map<String, Value>, path: &str) -> Result<Vec<&'a str>, String> {

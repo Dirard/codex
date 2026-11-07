@@ -1,6 +1,9 @@
 load("//:defs.bzl", "codex_rust_crate")
 
+# Fork: `compile_data` carries the built-in workflow scripts embedded with `include_str!`
+# (specs/builtin-workflows-2026-11-07.md, UC1).
 codex_rust_crate(
     name = "workflow",
+    compile_data = glob(["builtin/**"]),
     crate_name = "codex_workflow",
 )

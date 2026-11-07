@@ -108,6 +108,7 @@ fn builds_uncommitted_review_request() {
         commit: None,
         commit_title: None,
         prompt: None,
+        fork_workflow: None,
     };
     let request = build_review_request(&args).expect("builds uncommitted review request");
 
@@ -127,6 +128,7 @@ fn builds_commit_review_request_with_title() {
         commit: Some("123456789".to_string()),
         commit_title: Some("Add review command".to_string()),
         prompt: None,
+        fork_workflow: None,
     };
     let request = build_review_request(&args).expect("builds commit review request");
 
@@ -149,6 +151,7 @@ fn builds_custom_review_request_trims_prompt() {
         commit: None,
         commit_title: None,
         prompt: Some("  custom review instructions  ".to_string()),
+        fork_workflow: None,
     };
     let request = build_review_request(&args).expect("builds custom review request");
 

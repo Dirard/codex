@@ -297,6 +297,7 @@ fn load_run(run_id: &str, run_dir: &Path) -> std::io::Result<RestoredRun> {
                 name,
                 description: String::new(),
                 phases: Vec::new(),
+                args: None,
             }
         });
     let result_json = read_result(run_dir);

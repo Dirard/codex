@@ -24,6 +24,7 @@ pub(crate) fn parse_literal(text: &str) -> Result<Value, LiteralError> {
         text,
         bytes: text.as_bytes(),
         pos: 0,
+        track: None,
     };
     let value = parser.value(/*depth*/ 0)?;
     parser.skip_trivia()?;
@@ -33,10 +34,44 @@ pub(crate) fn parse_literal(text: &str) -> Result<Value, LiteralError> {
     Ok(value)
 }
 
+/// The property names of the object at `path` (keys from the root) of the literal `text`,
+/// in source order; empty when the literal does not parse or has no object there. JSON maps
+/// may sort their keys, so this keeps the author's order where it matters, such as the
+/// usage of `meta.args` (builtin-workflows UC3, R3.4).
+pub(crate) fn object_key_order(text: &str, path: &[&str]) -> Vec<String> {
+    let mut parser = Parser {
+        text,
+        bytes: text.as_bytes(),
+        pos: 0,
+        track: Some(KeyTrack {
+            target: path.iter().map(|key| (*key).to_string()).collect(),
+            stack: Vec::new(),
+            keys: None,
+        }),
+    };
+    if parser.value(/*depth*/ 0).is_err() {
+        return Vec::new();
+    }
+    parser
+        .track
+        .and_then(|track| track.keys)
+        .unwrap_or_default()
+}
+
 struct Parser<'a> {
     text: &'a str,
     bytes: &'a [u8],
     pos: usize,
+    track: Option<KeyTrack>,
+}
+
+/// Records the keys of the object at `target` while parsing.
+struct KeyTrack {
+    target: Vec<String>,
+    /// Keys from the root to the value being parsed; array items push nothing, so a path
+    /// never matches inside an array.
+    stack: Vec<Option<String>>,
+    keys: Option<Vec<String>>,
 }
 
 impl Parser<'_> {
@@ -112,6 +147,19 @@ impl Parser<'_> {
     fn object(&mut self, depth: usize) -> Result<Value, LiteralError> {
         self.pos += 1;
         let mut map = Map::new();
+        let tracked = self.track.as_mut().is_some_and(|track| {
+            let at_target = track.keys.is_none()
+                && track.stack.len() == track.target.len()
+                && track
+                    .stack
+                    .iter()
+                    .zip(&track.target)
+                    .all(|(key, target)| key.as_deref() == Some(target.as_str()));
+            if at_target {
+                track.keys = Some(Vec::new());
+            }
+            at_target
+        });
         loop {
             self.skip_trivia()?;
             match self.bytes.get(self.pos) {
@@ -121,18 +169,18 @@ impl Parser<'_> {
                 }
                 Some(b'\'' | b'"') => {
                     let key = self.string()?;
-                    self.entry(&mut map, key, depth)?;
+                    self.entry(&mut map, key, depth, tracked)?;
                 }
                 Some(b'0'..=b'9') => {
                     let key = self.word().to_string();
-                    self.entry(&mut map, key, depth)?;
+                    self.entry(&mut map, key, depth, tracked)?;
                 }
                 Some(_) => {
                     let key = self.word().to_string();
                     if key.is_empty() {
                         return Err(self.error("expected a property name"));
                     }
-                    self.entry(&mut map, key, depth)?;
+                    self.entry(&mut map, key, depth, tracked)?;
                 }
                 None => return Err(self.error("unterminated object literal")),
             }
@@ -150,13 +198,24 @@ impl Parser<'_> {
         map: &mut Map<String, Value>,
         key: String,
         depth: usize,
+        tracked: bool,
     ) -> Result<(), LiteralError> {
         self.skip_trivia()?;
         if self.bytes.get(self.pos) != Some(&b':') {
             return Err(self.error(&format!("expected `:` after property `{key}`")));
         }
         self.pos += 1;
-        let value = self.value(depth + 1)?;
+        if let Some(track) = self.track.as_mut() {
+            if tracked && let Some(keys) = track.keys.as_mut() {
+                keys.push(key.clone());
+            }
+            track.stack.push(Some(key.clone()));
+        }
+        let value = self.value(depth + 1);
+        if let Some(track) = self.track.as_mut() {
+            track.stack.pop();
+        }
+        let value = value?;
         if map.insert(key.clone(), value).is_some() {
             return Err(self.error(&format!("duplicate property `{key}`")));
         }
@@ -175,7 +234,16 @@ impl Parser<'_> {
                 }
                 Some(b',') => return Err(self.error("array holes are not allowed")),
                 None => return Err(self.error("unterminated array literal")),
-                Some(_) => items.push(self.value(depth + 1)?),
+                Some(_) => {
+                    if let Some(track) = self.track.as_mut() {
+                        track.stack.push(None);
+                    }
+                    let item = self.value(depth + 1);
+                    if let Some(track) = self.track.as_mut() {
+                        track.stack.pop();
+                    }
+                    items.push(item?);
+                }
             }
             self.skip_trivia()?;
             match self.bytes.get(self.pos) {

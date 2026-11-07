@@ -27,7 +27,7 @@ pub const SCRIPT_DISPLAY_NAME: &str = "workflow.js";
 // Every statement ends with `;` and there are no line comments: the prelude is joined into
 // one line.
 const PRELUDE: &str = r#"
-const { agent, parallel, pipeline, phase, log, workflow, budget, args, WorkflowDeterminismError, WorkflowSchemaError, WorkflowNestingError, __wf_finish, __wf_fail } = (() => {
+const { agent, parallel, pipeline, phase, log, workflow, budget, args, engine, WorkflowDeterminismError, WorkflowSchemaError, WorkflowNestingError, __wf_finish, __wf_fail } = (() => {
   const host = globalThis.tools;
   const indirectEval = globalThis.eval;
   for (const name of ["tools", "EXEC_TOOLS", "notify", "yield_control", "store", "load", "setTimeout", "clearTimeout", "exit", "text", "image", "audio", "generatedImage"]) {
@@ -151,7 +151,7 @@ const { agent, parallel, pipeline, phase, log, workflow, budget, args, WorkflowD
     let error = null;
     try {
       const body = indirectEval(loaded.source);
-      const result = await body(scope.agent, parallel, pipeline, scope.phase, scope.log, nestedWorkflow, budget, deepFreeze(JSON.parse(loaded.args_json)), scope.console);
+      const result = await body(scope.agent, parallel, pipeline, scope.phase, scope.log, nestedWorkflow, budget, deepFreeze(JSON.parse(loaded.args_json)), scope.console, engine);
       const json = JSON.stringify(result === undefined ? null : result);
       value = json === undefined ? null : JSON.parse(json);
     } catch (caught) {
@@ -163,6 +163,7 @@ const { agent, parallel, pipeline, phase, log, workflow, budget, args, WorkflowD
     return value;
   }
   const args = deepFreeze(JSON.parse(__ARGS_JSON__));
+  const engine = deepFreeze(JSON.parse(__ENGINE_JSON__));
   const __wf_finish = async (value) => {
     let json;
     try { json = JSON.stringify(value === undefined ? null : value); } catch (error) {
@@ -172,15 +173,36 @@ const { agent, parallel, pipeline, phase, log, workflow, budget, args, WorkflowD
     await host.__wf_event({ kind: "result", seq: ++eventSeq, value_json: json === undefined ? "null" : json });
   };
   const __wf_fail = async (error) => { await host.__wf_event({ kind: "error", seq: ++eventSeq, message: describe(error) }); };
-  return { agent: root.agent, parallel, pipeline, phase: root.phase, log: root.log, workflow, budget, args, WorkflowDeterminismError, WorkflowSchemaError, WorkflowNestingError, __wf_finish, __wf_fail };
+  return { agent: root.agent, parallel, pipeline, phase: root.phase, log: root.log, workflow, budget, args, engine, WorkflowDeterminismError, WorkflowSchemaError, WorkflowNestingError, __wf_finish, __wf_fail };
 })();
 "#;
 
+/// What a script learns about its run through the frozen `engine` global
+/// (builtin-workflows UC4, R4.1): fixed when the run starts and never journaled (R4.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct WorkflowEngineInfo {
+    pub max_concurrent_agents: usize,
+    pub max_agents_per_run: usize,
+    /// `features.agent_worktree_isolation` is enabled for the step that started the run.
+    pub worktree_isolation: bool,
+    /// `features.explorer_profile` is enabled, so `agent_type: "explorer"` runs read-only.
+    pub read_only_explorers: bool,
+}
+
 /// UC2: build the cell source for a validated script body: the prelude on the first line,
 /// the body inside `async function __wf_main()`, and a trailer that reports the result or
-/// the error through the event tool.
-pub fn build_cell_source(body: &str, args_json: &str, budget_limit: Option<u64>) -> String {
+/// the error through the event tool. The body's own `engine` shadows the global, since the
+/// global lives in the module scope (builtin-workflows R4.4).
+pub fn build_cell_source(
+    body: &str,
+    args_json: &str,
+    budget_limit: Option<u64>,
+    engine: &WorkflowEngineInfo,
+) -> String {
     let args_literal = serde_json::to_string(args_json).unwrap_or_else(|_| "\"null\"".to_string());
+    let engine_json = serde_json::to_string(engine).unwrap_or_else(|_| "{}".to_string());
+    let engine_literal =
+        serde_json::to_string(&engine_json).unwrap_or_else(|_| "\"{}\"".to_string());
     let budget_literal = budget_limit.map_or_else(|| "null".to_string(), |limit| limit.to_string());
     let prelude = PRELUDE
         .lines()
@@ -190,7 +212,8 @@ pub fn build_cell_source(body: &str, args_json: &str, budget_limit: Option<u64>)
         .join(" ")
         .replace("__MAX_FAN_OUT__", &MAX_FAN_OUT.to_string())
         .replace("__BUDGET_LIMIT__", &budget_literal)
-        .replace("__ARGS_JSON__", &args_literal);
+        .replace("__ARGS_JSON__", &args_literal)
+        .replace("__ENGINE_JSON__", &engine_literal);
     let mut source = String::with_capacity(prelude.len() + body.len() + 128);
     source.push_str(&prelude);
     source.push_str(" async function __wf_main() {");
@@ -203,9 +226,13 @@ pub fn build_cell_source(body: &str, args_json: &str, budget_limit: Option<u64>)
 /// of the workflow globals whose body is the validated saved script. The body starts on the
 /// first line, so V8 locations under `sourceURL=<name>.js` match the saved script's lines.
 /// `name` is validated by the `meta.name` rule.
+///
+/// The body runs in an inner arrow function, so its own `engine` (or `args`, `log`, …),
+/// declared with `const`, `let` or `var`, shadows the parameter instead of clashing with it
+/// (builtin-workflows R4.4).
 pub fn build_nested_source(body: &str, name: &str) -> String {
     format!(
-        "(async function (agent, parallel, pipeline, phase, log, workflow, budget, args, console) {{\"use strict\";{body}\n}})\n//# sourceURL={name}.js\n"
+        "(async function (agent, parallel, pipeline, phase, log, workflow, budget, args, console, engine) {{\"use strict\";return (async () => {{{body}\n}})();}})\n//# sourceURL={name}.js\n"
     )
 }
 

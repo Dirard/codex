@@ -154,3 +154,104 @@ async fn exec_cancels_runs_after_the_wait_timeout() -> anyhow::Result<()> {
     assert_eq!(served.last(), Some(&"notified"));
     Ok(())
 }
+
+/// Answers `codex exec review --workflow`: the parent starts the built-in `review` by name,
+/// its scope agent finds nothing to review, and the notification turn ends the run.
+#[derive(Clone, Default)]
+struct ReviewRouted {
+    served: Arc<Mutex<Vec<(&'static str, String)>>>,
+}
+
+impl Respond for ReviewRouted {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let body = String::from_utf8_lossy(&request.body).to_string();
+        let (name, sse) = if body.contains(AGENT_MARKER) {
+            let scope = json!({
+                "target": "changes against main",
+                "diff_command": "git diff HEAD --",
+                "revision": null,
+                "files": [],
+                "focus": null,
+                "empty_reason": "no changes against main",
+            });
+            ("agent", message("resp-agent", &scope.to_string()))
+        } else if body.contains(NOTIFICATION_MARKER) {
+            (
+                "notified",
+                message("resp-notified", "FINAL: the review found nothing"),
+            )
+        } else if has_call_output(&body) {
+            (
+                "after_tool",
+                message("resp-after-tool", "Started the review."),
+            )
+        } else {
+            let arguments =
+                json!({ "name": "review", "args": { "effort": "low", "base": "main" } })
+                    .to_string();
+            (
+                "start",
+                responses::sse(vec![
+                    responses::ev_response_created("resp-start"),
+                    responses::ev_function_call("wf-1", "workflow", &arguments),
+                    responses::ev_completed("resp-start"),
+                ]),
+            )
+        };
+        self.served.lock().expect("served").push((name, body));
+        responses::sse_response(sse)
+    }
+}
+
+/// Builtin-workflows R10.1, R10.4: `codex exec review --workflow=low --base main` starts an
+/// ordinary turn with the canonical review text instead of `review/start`, and prints the
+/// final message of the turn the run's notification starts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exec_review_workflow_sends_the_canonical_turn() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+    let server = responses::start_mock_server().await;
+    let routed = ReviewRouted::default();
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(routed.clone())
+        .mount(&server)
+        .await;
+
+    let mut cmd = test.cmd_with_server(&server);
+    cmd.arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(test.cwd_path());
+    for feature in ["collab", "multi_agent_v2", "workflows", "builtin_workflows"] {
+        cmd.arg("-c").arg(format!("features.{feature}=true"));
+    }
+    let output = cmd
+        .args(["review", "--workflow=low", "--base", "main"])
+        .timeout(Duration::from_secs(60))
+        .output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("FINAL: the review found nothing"),
+        "{stdout}"
+    );
+    let served = routed.served.lock().expect("served").clone();
+    assert_eq!(
+        served.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+        vec!["start", "after_tool", "agent", "notified"]
+    );
+    let first = &served[0].1;
+    let expected = serde_json::to_string(&codex_workflow::review_turn_text(
+        &json!({ "effort": "low", "base": "main" }),
+    ))?;
+    // The turn carries the canonical text, as a JSON string inside the request body.
+    assert!(first.contains(expected.trim_matches('"')), "{first}");
+    assert!(
+        !first.contains("Review the code changes against the base branch"),
+        "{first}"
+    );
+    Ok(())
+}

@@ -664,8 +664,21 @@ pub(crate) fn start_run(
     });
     registry.insert(Arc::clone(&run));
     let _ = run.updates.send(run_id);
-    let source =
-        codex_workflow::build_cell_source(&request.body, &request.args_json, limits.budget_tokens);
+    // Builtin-workflows R4.1, R4.2: the frozen `engine` global, fixed at the run's start.
+    let engine = codex_workflow::WorkflowEngineInfo {
+        max_concurrent_agents: limits.max_concurrent_agents,
+        max_agents_per_run: limits.max_agents_per_run,
+        worktree_isolation: config
+            .features
+            .enabled(codex_features::Feature::AgentWorktreeIsolation),
+        read_only_explorers: crate::agent::explorer_profile::enabled(config),
+    };
+    let source = codex_workflow::build_cell_source(
+        &request.body,
+        &request.args_json,
+        limits.budget_tokens,
+        &engine,
+    );
     tokio::spawn(run_main(
         Arc::clone(session),
         Arc::clone(step_context),

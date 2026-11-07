@@ -51,6 +51,7 @@ fn test_run(
             name: "budget".to_string(),
             description: String::new(),
             phases: Vec::new(),
+            args: None,
         },
         limits: limits(hard_budget_threshold),
         parent_turn_id: "turn".to_string(),

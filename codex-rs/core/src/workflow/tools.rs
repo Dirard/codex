@@ -22,8 +22,10 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use codex_utils_string::approx_token_count;
 use codex_workflow::RunSnapshot;
+use codex_workflow::ScriptOrigin;
 use codex_workflow::check_args_size;
 use codex_workflow::parse_script;
+use codex_workflow::validate_args;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
@@ -100,6 +102,7 @@ pub(crate) fn add_workflow_tools(
                 .config
                 .features
                 .enabled(codex_features::Feature::AgentWorktreeIsolation),
+            builtins: super::saved::builtins_enabled(&turn_context.config),
         },
         ToolExposure::DirectModelOnly,
     );
@@ -195,6 +198,19 @@ struct WorkflowStartHandler {
     max_agents_per_run: usize,
     /// `agent_worktree_isolation` is enabled for the turn (R1.7).
     worktree_isolation: bool,
+    /// `builtin_workflows` is enabled for the turn (builtin-workflows UC2).
+    builtins: bool,
+}
+
+/// The `name` parameter of the `workflow` tool: saved scripts, and while
+/// `builtin_workflows` is enabled the built-in ones (builtin-workflows R2.1–R2.3).
+fn name_description(builtins: bool) -> String {
+    let saved = "Name of a saved script to run instead of `script`: `<name>.js` in the project's `.codex/workflows/` or in `$CODEX_HOME/workflows/`.";
+    if builtins {
+        format!("{saved}\n{}", codex_workflow::BUILTIN_LISTING)
+    } else {
+        saved.to_string()
+    }
 }
 
 #[derive(Deserialize)]
@@ -239,6 +255,47 @@ struct ScriptSource {
     resume: Option<codex_workflow::JournalCache>,
     /// The token budget of the call, or without one that of the `resume_from` source (D3).
     budget_tokens: Option<u64>,
+    /// Where a script found by `name` comes from, while `builtin_workflows` is enabled
+    /// (builtin-workflows R1.5, R1.7); `None` keeps the earlier texts.
+    origin: Option<SourceOrigin>,
+}
+
+/// Builtin-workflows R1.5, R1.7: the origin of a script started by `name`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SourceOrigin {
+    origin: ScriptOrigin,
+    /// The name of the built-in script a file replaces.
+    replaces_builtin: Option<String>,
+}
+
+impl SourceOrigin {
+    /// The `source` of the start result: `built-in` or the path.
+    fn source(&self) -> String {
+        self.origin.to_string()
+    }
+
+    /// The origin as the approval question names it after the workflow's name.
+    fn approval_text(&self) -> String {
+        match (&self.origin, &self.replaces_builtin) {
+            (ScriptOrigin::Builtin { .. }, _) => String::new(),
+            (ScriptOrigin::File(path), None) => format!(" from {}", path.display()),
+            (ScriptOrigin::File(path), Some(builtin)) => {
+                format!(" from {} (replaces the built-in {builtin})", path.display())
+            }
+        }
+    }
+
+    fn is_builtin(&self) -> bool {
+        matches!(self.origin, ScriptOrigin::Builtin { .. })
+    }
+
+    /// The origin as the run log names it, as for a nested start.
+    fn log_text(&self) -> String {
+        match &self.replaces_builtin {
+            Some(builtin) => format!("{}; replaces the built-in {builtin}", self.source()),
+            None => self.source(),
+        }
+    }
 }
 
 /// UC1, R1.8, R6.3, R12.3: resolve the script, its args, the budget and the resume cache of
@@ -259,6 +316,7 @@ async fn resolve_script_source(
         resume_from,
         budget_tokens,
     } = args;
+    let mut origin = None;
     let explicit_script = match (script, name, &resume_from) {
         (Some(_), Some(_), _) => {
             return Err(
@@ -271,7 +329,16 @@ async fn resolve_script_source(
             );
         }
         (Some(script), None, _) => Some(script),
-        (None, Some(name), _) => Some(super::saved::load_saved_script(&turn.config, &name)?.source),
+        (None, Some(name), _) => {
+            let saved = super::saved::load_saved_script(&turn.config, &name)?;
+            if super::saved::builtins_enabled(&turn.config) {
+                origin = Some(SourceOrigin {
+                    replaces_builtin: saved.replaces_builtin.then(|| saved.name.clone()),
+                    origin: saved.origin,
+                });
+            }
+            Some(saved.source)
+        }
         (None, None, Some(_)) => None,
     };
     let explicit_args = args
@@ -285,6 +352,7 @@ async fn resolve_script_source(
             args_json: explicit_args.unwrap_or_else(|| "null".to_string()),
             resume: None,
             budget_tokens: budget_tokens.flatten(),
+            origin,
         });
     };
     let source = super::resume::resume_source(session, &turn.config, &run_id).await?;
@@ -306,6 +374,7 @@ async fn resolve_script_source(
             budget_tokens,
             source.run.snapshot(/*include_agents*/ false).budget_tokens,
         ),
+        origin,
     })
 }
 
@@ -340,9 +409,7 @@ impl ToolExecutor<ToolInvocation> for WorkflowStartHandler {
             ),
             (
                 "name".to_string(),
-                JsonSchema::string(Some(
-                    "Name of a saved script to run instead of `script`: `<name>.js` in the project's `.codex/workflows/` or in `$CODEX_HOME/workflows/`.".to_string(),
-                )),
+                JsonSchema::string(Some(name_description(self.builtins))),
             ),
             (
                 "resume_from".to_string(),
@@ -408,6 +475,7 @@ impl ToolExecutor<ToolInvocation> for WorkflowStartHandler {
                 args_json,
                 resume,
                 budget_tokens,
+                origin,
             } = resolve_script_source(&session, &turn, args)
                 .await
                 .map_err(|error| {
@@ -418,6 +486,11 @@ impl ToolExecutor<ToolInvocation> for WorkflowStartHandler {
             };
             check_args_size(&args_json).map_err(reject)?;
             let parsed = parse_script(&script).map_err(reject)?;
+            // Builtin-workflows R3.2: args that do not match `meta.args` answer this call
+            // with the usage, before the syntax check and the approval question.
+            validate_args(&parsed.meta, &args_json).map_err(|error| {
+                FunctionCallError::RespondToModel(format!("{error}\nNo run was created."))
+            })?;
             // N5: a script that does not compile answers this call; no run, no journal.
             super::run::check_script_syntax(&session, &parsed.body)
                 .await
@@ -435,6 +508,7 @@ impl ToolExecutor<ToolInvocation> for WorkflowStartHandler {
                     &parsed.meta,
                     budget_tokens,
                     resume_stats.as_ref(),
+                    origin.as_ref(),
                 )
                 .await
             {
@@ -456,6 +530,14 @@ impl ToolExecutor<ToolInvocation> for WorkflowStartHandler {
                 },
             )
             .map_err(FunctionCallError::RespondToModel)?;
+            // Builtin-workflows R1.5, R1.7: the run log names where a script by `name` came from.
+            if let Some(origin) = &origin {
+                run.log_line(&format!(
+                    "workflow {} started ({})",
+                    run.meta.name,
+                    origin.log_text()
+                ));
+            }
             // R8.3: record the start in the launching turn for clients and replay.
             let item = TurnItem::Extension(ExtensionItem::Workflow(WorkflowItem {
                 id: call_id,
@@ -466,16 +548,18 @@ impl ToolExecutor<ToolInvocation> for WorkflowStartHandler {
             }));
             session.emit_turn_item_started(turn.as_ref(), &item).await;
             session.emit_turn_item_completed(turn.as_ref(), item).await;
-            Ok(json_output(&start_result(&run)))
+            Ok(json_output(&start_result(&run, origin.as_ref())))
         })
     }
 }
 
 impl CoreToolRuntime for WorkflowStartHandler {}
 
-/// UC1, R1.4: what the model learns from a started run.
-fn start_result(run: &WorkflowRun) -> JsonValue {
-    json!({
+/// UC1, R1.4: what the model learns from a started run; for a script found by `name` while
+/// `builtin_workflows` is enabled, its `source` and the built-in it replaces (builtin-workflows
+/// R1.5, R1.7).
+fn start_result(run: &WorkflowRun, origin: Option<&SourceOrigin>) -> JsonValue {
+    let mut result = json!({
         "run_id": run.id,
         "name": run.meta.name,
         "status": "running",
@@ -489,7 +573,14 @@ fn start_result(run: &WorkflowRun) -> JsonValue {
         "resume": run.snapshot(/*include_agents*/ false).resume,
         "journal_dir": run.journal_dir().map(|dir| dir.display().to_string()),
         "note": "The run works in the background. Its completion is delivered to you automatically as a workflow notification, so polling is unnecessary; continue other work or end your turn, or call workflow_status with wait_ms if you must wait for the result now.",
-    })
+    });
+    if let Some(origin) = origin {
+        result["source"] = json!(origin.source());
+        if let Some(builtin) = &origin.replaces_builtin {
+            result["replaces_builtin"] = json!(builtin);
+        }
+    }
+    result
 }
 
 /// R10.4: `require_approval = "auto"` asks unless the approval policy is `never`.
@@ -503,12 +594,14 @@ fn needs_approval(turn: &TurnContext) -> bool {
 
 /// R10.4: the header and text of the question that asks the user to approve a run: its
 /// name, description, limits, budget and budget mode, and for a resumed run the source run
-/// and how many of its journaled answers may be reused.
+/// and how many of its journaled answers may be reused. A script found by `name` while
+/// `builtin_workflows` is enabled names its origin (builtin-workflows R1.5, R1.7).
 fn approval_question(
     meta: &codex_workflow::WorkflowMeta,
     workflows: &crate::config::WorkflowsConfig,
     budget_tokens: Option<u64>,
     resume: Option<&codex_workflow::ResumeStats>,
+    origin: Option<&SourceOrigin>,
 ) -> (String, String) {
     let budget = match budget_tokens.or(workflows.default_budget_tokens) {
         None => "no token budget".to_string(),
@@ -525,19 +618,30 @@ fn approval_question(
         "It may start up to {} agents, {} at a time, with {budget}.",
         workflows.max_agents_per_run, workflows.max_concurrent_agents,
     );
+    let kind = if origin.is_some_and(SourceOrigin::is_builtin) {
+        "built-in workflow"
+    } else {
+        "workflow"
+    };
+    let from = origin.map(SourceOrigin::approval_text).unwrap_or_default();
     match resume {
         None => (
             "Run workflow?".to_string(),
             format!(
-                "Run workflow \"{}\" in the background? {description} {limits}",
+                "Run {kind} \"{}\"{from} in the background? {description} {limits}",
                 meta.name
             ),
         ),
         Some(resume) => (
             "Resume workflow?".to_string(),
             format!(
-                "Resume workflow run {from} as \"{name}\" in the background? {description} Up to {count} journaled agent answers of {from} are reused without starting agents; the other calls run live. {limits}",
-                from = resume.from,
+                "Resume workflow run {run} as {builtin}\"{name}\"{from} in the background? {description} Up to {count} journaled agent answers of {run} are reused without starting agents; the other calls run live. {limits}",
+                builtin = if origin.is_some_and(SourceOrigin::is_builtin) {
+                    "the built-in workflow "
+                } else {
+                    ""
+                },
+                run = resume.from,
                 name = meta.name,
                 count = resume.source_results,
             ),
@@ -554,8 +658,10 @@ async fn approve_run(
     meta: &codex_workflow::WorkflowMeta,
     budget_tokens: Option<u64>,
     resume: Option<&codex_workflow::ResumeStats>,
+    origin: Option<&SourceOrigin>,
 ) -> bool {
-    let (header, text) = approval_question(meta, &turn.config.workflows, budget_tokens, resume);
+    let (header, text) =
+        approval_question(meta, &turn.config.workflows, budget_tokens, resume, origin);
     let question_id = format!("{APPROVAL_QUESTION_PREFIX}_{call_id}");
     let question = RequestUserInputQuestion {
         id: question_id.clone(),
@@ -1021,13 +1127,14 @@ mod tests {
             name: "find-bugs".to_string(),
             description: "Find bugs".to_string(),
             phases: Vec::new(),
+            args: None,
         };
         let mut workflows = crate::config::WorkflowsConfig {
             max_agents_per_run: 10,
             max_concurrent_agents: 2,
             ..Default::default()
         };
-        let (header, fresh) = approval_question(&meta, &workflows, Some(500), None);
+        let (header, fresh) = approval_question(&meta, &workflows, Some(500), None, None);
         assert_eq!(header, "Run workflow?");
         assert_eq!(
             fresh,
@@ -1042,13 +1149,14 @@ mod tests {
             served: 0,
             unused: 3,
         };
-        let (header, resumed) = approval_question(&meta, &workflows, Some(500), Some(&resume));
+        let (header, resumed) =
+            approval_question(&meta, &workflows, Some(500), Some(&resume), None);
         assert_eq!(header, "Resume workflow?");
         assert_eq!(
             resumed,
             "Resume workflow run wf-00000001 as \"find-bugs\" in the background? Find bugs. Up to 3 journaled agent answers of wf-00000001 are reused without starting agents; the other calls run live. It may start up to 10 agents, 2 at a time, with a hard budget of 500 tokens: running agents are interrupted above 600 tokens."
         );
-        let (_, unlimited) = approval_question(&meta, &workflows, None, None);
+        let (_, unlimited) = approval_question(&meta, &workflows, None, None, None);
         assert!(unlimited.ends_with("with no token budget."), "{unlimited}");
     }
 
@@ -1073,6 +1181,7 @@ mod tests {
             max_concurrent_agents: 2,
             max_agents_per_run: 10,
             worktree_isolation: false,
+            builtins: false,
         })
         .spec() else {
             panic!("a function tool");
@@ -1089,5 +1198,127 @@ mod tests {
             "{description}"
         );
         assert!(!description.contains("drop it"), "{description}");
+    }
+
+    /// Builtin-workflows R1.5, R1.7: the approval names a built-in script, the path of a
+    /// saved one and the built-in a file replaces; inline scripts keep the earlier text.
+    #[test]
+    fn approval_names_the_script_origin() {
+        let meta = codex_workflow::WorkflowMeta {
+            name: "review".to_string(),
+            description: "Review changes".to_string(),
+            phases: Vec::new(),
+            args: None,
+        };
+        let workflows = crate::config::WorkflowsConfig {
+            max_agents_per_run: 10,
+            max_concurrent_agents: 2,
+            ..Default::default()
+        };
+        let limits = "It may start up to 10 agents, 2 at a time, with no token budget.";
+        let builtin = SourceOrigin {
+            origin: ScriptOrigin::Builtin {
+                name: "review".to_string(),
+            },
+            replaces_builtin: None,
+        };
+        let path = std::path::PathBuf::from("/p/.codex/workflows/review.js");
+        let file = SourceOrigin {
+            origin: ScriptOrigin::File(path.clone()),
+            replaces_builtin: None,
+        };
+        let replacing = SourceOrigin {
+            origin: ScriptOrigin::File(path),
+            replaces_builtin: Some("review".to_string()),
+        };
+        let question = |origin: Option<&SourceOrigin>| {
+            approval_question(&meta, &workflows, None, None, origin).1
+        };
+        assert_eq!(
+            question(Some(&builtin)),
+            format!("Run built-in workflow \"review\" in the background? Review changes. {limits}")
+        );
+        assert_eq!(
+            question(Some(&file)),
+            format!(
+                "Run workflow \"review\" from /p/.codex/workflows/review.js in the background? Review changes. {limits}"
+            )
+        );
+        assert_eq!(
+            question(Some(&replacing)),
+            format!(
+                "Run workflow \"review\" from /p/.codex/workflows/review.js (replaces the built-in review) in the background? Review changes. {limits}"
+            )
+        );
+        assert_eq!(
+            question(None),
+            format!("Run workflow \"review\" in the background? Review changes. {limits}")
+        );
+        let resume = codex_workflow::ResumeStats {
+            from: "wf-00000001".to_string(),
+            source_results: 2,
+            served: 0,
+            unused: 2,
+        };
+        let (_, resumed) =
+            approval_question(&meta, &workflows, None, Some(&resume), Some(&builtin));
+        assert!(
+            resumed.starts_with(
+                "Resume workflow run wf-00000001 as the built-in workflow \"review\" in the background?"
+            ),
+            "{resumed}"
+        );
+        assert_eq!(builtin.source(), "built-in");
+        assert_eq!(file.source(), "/p/.codex/workflows/review.js");
+    }
+
+    /// Builtin-workflows R2.1–R2.3, R4.3: the `name` parameter lists the built-in scripts
+    /// only with the feature; otherwise the spec is the earlier one. The tool description is
+    /// the same in both cases, within 1500 tokens, and does not mention `engine`.
+    #[test]
+    fn name_lists_builtins_only_with_the_feature() {
+        let spec = |builtins: bool| {
+            let ToolSpec::Function(tool) = (WorkflowStartHandler {
+                max_concurrent_agents: 16,
+                max_agents_per_run: 1000,
+                worktree_isolation: true,
+                builtins,
+            })
+            .spec() else {
+                panic!("a function tool");
+            };
+            tool
+        };
+        let without = spec(false);
+        let with = spec(true);
+        let name = |tool: &ResponsesApiTool| {
+            serde_json::to_value(&tool.parameters).expect("schema")["properties"]["name"]
+                ["description"]
+                .as_str()
+                .expect("name description")
+                .to_string()
+        };
+        assert_eq!(
+            name(&without),
+            "Name of a saved script to run instead of `script`: `<name>.js` in the project's `.codex/workflows/` or in `$CODEX_HOME/workflows/`."
+        );
+        assert!(!name(&without).contains("uilt-in"));
+        assert_eq!(
+            name(&with),
+            format!("{}\n{}", name(&without), codex_workflow::BUILTIN_LISTING)
+        );
+        for builtin in codex_workflow::builtin_names() {
+            assert!(name(&with).contains(&format!("- `{builtin}`")), "{builtin}");
+        }
+        assert_eq!(with.description, without.description);
+        for tool in [&with, &without] {
+            assert!(approx_token_count(&tool.description) <= 1500);
+            assert!(!tool.description.contains("engine"), "{}", tool.description);
+        }
+        let mut without_value = serde_json::to_value(&without.parameters).expect("schema");
+        let mut with_value = serde_json::to_value(&with.parameters).expect("schema");
+        without_value["properties"]["name"] = JsonValue::Null;
+        with_value["properties"]["name"] = JsonValue::Null;
+        assert_eq!(with_value, without_value);
     }
 }

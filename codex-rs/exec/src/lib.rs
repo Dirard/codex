@@ -15,6 +15,8 @@ pub(crate) mod exec_events;
 mod fork_overrides;
 use fork_overrides::exec_cli_kv_overrides;
 mod fork_startup_warnings;
+// Fork: `codex exec review --workflow` (specs/builtin-workflows-2026-11-07.md, UC10).
+mod review_workflow;
 mod workflow_wait;
 // Fork end
 mod worktree;
@@ -932,6 +934,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let default_effort = config.model_reasoning_effort.clone();
 
     let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
+        // Fork: `--workflow` starts the built-in review workflow (builtin-workflows UC10).
+        (Some(ExecCommand::Review(review_cli)), _, _) if review_cli.fork_workflow.is_some() => {
+            review_workflow::fork_review_workflow_operation(review_cli, &config)?
+        }
         (Some(ExecCommand::Review(review_cli)), _, _) => {
             let review_request = build_review_request(review_cli)?;
             let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);

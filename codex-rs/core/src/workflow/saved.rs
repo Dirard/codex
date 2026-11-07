@@ -1,16 +1,19 @@
 //! Saved workflow scripts: `workflow(name, args)` in a script and the `workflow` tool's `name`
-//! (UC12, R12.1–R12.4).
+//! (UC12, R12.1–R12.4), with the built-in scripts of the binary as the last source while
+//! `builtin_workflows` is enabled (`specs/builtin-workflows-2026-11-07.md`, UC1).
 
 use std::path::PathBuf;
 
 use codex_config::ConfigLayerSource;
 use codex_workflow::JournalEvent;
 use codex_workflow::SavedScript;
+use codex_workflow::ScriptOrigin;
 use codex_workflow::build_nested_source;
 use codex_workflow::check_args_size;
 use codex_workflow::find_saved_script;
 use codex_workflow::parse_script;
 use codex_workflow::sha256_hex;
+use codex_workflow::validate_args;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
@@ -36,9 +39,28 @@ pub(super) fn saved_script_dirs(config: &Config) -> Vec<PathBuf> {
     dirs
 }
 
-/// UC12, R12.3, R12.4: find a saved script for the `workflow` tool's `name`.
+/// UC12, R12.3, R12.4: find a saved script for the `workflow` tool's `name`; with
+/// `builtin_workflows` the built-in scripts are the last source (builtin-workflows R1.1–R1.4).
 pub(super) fn load_saved_script(config: &Config, name: &str) -> Result<SavedScript, String> {
-    find_saved_script(&saved_script_dirs(config), name)
+    find_saved_script(&saved_script_dirs(config), name, builtins_enabled(config))
+}
+
+/// Builtin-workflows R1.3: built-in scripts exist only with their feature.
+pub(super) fn builtins_enabled(config: &Config) -> bool {
+    config
+        .features
+        .enabled(codex_features::Feature::BuiltinWorkflows)
+}
+
+/// Builtin-workflows R1.5, R1.7: the origin of a saved script as the run log and the start
+/// result name it: `built-in`, or the path and the built-in it replaces.
+pub(super) fn origin_text(saved: &SavedScript) -> String {
+    match &saved.origin {
+        ScriptOrigin::File(path) if saved.replaces_builtin => {
+            format!("{}; replaces the built-in {}", path.display(), saved.name)
+        }
+        origin => origin.to_string(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -114,17 +136,20 @@ fn load_nested(
     let saved = load_saved_script(config, name)?;
     check_args_size(args_json).map_err(|error| error.to_string())?;
     let parsed = parse_script(&saved.source)
-        .map_err(|error| format!("saved script {}: {error}", saved.path.display()))?;
+        .map_err(|error| format!("saved script {}: {error}", saved.origin))?;
+    // Builtin-workflows R3.3: args that do not match `meta.args` start no nested agent.
+    validate_args(&parsed.meta, args_json)?;
+    // Builtin-workflows R1.7: a built-in script journals `built-in:<name>` as its path.
     run.journal(JournalEvent::WorkflowStarted {
         call,
         name: name.to_string(),
-        path: saved.path.display().to_string(),
+        path: saved.origin.journal_path(),
         script_sha256: sha256_hex(saved.source.as_bytes()),
         args_sha256: sha256_hex(args_json.as_bytes()),
     });
     run.log_line(&format!(
         "workflow {name} started ({})",
-        saved.path.display()
+        origin_text(&saved)
     ));
     Ok(json!({
         "ok": true,

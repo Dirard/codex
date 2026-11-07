@@ -14,6 +14,8 @@ fn valid_meta_is_extracted_and_export_is_blanked() {
             name: "find-bugs".to_string(),
             description: "Fan-out search".to_string(),
             phases: vec!["Find".to_string(), "Verify".to_string()],
+            // Builtin-workflows R3.1, R3.5: a script without `meta.args` parses as before.
+            args: None,
         }
     );
     assert_eq!(
@@ -125,4 +127,40 @@ fn names_follow_the_identifier_rule() {
     assert!(!is_valid_name("-x"));
     assert!(!is_valid_name("a.b"));
     assert!(!is_valid_name(&"a".repeat(65)));
+}
+
+/// Builtin-workflows R3.1: `meta.args` keeps its schema and the source order of its
+/// properties; a schema outside the subset fails the `meta` rule on the line of `meta`.
+#[test]
+fn meta_args_are_parsed_and_checked() {
+    let script = "// head\nexport const meta = {\n  name: 'x', description: 'd',\n  args: { type: 'object', required: ['zeta'], properties: { zeta: { type: 'string' }, alpha: { type: 'integer', minimum: 1 } } },\n};\nreturn args;\n";
+    let parsed = parse_script(script).expect("script with args");
+    let args = parsed.meta.args.expect("meta.args");
+    assert_eq!(args.order, vec!["zeta".to_string(), "alpha".to_string()]);
+    assert_eq!(args.schema["required"], serde_json::json!(["zeta"]));
+
+    for (schema, expected) in [
+        (
+            "{ type: 'object', properties: { a: { type: 'string', oneOf: [] } } }",
+            "keyword `oneOf`",
+        ),
+        (
+            "{ type: 'array', items: { type: 'string' } }",
+            "root schema",
+        ),
+        ("{ type: 'object' }", "`properties`"),
+        ("'text'", "JSON Schema object"),
+    ] {
+        let error = parse_script(&format!(
+            "\nexport const meta = {{ name: 'x', description: 'd', args: {schema} }};\n"
+        ))
+        .unwrap_err();
+        assert_eq!(
+            (error.rule, error.line),
+            (ScriptRule::Meta, Some(2)),
+            "{schema}"
+        );
+        assert!(error.message.contains("meta.args"), "{schema}: {error}");
+        assert!(error.message.contains(expected), "{schema}: {error}");
+    }
 }

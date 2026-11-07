@@ -6,6 +6,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::args::ArgsSchema;
+use crate::args::check_args_schema;
+use crate::literal::object_key_order;
 use crate::literal::parse_literal;
 use crate::scan::Token;
 use crate::scan::TokenKind;
@@ -29,6 +32,10 @@ pub struct WorkflowMeta {
     pub description: String,
     #[serde(default)]
     pub phases: Vec<String>,
+    /// `meta.args`: the JSON Schema `args` are checked against before a run is created
+    /// (builtin-workflows UC3, R3.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<ArgsSchema>,
 }
 
 /// A script that passed static validation.
@@ -200,7 +207,10 @@ fn extract_meta<'a>(
             format!("meta must be a plain object literal: {}", error.message),
         )
     })?;
-    let meta = validate_meta(value, open.line)?;
+    let mut meta = validate_meta(value, open.line)?;
+    if let Some(args) = &mut meta.args {
+        args.order = object_key_order(literal, &["args", "properties"]);
+    }
     Ok((meta, *export))
 }
 
@@ -260,10 +270,19 @@ fn validate_meta(value: Value, line: usize) -> Result<WorkflowMeta, ScriptError>
         }
         Some(_) => return Err(error("meta.phases must be an array of strings".to_string())),
     };
+    // Builtin-workflows R3.1: `meta.args` is an object schema of the workflow subset.
+    let args = match object.get("args") {
+        None | Some(Value::Null) => None,
+        Some(schema) => {
+            check_args_schema(schema).map_err(|message| error(format!("meta.args: {message}")))?;
+            Some(ArgsSchema::from(schema.clone()))
+        }
+    };
     Ok(WorkflowMeta {
         name,
         description,
         phases,
+        args,
     })
 }
 

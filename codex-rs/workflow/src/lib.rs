@@ -3,7 +3,10 @@
 //! The crate has no dependency on `codex-core`: it validates workflow scripts, generates
 //! the Code Mode cell that runs them, checks and validates JSON schemas of `agent()` calls,
 //! keys and journals calls, tracks run snapshots and renders the completion notification.
+//! It also ships the built-in workflow scripts (`specs/builtin-workflows-2026-11-07.md`).
 
+mod args;
+mod builtin;
 mod index;
 mod journal;
 mod key;
@@ -17,6 +20,19 @@ mod scan;
 mod schema;
 mod snapshot;
 
+pub use args::ArgsSchema;
+pub use args::MAX_ARGS_USAGE_CHARS;
+pub use args::args_usage;
+pub use args::check_args_schema;
+pub use args::validate_args;
+pub use builtin::BUILTIN_LISTING;
+pub use builtin::BUILTIN_PREFIX;
+pub use builtin::BUILTIN_WORKFLOWS;
+pub use builtin::BuiltinWorkflow;
+pub use builtin::REVIEW_EFFORTS;
+pub use builtin::builtin_names;
+pub use builtin::find_builtin;
+pub use builtin::review_turn_text;
 pub use index::INDEX_FILE;
 pub use index::append_index;
 pub use index::index_entry;
@@ -62,12 +78,14 @@ pub use prelude::TOOL_AGENT;
 pub use prelude::TOOL_BUDGET;
 pub use prelude::TOOL_EVENT;
 pub use prelude::TOOL_WORKFLOW;
+pub use prelude::WorkflowEngineInfo;
 pub use prelude::build_cell_source;
 pub use prelude::build_nested_source;
 pub use prelude::display_error;
 pub use resume::CachedAnswer;
 pub use resume::JournalCache;
 pub use saved::SavedScript;
+pub use saved::ScriptOrigin;
 pub use saved::find_saved_script;
 pub use schema::check_strict_compatible;
 pub use schema::is_schema_format_rejection;

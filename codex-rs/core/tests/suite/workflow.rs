@@ -36,6 +36,10 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 
+// Fork: built-in workflows, `meta.args` and `engine` (specs/builtin-workflows-2026-11-07.md).
+#[path = "workflow_builtin.rs"]
+mod builtin;
+
 const AGENT_MARKER: &str = "You are a workflow agent started by an orchestration script";
 const NOTIFICATION_MARKER: &str = "<workflow_notification>";
 const CORRECTION_MARKER: &str = "did not match the required JSON schema";

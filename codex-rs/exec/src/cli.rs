@@ -326,6 +326,18 @@ pub struct ReviewArgs {
     /// Custom review instructions. If `-` is used, read from stdin.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,
+
+    /// Fork: run the built-in multi-agent `review` workflow instead, at effort low, medium
+    /// (the default), high, xhigh or max; needs the workflows and builtin_workflows features.
+    #[arg(
+        long = "workflow",
+        value_name = "EFFORT",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "medium",
+        value_enum
+    )]
+    pub fork_workflow: Option<crate::review_workflow::ReviewWorkflowEffort>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]

@@ -234,6 +234,7 @@ mod tests {
                     name: "registered".to_string(),
                     description: String::new(),
                     phases: Vec::new(),
+                    args: None,
                 },
                 tracker,
                 journal: Journal::in_memory(),

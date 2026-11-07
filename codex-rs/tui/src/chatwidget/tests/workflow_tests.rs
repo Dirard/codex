@@ -569,3 +569,99 @@ async fn closed_screen_builds_nothing_and_reads_are_spaced() {
     );
     assert_eq!(refreshes(&app_events(&mut rx)), 0);
 }
+
+/// Submits `text` from the composer, as the user does with Enter.
+fn submit_composer_text(chat: &mut ChatWidget, text: &str) {
+    chat.bottom_pane
+        .set_composer_text(text.to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+}
+
+/// Builtin-workflows R9.1: `/code-review` exists only while both `features.workflows` and
+/// `features.builtin_workflows` are enabled, and runtime toggles show or hide it.
+#[tokio::test]
+async fn code_review_command_follows_both_features() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    drain_insert_history(&mut rx);
+    let popup = |chat: &mut ChatWidget| {
+        chat.bottom_pane
+            .set_composer_text("/code-r".to_string(), Vec::new(), Vec::new());
+        render_bottom_popup(chat, /*width*/ 100)
+    };
+    for (workflows, builtins) in [(false, false), (true, false), (false, true)] {
+        chat.set_feature_enabled(Feature::Workflows, workflows);
+        chat.set_feature_enabled(Feature::BuiltinWorkflows, builtins);
+        let shown = popup(&mut chat);
+        assert!(
+            !shown.contains("/code-review"),
+            "workflows {workflows}, built-ins {builtins}: {shown}"
+        );
+    }
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    let shown = popup(&mut chat);
+    assert!(
+        shown.contains("/code-review")
+            && shown.contains("review changes with several agents and keep only verified findings"),
+        "{shown}"
+    );
+    assert!(!SlashCommand::CodeReview.available_during_task());
+    assert!(SlashCommand::CodeReview.supports_inline_args());
+    chat.set_feature_enabled(Feature::BuiltinWorkflows, /*enabled*/ false);
+    assert!(!popup(&mut chat).contains("/code-review"));
+}
+
+/// Builtin-workflows R9.2, R9.4: `/code-review` submits one user message, the canonical
+/// review turn for its arguments.
+#[tokio::test]
+async fn code_review_command_submits_the_canonical_turn() {
+    for (input, args) in [
+        (
+            "/code-review MAX main",
+            serde_json::json!({ "effort": "max", "target": "main" }),
+        ),
+        ("/code-review", serde_json::json!({})),
+        (
+            "/code-review security of src/auth",
+            serde_json::json!({ "target": "security of src/auth" }),
+        ),
+    ] {
+        let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+        chat.set_feature_enabled(Feature::BuiltinWorkflows, /*enabled*/ true);
+        drain_insert_history(&mut rx);
+
+        submit_composer_text(&mut chat, input);
+
+        assert_eq!(chat.input_queue.queued_user_messages.len(), 1, "{input}");
+        assert_eq!(
+            chat.input_queue.queued_user_messages.front().unwrap().text,
+            codex_workflow::review_turn_text(&args),
+            "{input}"
+        );
+    }
+}
+
+/// Builtin-workflows R9.3: `/review` still opens the preset popup and submits nothing, with
+/// the built-in workflows enabled.
+#[tokio::test]
+async fn review_command_is_unchanged_by_code_review() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::BuiltinWorkflows, /*enabled*/ true);
+    drain_insert_history(&mut rx);
+
+    chat.bottom_pane
+        .set_composer_text("/review".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(chat.input_queue.queued_user_messages.is_empty());
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Review against a base branch")
+            && popup.contains("Review uncommitted changes"),
+        "{popup}"
+    );
+}
