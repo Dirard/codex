@@ -11,6 +11,7 @@ use codex_protocol::models::PermissionProfile;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -348,5 +349,117 @@ async fn a_session_start_sweeps_old_outputs_with_the_feature_off() -> Result<()>
         "older than max_age_days"
     );
     assert!(thread.join("fresh.txt").exists());
+    Ok(())
+}
+
+/// The cell output of the Code Mode `exec` call `call_id` that a request carried.
+fn cell_output(
+    request: &core_test_support::responses::ResponsesRequest,
+    call_id: &str,
+) -> serde_json::Value {
+    request.custom_tool_call_output(call_id)["output"].clone()
+}
+
+/// The texts of a cell output, joined.
+fn cell_text(output: &serde_json::Value) -> String {
+    match output {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item.get("text").and_then(serde_json::Value::as_str))
+            .collect(),
+        other => panic!("unexpected cell output {other}"),
+    }
+}
+
+/// R7.1, R7.2, R7.4, R7.5 (live run 2026-11-07): a Code Mode cell calls `tools.exec_command` with
+/// a small `max_output_tokens`. The `output` the script prints ends with the notice, which names
+/// `tools.exec_command`, and the file holds the whole output. The cell output is recorded and
+/// replayed on resume like any cell output, with the notice and nothing more.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_nested_exec_command_cut_is_saved_for_the_script() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_remote!(Ok(()), "the spill file is written on the Codex host");
+    let code_mode = |config: &mut codex_core::config::Config| {
+        config
+            .features
+            .enable(Feature::CodeMode)
+            .expect("enable code_mode");
+    };
+    let server = start_mock_server().await;
+    let fixture = builder(
+        /*enabled*/ true, /*token_limit*/ None, /*max_lines*/ None,
+    )
+    .with_config(code_mode)
+    .build(&server)
+    .await?;
+    let code = r#"const r = await tools.exec_command({ cmd: "seq 1 5000", max_output_tokens: 100 });
+text(r.output);"#;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-cell"),
+            ev_custom_tool_call("spill-cell", "exec", code),
+            ev_completed("resp-cell"),
+        ]),
+    )
+    .await;
+    let answer = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-cell", "done"),
+            ev_completed("resp-cell-done"),
+        ]),
+    )
+    .await;
+    fixture
+        .submit_turn_with_permission_profile(
+            "run the command in a cell",
+            PermissionProfile::Disabled,
+        )
+        .await?;
+    let output = cell_output(&answer.single_request(), "spill-cell");
+    let text = cell_text(&output);
+
+    assert_eq!(text.matches(NOTICE_PREFIX).count(), 1, "{text}");
+    assert!(text.contains("tokens truncated"), "{text}");
+    assert!(!text.contains("\n2500\n"), "the middle was cut");
+    let path = notice_path(&text).with_context(|| format!("no notice in {text}"))?;
+    let thread_dir = spill_dir(&fixture)
+        .canonicalize()?
+        .join(fixture.session_configured.thread_id.to_string());
+    assert_eq!(path.parent(), Some(thread_dir.as_path()));
+    assert_eq!(std::fs::read_to_string(&path)?, seq_output(5000));
+    let notice = &text[text.rfind(NOTICE_PREFIX).unwrap_or_default()..];
+    assert!(
+        notice.contains("(5000 lines, 23893 bytes, ~5974 tokens). Read the omitted part with tools.exec_command, e.g. sed -n 'A,Bp' or rg -n 'PATTERN' on that file."),
+        "{notice}"
+    );
+    assert!(text.ends_with(notice), "{text}");
+    assert!(text.contains("\n\nFull output saved to: "), "{text}");
+
+    let rollout = rollout_text(&fixture).await?;
+    let line = rollout
+        .lines()
+        .find(|line| line.contains("\"custom_tool_call_output\"") && line.contains("spill-cell"))
+        .context("rollout line of the cell output")?;
+    let item: serde_json::Value = serde_json::from_str(line)?;
+    assert_eq!(item["payload"]["output"], output);
+
+    let resumed_answer = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-resumed", "resumed"),
+            ev_completed("resp-resumed"),
+        ]),
+    )
+    .await;
+    let mut resume_builder = builder(/*enabled*/ false, Some(50), Some(3)).with_config(code_mode);
+    let resumed = resume_builder.restart(&server, &fixture).await?;
+    resumed.submit_turn("continue").await?;
+    assert_eq!(
+        cell_output(&resumed_answer.single_request(), "spill-cell"),
+        output
+    );
     Ok(())
 }

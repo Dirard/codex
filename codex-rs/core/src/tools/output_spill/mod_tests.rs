@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use super::store::SpillRecord;
 use super::*;
 use crate::context_manager::ContextManager;
 use crate::function_tool::FunctionCallError;
@@ -131,14 +132,19 @@ fn test_record(path: &str) -> SpillRecord {
     }
 }
 
-/// R4.2: the notice text, as its own item after media, and with a capped file.
+/// R4.2, R7.4: the notice text, with `tools.exec_command` for Code Mode, as its own item after
+/// media, and with a capped file.
 #[test]
 fn the_notice_follows_the_template() {
     let record = test_record("/home/user/.codex/tool_outputs/t/0123456789abcdef.txt");
-    let notice = notice::spill_notice(&record);
+    let notice = notice::spill_notice(&record, "exec_command");
     assert_eq!(
         notice,
         "Full output saved to: /home/user/.codex/tool_outputs/t/0123456789abcdef.txt (5000 lines, 38893 bytes, ~9724 tokens). Read the omitted part with exec_command, e.g. sed -n 'A,Bp' or rg -n 'PATTERN' on that file."
+    );
+    assert_eq!(
+        notice::spill_notice(&record, "tools.exec_command"),
+        "Full output saved to: /home/user/.codex/tool_outputs/t/0123456789abcdef.txt (5000 lines, 38893 bytes, ~9724 tokens). Read the omitted part with tools.exec_command, e.g. sed -n 'A,Bp' or rg -n 'PATTERN' on that file."
     );
     let capped = SpillRecord {
         capped: Some(store::CappedSpill {
@@ -148,7 +154,7 @@ fn the_notice_follows_the_template() {
         ..record
     };
     assert_eq!(
-        notice::spill_notice(&capped),
+        notice::spill_notice(&capped, "exec_command"),
         "Full output saved to: /home/user/.codex/tool_outputs/t/0123456789abcdef.txt (5000 lines, 38893 bytes, ~9724 tokens; the file keeps the first and last 4194304 bytes of 9000000). Read the omitted part with exec_command, e.g. sed -n 'A,Bp' or rg -n 'PATTERN' on that file."
     );
 
@@ -370,7 +376,7 @@ fn dynamic_tool_output_is_eligible_and_unchanged() {
 }
 
 /// A session whose turn has the feature on, `CODEX_HOME` at `codex_home`, a 100-line history
-/// limit and a step that exposes `exec_command`.
+/// limit and a Code Mode step that offers `exec_command` as a tool and inside Code Mode.
 async fn spill_session(
     codex_home: &tempfile::TempDir,
     enabled: bool,
@@ -387,16 +393,40 @@ async fn spill_session(
     config.output_truncation.max_lines = Some(100);
     turn.config = Arc::new(config);
     let turn = Arc::new(turn);
+    let step = step_with_exec_command(&turn, /*direct*/ true, /*nested*/ true);
+    (Arc::new(session), turn, step)
+}
+
+/// A step of `turn` that offers `exec_command` as a model tool (`direct`) and inside Code Mode
+/// (`nested`).
+fn step_with_exec_command(turn: &Arc<TurnContext>, direct: bool, nested: bool) -> Arc<StepContext> {
+    let spec = ToolSpec::Function(codex_tools::ResponsesApiTool {
+        name: "exec_command".to_string(),
+        description: "Test tool.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: codex_tools::JsonSchema::default(),
+        output_schema: None,
+    });
+    let tool_mode = match (direct, nested) {
+        (_, false) => ToolMode::Direct,
+        (true, true) => ToolMode::CodeMode,
+        (false, true) => ToolMode::CodeModeOnly,
+    };
+    let code_mode_tool_names = if nested {
+        BTreeMap::from([("exec_command".to_string(), ToolName::plain("exec_command"))])
+    } else {
+        BTreeMap::new()
+    };
     let router = ToolRouter::from_parts(
         ToolRegistry::empty_for_test(),
-        Vec::new(),
-        ToolMode::Direct,
-        BTreeMap::from([("exec_command".to_string(), ToolName::plain("exec_command"))]),
+        if direct { vec![spec] } else { Vec::new() },
+        tool_mode,
+        code_mode_tool_names,
         /*tool_namespaces_info*/ None,
         &[],
     );
-    let step = StepContext::for_test(Arc::clone(&turn)).with_tool_router_for_test(Arc::new(router));
-    (Arc::new(session), turn, step)
+    StepContext::for_test(Arc::clone(turn)).with_tool_router_for_test(Arc::new(router))
 }
 
 fn invocation(
@@ -512,32 +542,164 @@ async fn output_that_fits_is_not_wrapped() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// R1.4: nested Code Mode calls are never spilled; JavaScript gets the raw result.
+fn nested_source() -> ToolCallSource {
+    ToolCallSource::CodeMode {
+        cell_id: "cell-1".to_string(),
+        runtime_tool_call_id: "tool-1".to_string(),
+    }
+}
+
+/// An exec output of `text` for a call with `max_output_tokens`.
+fn exec_output_with_budget(text: &str, max_output_tokens: Option<usize>) -> ExecCommandToolOutput {
+    ExecCommandToolOutput {
+        max_output_tokens,
+        ..exec_output(text)
+    }
+}
+
+/// R7.1, R7.2, R7.4, R7.5: a nested `exec_command` whose own `max_output_tokens` cut the output is
+/// saved whole; the script gets the same result with the notice after its output, and the rest
+/// of the result, its history item and its logs stay the original's.
 #[tokio::test]
-async fn nested_code_mode_calls_are_not_spilled() -> anyhow::Result<()> {
+async fn a_cut_nested_exec_result_is_spilled_for_the_script() -> anyhow::Result<()> {
     let home = tempfile::tempdir()?;
     let (session, turn, step) = spill_session(&home, /*enabled*/ true).await;
-    let long = numbered_lines(5000);
-    let mut nested = result(Box::new(exec_output(&long)));
+    let full = numbered_lines(5000);
+    let original = || exec_output_with_budget(&full, Some(100));
+    let mut nested = result(Box::new(original()));
     spill_truncated_output(
-        &invocation(
-            &session,
-            &turn,
-            &step,
-            ToolCallSource::CodeMode {
-                cell_id: "cell-1".to_string(),
-                runtime_tool_call_id: "tool-1".to_string(),
-            },
-        ),
+        &invocation(&session, &turn, &step, nested_source()),
         &mut nested,
     )
     .await;
+
+    let files = spill_files(home.path());
+    let [file] = files.as_slice() else {
+        panic!("expected one spill file, got {files:?}");
+    };
+    assert_eq!(std::fs::read_to_string(file)?, full);
+    let payload = function_payload();
+    let mut expected = original().code_mode_result(&payload);
+    let cut = expected[SCRIPT_TEXT_FIELD]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("no output in {expected}"))?;
+    assert!(cut.contains("truncated"), "{cut}");
+    expected[SCRIPT_TEXT_FIELD] = JsonValue::String(format!(
+        "{cut}\n\nFull output saved to: {} (5000 lines, {} bytes, ~{} tokens). Read the omitted part with tools.exec_command, e.g. sed -n 'A,Bp' or rg -n 'PATTERN' on that file.",
+        file.canonicalize()?.display(),
+        full.len(),
+        approx_token_count(&full)
+    ));
+    assert_eq!(nested.result.code_mode_result(&payload), expected);
     assert_eq!(
-        nested.code_mode_result(),
-        exec_output(&long).code_mode_result(&function_payload())
+        nested.result.to_response_item(CALL_ID, &payload),
+        original().to_response_item(CALL_ID, &payload)
     );
-    assert!(!home.path().join("tool_outputs").exists());
+    assert_eq!(
+        nested.result.history_truncation_override(),
+        original().history_truncation_override()
+    );
+    assert_eq!(nested.result.log_output(), original().log_output());
+    assert_eq!(
+        nested.result.post_tool_use_response(CALL_ID, &payload),
+        original().post_tool_use_response(CALL_ID, &payload)
+    );
+    assert_eq!(
+        nested.result.spill_text(),
+        None,
+        "the hook runs once per call"
+    );
     Ok(())
+}
+
+/// Builds a tool output of a text.
+type OutputOf = fn(&str) -> Box<dyn ToolOutput>;
+
+/// R7.2, R7.3, R7.6: nested results that reach the script whole are left alone and nothing is
+/// written, however long: `exec_command` without `max_output_tokens` or within it, an MCP result
+/// and a dynamic tool result; so is a cut `exec_command` result while the feature is off.
+#[tokio::test]
+async fn nested_results_the_script_gets_whole_are_not_spilled() -> anyhow::Result<()> {
+    let home = tempfile::tempdir()?;
+    let (session, turn, step) = spill_session(&home, /*enabled*/ true).await;
+    let long = numbered_lines(5000);
+    let payload = function_payload();
+    let outputs: [(&str, OutputOf); 4] = [
+        ("exec without max_output_tokens", |text| {
+            Box::new(exec_output_with_budget(
+                text, /*max_output_tokens*/ None,
+            ))
+        }),
+        ("exec within max_output_tokens", |text| {
+            Box::new(exec_output_with_budget(text, Some(1_000_000)))
+        }),
+        ("mcp", |text| {
+            Box::new(mcp_output(
+                text,
+                OutputTruncation::new(TruncationPolicy::Tokens(100), /*max_lines*/ None),
+            ))
+        }),
+        ("dynamic tool", |text| {
+            fork_dynamic_tool_output(FunctionToolOutput::from_text(text.to_string(), Some(true)))
+        }),
+    ];
+    for (name, output) in outputs {
+        assert!(output(&long).spill_text().is_some(), "{name} is eligible");
+        let mut nested = result(output(&long));
+        spill_truncated_output(
+            &invocation(&session, &turn, &step, nested_source()),
+            &mut nested,
+        )
+        .await;
+        assert_eq!(
+            nested.result.code_mode_result(&payload),
+            output(&long).code_mode_result(&payload),
+            "{name}"
+        );
+    }
+    assert!(!home.path().join("tool_outputs").exists());
+
+    let off_home = tempfile::tempdir()?;
+    let (session, turn, step) = spill_session(&off_home, /*enabled*/ false).await;
+    let mut off = result(Box::new(exec_output_with_budget(&long, Some(100))));
+    spill_truncated_output(
+        &invocation(&session, &turn, &step, nested_source()),
+        &mut off,
+    )
+    .await;
+    assert_eq!(
+        off.result.code_mode_result(&payload),
+        exec_output_with_budget(&long, Some(100)).code_mode_result(&payload)
+    );
+    assert!(!off_home.path().join("tool_outputs").exists());
+    Ok(())
+}
+
+/// R7.4: a notice that reaches a script names `tools.exec_command`; a direct notice names
+/// `exec_command` when the model has it as a tool or there is no Code Mode, and
+/// `tools.exec_command` when the step offers it only inside Code Mode.
+#[tokio::test]
+async fn the_notice_names_how_the_model_reaches_exec_command() {
+    let (_, turn) = crate::session::tests::make_session_and_context().await;
+    let turn = Arc::new(turn);
+    for (direct, nested, direct_call, nested_call) in [
+        (true, true, "exec_command", "tools.exec_command"),
+        (false, true, "tools.exec_command", "tools.exec_command"),
+        (true, false, "exec_command", "exec_command"),
+    ] {
+        let step = step_with_exec_command(&turn, direct, nested);
+        assert_eq!(
+            exec_command_reference(&step, &ToolCallSource::Direct),
+            direct_call,
+            "direct: {direct}, nested: {nested}"
+        );
+        assert_eq!(
+            exec_command_reference(&step, &nested_source()),
+            nested_call,
+            "direct: {direct}, nested: {nested}"
+        );
+    }
 }
 
 /// R1.5: when the file cannot be written the output is delivered as without the feature.

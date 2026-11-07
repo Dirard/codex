@@ -4,8 +4,9 @@
 use super::store::SpillRecord;
 
 /// `spill_notice`, with `spill_notice_when_capped` after the token count when `max_file_bytes`
-/// cut the middle of the file (R3.3, R4.2).
-pub(crate) fn spill_notice(record: &SpillRecord) -> String {
+/// cut the middle of the file (R3.3, R4.2). `reader` is how the model calls `exec_command`:
+/// `exec_command`, or `tools.exec_command` from a Code Mode cell (R7.4).
+pub(crate) fn spill_notice(record: &SpillRecord, reader: &str) -> String {
     let SpillRecord {
         path,
         lines,
@@ -22,7 +23,7 @@ pub(crate) fn spill_notice(record: &SpillRecord) -> String {
         })
         .unwrap_or_default();
     format!(
-        "Full output saved to: {} ({lines} lines, {bytes} bytes, ~{tokens} tokens{capped}). Read the omitted part with exec_command, e.g. sed -n 'A,Bp' or rg -n 'PATTERN' on that file.",
+        "Full output saved to: {} ({lines} lines, {bytes} bytes, ~{tokens} tokens{capped}). Read the omitted part with {reader}, e.g. sed -n 'A,Bp' or rg -n 'PATTERN' on that file.",
         path.display()
     )
 }
