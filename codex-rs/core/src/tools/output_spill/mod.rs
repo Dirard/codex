@@ -68,9 +68,6 @@ pub(crate) async fn spill_truncated_output(
     if full.is_empty() {
         return;
     }
-    let Some(thread_dir) = spill_reader_dir(step, invocation.session.thread_id) else {
-        return;
-    };
     let truncation = history_truncation(result.result.as_ref(), step);
     let (ResponseInputItem::FunctionCallOutput { mut output, .. }
     | ResponseInputItem::CustomToolCallOutput { mut output, .. }) = result
@@ -83,6 +80,11 @@ pub(crate) async fn spill_truncated_output(
     if visible_text(&output).contains(full.as_ref()) {
         return;
     }
+    // After the in-memory decision: the reader check resolves the sandbox policy for every
+    // directory above the file and touches the disk.
+    let Some(thread_dir) = spill_reader_dir(step, invocation.session.thread_id) else {
+        return;
+    };
     let full = full.into_owned();
     let record =
         match store::save(thread_dir, &result.call_id, full, *config.tool_output_spill).await {
@@ -111,7 +113,7 @@ pub(crate) async fn spill_truncated_output(
 /// Use case 3, step "find a spill directory that the step's exec_command can read": the
 /// thread directory when the step's primary environment is local, `exec_command` is available
 /// to the model (directly, through Code Mode or tool search) and its sandbox can read the
-/// directory (R3.4–R3.6).
+/// directory but cannot redirect it (R3.4–R3.6).
 fn spill_reader_dir(
     step: &StepContext,
     thread_id: codex_protocol::ThreadId,
@@ -433,6 +435,17 @@ impl ToolOutput for ItemTextSpill {
     fn spill_text(&self) -> Option<Cow<'_, str>> {
         Some(item_text(&self.0.body))
     }
+}
+
+/// Use case 5, step "sweep old files and the total size": a starting session sweeps the saved
+/// outputs of all threads in the background with the feature on or off, so files saved while
+/// it was on keep their age and size limits after it is turned off (R5.2; review 2026-11-07,
+/// S-3). A sweep runs at most once an hour per `CODEX_HOME` in a process; the handle lets
+/// tests wait for it, callers drop it.
+pub(crate) fn sweep_on_session_start(
+    config: &crate::config::Config,
+) -> Option<tokio::task::JoinHandle<()>> {
+    store::sweep_in_background(config.codex_home.as_path(), *config.tool_output_spill)
 }
 
 /// Fork hook of `thread/delete` in app-server: removes the saved full outputs of `thread_ids`,

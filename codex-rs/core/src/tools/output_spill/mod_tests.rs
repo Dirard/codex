@@ -656,3 +656,70 @@ async fn failure_responses_are_not_spilled() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+/// S-2 (review 2026-11-07): two long outputs of one call id in a thread are saved to two files,
+/// and each notice names the file with its own output.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_repeated_call_id_gets_its_own_file() -> anyhow::Result<()> {
+    let home = tempfile::tempdir()?;
+    let (session, turn, step) = spill_session(&home, /*enabled*/ true).await;
+    let mut notices = Vec::new();
+    for marker in ["first", "second"] {
+        let full = format!("{marker}\n{}", numbered_lines(5000));
+        let mut spilled = result(Box::new(exec_output(&full)));
+        spill_truncated_output(
+            &invocation(&session, &turn, &step, ToolCallSource::Direct),
+            &mut spilled,
+        )
+        .await;
+        let text = text_of(&recorded(
+            spilled,
+            step.output_truncation(),
+            /*replay*/ true,
+        ));
+        let (_, notice) = split_notice(&text);
+        let path = notice
+            .strip_prefix("Full output saved to: ")
+            .and_then(|rest| rest.split(" (").next())
+            .map(PathBuf::from)
+            .ok_or_else(|| anyhow::anyhow!("no path in {notice}"))?;
+        notices.push((path, full));
+    }
+    assert_ne!(notices[0].0, notices[1].0);
+    for (path, full) in &notices {
+        assert_eq!(&std::fs::read_to_string(path)?, full);
+    }
+    assert_eq!(spill_files(home.path()).len(), 2);
+    Ok(())
+}
+
+/// S-3 (review 2026-11-07): a starting session sweeps saved outputs without a spill and with
+/// the feature off: expired files go, fresh ones stay.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_starting_session_sweeps_with_the_feature_off() -> anyhow::Result<()> {
+    let home = tempfile::tempdir()?;
+    let (_session, turn, _step) = spill_session(&home, /*enabled*/ false).await;
+    let thread = home.path().join(store::SPILL_DIR).join("old-thread");
+    crate::fork_private_fs::create_private_dir(&thread)?;
+    let expired = thread.join("expired.txt");
+    let fresh = thread.join("fresh.txt");
+    std::fs::write(&expired, "secret")?;
+    std::fs::write(&fresh, "recent")?;
+    let max_age =
+        std::time::Duration::from_secs(turn.config.tool_output_spill.max_age_days * 86_400);
+    std::fs::File::options()
+        .write(true)
+        .open(&expired)?
+        .set_modified(
+            std::time::SystemTime::now() - max_age - std::time::Duration::from_secs(60),
+        )?;
+
+    if let Some(sweep) = sweep_on_session_start(&turn.config) {
+        sweep.await?;
+    }
+    assert!(!expired.exists(), "older than max_age_days");
+    assert!(fresh.exists());
+    Ok(())
+}

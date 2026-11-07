@@ -310,3 +310,43 @@ async fn ephemeral_thread_removes_its_outputs_on_shutdown() -> Result<()> {
     assert!(!thread_dir.exists(), "{}", thread_dir.display());
     Ok(())
 }
+
+/// S-3 (review 2026-11-07): a starting session sweeps saved outputs older than `max_age_days`
+/// with the feature off and before any spill; younger files stay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_start_sweeps_old_outputs_with_the_feature_off() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_remote!(Ok(()), "the spill files live on the Codex host");
+    let server = start_mock_server().await;
+    let fixture = builder(
+        /*enabled*/ false, /*token_limit*/ None, /*max_lines*/ None,
+    )
+    .with_pre_build_hook(|home| {
+        let thread = home.join("tool_outputs").join("old-thread");
+        std::fs::create_dir_all(&thread).expect("create a thread directory");
+        std::fs::write(thread.join("expired.txt"), "secret").expect("write expired");
+        std::fs::write(thread.join("fresh.txt"), "recent").expect("write fresh");
+        std::fs::File::options()
+            .write(true)
+            .open(thread.join("expired.txt"))
+            .and_then(|file| {
+                file.set_modified(
+                    std::time::SystemTime::now() - std::time::Duration::from_secs(8 * 24 * 60 * 60),
+                )
+            })
+            .expect("age the expired file");
+    })
+    .build(&server)
+    .await?;
+    let thread = spill_dir(&fixture).join("old-thread");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while thread.join("expired.txt").exists() && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        !thread.join("expired.txt").exists(),
+        "older than max_age_days"
+    );
+    assert!(thread.join("fresh.txt").exists());
+    Ok(())
+}

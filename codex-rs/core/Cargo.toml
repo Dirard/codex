@@ -137,6 +137,10 @@ which = { workspace = true }
 whoami = { workspace = true }
 
 # Build OpenSSL from source for musl builds.
+[target.'cfg(unix)'.dependencies]
+# Fork: descriptor-relative, no-follow file operations of tool-output-spill (`fork_private_fs.rs`).
+rustix = { workspace = true, features = ["fs"] }
+
 [target.x86_64-unknown-linux-musl.dependencies]
 openssl-sys = { workspace = true, features = ["vendored"] }
 
