@@ -83,6 +83,9 @@ pub(super) fn server_notification_thread_target(
         ServerNotification::ThreadWorkflowUpdated(notification) => {
             Some(notification.thread_id.as_str())
         }
+        ServerNotification::ThreadWakeupUpdated(notification) => {
+            Some(notification.thread_id.as_str()) // Fork: scheduled wakeups
+        }
         ServerNotification::ThreadSettingsUpdated(notification) => {
             Some(notification.thread_id.as_str())
         }

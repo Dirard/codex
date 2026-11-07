@@ -6,8 +6,9 @@
 //! cancels the remaining runs and processes the cancellation's turn for a bounded time.
 //!
 //! The same hooks also wait for background terminals (`terminal_wait`,
-//! `specs/background-exec-notifications-2026-10-25.md` UC7): exec stays while either wait
-//! asks for it.
+//! `specs/background-exec-notifications-2026-10-25.md` UC7) and for scheduled wakeups
+//! (`wakeup_wait`, `specs/scheduled-wakeups-2026-11-07.md` UC7): exec stays while any of the
+//! three waits asks for it.
 
 use std::time::Duration;
 
@@ -27,8 +28,11 @@ use crate::send_request_with_response;
 
 #[path = "terminal_wait.rs"]
 mod terminal_wait;
-use terminal_wait::TerminalTick;
 use terminal_wait::TerminalWait;
+// Fork: scheduled wakeups (specs/scheduled-wakeups-2026-11-07.md, UC7).
+#[path = "wakeup_wait.rs"]
+mod wakeup_wait;
+use wakeup_wait::WakeupWait;
 
 /// How long exec processes the turn started by a cancellation before it exits anyway.
 const CANCEL_GRACE: Duration = Duration::from_secs(120);
@@ -98,6 +102,8 @@ pub(crate) struct ExecWorkflowWait {
     wait: Option<WorkflowWait>,
     /// Background terminals of the thread (UC7 of the background exec notifications spec).
     terminals: TerminalWait,
+    /// Scheduled wakeups and `/loop` of the thread (scheduled wakeups, UC7).
+    wakeups: WakeupWait,
 }
 
 impl ExecWorkflowWait {
@@ -108,24 +114,27 @@ impl ExecWorkflowWait {
             thread_id: thread_id.to_string(),
             wait: None,
             terminals: TerminalWait::new(config, thread_id),
+            wakeups: WakeupWait::new(config, thread_id),
         }
     }
 
     /// Whether exec waits for runs or terminals; the deadline branch of the loop is active
     /// only then.
     pub(crate) fn fork_is_waiting(&self) -> bool {
-        self.wait.is_some() || self.terminals.is_waiting()
+        self.wait.is_some() || self.terminals.is_waiting() || self.wakeups.is_waiting()
     }
 
     /// When a timer of a wait fires next; a day away while exec does not wait.
     pub(crate) fn fork_deadline(&self) -> Instant {
-        let workflow = self.wait.as_ref().map(WorkflowWait::deadline);
-        let terminals = self.terminals.next_wakeup();
-        match (workflow, terminals) {
-            (Some(workflow), Some(terminals)) => workflow.min(terminals),
-            (Some(deadline), None) | (None, Some(deadline)) => deadline,
-            (None, None) => Instant::now() + Duration::from_secs(24 * 60 * 60),
-        }
+        [
+            self.wait.as_ref().map(WorkflowWait::deadline),
+            self.terminals.next_wakeup(),
+            self.wakeups.next_wakeup(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or_else(|| Instant::now() + Duration::from_secs(24 * 60 * 60))
     }
 
     /// A timer fired. The workflow wait cancels the remaining runs the first time it times
@@ -139,19 +148,19 @@ impl ExecWorkflowWait {
         error_seen: &mut bool,
     ) -> bool {
         let now = Instant::now();
-        if self.terminals.is_waiting()
-            && self.terminals.next_wakeup().is_some_and(|at| at <= now)
-            && self
-                .terminals
+        if self.terminals.is_waiting() && self.terminals.next_wakeup().is_some_and(|at| at <= now) {
+            self.terminals
                 .on_tick(client, request_ids, event_processor, error_seen)
-                .await
-                == TerminalTick::Done
-            && self.wait.is_none()
-        {
-            return true;
+                .await;
+        }
+        // Fork: scheduled wakeups (R7.3).
+        if self.wakeups.is_waiting() && self.wakeups.next_wakeup().is_some_and(|at| at <= now) {
+            self.wakeups
+                .on_tick(client, request_ids, event_processor, error_seen)
+                .await;
         }
         let Some(wait) = self.wait.as_mut() else {
-            return !self.terminals.is_waiting();
+            return !self.terminals.is_waiting() && !self.wakeups.is_waiting();
         };
         if wait.deadline() > now {
             return false;
@@ -181,11 +190,17 @@ impl ExecWorkflowWait {
             .as_ref()
             .is_some_and(|wait| !wait.turn_in_progress);
         let terminals_idle = self.terminals.is_waiting() && !self.terminals.turn_in_progress();
+        let wakeups_idle = self.wakeups.is_waiting() && !self.wakeups.turn_in_progress();
         let stops = (self.wait.is_none() || workflow_idle)
             && (!self.terminals.is_waiting() || terminals_idle)
-            && (self.wait.is_some() || self.terminals.is_waiting());
+            && (!self.wakeups.is_waiting() || wakeups_idle)
+            && (self.wait.is_some() || self.terminals.is_waiting() || self.wakeups.is_waiting());
         if stops {
             self.terminals
+                .on_interrupt(client, request_ids, event_processor, error_seen)
+                .await;
+            // Fork: Ctrl-C cancels a scheduled wakeup exec waits for (R7.4).
+            self.wakeups
                 .on_interrupt(client, request_ids, event_processor, error_seen)
                 .await;
         }
@@ -206,6 +221,7 @@ impl ExecWorkflowWait {
             return true;
         }
         self.terminals.observe(notification, task_id);
+        self.wakeups.observe(notification, task_id); // Fork: scheduled wakeups (R7.1)
         if let Some(wait) = self.wait.as_mut()
             && let codex_app_server_protocol::ServerNotification::TurnStarted(payload) =
                 notification
@@ -232,7 +248,9 @@ impl ExecWorkflowWait {
             .keep_waiting(client, request_ids, event_processor)
             .await;
         let workflows = self.keep_waiting_for_workflows(client, request_ids).await;
-        terminals || workflows
+        // Fork: and while the thread has a scheduled wakeup or `/loop` (scheduled wakeups R7.5).
+        let wakeups = self.wakeups.keep_waiting(client, request_ids).await;
+        terminals || workflows || wakeups
     }
 
     async fn keep_waiting_for_workflows(

@@ -270,6 +270,22 @@ impl LocalAgentControl {
         }
         message
     }
+
+    /// The completion mail of a child: its worktree checkpoint (spec UC4) and, while it has a
+    /// pending wakeup, when it resumes by itself (`specs/scheduled-wakeups-2026-11-07.md`,
+    /// R6.1).
+    pub(super) async fn fork_completion_message(
+        &self,
+        thread_id: ThreadId,
+        message: String,
+    ) -> String {
+        let mut message = self.with_worktree_checkpoint(thread_id, message).await;
+        if let Some(view) = self.runtime.fork_pending_wakeup(thread_id).await {
+            message.push_str("\n\n");
+            message.push_str(&crate::fork_wakeup::completion_note(&view));
+        }
+        message
+    }
 }
 
 /// A reused parent context does not carry the child's developer instructions, so an

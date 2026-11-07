@@ -328,6 +328,65 @@ async fn queued_background_terminal_notification_blocks_eviction() {
     assert_eq!(outcome, ThreadEvictionOutcome::Evicted);
 }
 
+/// Fork (scheduled wakeups R6.3): an idle V2 agent with a pending wakeup stays resident; once
+/// the beacon is clear it can be unloaded.
+#[tokio::test]
+async fn pending_wakeup_blocks_eviction() {
+    let mut config = test_config().await;
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    config.codex_home = temp_home.path().to_path_buf().try_into().unwrap();
+    config.cwd = temp_home.path().to_path_buf().try_into().unwrap();
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let root = manager
+        .start_thread(StartThreadOptions::new(config.clone()))
+        .await
+        .expect("start root thread");
+    let control = manager.agent_control();
+    let state = control
+        .runtime
+        .upgrade()
+        .expect("thread manager should be live");
+    let membership = control.runtime.admit_start().expect("admit residency work");
+    let worker = spawn_thread_spawn_agent(
+        &control,
+        &state,
+        config,
+        root.thread_id,
+        AgentPath::root().join("ci_watch").expect("worker path"),
+        /*depth*/ 1,
+    )
+    .await;
+    mark_thread_completed(worker.thread.as_ref()).await;
+    let beacon = worker
+        .thread
+        .thread_extension_data()
+        .get_or_init::<crate::fork_wakeup::WakeupBeacon>(Default::default);
+    beacon.set(Some(crate::fork_wakeup::PendingWakeupView {
+        due_at: chrono::Utc::now() + chrono::Duration::minutes(5),
+        loop_iteration: None,
+    }));
+
+    let outcome = state
+        .try_evict_v2_thread(Arc::clone(&worker.thread), &membership)
+        .await
+        .expect("try to evict worker");
+    assert_eq!(outcome, ThreadEvictionOutcome::Busy);
+    assert!(manager.get_thread(worker.thread_id).await.is_ok());
+
+    beacon.set(None);
+    let outcome = state
+        .try_evict_v2_thread(Arc::clone(&worker.thread), &membership)
+        .await
+        .expect("evict idle worker");
+    assert_eq!(outcome, ThreadEvictionOutcome::Evicted);
+}
+
 /// Fork (R3.6): a notification that never starts a turn does not keep its agent resident;
 /// the shutdown records it in the agent's history (R2.5).
 #[tokio::test]

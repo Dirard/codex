@@ -83,6 +83,7 @@ from .v2_all import ThreadStartedNotification
 from .v2_all import ThreadStatusChangedNotification
 from .v2_all import ThreadTokenUsageUpdatedNotification
 from .v2_all import ThreadUnarchivedNotification
+from .v2_all import ThreadWakeupUpdatedNotification
 from .v2_all import ThreadWorkflowUpdatedNotification
 from .v2_all import TurnCompletedNotification
 from .v2_all import TurnDiffUpdatedNotification
@@ -170,6 +171,7 @@ KnownNotificationPayload: TypeAlias = (
     | ThreadStatusChangedNotification
     | ThreadTokenUsageUpdatedNotification
     | ThreadUnarchivedNotification
+    | ThreadWakeupUpdatedNotification
     | ThreadWorkflowUpdatedNotification
     | TurnCompletedNotification
     | TurnDiffUpdatedNotification
@@ -260,6 +262,7 @@ NOTIFICATION_MODELS: dict[str, type[KnownNotificationPayload]] = {
     "thread/status/changed": ThreadStatusChangedNotification,
     "thread/tokenUsage/updated": ThreadTokenUsageUpdatedNotification,
     "thread/unarchived": ThreadUnarchivedNotification,
+    "thread/wakeup/updated": ThreadWakeupUpdatedNotification,
     "thread/workflow/updated": ThreadWorkflowUpdatedNotification,
     "turn/completed": TurnCompletedNotification,
     "turn/diff/updated": TurnDiffUpdatedNotification,
@@ -297,6 +300,7 @@ DIRECT_TURN_ID_NOTIFICATION_TYPES: tuple[type[BaseModel], ...] = (
     TerminalInteractionNotification,
     ThreadGoalUpdatedNotification,
     ThreadTokenUsageUpdatedNotification,
+    ThreadWakeupUpdatedNotification,
     TurnDiffUpdatedNotification,
     TurnModerationMetadataNotification,
     TurnPlanUpdatedNotification,

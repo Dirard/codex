@@ -112,9 +112,10 @@ impl LocalAgentControl {
         let Some(message) = message else {
             return;
         };
-        // Fork: an isolated child's changes are on its branch before the parent hears (UC4).
+        // Fork: an isolated child's changes are on its branch before the parent hears (UC4);
+        // a pending wakeup is named (scheduled wakeups, R6.1).
         let message = self
-            .with_worktree_checkpoint(outcome.thread_id, message)
+            .fork_completion_message(outcome.thread_id, message)
             .await;
         // `communication` owns the message. Keep a second copy only when the
         // recorder will actually need it after parent delivery succeeds.

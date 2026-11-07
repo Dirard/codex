@@ -81,6 +81,10 @@ pub(crate) enum ThreadListenerCommand {
     EmitThreadWorkflowUpdated {
         run: Box<WorkflowRun>,
     },
+    // Fork: EmitThreadWakeupUpdated orders scheduled-wakeup changes with thread notifications.
+    EmitThreadWakeupUpdated {
+        notification: Box<codex_app_server_protocol::ThreadWakeupUpdatedNotification>,
+    },
     // EmitWarning is used to order extension warnings with other thread notifications.
     EmitWarning {
         message: String,

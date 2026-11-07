@@ -274,6 +274,8 @@ mod workspace_command;
 mod workspace_messages;
 // Fork: the `/workflows` screen (specs/dynamic-workflow-2026-10-25.md, UC 8.1).
 mod workflows;
+// Fork: `/loop` (specs/scheduled-wakeups-2026-11-07.md, UC9).
+mod wakeups;
 
 mod wrapping;
 

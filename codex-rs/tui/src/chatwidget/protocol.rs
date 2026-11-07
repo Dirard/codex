@@ -86,6 +86,10 @@ impl ChatWidget {
             ServerNotification::ThreadWorkflowUpdated(notification) => {
                 self.on_workflow_updated(notification);
             }
+            // Fork: scheduled wakeups (specs/scheduled-wakeups-2026-11-07.md, R9.2, R9.3).
+            ServerNotification::ThreadWakeupUpdated(notification) => {
+                self.on_wakeup_updated(notification);
+            }
             ServerNotification::ThreadSettingsUpdated(notification) => {
                 self.on_thread_settings_updated(notification);
             }

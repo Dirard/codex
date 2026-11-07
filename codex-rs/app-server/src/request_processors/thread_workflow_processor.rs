@@ -56,6 +56,12 @@ impl ThreadWorkflowRequestProcessor {
                 .pending_background_terminals(params)
                 .await
                 .map(|response| Some(response.into())),
+            // Fork: scheduled wakeups (specs/scheduled-wakeups-2026-11-07.md, UC8).
+            request @ (ClientRequest::ThreadWakeupRead { .. }
+            | ClientRequest::ThreadWakeupCancel { .. }
+            | ClientRequest::ThreadLoopStart { .. }) => {
+                super::thread_wakeup_fork::handle(&self.thread_manager, request).await
+            }
             other => Err(internal_error(format!(
                 "{} is not a thread/workflow request",
                 other.method_name()

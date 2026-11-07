@@ -116,6 +116,11 @@ fn server_notification_requires_delivery(notification: &ServerNotification) -> b
     if let ServerNotification::ThreadWorkflowUpdated(update) = notification {
         return update.run.status.is_terminal();
     }
+    // Fork: wakeup changes are rare and `fired` or `loopEnded` is shown once (scheduled
+    // wakeups, R9.3), so never drop them.
+    if matches!(notification, ServerNotification::ThreadWakeupUpdated(_)) {
+        return true;
+    }
     matches!(
         notification,
         ServerNotification::ProcessOutputDelta(_)

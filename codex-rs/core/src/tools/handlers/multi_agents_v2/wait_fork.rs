@@ -254,15 +254,66 @@ pub(super) fn wait_outcome_for_activity(activity: InputQueueActivity) -> WaitOut
 pub(super) struct PendingWork {
     pub(super) terminals: Vec<WaitingTerminal>,
     pub(super) workflow_runs: Vec<String>,
+    /// Descendants with a scheduled wakeup (`specs/scheduled-wakeups-2026-11-07.md`, R6.2).
+    pub(super) wakeups: Vec<(String, crate::fork_wakeup::PendingWakeupView)>,
 }
 
-pub(super) async fn pending_work(session: &crate::session::session::Session) -> PendingWork {
+pub(super) async fn pending_work(
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
+) -> PendingWork {
     PendingWork {
         terminals: waiting_terminals(session).await,
         workflow_runs: crate::workflow::WorkflowRegistry::existing(session)
             .map(|registry| registry.active_run_ids())
             .unwrap_or_default(),
+        wakeups: descendant_wakeups(session, turn).await,
     }
+}
+
+/// The loaded descendants of the caller with a pending scheduled wakeup or `/loop`: each
+/// reports again after its wakeup, so a wait counts it as active (scheduled wakeups, R6.2).
+/// Workflow agents never schedule wakeups (R6.5). Empty when listing fails.
+pub(super) async fn descendant_wakeups(
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
+) -> Vec<(String, crate::fork_wakeup::PendingWakeupView)> {
+    let current_agent_path = turn
+        .session_source
+        .get_agent_path()
+        .unwrap_or_else(AgentPath::root);
+    let prefix = current_agent_path.to_string();
+    let Ok(agents) = session
+        .services
+        .agent_control
+        .list(
+            session.thread_id,
+            turn.parent_thread_id,
+            &turn.session_source,
+            Some(&prefix),
+        )
+        .await
+    else {
+        return Vec::new();
+    };
+    let mut wakeups = Vec::new();
+    for agent in agents {
+        let Some(path) = agent.metadata.agent_path.as_ref() else {
+            continue;
+        };
+        if *path == current_agent_path {
+            continue;
+        }
+        if let Some(view) = session
+            .services
+            .local_agent_runtime
+            .fork_pending_wakeup(agent.thread_id)
+            .await
+        {
+            wakeups.push((path.to_string(), view));
+        }
+    }
+    wakeups
 }
 
 /// The timeout snapshot's text about pending work, each part after a space; empty when
@@ -279,6 +330,7 @@ pub(super) fn describe_pending_work(pending: &PendingWork) -> String {
             pending.workflow_runs.join(", ")
         ));
     }
+    text.push_str(&crate::fork_wakeup::wait_timeout_note(&pending.wakeups));
     text
 }
 

@@ -98,6 +98,15 @@ pub(crate) fn thread_extensions(
             },
         );
     }
+    // Fork: scheduled wakeups, after the queue and goal (specs/scheduled-wakeups-2026-11-07.md).
+    codex_wakeup_extension::install(&mut builder, thread_manager.clone(), |config: &Config| {
+        codex_wakeup_extension::WakeupExtensionConfig {
+            enabled: config
+                .features
+                .enabled(codex_features::Feature::ScheduledWakeups),
+            limits: *config.scheduled_wakeups,
+        }
+    });
     codex_git_attribution::install(
         &mut builder,
         auth_manager.clone(),

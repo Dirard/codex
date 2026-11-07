@@ -73,6 +73,7 @@ pub(crate) fn without_notification_media(notification: ServerNotification) -> Se
         | ServerNotification::ThreadGoalCleared(_)
         | ServerNotification::ThreadQueueChanged(_)
         | ServerNotification::ThreadWorkflowUpdated(_)
+        | ServerNotification::ThreadWakeupUpdated(_) // Fork: scheduled wakeups
         | ServerNotification::ProjectChanged(_)
         | ServerNotification::ThreadProjectUpdated(_)
         | ServerNotification::EnvironmentConnected(_)

@@ -137,4 +137,18 @@ pub(super) async fn blocks_eviction(thread: &CodexThread) -> bool {
             .local_agent_runtime
             .workflow_children
             .has_pending_call(thread.session.thread_id)
+        // Scheduled wakeups (R6.3): unloading would lose a child's pending wakeup.
+        || crate::fork_wakeup::pending_wakeup(&thread.session.services.thread_extension_data)
+            .is_some()
+}
+
+impl LocalAgentRuntime {
+    /// Fork (scheduled wakeups R6.1, R6.2): the pending wakeup of a loaded agent.
+    pub(crate) async fn fork_pending_wakeup(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<crate::fork_wakeup::PendingWakeupView> {
+        let thread = self.upgrade().ok()?.get_thread(thread_id).await.ok()?;
+        crate::fork_wakeup::pending_wakeup(thread.thread_extension_data())
+    }
 }

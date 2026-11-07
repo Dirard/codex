@@ -103,8 +103,12 @@ impl Handler {
             outcome
         } else {
             let snapshot = active_descendant_snapshot(session.as_ref(), turn.as_ref()).await?;
+            // Fork: a descendant with a scheduled wakeup reports again (scheduled wakeups R6.2).
             let no_agents = snapshot == ActiveAgentSnapshot::default()
-                && !board_posts_may_arrive(session.as_ref(), turn.as_ref()).await?;
+                && !board_posts_may_arrive(session.as_ref(), turn.as_ref()).await?
+                && descendant_wakeups(session.as_ref(), turn.as_ref())
+                    .await
+                    .is_empty();
             // Fork: an expected background terminal notification is worth waiting for.
             let terminals_only = no_agents && session.has_pending_background_terminal_work().await;
             if no_agents && !terminals_only {
@@ -281,7 +285,10 @@ async fn wait_for_activity(
             if let Some(outcome) = recheck_activity(session, turn_state).await {
                 return Ok(outcome);
             }
-            Ok(WaitOutcome::TimedOut(snapshot, pending_work(session).await))
+            Ok(WaitOutcome::TimedOut(
+                snapshot,
+                pending_work(session, turn).await,
+            ))
         }
     }
 }

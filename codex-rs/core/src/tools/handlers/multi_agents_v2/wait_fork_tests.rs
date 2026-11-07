@@ -45,6 +45,7 @@ fn timeout_snapshot_describes_each_terminal() {
                     },
                 ],
                 workflow_runs: Vec::new(),
+                wakeups: Vec::new(),
             },
         ),
         /*requested_timeout_ms*/ None,
@@ -157,6 +158,7 @@ fn timeout_snapshot_names_active_workflow_runs() {
             PendingWork {
                 terminals: Vec::new(),
                 workflow_runs: vec!["wf-0000abcd".to_string(), "wf-0000beef".to_string()],
+                wakeups: Vec::new(),
             },
         ),
         /*requested_timeout_ms*/ None,
@@ -168,5 +170,33 @@ fn timeout_snapshot_names_active_workflow_runs() {
             message: "Wait timed out. Active agents: pending_init=0, running=0, interrupted=0. Workflow runs still active: wf-0000abcd, wf-0000beef. Their agents are not counted above; each run's completion is notified automatically, and workflow_status shows its progress.".to_string(),
             timed_out: true,
         }
+    );
+}
+
+/// Scheduled wakeups R6.2: a timeout names the descendants with a scheduled wakeup and when
+/// each is due.
+#[test]
+fn timeout_snapshot_names_agents_with_wakeups() {
+    use chrono::TimeZone;
+    let result = WaitAgentResult::from_outcome(
+        WaitOutcome::TimedOut(
+            ActiveAgentSnapshot::default(),
+            PendingWork {
+                wakeups: vec![(
+                    "/root/ci_watch".to_string(),
+                    crate::fork_wakeup::PendingWakeupView {
+                        due_at: chrono::Utc.with_ymd_and_hms(2026, 11, 7, 12, 5, 0).unwrap(),
+                        loop_iteration: None,
+                    },
+                )],
+                ..Default::default()
+            },
+        ),
+        /*requested_timeout_ms*/ None,
+        /*timeout_ms*/ 1_000,
+    );
+    assert_eq!(
+        result.message,
+        "Wait timed out. Active agents: pending_init=0, running=0, interrupted=0. Agents with scheduled wakeups: /root/ci_watch (next at 12:05:00Z). Each reports again after its wakeup; close_agent stops it."
     );
 }

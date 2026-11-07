@@ -461,6 +461,11 @@ async fn start_listener(
                         &conversation,
                         listener_command_tx.clone(),
                     ));
+                    // Fork: forward scheduled-wakeup changes (scheduled wakeups, R8.4).
+                    crate::wakeup_updates::forward_wakeup_updates(
+                        &conversation,
+                        listener_command_tx.clone(),
+                    );
                     listener_task_context
                         .thread_state_manager
                         .register_listener_command_tx(conversation_id, listener_command_tx);
@@ -1003,6 +1008,15 @@ pub(super) async fn handle_thread_listener_command(
                 thread_state_manager,
                 conversation_id,
                 *run,
+            )
+            .await;
+        }
+        ThreadListenerCommand::EmitThreadWakeupUpdated { notification } => {
+            crate::wakeup_updates::emit_thread_wakeup_updated(
+                outgoing,
+                thread_state_manager,
+                conversation_id,
+                *notification,
             )
             .await;
         }

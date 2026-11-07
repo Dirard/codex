@@ -6142,6 +6142,26 @@ class ThreadLoadedListResponse(BaseModel):
     ] = None
 
 
+class ThreadLoop(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    ends_at: Annotated[int, Field(alias="endsAt", description="Unix time in seconds.")]
+    id: str
+    interval_seconds: Annotated[
+        int | None,
+        Field(
+            alias="intervalSeconds",
+            description="Null for a self-paced loop, whose next iteration the model schedules.",
+            ge=0,
+        ),
+    ] = None
+    iteration: Annotated[int, Field(description="Iterations started so far.", ge=0)]
+    max_iterations: Annotated[int, Field(alias="maxIterations", ge=0)]
+    prompt: Annotated[str, Field(description="The user's prompt each iteration runs.")]
+    started_at: Annotated[int, Field(alias="startedAt", description="Unix time in seconds.")]
+
+
 class ThreadMemoryMode(Enum):
     enabled = "enabled"
     disabled = "disabled"
@@ -6872,6 +6892,46 @@ class ThreadUsageBreakdownGroup(BaseModel):
     reasoning_effort: Annotated[str | None, Field(alias="reasoningEffort")] = None
     speed: str | None = None
     total_tokens: Annotated[int | None, Field(alias="totalTokens")] = None
+
+
+class ThreadWakeupCancelReason(Enum):
+    model = "model"
+    user = "user"
+    interrupt = "interrupt"
+    limit = "limit"
+    failures = "failures"
+    replaced = "replaced"
+    completed = "completed"
+    thread_closed = "threadClosed"
+
+
+class ThreadWakeupChain(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    ends_at: Annotated[
+        int | None,
+        Field(
+            alias="endsAt",
+            description="Unix time in seconds; null before the chain's first wakeup.",
+        ),
+    ] = None
+    fired: Annotated[int, Field(ge=0)]
+    max_wakeups: Annotated[int, Field(alias="maxWakeups", ge=0)]
+
+
+class ThreadWakeupChange(Enum):
+    scheduled = "scheduled"
+    replaced = "replaced"
+    fired = "fired"
+    cancelled = "cancelled"
+    loop_started = "loopStarted"
+    loop_ended = "loopEnded"
+
+
+class ThreadWakeupOrigin(Enum):
+    model = "model"
+    loop = "loop"
 
 
 class TokenUsageBreakdown(BaseModel):
@@ -11461,6 +11521,47 @@ class ThreadUsage(BaseModel):
     thread_id: Annotated[str, Field(alias="threadId")]
 
 
+class ThreadWakeup(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    delay_seconds: Annotated[
+        int, Field(alias="delaySeconds", description="The effective delay in seconds.", ge=0)
+    ]
+    due: Annotated[bool, Field(description="Due and waiting for the thread to become idle.")]
+    due_at: Annotated[int, Field(alias="dueAt", description="Unix time in seconds.")]
+    id: str
+    origin: ThreadWakeupOrigin
+    prompt: Annotated[str | None, Field(description="The model's note for the wakeup.")] = None
+    reason: Annotated[
+        str | None, Field(description="Model-authored; control characters are replaced.")
+    ] = None
+    requested_delay_seconds: Annotated[int, Field(alias="requestedDelaySeconds", ge=0)]
+    scheduled_in_turn_id: Annotated[str | None, Field(alias="scheduledInTurnId")] = None
+
+
+class ThreadWakeupState(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    chain: ThreadWakeupChain
+    loop: ThreadLoop | None = None
+    wakeup: ThreadWakeup | None = None
+
+
+class ThreadWakeupUpdatedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    cancel_reason: Annotated[ThreadWakeupCancelReason | None, Field(alias="cancelReason")] = None
+    change: ThreadWakeupChange
+    state: ThreadWakeupState
+    thread_id: Annotated[str, Field(alias="threadId")]
+    turn_id: Annotated[
+        str | None, Field(alias="turnId", description="The turn a `fired` change started.")
+    ] = None
+
+
 class ToolsV2(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -12422,6 +12523,23 @@ class ThreadGoalUpdatedServerNotification(BaseModel):
         Literal["thread/goal/updated"], Field(title="Thread/goal/updatedNotificationMethod")
     ]
     params: ThreadGoalUpdatedNotification
+
+
+class ThreadWakeupUpdatedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    emitted_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="emittedAtMs",
+            description="Unix timestamp (in milliseconds) when app-server emitted this notification.",
+        ),
+    ] = None
+    method: Annotated[
+        Literal["thread/wakeup/updated"], Field(title="Thread/wakeup/updatedNotificationMethod")
+    ]
+    params: ThreadWakeupUpdatedNotification
 
 
 class ThreadSettingsUpdatedServerNotification(BaseModel):
@@ -14274,6 +14392,7 @@ class ServerNotification(
         | ThreadGoalClearedServerNotification
         | ThreadQueueChangedServerNotification
         | ThreadWorkflowUpdatedServerNotification
+        | ThreadWakeupUpdatedServerNotification
         | ProjectChangedServerNotification
         | ThreadProjectUpdatedServerNotification
         | ThreadEnvironmentConnectedServerNotification
@@ -14364,6 +14483,7 @@ class ServerNotification(
         | ThreadGoalClearedServerNotification
         | ThreadQueueChangedServerNotification
         | ThreadWorkflowUpdatedServerNotification
+        | ThreadWakeupUpdatedServerNotification
         | ProjectChangedServerNotification
         | ThreadProjectUpdatedServerNotification
         | ThreadEnvironmentConnectedServerNotification
