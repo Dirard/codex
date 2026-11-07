@@ -1,0 +1,19 @@
+---
+source: tui/src/chatwidget/tests/output_style_tests.rs
+expression: "render_bottom_popup(&chat, 100)"
+---
+  Output style
+  Choose how Codex communicates in this thread.
+
+
+  1. default                  Codex's standard communication; no extra instructions.
+› 2. outcome-first (current)  Outcome first, short updates, plain words; written for a teammate who
+                              was not watching.
+  3. explanatory              Adds short insights about codebase-specific choices while doing the
+                              task.
+  4. learning                 Asks you to write small key pieces of code (TODO(human)) and explains
+                              choices.
+  5. terse (user)             Short answers.
+  6. team (project)           Our team's voice.
+
+  enter select · esc back

@@ -66,6 +66,9 @@ const EXPERIMENTAL_CLIENT_METHOD_DEPENDENCY_TYPES: &[&str] = &[
     "UserVerificationInvalidRequestReason",
     "UserVerificationRpcError",
     "UserVerificationUnavailableReason",
+    // Fork: only `thread/outputStyle/*` use these (specs/output-styles-2026-11-07.md, R6.3).
+    "OutputStyleInfo",
+    "OutputStyleSource",
 ];
 const SPECIAL_DEFINITIONS: &[&str] = &[
     "ClientNotification",

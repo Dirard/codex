@@ -485,6 +485,13 @@ impl Session {
             world_state.add_section(crate::workflow::WorkflowRunsState::for_session(self));
             world_state.add_section(crate::workflow::WorkflowUltraModeState::new(step_context));
         }
+        // Fork: output styles (specs/output-styles-2026-11-07.md).
+        crate::output_style::add_world_state_section(
+            self,
+            &mut world_state,
+            step_context,
+            previous_world_state.as_ref().map(|state| &state.state),
+        );
         Ok(world_state)
     }
 }
