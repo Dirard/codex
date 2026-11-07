@@ -511,37 +511,44 @@ async fn unified_exec_pause_blocks_yield_timeout() -> anyhow::Result<()> {
     skip_if_sandbox!(Ok(()));
 
     let (session, turn) = test_session_and_turn().await;
+    // Fork: the pause outlasts the command. It holds the yield deadline while the command runs,
+    // but the exited command returns without waiting for the pause to lift
+    // (docs/fork/reports/2026-11-07-ci-network-approval.md).
     let elicitation = session.services.elicitations.register();
 
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        drop(elicitation);
-    });
-
     let started = tokio::time::Instant::now();
-    let response = exec_command(
-        &session,
-        &turn,
-        "sleep 1 && echo unified-exec-done",
-        /*yield_time_ms*/ 250,
-        /*workdir*/ None,
+    let response = tokio::time::timeout(
+        Duration::from_secs(30),
+        exec_command(
+            &session,
+            &turn,
+            "sleep 1 && echo unified-exec-done",
+            /*yield_time_ms*/ 250,
+            /*workdir*/ None,
+        ),
     )
-    .await?;
+    .await
+    .map_err(|_| anyhow::anyhow!("an exited command must not wait for the pause to lift"))??;
 
     assert!(
-        started.elapsed() >= Duration::from_secs(2),
+        started.elapsed() >= Duration::from_secs(1),
         "pause should block the unified exec yield timeout"
     );
     assert!(
         response
             .truncated_output(DEFAULT_MAX_OUTPUT_TOKENS)
             .contains("unified-exec-done"),
-        "exec_command should wait for output after the pause lifts"
+        "exec_command should collect the output of a command that exits during the pause"
     );
     assert!(
         response.process_id.is_none(),
         "completed command should not leave a background process"
     );
+    assert!(
+        *session.subscribe_elicitation_pause_state().borrow(),
+        "the command returned while the pause was still active"
+    );
+    drop(elicitation);
 
     Ok(())
 }

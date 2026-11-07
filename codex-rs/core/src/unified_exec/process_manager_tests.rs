@@ -672,3 +672,58 @@ async fn pruning_does_not_evict_live_process_while_exited_process_is_finalizing(
         (None, MAX_UNIFIED_EXEC_PROCESSES)
     );
 }
+
+/// Fork: a pause (a pending approval anywhere in the session) freezes the yield deadline of a
+/// running process, but a process that exits during the pause still finishes collecting
+/// (docs/fork/reports/2026-11-07-ci-network-approval.md).
+#[tokio::test]
+async fn paused_output_collection_finishes_when_the_process_exits() {
+    let output_buffer = Arc::new(tokio::sync::Mutex::new(OutputBuffers::<64>::default()));
+    let output_notify = Arc::new(Notify::new());
+    let output_closed = Arc::new(AtomicBool::new(false));
+    let output_closed_notify = Arc::new(Notify::new());
+    let cancellation_token = CancellationToken::new();
+    let output = OutputHandles {
+        output_buffer: Arc::clone(&output_buffer),
+        output_notify: Arc::clone(&output_notify),
+        output_closed: Arc::clone(&output_closed),
+        output_closed_notify: Arc::clone(&output_closed_notify),
+        cancellation_token: cancellation_token.clone(),
+        collection_finished: CancellationToken::new(),
+        drain_policy: OutputDrainPolicy::BoundedAfterExit,
+    };
+    let (pause_tx, pause_rx) = watch::channel(true);
+    let collect = tokio::spawn(async move {
+        UnifiedExecProcessManager::collect_output_until_deadline(
+            &output,
+            Some(pause_rx),
+            Instant::now() + Duration::from_millis(50),
+        )
+        .await
+    });
+
+    // The yield deadline passes while the process runs under the pause.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !collect.is_finished(),
+        "a pause must hold the yield deadline of a running process"
+    );
+
+    output_buffer
+        .lock()
+        .await
+        .push_chunk(ExecOutputStream::Stdout, b"done");
+    output_notify.notify_one();
+    output_closed.store(true, Ordering::Release);
+    cancellation_token.cancel();
+    output_closed_notify.notify_waiters();
+
+    let collected = tokio::time::timeout(Duration::from_secs(5), collect)
+        .await
+        .expect("an exited process must not wait for the pause to lift")
+        .expect("collection task");
+    let mut expected = HeadTailBuffer::<64>::default();
+    expected.push_chunk(b"done");
+    assert_eq!(collected, expected);
+    assert!(*pause_tx.borrow(), "the pause is still active");
+}

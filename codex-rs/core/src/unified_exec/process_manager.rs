@@ -1643,8 +1643,8 @@ impl UnifiedExecProcessManager {
         let stop_reason = loop {
             Self::extend_deadlines_while_paused(
                 &mut pause_state,
+                cancellation_token,
                 &mut deadline,
-                &mut post_exit_deadline,
             )
             .await;
             let drained_output: HeadTailBuffer<MAX_BYTES>;
@@ -1686,7 +1686,6 @@ impl UnifiedExecProcessManager {
                         _ = &mut notified => {}
                         _ = &mut closed => {}
                         _ = tokio::time::sleep(close_wait_remaining) => break StopReason::PostExitDeadline,
-                        _ = Self::wait_for_pause_change(pause_state.as_ref()) => {}
                     }
                     continue;
                 }
@@ -1732,28 +1731,34 @@ impl UnifiedExecProcessManager {
 
     async fn extend_deadlines_while_paused(
         pause_state: &mut Option<watch::Receiver<bool>>,
+        exit_signal: &CancellationToken,
         deadline: &mut Instant,
-        post_exit_deadline: &mut Option<Instant>,
     ) {
         let Some(receiver) = pause_state.as_mut() else {
             return;
         };
-        if !*receiver.borrow() {
+        // Fork: a pause (any pending approval or elicitation of the session) freezes the yield
+        // deadline of a running process only. An exited process finishes collecting, or an
+        // unrelated prompt would hold its result and, for a command that exits within the
+        // early-exit grace, its `ExecCommandEnd`
+        // (docs/fork/reports/2026-11-07-ci-network-approval.md).
+        if !*receiver.borrow() || exit_signal.is_cancelled() {
             return;
         }
 
         let paused_at = Instant::now();
         while *receiver.borrow() {
-            if receiver.changed().await.is_err() {
-                break;
+            tokio::select! {
+                changed = receiver.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                }
+                () = exit_signal.cancelled() => break,
             }
         }
 
-        let paused_for = paused_at.elapsed();
-        *deadline += paused_for;
-        if let Some(post_exit_deadline) = post_exit_deadline.as_mut() {
-            *post_exit_deadline += paused_for;
-        }
+        *deadline += paused_at.elapsed();
     }
 
     async fn wait_for_pause_change(pause_state: Option<&watch::Receiver<bool>>) {
