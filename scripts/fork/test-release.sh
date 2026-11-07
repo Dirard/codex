@@ -49,7 +49,8 @@ marker="Draft staged by fork-rust-release."
 #   id <TAB> draft <TAB> published_at <TAB> target <TAB> marker <TAB> html_url
 # in $FAKE_GH_STATE/releases. Workflow runs, run artifacts and commit
 # comparisons are raw API JSON (release.sh filters them with jq):
-# runs-<workflow file>, artifacts-<run id> and compare-<base>...<head>;
+# runs-<workflow file>, artifacts-<run id>, jobs-<run id> (default: a successful
+# job on the default runner per part artifact) and compare-<base>...<head>;
 # contents-<ref> is a raw file, and `gh run download` writes <name>.tar.
 # Unknown calls fail loudly.
 mkdir -p "${work}/bin"
@@ -125,6 +126,23 @@ case "${args}" in
     else
       echo "gh: Not Found (HTTP 404)" >&2
       exit 1
+    fi
+    ;;
+  " api repos/"*"/actions/runs/"*"/jobs?"*)
+    id="${args#*/actions/runs/}"
+    id="${id%%/jobs*}"
+    if [[ -f "${state}/jobs-${id}" ]]; then
+      cat "${state}/jobs-${id}"
+    else
+      # By default each part artifact of the run was built by a successful job
+      # on its default runner.
+      jq -c '{total_count: 0, jobs: [.artifacts[] | .name
+        | capture("^codex-parts-.*-(?<target>(x86_64|aarch64)-[a-z0-9_]+-[a-z0-9_]+(-[a-z0-9_]+)?)-(?<bundle>primary|app-server)$")
+        | {name: "Build \(.target) \(.bundle)", status: "completed", conclusion: "success",
+           labels: [{"x86_64-unknown-linux-gnu": "ubuntu-24.04", "aarch64-unknown-linux-gnu": "ubuntu-24.04-arm",
+             "x86_64-apple-darwin": "macos-15-intel", "aarch64-apple-darwin": "macos-15",
+             "x86_64-pc-windows-msvc": "windows-2025"}[.target]]}]}' \
+        "${state}/artifacts-${id}" 2>/dev/null || echo '{"total_count":0,"jobs":[]}'
     fi
     ;;
   " run download "*)
@@ -474,21 +492,29 @@ check find-run-no-parts-version fail 'unknown find-run option: --parts-version' 
 
 all_targets=(x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin
   aarch64-apple-darwin x86_64-pc-windows-msvc)
+default_matrix_json='[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},
+  {"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-gnu"},
+  {"runner":"macos-15-intel","target":"x86_64-apple-darwin"},
+  {"runner":"macos-15","target":"aarch64-apple-darwin"},
+  {"runner":"windows-2025","target":"x86_64-pc-windows-msvc"}]'
 part() { printf 'codex-parts-%s-%s-%s\n' "${PARTS_VERSION:-${version}}" "$1" "$2"; }
 win_primary="$(part x86_64-pc-windows-msvc primary)"
 win_app="$(part x86_64-pc-windows-msvc app-server)"
 arm_primary="$(part aarch64-unknown-linux-gnu primary)"
+arm_app="$(part aarch64-unknown-linux-gnu app-server)"
+x86_linux_primary="$(part x86_64-unknown-linux-gnu primary)"
+x86_linux_app="$(part x86_64-unknown-linux-gnu app-server)"
 sha_b="$(printf '%040d' 0 | tr 0 b)"
 
-# parts_listing [--expired NAME] [DROP...]: a run artifacts API response with
-# the ten parts of ${PARTS_VERSION:-version} but DROP (NAME expired), their
-# timings and the packages.
+# parts_listing [--expired NAME] [--expiring NAME] [DROP...]: a run artifacts
+# API response with the ten parts of ${PARTS_VERSION:-version} but DROP (NAME
+# expired, or expiring within an hour), their timings and the packages.
 parts_listing() {
-  local expired="" target bundle
-  if [[ "${1-}" == --expired ]]; then
-    expired="$2"
+  local expired="" expiring="" target bundle
+  while [[ "${1-}" == --expired || "${1-}" == --expiring ]]; do
+    if [[ "$1" == --expired ]]; then expired="$2"; else expiring="$2"; fi
     shift 2
-  fi
+  done
   {
     for target in "${all_targets[@]}"; do
       for bundle in primary app-server; do
@@ -497,9 +523,10 @@ parts_listing() {
       done
     done
     printf 'codex-%s-packages\ncodex-%s-SHA256SUMS\n' "${version}" "${version}"
-  } | jq -Rn --arg expired "${expired}" --args '
+  } | jq -Rn --arg expired "${expired}" --arg expiring "${expiring}" --args '
     [inputs | select(. as $n | $ARGS.positional | index($n) | not)
-      | {name: ., expired: (. == $expired)}]
+      | {name: ., expired: (. == $expired),
+         expires_at: (if . == $expiring then (now + 3600 | todate) else "2099-01-01T00:00:00Z" end)}]
     | {total_count: length, artifacts: .}' "$@"
 }
 # compare_json STATUS FILE...: a compare API response; FILE is NAME or
@@ -545,11 +572,13 @@ release_runs() { runs_listing "$@" >"${FAKE_GH_STATE}/runs-fork-rust-release.yml
 FAKE_GH_STATE="$(new_state)"
 release_runs "$(run_json 401 "${release_path}" push codex/fork "${head}" failure 2026-11-07T10:00:00Z)"
 parts_listing "${win_primary}" "${win_app}" "${arm_primary}" >"${FAKE_GH_STATE}/artifacts-401"
-prebuild_reuse reuse-failed-run reuse-401 'reusing 7 of 10 parts'
+# The aarch64 Linux app-server part is built again with its primary (R6.7).
+prebuild_reuse reuse-failed-run reuse-401 'reusing 6 of 10 parts'
 expect reuse-failed-run-parts test "$(reused_from reuse-401)" = \
-  "$(all_from 401 "${win_primary}" "${win_app}" "${arm_primary}")"
+  "$(all_from 401 "${win_primary}" "${win_app}" "${arm_primary}" "${arm_app}")"
 expect reuse-failed-run-builds-rest test "$(built reuse-401)" = \
-  "aarch64-unknown-linux-gnu primary, x86_64-pc-windows-msvc app-server, x86_64-pc-windows-msvc primary"
+  "aarch64-unknown-linux-gnu app-server, aarch64-unknown-linux-gnu primary, x86_64-pc-windows-msvc app-server, x86_64-pc-windows-msvc primary"
+expect reuse-failed-run-jobs-query calls_match "^gh api repos/${repo}/actions/runs/401/jobs\?filter=latest&per_page=100 $"
 expect reuse-failed-run-build-true grep -qx 'build=true' "${work}/reuse-401"
 expect reuse-failed-run-runs grep -qx "reused_runs=${runs_url}/401" "${work}/reuse-401"
 expect reuse-failed-run-query calls_match \
@@ -582,6 +611,7 @@ expect reuse-ancestor-docs-only-parts test "$(reused_from reuse-403)" = "$(all_f
 expect reuse-ancestor-compare-query calls_match "^gh api repos/${repo}/compare/${sha_b}\.\.\.${head} $"
 
 for spec in "source codex-rs/core/src/lib.rs" "package-script scripts/fork/release-package.sh" \
+  "root-cargo-config .cargo/config.toml" "v8-manifest third_party/v8/rusty_v8_146_4_0_release_manifests.sha256" \
   "toolchain-action .github/actions/fork-rust-toolchain/action.yml" \
   "rusty-v8-script .github/scripts/rusty_v8_bazel.py" "rename-out docs/moved.rs<codex-rs/core/src/x.rs"; do
   read -r name file <<<"${spec}"
@@ -600,6 +630,12 @@ prebuild_reuse reuse-diverged reuse-diverged 'not in one line of history \(compa
 expect reuse-diverged-builds-all test "$(output_value "${work}/reuse-diverged" reused_parts)" = '[]'
 
 candidate_state ahead docs/a.md
+jq -c 'del(.files)' "${FAKE_GH_STATE}/compare-${sha_b}...${head}" >"${work}/no-files.json"
+mv "${work}/no-files.json" "${FAKE_GH_STATE}/compare-${sha_b}...${head}"
+prebuild_reuse reuse-compare-without-files reuse-no-files "cannot compare ${sha_b} with ${head}"
+expect reuse-compare-without-files-builds-all test "$(output_value "${work}/reuse-no-files" reused_parts)" = '[]'
+
+candidate_state ahead docs/a.md
 rm "${FAKE_GH_STATE}/compare-${sha_b}...${head}"
 prebuild_reuse reuse-compare-error reuse-compare-error "cannot compare ${sha_b} with ${head}"
 expect reuse-compare-error-builds-all test "$(output_value "${work}/reuse-compare-error" build)" = true
@@ -612,6 +648,11 @@ expect reuse-newer-commit-reverse-compare calls_match "^gh api repos/${repo}/com
 candidate_state behind
 compare_json ahead codex-rs/Cargo.lock >"${FAKE_GH_STATE}/compare-${head}...${sha_b}"
 prebuild_reuse reuse-newer-other-inputs reuse-newer-other 'build inputs differ'
+candidate_state behind
+compare_json diverged docs/a.md >"${FAKE_GH_STATE}/compare-${head}...${sha_b}"
+prebuild_reuse reuse-newer-diverged reuse-newer-diverged 'compare: diverged'
+candidate_state behind
+prebuild_reuse reuse-newer-compare-error reuse-newer-compare-error "cannot compare ${head} with ${sha_b}"
 
 # The release workflow changed: the build job's recipe decides.
 for spec in "absent reused x" "same reused 1" "other differ 2"; do
@@ -660,6 +701,53 @@ parts_listing --expired "${win_primary}" >"${FAKE_GH_STATE}/artifacts-412"
 prebuild_reuse reuse-expired reuse-expired 'reusing 9 of 10 parts'
 expect reuse-expired-builds-it test "$(built reuse-expired)" = "x86_64-pc-windows-msvc primary"
 
+# A part that expires before a build could finish is built again (R6.1).
+FAKE_GH_STATE="$(new_state)"
+release_runs "$(run_json 421 "${release_path}" push codex/fork "${head}" success 2026-11-07T10:00:00Z)"
+parts_listing --expiring "${win_primary}" >"${FAKE_GH_STATE}/artifacts-421"
+prebuild_reuse reuse-expiring reuse-expiring 'reusing 9 of 10 parts'
+expect reuse-expiring-builds-it test "$(built reuse-expiring)" = "x86_64-pc-windows-msvc primary"
+
+# A part whose build job failed after the upload (or was re-run and failed) is
+# not reused (R6.6).
+FAKE_GH_STATE="$(new_state)"
+release_runs "$(run_json 422 "${release_path}" push codex/fork "${head}" failure 2026-11-07T10:00:00Z)"
+parts_listing >"${FAKE_GH_STATE}/artifacts-422"
+FAKE_GH_STATE="${FAKE_GH_STATE}" "${work}/bin/gh" api "repos/${repo}/actions/runs/422/jobs?filter=latest&per_page=100" |
+  jq -c --arg job "Build x86_64-apple-darwin primary" \
+    '.jobs |= map(if .name == $job then .conclusion = "failure" else . end)' >"${work}/jobs-422"
+mv "${work}/jobs-422" "${FAKE_GH_STATE}/jobs-422"
+prebuild_reuse reuse-failed-job reuse-failed-job 'reusing 9 of 10 parts'
+expect reuse-failed-job-builds-it test "$(built reuse-failed-job)" = "x86_64-apple-darwin primary"
+
+# Parts built on another runner than the matrix asks for are built again (R6.6):
+# a full-matrix dispatch on ubuntu-22.04 for x86_64 Linux.
+FAKE_GH_STATE="$(new_state)"
+release_runs "$(run_json 423 "${release_path}" push codex/fork "${head}" success 2026-11-07T10:00:00Z)"
+parts_listing >"${FAKE_GH_STATE}/artifacts-423"
+check reuse-other-runner ok 'reusing 8 of 10 parts' \
+  "${release}" preflight --version "${version}" --sha "${head}" --repo "${repo}" --create-draft false \
+  --matrix "$(jq -c 'map(if .target == "x86_64-unknown-linux-gnu" then .runner = "ubuntu-22.04" else . end)' <<<"${default_matrix_json}")" \
+  --output "${work}/reuse-other-runner"
+expect reuse-other-runner-builds-them test "$(built reuse-other-runner)" = \
+  "x86_64-unknown-linux-gnu app-server, x86_64-unknown-linux-gnu primary"
+expect reuse-other-runner-keeps-runner test \
+  "$(output_value "${work}/reuse-other-runner" matrix | jq -r '[.[].runner] | unique | join(" ")')" = ubuntu-22.04
+
+# Both Linux parts of a target come from one run (R6.7): the newest run has only
+# the app-server part, so both come from the older run.
+FAKE_GH_STATE="$(new_state)"
+release_runs "$(run_json 425 "${release_path}" push codex/fork "${head}" success 2026-11-07T09:00:00Z)" \
+  "$(run_json 424 "${release_path}" push codex/fork "${head}" failure 2026-11-07T11:00:00Z)"
+parts_listing >"${FAKE_GH_STATE}/artifacts-425"
+parts_listing "${x86_linux_primary}" >"${FAKE_GH_STATE}/artifacts-424"
+prebuild_reuse reuse-linux-pair reuse-linux-pair 'every part is reused'
+expect reuse-linux-pair-one-run test \
+  "$(output_value "${work}/reuse-linux-pair" reused_parts | jq -r --arg a "${x86_linux_primary}" --arg b "${x86_linux_app}" \
+    '[.[] | select(.name == $a or .name == $b) | .run_id] | unique | join(" ")')" = 425
+expect reuse-linux-pair-others-newest test \
+  "$(output_value "${work}/reuse-linux-pair" reused_parts | jq -r '[.[] | select(.name | test("linux") | not) | .run_id] | unique | join(" ")')" = 424
+
 FAKE_GH_STATE="$(new_state)"
 release_runs "$(run_json 413 "${release_path}" push codex/fork "${head}" success 2026-11-07T10:00:00Z)"
 PARTS_VERSION=0.0.1 parts_listing >"${FAKE_GH_STATE}/artifacts-413"
@@ -684,7 +772,7 @@ release_runs "$(run_json 419 "${release_path}" push codex/fork "${head}" success
 parts_listing >"${FAKE_GH_STATE}/artifacts-418"
 parts_listing >"${FAKE_GH_STATE}/artifacts-419"
 touch "${FAKE_GH_STATE}/fail-artifacts-419"
-prebuild_reuse reuse-artifacts-error reuse-artifacts-error 'cannot list the artifacts of run 419'
+prebuild_reuse reuse-artifacts-error reuse-artifacts-error 'cannot list the artifacts or jobs of run 419'
 expect reuse-artifacts-error-older-run test "$(reused_from reuse-artifacts-error)" = "$(all_from 418)"
 
 # A release dispatch (R6.5): reuse_state has a successful fork-ci push run 301

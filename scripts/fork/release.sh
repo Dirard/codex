@@ -43,8 +43,11 @@
 #              codex-parts-<version>-<target>-<bundle> of a push run of
 #              fork-rust-release.yml on codex/fork, of any status, whose
 #              commit has the same build inputs as SHA (build_input_paths and the
-#              build job's FORK_BUILD_RECIPE, compared through GitHub compare).
-#              The output matrix holds only the parts left to build.
+#              build job's FORK_BUILD_RECIPE, compared through GitHub compare),
+#              whose build job succeeded on the part's runner, and that stays
+#              unexpired for 12 more hours; both Linux parts of a target come
+#              from one run. The output matrix holds only the parts left to
+#              build.
 #              Writes version, sha, matrix, targets, full_matrix, ci_run_url,
 #              build (true when the matrix is not empty), reused_parts (JSON
 #              [{name, run_id, run_url}]) and reused_runs (run URLs) as
@@ -123,9 +126,13 @@ ci_workflow=fork-ci.yml
 release_workflow=fork-rust-release.yml
 
 # Files whose content decides what a build job produces (R6.2). codex-rs/ is
-# self-contained: its include_str! paths and build scripts stay inside it.
+# self-contained: its include_str! paths and build scripts stay inside it;
+# cargo also reads the root .cargo/config.toml, and setup-rusty-v8 checks the
+# V8 archives against the manifests in third_party/v8/.
 build_input_paths=(
   codex-rs/
+  .cargo/
+  third_party/v8/
   scripts/fork/release-package.sh
   scripts/fork/rust-toolchain.sh
   .github/actions/fork-rust-toolchain/
@@ -140,6 +147,9 @@ recipe_key=FORK_BUILD_RECIPE
 compare_file_limit=300
 # Newest push runs searched for parts to reuse.
 reuse_run_limit=20
+# A reused part must stay unexpired this many more seconds, so that it outlives
+# the longest build job (330 minutes) and its queue.
+reuse_expiry_margin=$((12 * 3600))
 
 # Files that decide what the release workflow builds, checks and runs with a
 # write token: the workflows, the local actions they use and these scripts.
@@ -368,8 +378,9 @@ build_recipe() {
 compare_listing() {
   local json
   json="$(gh api "repos/$1/compare/$2...$3")" || return 1
-  jq -r '.status, (.files // [] | length),
-    (.files // [] | .[] | .filename, (.previous_filename // empty))' <<<"${json}"
+  # A response without a files array lists nothing it can vouch for.
+  jq -er 'if (.files | type) != "array" then error("no files") else
+    .status, (.files | length), (.files[] | .filename, (.previous_filename // empty)) end' <<<"${json}"
 }
 
 # same_build_inputs REPO CANDIDATE SHA: succeeds when commit CANDIDATE has the
@@ -437,17 +448,46 @@ same_build_inputs() {
   fi
 }
 
+# run_usable_parts REPO RUN_ID: prints "name<TAB>runner labels" of each part the
+# run can give: an artifact that stays unexpired for reuse_expiry_margin more
+# seconds, built by a "Build <target> <bundle>" job of the run's latest attempt
+# that succeeded. Fails when a listing cannot be read.
+run_usable_parts() {
+  local repo="$1" id="$2" artifacts jobs
+  artifacts="$(gh api "repos/${repo}/actions/runs/${id}/artifacts?per_page=100")" || return 1
+  jobs="$(gh api "repos/${repo}/actions/runs/${id}/jobs?filter=latest&per_page=100")" || return 1
+  jq -rn --argjson artifacts "${artifacts}" --argjson jobs "${jobs}" \
+    --argjson margin "${reuse_expiry_margin}" '
+    ([$artifacts.artifacts[]
+      | select(.expired == false
+          and ((.expires_at // "") | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch 0) > (now + $margin))
+      | .name]) as $names
+    | $jobs.jobs[]
+    | select(.conclusion == "success")
+    | (.name | capture("^Build (?<target>[^ ]+) (?<bundle>[^ ]+)$")) as $job
+    | ($names[] | select(endswith("-\($job.target)-\($job.bundle)"))) as $name
+    | [$name, (.labels | join(" "))] | @tsv
+  '
+}
+
 # reusable_parts REPO SHA VERSION MATRIX: prints the JSON array of the parts of
 # the bundle MATRIX found in earlier push runs with the same build inputs as SHA
-# (R6.1), each {name, run_id, run_url} from the newest run that has it. A failed
-# lookup reuses less; it never stops the release.
+# (R6.1), each {name, run_id, run_url} from the newest run that can give it:
+# its build job ran on the part's runner of MATRIX and succeeded (R6.6). Both
+# Linux parts of a target come from one run, since each embeds the digest of
+# the bwrap that its own job built (R6.7). A failed lookup reuses less; it never
+# stops the release.
 reusable_parts() {
   local repo="$1" sha="$2" version="$3" matrix="$4"
-  local -A wanted=() verdict=()
-  local name
-  while IFS= read -r name; do
-    wanted["${name}"]=1
-  done < <(jq -r --arg v "${version}" '.[] | "codex-parts-\($v)-\(.target)-\(.bundle)"' <<<"${matrix}")
+  local -A runner_of=() groups=() verdict=()
+  local name runner target group
+  while IFS=$'\t' read -r name runner target; do
+    runner_of["${name}"]="${runner}"
+    group="${name}"
+    [[ "${target}" != *-linux-* ]] || group="${target}"
+    groups["${group}"]+="${groups[${group}]:+ }${name}"
+  done < <(jq -r --arg v "${version}" \
+    '.[] | ["codex-parts-\($v)-\(.target)-\(.bundle)", .runner, .target] | @tsv' <<<"${matrix}")
 
   local runs candidates
   # Runs of any status: a newer push cancels the older prebuild, whose finished
@@ -463,9 +503,9 @@ reusable_parts() {
     return 0
   fi
 
-  local id candidate url listing present found=()
+  local id candidate url usable labels part ok found=()
   while read -r id candidate url; do
-    [[ ${#wanted[@]} -gt 0 ]] || break
+    [[ ${#groups[@]} -gt 0 ]] || break
     [[ "${id}" =~ ^[0-9]+$ && "${candidate}" =~ ${sha_re} ]] || continue
     if [[ -z "${verdict[${candidate}]+set}" ]]; then
       verdict["${candidate}"]=different
@@ -474,18 +514,30 @@ reusable_parts() {
       fi
     fi
     [[ "${verdict[${candidate}]}" == same ]] || continue
-    if ! listing="$(gh api "repos/${repo}/actions/runs/${id}/artifacts?per_page=100")" ||
-      ! present="$(jq -r '.artifacts[] | select(.expired == false) | .name' <<<"${listing}")"; then
-      log "cannot list the artifacts of run ${id}; its parts are not reused"
+    if ! usable="$(run_usable_parts "${repo}" "${id}")"; then
+      log "cannot list the artifacts or jobs of run ${id}; its parts are not reused"
       continue
     fi
-    while IFS= read -r name; do
-      if [[ -n "${name}" && -n "${wanted[${name}]+set}" ]]; then
-        unset 'wanted[${name}]'
-        found+=("$(jq -cn --arg name "${name}" --argjson id "${id}" --arg url "${url}" \
+    local -A labels_of=()
+    while IFS=$'\t' read -r name labels; do
+      [[ -z "${name}" ]] || labels_of["${name}"]="${labels}"
+    done <<<"${usable}"
+    for group in "${!groups[@]}"; do
+      ok=true
+      for part in ${groups[${group}]}; do
+        if [[ -z "${labels_of[${part}]+set}" || " ${labels_of[${part}]} " != *" ${runner_of[${part}]} "* ]]; then
+          ok=false
+          break
+        fi
+      done
+      [[ "${ok}" == true ]] || continue
+      for part in ${groups[${group}]}; do
+        found+=("$(jq -cn --arg name "${part}" --argjson id "${id}" --arg url "${url}" \
           '{name: $name, run_id: $id, run_url: $url}')")
-      fi
-    done <<<"${present}"
+      done
+      unset 'groups[${group}]'
+    done
+    unset labels_of
   done <<<"${candidates}"
   if [[ ${#found[@]} -eq 0 ]]; then
     printf '[]\n'

@@ -15,10 +15,11 @@ name: fork-rust-release
 # token; a newer push cancels an older prebuild.
 #
 # Each bundle part is built once per build inputs (scripts/fork/release.sh
-# build_input_paths and FORK_BUILD_RECIPE of the build job): a push, and a
-# full-matrix dispatch unless rebuild=true, takes every part that an earlier
-# push run built from the same inputs, of any outcome, and builds only the
-# rest. A push that changes only the workflow, docs or other non-inputs builds
+# build_input_paths and FORK_BUILD_RECIPE of the build job) and runner: a push,
+# and a full-matrix dispatch unless rebuild=true, takes every part that a
+# successful build job of an earlier push run, of any outcome, built from the
+# same inputs on the same runner (both Linux parts of a target from one run),
+# and builds only the rest. A push that changes only the workflow, docs or other non-inputs builds
 # just the parts that are missing or failed before.
 #
 # Dispatch a release from codex/fork; the commit must be on codex/fork and
