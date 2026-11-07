@@ -99,6 +99,17 @@ impl Harness {
     }
 
     pub(crate) fn with_limits(limits: ScheduledWakeupsConfig) -> Self {
+        Self::build(limits, Eligibility::Eligible)
+    }
+
+    /// A MultiAgentV2 child that passed its eligibility check.
+    pub(crate) fn child() -> Self {
+        let harness = Self::build(ScheduledWakeupsConfig::default(), Eligibility::PendingCheck);
+        harness.state.set_eligibility(Eligibility::Eligible);
+        harness
+    }
+
+    fn build(limits: ScheduledWakeupsConfig, eligibility: Eligibility) -> Self {
         let host = Arc::new(FakeHost::default());
         let clock = TestClock::new();
         let beacon = Arc::new(WakeupBeacon::default());
@@ -107,7 +118,7 @@ impl Harness {
             "thread-1".to_string(),
             /*enabled*/ true,
             limits,
-            Eligibility::Eligible,
+            eligibility,
             Arc::clone(&beacon),
             host.clone(),
             Arc::new(move || clock_for_state.now()),

@@ -3,12 +3,14 @@
 //! A timer only marks its wakeup due; a due wakeup starts a turn through
 //! `CodexThread::start_turn_if_idle` when the thread is idle and an automatic turn is
 //! allowed, otherwise it stays due and the next `on_thread_idle` after a completed or failed
-//! turn starts it (D2). A wakeup never joins a running turn (R3.2).
+//! turn, or a retry with backoff, starts it (D2, D17). A wakeup never joins a running turn
+//! (R3.2).
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Weak;
+use std::time::Duration;
 
 use chrono::DateTime;
 use chrono::Utc;
@@ -24,6 +26,8 @@ use codex_core::context::InternalContextSource;
 use codex_core::context::InternalModelContextFragment;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::error::CodexErrorDetails;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItemMetadata;
 use codex_protocol::models::ContentItemNamespace;
 use codex_protocol::protocol::AgentStatus;
@@ -49,9 +53,14 @@ pub(crate) enum StartOutcome {
     Started {
         turn_id: String,
     },
-    /// Not now: a turn runs or is reserved, Plan mode, an interrupted thread or mail that
-    /// starts a turn first (R3.2, R3.3).
+    /// Not now: a turn runs or is reserved, Plan mode, mail that starts a turn first, or no
+    /// execution capacity (R3.2, R3.3); retried with backoff (D17).
     Held,
+    /// The thread's last turn was interrupted: a root thread holds the model's wakeup
+    /// (R3.3), a MultiAgentV2 child drops it (D17).
+    Interrupted,
+    /// The start failed with an error; it counts as a failed wakeup turn (R3.8, D17).
+    Failed,
     /// The host is draining or the runtime is gone (R3.4).
     Closed,
 }
@@ -96,6 +105,18 @@ pub(crate) async fn run_timer(
         return;
     };
     if state.mark_due(&id) {
+        tokio::spawn(fire_if_due(state));
+    }
+}
+
+/// Tries the held wakeup `id` again after `delay` (D17), in a task of its own like the
+/// timer's start.
+pub(crate) async fn run_retry(state: Weak<WakeupThreadState>, id: String, delay: Duration) {
+    tokio::time::sleep(delay).await;
+    let Some(state) = state.upgrade() else {
+        return;
+    };
+    if state.is_due(&id) {
         tokio::spawn(fire_if_due(state));
     }
 }
@@ -151,10 +172,14 @@ impl WakeupHost for ThreadManagerHost {
             let Some(thread) = Self::live_thread(&self.thread_manager, state).await else {
                 return StartOutcome::Closed;
             };
-            // `start_if_idle` does not look at the interrupt mark, and user input starts
-            // even in Plan mode: check both here (R3.3).
-            if matches!(thread.agent_status().await, AgentStatus::Interrupted) {
-                return StartOutcome::Held;
+            // `start_if_idle` does not look at the interrupt mark: an interrupted thread holds
+            // the model's wakeups (R3.3). A loop iteration is the prompt of a loop the user
+            // started, so it runs on an interrupted thread too (R5.1, D18); user input starts
+            // even in Plan mode, so that is checked for it below.
+            if matches!(request, StartRequest::Wakeup { .. })
+                && matches!(thread.agent_status().await, AgentStatus::Interrupted)
+            {
+                return StartOutcome::Interrupted;
             }
             let previous = thread
                 .thread_extension_data()
@@ -199,23 +224,34 @@ impl WakeupHost for ThreadManagerHost {
                     })
                 }
             };
-            match thread.start_turn_if_idle(request).await {
-                Ok(StartIfIdleSubmission::Started { turn_id, .. }) => {
-                    StartOutcome::Started { turn_id }
-                }
-                Ok(StartIfIdleSubmission::NotSubmitted {
-                    reason: NotSubmittedReason::ServerDraining,
-                }) => StartOutcome::Closed,
-                Ok(StartIfIdleSubmission::NotSubmitted { reason }) => {
-                    tracing::debug!(?reason, "scheduled wakeup waits for an idle thread");
-                    StartOutcome::Held
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "scheduled wakeup could not start a turn");
-                    StartOutcome::Held
-                }
-            }
+            outcome_of(thread.start_turn_if_idle(request).await)
         })
+    }
+}
+
+/// What a `start_turn_if_idle` answer means for a wakeup.
+pub(crate) fn outcome_of(result: CodexResult<StartIfIdleSubmission>) -> StartOutcome {
+    match result {
+        Ok(StartIfIdleSubmission::Started { turn_id, .. }) => StartOutcome::Started { turn_id },
+        Ok(StartIfIdleSubmission::NotSubmitted {
+            reason: NotSubmittedReason::ServerDraining,
+        }) => StartOutcome::Closed,
+        Ok(StartIfIdleSubmission::NotSubmitted { reason }) => {
+            tracing::debug!(?reason, "scheduled wakeup waits for an idle thread");
+            StartOutcome::Held
+        }
+        Err(error) => match error.details() {
+            // A MultiAgentV2 child waits for a running turn elsewhere in its tree to end.
+            CodexErrorDetails::AgentLimitReached { .. } => {
+                tracing::debug!(%error, "scheduled wakeup waits for execution capacity");
+                StartOutcome::Held
+            }
+            CodexErrorDetails::InternalAgentDied => StartOutcome::Closed,
+            _ => {
+                tracing::warn!(%error, "scheduled wakeup could not start a turn");
+                StartOutcome::Failed
+            }
+        },
     }
 }
 

@@ -188,7 +188,9 @@ pub(crate) fn cancel_notice(
                 "the /loop reached its limit of {} iterations",
                 ended.max_iterations
             ),
-            _ => "the /loop reached its end time".to_string(),
+            Some(_) => "the /loop reached its end time".to_string(),
+            None => "it was held until its chain ended (features.scheduled_wakeups.max_duration_minutes)"
+                .to_string(),
         },
         CancelReason::Failures => format!(
             "{} wakeup turns in a row failed",
@@ -200,6 +202,11 @@ pub(crate) fn cancel_notice(
             limits.max_wakeups
         ),
     };
+    cancel_notice_with_cause(cancelled, &cause)
+}
+
+/// The notice of a cancel the model did not make, with its cause (R4.5).
+pub(crate) fn cancel_notice_with_cause(cancelled: &Cancelled, cause: &str) -> String {
     if let Some(ended) = &cancelled.ended_loop {
         return format!(
             "The /loop {} ended after {} iterations: {cause}. Nothing is scheduled now.",

@@ -1,8 +1,12 @@
 use super::*;
 use crate::state::CancelReason;
+use crate::state::LoopStartRequest;
 use crate::state::ScheduleArgs;
 use crate::state::WakeupChange;
 use crate::test_support::Harness;
+use codex_core::config::ScheduledWakeupsConfig;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 
@@ -182,5 +186,187 @@ async fn three_failed_wakeup_turns_stop_the_wakeups() {
         h.state
             .take_notice()
             .is_some_and(|notice| notice.contains("3 wakeup turns in a row failed"))
+    );
+}
+
+/// W-1: a start the thread cannot take now (no execution capacity, a turn runs, Plan mode)
+/// is retried by a timer with backoff (2 s, then 4 s, …), without waiting for another
+/// `on_thread_idle`, which an idle child never gets.
+#[tokio::test(start_paused = true)]
+async fn held_start_retries_without_an_idle() {
+    let h = Harness::new();
+    h.host.push(StartOutcome::Held);
+    h.host.push(StartOutcome::Held);
+    schedule(&h, 60, "turn-1");
+    tokio::time::sleep(Duration::from_secs(61)).await;
+    settle().await;
+    assert_eq!(h.host.requests().len(), 1);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    settle().await;
+    assert_eq!(h.host.requests().len(), 2);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    settle().await;
+    assert_eq!(h.host.requests().len(), 2, "the second retry waits 4 s");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    settle().await;
+    assert_eq!(h.host.requests().len(), 3);
+    assert_eq!(h.state.snapshot().wakeup, None);
+    assert_eq!(h.state.snapshot().chain.fired, 1);
+    assert_eq!(h.beacon.get(), None);
+}
+
+/// W-1, R3.8: a start that fails with an error counts as a failed wakeup turn; it is retried,
+/// and the third failure in a row cancels the wakeup with `failures`.
+#[tokio::test(start_paused = true)]
+async fn failed_starts_count_as_failures() {
+    let h = Harness::new();
+    for _ in 0..3 {
+        h.host.push(StartOutcome::Failed);
+    }
+    schedule(&h, 60, "turn-1");
+    tokio::time::sleep(Duration::from_secs(61 + 2 + 4 + 2)).await;
+    settle().await;
+    assert_eq!(h.host.requests().len(), 3);
+    assert_eq!(h.state.snapshot().wakeup, None);
+    let last = h.take_updates().pop().expect("an update");
+    assert_eq!(
+        (last.change, last.cancel_reason),
+        (WakeupChange::Cancelled, Some(CancelReason::Failures))
+    );
+    tokio::time::sleep(Duration::from_secs(600)).await;
+    settle().await;
+    assert_eq!(
+        h.host.requests().len(),
+        3,
+        "nothing retries a cancelled wakeup"
+    );
+}
+
+/// W-1: a MultiAgentV2 child whose thread was interrupted when its wakeup came due drops the
+/// wakeup with `interrupt`; nobody would start the child's next turn, so holding it would pin
+/// the child and keep the parent's `wait_agent` waiting.
+#[tokio::test(start_paused = true)]
+async fn interrupted_child_drops_its_due_wakeup() {
+    let h = Harness::child();
+    h.host.push(StartOutcome::Interrupted);
+    schedule(&h, 60, "turn-1");
+    tokio::time::sleep(Duration::from_secs(61)).await;
+    settle().await;
+    assert_eq!(h.host.requests().len(), 1);
+    assert_eq!(h.state.snapshot().wakeup, None);
+    assert_eq!(h.beacon.get(), None);
+    let last = h.take_updates().pop().expect("an update");
+    assert_eq!(
+        (last.change, last.cancel_reason),
+        (WakeupChange::Cancelled, Some(CancelReason::Interrupt))
+    );
+    let notice = h.state.take_notice().expect("a notice for the next turn");
+    assert!(
+        notice.contains("the thread was interrupted when it came due"),
+        "{notice}"
+    );
+}
+
+/// R3.3 with W-1: an interrupted root thread holds its due wakeup and retries keep it held;
+/// a wakeup held past its chain's end is cancelled with `limit`, so it never waits forever.
+#[tokio::test(start_paused = true)]
+async fn interrupted_root_holds_until_its_chain_ends() {
+    let h = Harness::with_limits(ScheduledWakeupsConfig {
+        max_duration_minutes: 10,
+        ..ScheduledWakeupsConfig::default()
+    });
+    for _ in 0..100 {
+        h.host.push(StartOutcome::Interrupted);
+    }
+    schedule(&h, 60, "turn-1");
+    tokio::time::sleep(Duration::from_secs(61)).await;
+    settle().await;
+    assert!(h.state.snapshot().wakeup.expect("held").due);
+    tokio::time::sleep(Duration::from_secs(300)).await;
+    settle().await;
+    assert!(
+        h.state.snapshot().wakeup.is_some(),
+        "a root holds it (R3.3)"
+    );
+    assert!(h.host.requests().len() > 2, "{:?}", h.host.requests().len());
+    // The chain started at 12:00 and ends at 12:10.
+    h.clock.advance(11 * 60);
+    tokio::time::sleep(Duration::from_secs(300)).await;
+    settle().await;
+    assert_eq!(h.state.snapshot().wakeup, None);
+    let last = h.take_updates().pop().expect("an update");
+    assert_eq!(
+        (last.change, last.cancel_reason),
+        (WakeupChange::Cancelled, Some(CancelReason::Limit))
+    );
+    let notice = h.state.take_notice().expect("a notice for the next turn");
+    assert!(notice.contains("its chain ended"), "{notice}");
+}
+
+/// W-2, R5.1: a loop iteration that came due during a foreign turn starts soon after that
+/// turn is interrupted (no `on_thread_idle` follows a user interrupt), not only after another
+/// completed turn; interrupting the iteration's own turn still ends the loop (R4.3).
+#[tokio::test(start_paused = true)]
+async fn loop_iteration_starts_after_a_foreign_interrupt() {
+    let h = Harness::new();
+    // A long user turn holds the iteration; retries back off to minutes.
+    for _ in 0..9 {
+        h.host.push(StartOutcome::Held);
+    }
+    h.state
+        .start_loop(LoopStartRequest {
+            prompt: "check the deploy".to_string(),
+            interval_seconds: Some(300),
+            max_iterations: Some(3),
+        })
+        .expect("loop started");
+    fire_if_due(Arc::clone(&h.state)).await;
+    tokio::time::sleep(Duration::from_secs(600)).await;
+    settle().await;
+    assert_eq!(h.host.requests().len(), 9);
+    assert_eq!(
+        h.state.snapshot().loop_state.map(|state| state.iteration),
+        Some(0)
+    );
+    h.state.on_turn_interrupted("user-turn");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    settle().await;
+    assert_eq!(h.host.requests().len(), 10);
+    assert_eq!(
+        h.state.snapshot().loop_state.map(|state| state.iteration),
+        Some(1)
+    );
+    h.state.on_turn_interrupted("wake-turn-10");
+    assert_eq!(h.state.snapshot().loop_state, None);
+    let last = h.take_updates().pop().expect("an update");
+    assert_eq!(
+        (last.change, last.cancel_reason),
+        (WakeupChange::LoopEnded, Some(CancelReason::Interrupt))
+    );
+}
+
+/// W-1: missing execution capacity holds a wakeup for a retry, a dead runtime closes it, and
+/// any other start error is a failure.
+#[test]
+fn start_errors_map_to_outcomes() {
+    assert_eq!(
+        outcome_of(Err(CodexErr::new(CodexErrorDetails::AgentLimitReached {
+            max_threads: 2
+        }))),
+        StartOutcome::Held
+    );
+    assert_eq!(
+        outcome_of(Err(CodexErr::InternalAgentDied)),
+        StartOutcome::Closed
+    );
+    assert_eq!(
+        outcome_of(Err(CodexErr::InvalidRequest("bad settings".to_string()))),
+        StartOutcome::Failed
+    );
+    assert_eq!(
+        outcome_of(Ok(StartIfIdleSubmission::NotSubmitted {
+            reason: NotSubmittedReason::PlanMode
+        })),
+        StartOutcome::Held
     );
 }

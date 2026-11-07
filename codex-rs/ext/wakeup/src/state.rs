@@ -36,6 +36,12 @@ pub(crate) const MAX_LOOP_PROMPT_BYTES: usize = 16_000;
 pub(crate) const MAX_CONSECUTIVE_FAILED_TURNS: u32 = 3;
 /// How often a timer compares the wall clock with the due time (R3.6, D7).
 pub(crate) const WALL_CLOCK_RECHECK: Duration = Duration::from_secs(30);
+/// First retry of a due wakeup the thread could not take, doubling up to
+/// [`HELD_RETRY_MAX`]: no `on_thread_idle` follows a user interrupt, leaving Plan mode or freed
+/// execution capacity, and an idle child gets none at all (D17).
+pub(crate) const HELD_RETRY_FIRST: Duration = Duration::from_secs(2);
+/// Longest wait between two retries of a held wakeup (D17).
+pub(crate) const HELD_RETRY_MAX: Duration = Duration::from_secs(300);
 
 /// Who scheduled a wakeup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,7 +165,10 @@ pub(crate) struct PendingWakeup {
     pub(crate) reason: Option<String>,
     pub(crate) scheduled_in_turn: Option<String>,
     pub(crate) due: bool,
-    /// Held for its drop, which stops the timer with the wakeup.
+    /// Starts the thread could not take so far: the backoff of the next retry; a model
+    /// wakeup held this way ends with its chain (D17).
+    pub(crate) held: u32,
+    /// Held for its drop, which stops the timer or the retry with the wakeup.
     pub(crate) _timer: Option<AbortOnDropHandle<()>>,
 }
 
@@ -277,6 +286,8 @@ pub struct WakeupThreadState {
     enabled: AtomicBool,
     limits: Mutex<ScheduledWakeupsConfig>,
     eligibility: Mutex<Eligibility>,
+    /// A MultiAgentV2 child: only its parent starts its turns (D17).
+    child: bool,
     inner: Mutex<Inner>,
     /// Serializes starting a turn with schedules and cancels, so a wakeup starts at most one
     /// turn and a cancel lands either before the start or after it (R3.5, R4.6).
@@ -327,6 +338,7 @@ impl WakeupThreadState {
             enabled: AtomicBool::new(enabled),
             limits: Mutex::new(limits),
             eligibility: Mutex::new(eligibility),
+            child: eligibility == Eligibility::PendingCheck,
             inner: Mutex::new(Inner::default()),
             fire_lock: tokio::sync::Mutex::new(()),
             subscribers: Mutex::new(Vec::new()),
@@ -460,6 +472,41 @@ impl WakeupThreadState {
             due_at,
             deadline,
         )))
+    }
+
+    fn spawn_retry(&self, id: &str, delay: Duration) -> AbortOnDropHandle<()> {
+        AbortOnDropHandle::new(tokio::spawn(crate::scheduler::run_retry(
+            self.weak_self.clone(),
+            id.to_string(),
+            delay,
+        )))
+    }
+
+    /// Whether the wakeup `id` is still pending and due.
+    pub(crate) fn is_due(&self, id: &str) -> bool {
+        let inner = self.inner();
+        !inner.closed
+            && inner
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.id == id && pending.due)
+    }
+
+    /// Keeps the due wakeup `wakeup_id` the thread could not take and tries it again after a
+    /// backoff (D17); the next idle may start it sooner.
+    fn retry_later(&self, inner: &mut Inner, wakeup_id: &str) {
+        let Some(pending) = inner
+            .pending
+            .as_mut()
+            .filter(|pending| pending.id == wakeup_id)
+        else {
+            return;
+        };
+        let delay = HELD_RETRY_FIRST
+            .saturating_mul(2_u32.saturating_pow(pending.held))
+            .min(HELD_RETRY_MAX);
+        pending.held = pending.held.saturating_add(1);
+        pending._timer = Some(self.spawn_retry(wakeup_id, delay));
     }
 
     /// `clock.schedule_wakeup`: check arguments, the loop mode and the chain's limits, then
@@ -599,6 +646,7 @@ impl WakeupThreadState {
             reason,
             scheduled_in_turn: Some(turn_id.to_string()),
             due: false,
+            held: 0,
             _timer: Some(timer),
         });
         let change = if replaced.is_some() {
@@ -739,6 +787,7 @@ impl WakeupThreadState {
             reason: None,
             scheduled_in_turn: None,
             due: true,
+            held: 0,
             _timer: None,
         });
         self.publish(&inner, WakeupChange::LoopStarted, None, None);
@@ -770,6 +819,7 @@ impl WakeupThreadState {
             reason: None,
             scheduled_in_turn: None,
             due: false,
+            held: 0,
             _timer: Some(timer),
         });
         self.publish(inner, WakeupChange::Scheduled, None, None);
@@ -824,8 +874,9 @@ impl WakeupThreadState {
     }
 
     /// A turn was interrupted (or budget-limited): the wakeup it started or scheduled, and a
-    /// loop it was an iteration of, stop (R4.3). Another interrupted turn only holds a due
-    /// wakeup back (R3.3).
+    /// loop it was an iteration of, stop (R4.3). After another interrupted turn a due wakeup
+    /// is tried again soon, since no `on_thread_idle` follows a user interrupt: a loop
+    /// iteration starts, a model wakeup stays held (R3.3, R5.1, D18).
     pub(crate) fn on_turn_interrupted(&self, turn_id: &str) {
         let mut inner = self.inner();
         let own = inner
@@ -839,6 +890,9 @@ impl WakeupThreadState {
             .is_some_and(|pending| pending.scheduled_in_turn.as_deref() == Some(turn_id));
         if own || scheduled_here {
             self.cancel_locked(&mut inner, CancelReason::Interrupt);
+        } else if let Some(pending) = inner.pending.as_mut().filter(|pending| pending.due) {
+            let id = pending.id.clone();
+            pending._timer = Some(self.spawn_retry(&id, HELD_RETRY_FIRST));
         }
     }
 
@@ -932,6 +986,12 @@ impl WakeupThreadState {
             WakeupOrigin::Model => {
                 let limits = self.limits();
                 let chain_start = inner.chain.started_at.unwrap_or(pending.scheduled_at);
+                let chain_ends_at = chain_deadline(chain_start, &limits);
+                if pending.held > 0 && now > chain_ends_at {
+                    // D17: a wakeup held past its chain's end waits no longer (R2.4).
+                    self.cancel_locked(&mut inner, CancelReason::Limit);
+                    return None;
+                }
                 let input = fragments::WakeInput {
                     id: &pending.id,
                     scheduled_at: pending.scheduled_at,
@@ -939,7 +999,7 @@ impl WakeupThreadState {
                     turn_id: pending.scheduled_in_turn.as_deref(),
                     number: inner.chain.fired + 1,
                     max: limits.max_wakeups,
-                    chain_ends_at: chain_deadline(chain_start, &limits),
+                    chain_ends_at,
                     prompt: pending.prompt.as_deref().unwrap_or_default(),
                 };
                 crate::scheduler::StartRequest::Wakeup {
@@ -1008,13 +1068,45 @@ impl WakeupThreadState {
                 drop(pending);
                 self.publish(&inner, WakeupChange::Fired, None, Some(turn_id));
             }
-            crate::scheduler::StartOutcome::Held => {
+            not_started @ (crate::scheduler::StartOutcome::Held
+            | crate::scheduler::StartOutcome::Interrupted
+            | crate::scheduler::StartOutcome::Failed) => {
                 if consumed && inner.own_turn.as_ref().is_some_and(|own| own.kind == *kind) {
                     // `on_turn_start` took the arming for another turn.
                     inner.own_turn = None;
                 }
-                // The wakeup stays due and fires at the next idle (R3.2, R3.3); `due` is
-                // already set, so clients saw it when it became due.
+                if inner
+                    .pending
+                    .as_ref()
+                    .is_none_or(|pending| pending.id != kind.wakeup_id())
+                {
+                    // Cancelled or replaced while the start was on its way.
+                    return;
+                }
+                match not_started {
+                    crate::scheduler::StartOutcome::Interrupted if self.child => {
+                        // D17: only the parent starts a child's turns, and it interrupted the
+                        // child; a held wakeup would pin the child and keep the parent's
+                        // `wait_agent` waiting.
+                        let cancelled = self.cancel_locked(&mut inner, CancelReason::Interrupt);
+                        inner.notice = Some(fragments::cancel_notice_with_cause(
+                            &cancelled,
+                            "the thread was interrupted when it came due",
+                        ));
+                    }
+                    crate::scheduler::StartOutcome::Failed => {
+                        // R3.8, D17: a failed start counts like a failed wakeup turn.
+                        inner.failures += 1;
+                        if inner.failures >= MAX_CONSECUTIVE_FAILED_TURNS {
+                            self.cancel_locked(&mut inner, CancelReason::Failures);
+                        } else {
+                            self.retry_later(&mut inner, kind.wakeup_id());
+                        }
+                    }
+                    // The wakeup stays due (clients saw it when it became due) and fires at
+                    // the next idle or retry (R3.2, R3.3, D17).
+                    _ => self.retry_later(&mut inner, kind.wakeup_id()),
+                }
             }
             crate::scheduler::StartOutcome::Closed => {
                 inner.own_turn = None;
