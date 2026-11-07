@@ -1206,6 +1206,8 @@ expect workflow-build-no-debuginfo grep -qxF '      CARGO_PROFILE_RELEASE_DEBUG:
 expect workflow-build-timings grep -qF 'cargo build --locked --target "${TARGET}" --release --timings' <<<"${build_job}"
 expect workflow-build-bwrap-linux-only test "$(step_if "${build_job}" 'Build bwrap and export digest')" = "runner.os == 'Linux'"
 expect workflow-build-bwrap-first in_order "${build_job}" 'name: Build bwrap and export digest' 'name: Build release binaries'
+expect workflow-build-swap-linux-only test "$(step_if "${build_job}" 'Add swap (Linux)')" = "runner.os == 'Linux'"
+expect workflow-build-swap-before-cargo in_order "${build_job}" 'name: Add swap (Linux)' 'name: Build bwrap and export digest'
 expect workflow-build-part-after-cargo in_order "${build_job}" 'name: Build release binaries' 'release-package.sh part'
 # shellcheck disable=SC2016 # ${{ }} is workflow syntax
 expect workflow-build-uploads-part grep -qxF \

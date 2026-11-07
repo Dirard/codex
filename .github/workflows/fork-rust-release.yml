@@ -258,6 +258,31 @@ jobs:
           sudo apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends binutils pkg-config libcap-dev
 
+      # The aarch64 primary bundle lost its runner twice (exit 143, "shutdown
+      # signal") at the same point, while codex-tui and codex-exec compile in
+      # parallel: the 16 GB runner runs out of memory. Swap lets the peak pass;
+      # the step prints memory and disk for the next diagnosis.
+      - name: Add swap (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          free -m
+          swapon --show
+          df -h /
+          # Leave about 40 GB for the release target directory.
+          avail_gb="$(df --output=avail -BG / | tail -n 1 | tr -dc '0-9')"
+          size_gb=$((avail_gb - 40 < 16 ? avail_gb - 40 : 16))
+          if ((size_gb >= 4)); then
+            sudo fallocate -l "${size_gb}G" /swapfile-fork
+            sudo chmod 600 /swapfile-fork
+            sudo mkswap /swapfile-fork >/dev/null
+            sudo swapon /swapfile-fork
+          else
+            echo "::warning::only ${avail_gb} GB free on /; no swap added"
+          fi
+          free -m
+
       - name: Configure rusty_v8 artifacts
         uses: ./.github/actions/setup-rusty-v8
         with:
