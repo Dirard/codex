@@ -251,13 +251,14 @@ impl ChatWidget {
     }
 
     /// R8.6.1: a runtime toggle of `features.workflows` shows or hides `/workflows`; output
-    /// styles R5.1: one of `features.output_styles` shows or hides `/output-style`.
-    pub(super) fn fork_on_feature_toggled(&mut self, feature: Feature) {
+    /// styles R5.1: one of `features.output_styles` shows or hides `/output-style` and, when
+    /// it changes the value (`was_enabled` is the value before), says it applies to new threads.
+    pub(super) fn fork_on_feature_toggled(&mut self, feature: Feature, was_enabled: bool) {
         if feature == Feature::Workflows {
             self.fork_sync_workflows_command();
         }
         if feature == Feature::OutputStyles {
-            self.fork_sync_output_style_command();
+            self.fork_on_output_styles_toggled(was_enabled);
         }
         if feature == Feature::ScheduledWakeups {
             self.fork_sync_wakeups_command();

@@ -104,7 +104,6 @@ fn builtin_style_texts() {
     let learning = text("learning");
     assert!(learning.contains("TODO(human)"));
     assert!(learning.contains("Insight:"));
-    assert!(learning.contains("write the code yourself"));
     insta::assert_snapshot!(
         "builtin_output_styles",
         ["outcome-first", "explanatory", "learning"]
@@ -113,6 +112,30 @@ fn builtin_style_texts() {
             .collect::<Vec<_>>()
             .join("\n\n")
     );
+}
+
+/// R7.2, review O-3: `learning` adds teaching but still finishes the task with all of its code;
+/// it hands a piece to the user with `TODO(human)` only when the user asks, so a run where
+/// nobody can answer (`codex exec`, `/loop`) never ends with a missing piece.
+#[test]
+fn learning_finishes_the_task_and_hands_off_code_only_on_request() {
+    let catalog = OutputStyleCatalog::builtin();
+    let learning = catalog
+        .find("learning")
+        .expect("built-in style")
+        .text
+        .clone();
+    assert!(!learning.contains("End your turn and wait"), "{learning}");
+    assert!(
+        learning.contains("you still finish the task, including all of its code"),
+        "{learning}"
+    );
+    let on_request = learning
+        .find("If the user asks to write")
+        .expect("the hand-off is on request");
+    let todo = learning.find("TODO(human)").expect("TODO(human) mark");
+    assert!(on_request < todo, "{learning}");
+    assert!(!learning.contains("explanatory style"), "{learning}");
 }
 
 /// R1.3: `name` comes from the frontmatter or the file stem, unknown keys and CRLF line ends
@@ -195,6 +218,45 @@ async fn invalid_files_are_skipped_with_a_warning() {
     assert!(catalog.warnings[0].contains("missing YAML frontmatter"));
     assert!(catalog.warnings[1].contains(&dir.join("empty.md").display().to_string()));
     assert!(catalog.warnings[1].contains("empty"));
+}
+
+/// R1.3, review O-5: a file larger than a style file can be is skipped with a warning from
+/// its size, without reading it.
+#[tokio::test]
+async fn oversized_files_are_skipped_without_being_read() {
+    let folders = folders();
+    write_style(
+        &folders.codex_home,
+        "huge.md",
+        &style_file(None, "Huge.", &"x".repeat(1024 * 1024)),
+    );
+    write_style(
+        &folders.codex_home,
+        "small.md",
+        &style_file(None, "Small.", "Text."),
+    );
+    let fs = RecordingFs::default();
+    let catalog = OutputStyleCatalog::load(
+        &fs,
+        &folders.codex_home,
+        &layer_stack(&folders.codex_home, &[]),
+    )
+    .await;
+    let huge = folders
+        .codex_home
+        .join(OUTPUT_STYLES_DIR)
+        .join("huge.md")
+        .display()
+        .to_string();
+    assert!(catalog.find("small").is_some());
+    assert!(catalog.find("huge").is_none());
+    assert!(!fs.read().contains(&huge), "{:?}", fs.read());
+    assert_eq!(catalog.warnings.len(), 1, "{:?}", catalog.warnings);
+    assert!(
+        catalog.warnings[0].contains(&huge) && catalog.warnings[0].contains("the file has"),
+        "{}",
+        catalog.warnings[0]
+    );
 }
 
 /// R1.4, R1.6: a project style wins over a user style of the same name in any case, the

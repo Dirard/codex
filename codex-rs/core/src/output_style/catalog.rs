@@ -8,6 +8,7 @@ use std::sync::LazyLock;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::GetMetadataOptions;
 use codex_exec_server::ReadFileOptions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -20,6 +21,9 @@ use super::OutputStyleSource;
 pub(crate) const OUTPUT_STYLES_DIR: &str = "output-styles";
 /// R1.3: the longest style text, in bytes.
 pub(crate) const MAX_STYLE_TEXT_BYTES: usize = 16 * 1024;
+/// R1.3, review O-5: the largest style file that is read; a larger one is skipped from its
+/// size without reading it. The frontmatter and the longest text fit well below it.
+pub(crate) const MAX_STYLE_FILE_BYTES: u64 = 64 * 1024;
 /// R1.5: the most style files read from one folder.
 pub(crate) const MAX_FILES_PER_DIR: usize = 256;
 
@@ -179,12 +183,29 @@ impl OutputStyleCatalog {
         let mut custom = Vec::new();
         for (dir, source) in dirs {
             for (path, file_stem) in list_style_files(fs, &dir, &mut catalog.warnings).await {
+                let uri = PathUri::from_abs_path(&path);
+                match fs
+                    .get_metadata(&uri, GetMetadataOptions::default(), /*sandbox*/ None)
+                    .await
+                {
+                    Ok(metadata) if metadata.size > MAX_STYLE_FILE_BYTES => {
+                        catalog.warnings.push(skipped(
+                            &path,
+                            &format!(
+                                "the file has {} bytes, more than the limit of {MAX_STYLE_FILE_BYTES}",
+                                metadata.size
+                            ),
+                        ));
+                        continue;
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        catalog.warnings.push(skipped(&path, &error.to_string()));
+                        continue;
+                    }
+                }
                 let contents = match fs
-                    .read_file_text(
-                        &PathUri::from_abs_path(&path),
-                        ReadFileOptions::default(),
-                        /*sandbox*/ None,
-                    )
+                    .read_file_text(&uri, ReadFileOptions::default(), /*sandbox*/ None)
                     .await
                 {
                     Ok(contents) => contents,

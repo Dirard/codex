@@ -120,6 +120,7 @@ impl ChatWidget {
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_feature_enabled(&mut self, feature: Feature, enabled: bool) -> bool {
+        let was_enabled = self.config.features.enabled(feature); // Fork: output styles (review O-1)
         if let Err(err) = self.config.features.set_enabled(feature, enabled) {
             tracing::warn!(
                 error = %err,
@@ -159,7 +160,7 @@ impl ChatWidget {
         if feature == Feature::PreventIdleSleep {
             self.turn_lifecycle.set_prevent_idle_sleep(enabled);
         }
-        self.fork_on_feature_toggled(feature); // Fork: `/workflows` follows `features.workflows`
+        self.fork_on_feature_toggled(feature, was_enabled); // Fork: `/workflows` follows `features.workflows`
         enabled
     }
 

@@ -10,9 +10,13 @@ use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ConfigBatchWriteParams;
+use codex_app_server_protocol::ConfigEdit;
+use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::OutputStyleSource;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadOutputStyleListParams;
@@ -223,7 +227,10 @@ async fn set_applies_to_the_next_request_and_refuses_with_reasons() -> Result<()
     let error = set_error(&mut app, &plain.id, "learning").await?;
     assert_eq!(error.error.code, -32600);
     assert!(
-        error.error.message.contains("output styles are disabled"),
+        error
+            .error
+            .message
+            .contains("output styles are off for this thread"),
         "{}",
         error.error.message
     );
@@ -252,6 +259,58 @@ async fn set_applies_to_the_next_request_and_refuses_with_reasons() -> Result<()
     assert_eq!(second.len(), 2, "{second:?}");
     assert!(second[1].contains("The user switched the output style to `learning`."));
     assert_eq!(fragments(2), Vec::<String>::new());
+    Ok(())
+}
+
+/// Review O-1: a running thread keeps the features it started with, so turning the feature on
+/// in the user config (what `/experimental` writes, with a reload) does not let `set` change
+/// that thread; the refusal says to start a new thread, and a new thread can use styles.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn enabling_the_feature_later_applies_to_new_threads() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let running = app.start_thread(ThreadStartParams::default()).await?.thread;
+
+    let _: ConfigWriteResponse = app
+        .request(|request_id| ClientRequest::ConfigBatchWrite {
+            request_id,
+            params: ConfigBatchWriteParams {
+                edits: vec![ConfigEdit {
+                    key_path: format!("features.{}", Feature::OutputStyles.key()),
+                    value: json!(true),
+                    merge_strategy: MergeStrategy::Replace,
+                }],
+                file_path: None,
+                expected_version: None,
+                reload_user_config: true,
+            },
+        })
+        .await?;
+    let error = set_error(&mut app, &running.id, "learning").await?;
+    assert_eq!(error.error.code, -32600);
+    assert!(
+        error.error.message.contains("start a new thread"),
+        "{}",
+        error.error.message
+    );
+    assert_eq!(list(&mut app, &running.id).await?.current, "default");
+
+    let fresh = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let ThreadOutputStyleSetResponse { style } = app
+        .request(|request_id| ClientRequest::ThreadOutputStyleSet {
+            request_id,
+            params: ThreadOutputStyleSetParams {
+                thread_id: fresh.id.clone(),
+                name: "learning".to_string(),
+            },
+        })
+        .await?;
+    assert_eq!(style.name, "learning");
     Ok(())
 }
 

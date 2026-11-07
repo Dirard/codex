@@ -29,6 +29,8 @@ use codex_utils_path_uri::PathUri;
 #[derive(Default)]
 pub(crate) struct RecordingFs {
     accessed: Mutex<Vec<String>>,
+    /// The paths whose contents were read, a subset of `accessed`.
+    read: Mutex<Vec<String>>,
 }
 
 impl RecordingFs {
@@ -39,16 +41,33 @@ impl RecordingFs {
             .clone()
     }
 
+    pub(crate) fn read(&self) -> Vec<String> {
+        self.read
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     fn record(&self, path: &PathUri) {
-        let path = path
-            .to_abs_path()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|_| format!("{path:?}"));
         self.accessed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(path);
+            .push(display(path));
     }
+
+    fn record_read(&self, path: &PathUri) {
+        self.record(path);
+        self.read
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(display(path));
+    }
+}
+
+fn display(path: &PathUri) -> String {
+    path.to_abs_path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| format!("{path:?}"))
 }
 
 impl ExecutorFileSystem for RecordingFs {
@@ -67,7 +86,7 @@ impl ExecutorFileSystem for RecordingFs {
         options: ReadFileOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
-        self.record(path);
+        self.record_read(path);
         LOCAL_FS.read_file(path, options, sandbox)
     }
 
@@ -76,7 +95,7 @@ impl ExecutorFileSystem for RecordingFs {
         path: &'a PathUri,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
-        self.record(path);
+        self.record_read(path);
         LOCAL_FS.read_file_stream(path, sandbox)
     }
 

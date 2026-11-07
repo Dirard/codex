@@ -277,6 +277,22 @@ fn wrapper_stays_within_one_kib() {
     }
 }
 
+/// Review O-4: the scope leaves the rules of the current collaboration mode, such as when Plan
+/// mode asks questions, to the mode, so a style's own question guidance does not override them.
+#[test]
+fn collaboration_mode_rules_win_over_the_style() {
+    let message = text(&OutputStyleInstructions::active(
+        Lead::First,
+        &builtin("outcome-first"),
+    ));
+    assert!(
+        message.contains(
+            "the rules of the current collaboration mode, such as when to ask questions and how to present a plan"
+        ),
+        "{message}"
+    );
+}
+
 /// The wording of the messages for review.
 #[test]
 fn messages_snapshot() {

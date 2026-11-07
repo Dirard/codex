@@ -25,8 +25,10 @@ pub struct OutputStyleListing {
 /// Why [`CodexThread::set_output_style`] refused a style (R4.3).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum OutputStyleError {
+    /// Review O-1: a thread keeps the features it started with, so enabling the feature
+    /// later (for example in the TUI's `/experimental`) helps only new threads.
     #[error(
-        "output styles are disabled for this thread; enable the `output_styles` feature (`[features] output_styles = true`) first"
+        "output styles are off for this thread, and a thread keeps the features it started with; enable the `output_styles` feature (`[features] output_styles = true`) and start a new thread"
     )]
     FeatureDisabled,
     #[error("output styles apply only to root threads, and this thread is a subagent")]

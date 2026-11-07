@@ -4,6 +4,8 @@
 //! `thread/outputStyle/*` requests in the background and hands the answers back here, where
 //! the picker opens and the outcome is reported.
 
+use codex_app_server_protocol::ConfigEdit;
+use codex_app_server_protocol::OutputStyleInfo;
 use codex_app_server_protocol::OutputStyleSource;
 use codex_app_server_protocol::ThreadOutputStyleListResponse;
 use codex_app_server_protocol::WriteStatus;
@@ -36,7 +38,24 @@ pub(crate) enum OutputStyleEvent {
 #[derive(Debug)]
 pub(crate) struct OutputStyleSaved {
     pub(crate) name: String,
-    pub(crate) write: Result<WriteStatus, String>,
+    /// `None` when the style is not saved as the default: a project style (review O-2).
+    pub(crate) write: Option<Result<WriteStatus, String>>,
+}
+
+/// R5.3, review O-2: the config edit that saves a selected style as the user's default, or
+/// `None` for a project style. Clients can write only the user config (`config/batchWrite`
+/// refuses other files), and there a project style's name would be unknown in every other
+/// project, in `codex exec` and in IDE threads.
+pub(crate) fn default_style_edit(style: &OutputStyleInfo) -> Option<ConfigEdit> {
+    match style.source {
+        OutputStyleSource::Builtin | OutputStyleSource::User => {
+            Some(crate::config_update::replace_config_value(
+                "output_style",
+                serde_json::json!(style.name),
+            ))
+        }
+        OutputStyleSource::Project => None,
+    }
 }
 
 impl ChatWidget {
@@ -44,6 +63,31 @@ impl ChatWidget {
     pub(crate) fn fork_sync_output_style_command(&mut self) {
         self.bottom_pane
             .set_output_style_command_enabled(self.config.features.enabled(Feature::OutputStyles));
+    }
+
+    /// R5.1, review O-1: a toggle of `features.output_styles` shows or hides `/output-style`.
+    /// A running thread keeps the features it started with, so a toggle that changes the
+    /// value while a thread is shown says that it applies to new threads.
+    pub(crate) fn fork_on_output_styles_toggled(&mut self, was_enabled: bool) {
+        self.fork_sync_output_style_command();
+        let enabled = self.config.features.enabled(Feature::OutputStyles);
+        if enabled == was_enabled || self.thread_id.is_none() {
+            return;
+        }
+        if enabled {
+            self.add_info_message(
+                "Output styles take effect in new threads.".to_string(),
+                Some("Start a new thread with /new to use /output-style.".to_string()),
+            );
+        } else {
+            self.add_info_message(
+                "Output styles are off for new threads.".to_string(),
+                Some(
+                    "This thread keeps its current output style until you start a new thread."
+                        .to_string(),
+                ),
+            );
+        }
     }
 
     /// R5.2: `/output-style` asks the app for the styles of the primary thread.
@@ -111,12 +155,18 @@ impl ChatWidget {
         });
     }
 
-    /// R5.3: reports a selection: set and saved, saved but overridden, set but not saved, or
-    /// refused by the server.
+    /// R5.3: reports a selection: set and saved, saved but overridden, set but not saved, set
+    /// for this thread only (a project style, review O-2), or refused by the server.
     pub(crate) fn on_output_style_selected(&mut self, result: Result<OutputStyleSaved, String>) {
         match result {
             Ok(OutputStyleSaved { name, write }) => match write {
-                Ok(status) => {
+                None => self.add_info_message(
+                    format!("Output style set to {name} for this thread"),
+                    Some(format!(
+                        "Project styles are not saved as your default. To use it whenever you work in this project, add output_style = \"{name}\" to the project's .codex/config.toml."
+                    )),
+                ),
+                Some(Ok(status)) => {
                     self.add_info_message(format!("Output style set to {name}"), /*hint*/ None);
                     if status == WriteStatus::OkOverridden {
                         self.add_warning_message(
@@ -125,7 +175,7 @@ impl ChatWidget {
                         );
                     }
                 }
-                Err(error) => self.add_error_message(format!(
+                Some(Err(error)) => self.add_error_message(format!(
                     "This thread now uses the output style {name}, but saving it as the default failed: {error}"
                 )),
             },

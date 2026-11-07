@@ -3,6 +3,9 @@
 use super::*;
 use crate::chatwidget::output_style::OutputStyleEvent;
 use crate::chatwidget::output_style::OutputStyleSaved;
+use crate::chatwidget::output_style::default_style_edit;
+use codex_app_server_protocol::ConfigEdit;
+use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::OutputStyleInfo;
 use codex_app_server_protocol::OutputStyleSource;
 use codex_app_server_protocol::ThreadOutputStyleListResponse;
@@ -178,13 +181,14 @@ async fn inline_name_selects_without_the_picker() {
     );
 }
 
-/// R5.3: the outcome of a selection: saved, saved but overridden, set but not saved, refused.
+/// R5.3: the outcome of a selection: saved, saved but overridden, set but not saved, set for
+/// this thread only (a project style, review O-2), refused.
 #[tokio::test]
 async fn selection_outcomes_are_reported() {
     let (mut chat, mut rx) = output_style_chat().await;
     chat.on_output_style_selected(Ok(OutputStyleSaved {
         name: "learning".to_string(),
-        write: Ok(WriteStatus::Ok),
+        write: Some(Ok(WriteStatus::Ok)),
     }));
     let text = history_text(&mut rx);
     assert!(text.contains("Output style set to learning"), "{text}");
@@ -192,7 +196,7 @@ async fn selection_outcomes_are_reported() {
 
     chat.on_output_style_selected(Ok(OutputStyleSaved {
         name: "learning".to_string(),
-        write: Ok(WriteStatus::OkOverridden),
+        write: Some(Ok(WriteStatus::OkOverridden)),
     }));
     let text = history_text(&mut rx);
     assert!(text.contains("Output style set to learning"), "{text}");
@@ -203,11 +207,22 @@ async fn selection_outcomes_are_reported() {
 
     chat.on_output_style_selected(Ok(OutputStyleSaved {
         name: "learning".to_string(),
-        write: Err("permission denied".to_string()),
+        write: Some(Err("permission denied".to_string())),
     }));
     let text = history_text(&mut rx);
     assert!(
         text.contains("This thread now uses the output style learning, but saving it as the default failed: permission denied"),
+        "{text}"
+    );
+
+    chat.on_output_style_selected(Ok(OutputStyleSaved {
+        name: "team".to_string(),
+        write: None,
+    }));
+    let text = history_text(&mut rx);
+    assert!(
+        text.contains("Output style set to team for this thread")
+            && text.contains("add output_style = \"team\" to the project's .codex/config.toml"),
         "{text}"
     );
 
@@ -216,5 +231,58 @@ async fn selection_outcomes_are_reported() {
     assert!(
         text.contains("Failed to set the output style: unknown output style `nope`"),
         "{text}"
+    );
+}
+
+/// Review O-1: a running thread keeps the features it started with, so turning output styles
+/// on or off during a session says what that means for this thread; without a thread, or
+/// when the value does not change, nothing is said.
+#[tokio::test]
+async fn toggling_the_feature_mid_session_points_to_a_new_thread() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    drain_insert_history(&mut rx);
+    chat.set_feature_enabled(Feature::OutputStyles, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::OutputStyles, /*enabled*/ false);
+    assert_eq!(history_text(&mut rx), "");
+
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::OutputStyles, /*enabled*/ true);
+    let text = history_text(&mut rx);
+    assert!(
+        text.contains("Output styles take effect in new threads.") && text.contains("/new"),
+        "{text}"
+    );
+    chat.set_feature_enabled(Feature::OutputStyles, /*enabled*/ true);
+    assert_eq!(history_text(&mut rx), "");
+    chat.set_feature_enabled(Feature::OutputStyles, /*enabled*/ false);
+    let text = history_text(&mut rx);
+    assert!(
+        text.contains("This thread keeps its current output style"),
+        "{text}"
+    );
+}
+
+/// Review O-2: built-in and user styles are saved as `output_style` in the user config; a
+/// project style is not, since its name is unknown outside that project.
+#[test]
+fn project_styles_are_not_saved_as_the_default() {
+    for source in [OutputStyleSource::Builtin, OutputStyleSource::User] {
+        assert_eq!(
+            default_style_edit(&style("terse", "Short answers.", source)),
+            Some(ConfigEdit {
+                key_path: "output_style".to_string(),
+                value: serde_json::json!("terse"),
+                merge_strategy: MergeStrategy::Replace,
+            }),
+            "{source:?}"
+        );
+    }
+    assert_eq!(
+        default_style_edit(&style(
+            "team",
+            "Our team's voice.",
+            OutputStyleSource::Project
+        )),
+        None
     );
 }

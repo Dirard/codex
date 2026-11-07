@@ -19,6 +19,7 @@ use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::chatwidget::output_style::OutputStyleEvent;
 use crate::chatwidget::output_style::OutputStyleSaved;
+use crate::chatwidget::output_style::default_style_edit;
 
 impl App {
     /// UC5: route an `/output-style` event.
@@ -80,7 +81,8 @@ impl App {
     }
 
     /// R5.3: sets the style on the thread, then saves its name as `output_style` in the active
-    /// user config; nothing is written when the server refuses the style.
+    /// user config; nothing is written when the server refuses the style or when it is a
+    /// project style (review O-2, [`default_style_edit`]).
     fn spawn_output_style_set(
         &self,
         app_server: &AppServerSession,
@@ -104,18 +106,19 @@ impl App {
                 .map_err(|error| error.to_string());
             let result = match set {
                 Ok(response) => {
-                    let name = response.style.name;
-                    let write = crate::config_update::write_config_batch(
-                        request_handle,
-                        vec![crate::config_update::replace_config_value(
-                            "output_style",
-                            serde_json::json!(name),
-                        )],
-                    )
-                    .await
-                    .map(|response| response.status)
-                    .map_err(|error| crate::config_update::format_config_error(&error));
-                    Ok(OutputStyleSaved { name, write })
+                    let write = match default_style_edit(&response.style) {
+                        Some(edit) => Some(
+                            crate::config_update::write_config_batch(request_handle, vec![edit])
+                                .await
+                                .map(|response| response.status)
+                                .map_err(|error| crate::config_update::format_config_error(&error)),
+                        ),
+                        None => None,
+                    };
+                    Ok(OutputStyleSaved {
+                        name: response.style.name,
+                        write,
+                    })
                 }
                 Err(error) => Err(error),
             };
