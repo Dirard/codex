@@ -231,13 +231,13 @@ fn listing_names_every_builtin_once() {
     }
 }
 
-/// Builtin-workflows R9.4: the canonical review turn names the call with compact args in
-/// the order of `meta.args`, and the reporting instructions.
+/// Builtin-workflows R9.4: the canonical review turn names the `builtin-review` call with
+/// compact args in the order of `meta.args`, and the reporting instructions.
 #[test]
 fn review_turn_text_names_the_call_and_the_report() {
     let text = review_turn_text(&json!({ "target": "main", "effort": "max" }));
     assert!(
-        text.contains(r#"call the `workflow` tool with {"name":"review","args":{"effort":"max","target":"main"}}."#),
+        text.contains(r#"call the `workflow` tool with {"name":"builtin-review","args":{"effort":"max","target":"main"}}; the `builtin-` name runs the script built into Codex even when the project or $CODEX_HOME has its own `review`."#),
         "{text}"
     );
     for part in [
@@ -252,7 +252,7 @@ fn review_turn_text_names_the_call_and_the_report() {
     }
     for empty in [json!({}), serde_json::Value::Null] {
         assert!(
-            review_turn_text(&empty).contains(r#"{"name":"review","args":{}}"#),
+            review_turn_text(&empty).contains(r#"{"name":"builtin-review","args":{}}"#),
             "{empty}"
         );
     }
@@ -260,4 +260,19 @@ fn review_turn_text_names_the_call_and_the_report() {
         review_turn_text(&json!({ "zeta": 1, "uncommitted": true, "base": "main" }))
             .contains(r#""args":{"base":"main","uncommitted":true,"zeta":1}"#)
     );
+}
+
+/// Builtin-workflows review B-8: `/code-review` and `codex exec review --workflow` ask for the
+/// built-in by its `builtin-` name, so a project or `$CODEX_HOME` script named `review` cannot
+/// take their place; only a model's own `{name: "review"}` call reaches such a script.
+#[test]
+fn review_turn_text_runs_the_builtin_by_its_prefix() {
+    let text = review_turn_text(&json!({ "effort": "high" }));
+    assert!(
+        text.contains(&format!(
+            r#"{{"name":"{BUILTIN_PREFIX}review","args":{{"effort":"high"}}}}"#
+        )),
+        "{text}"
+    );
+    assert!(!text.contains(r#""name":"review""#), "{text}");
 }

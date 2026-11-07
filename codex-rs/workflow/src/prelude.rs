@@ -204,6 +204,8 @@ pub fn build_cell_source(
     let engine_literal =
         serde_json::to_string(&engine_json).unwrap_or_else(|_| "\"{}\"".to_string());
     let budget_literal = budget_limit.map_or_else(|| "null".to_string(), |limit| limit.to_string());
+    // `args` is the only caller-controlled text, so it goes in last: a placeholder name inside
+    // it stays text instead of being replaced (builtin-workflows review B-1).
     let prelude = PRELUDE
         .lines()
         .map(str::trim)
@@ -212,8 +214,8 @@ pub fn build_cell_source(
         .join(" ")
         .replace("__MAX_FAN_OUT__", &MAX_FAN_OUT.to_string())
         .replace("__BUDGET_LIMIT__", &budget_literal)
-        .replace("__ARGS_JSON__", &args_literal)
-        .replace("__ENGINE_JSON__", &engine_literal);
+        .replace("__ENGINE_JSON__", &engine_literal)
+        .replace("__ARGS_JSON__", &args_literal);
     let mut source = String::with_capacity(prelude.len() + body.len() + 128);
     source.push_str(&prelude);
     source.push_str(" async function __wf_main() {");

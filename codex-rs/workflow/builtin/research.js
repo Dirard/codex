@@ -310,21 +310,26 @@ const draft = await ask("synthesize", "synthesize", SCHEMAS.answer, `You answer 
 Facts (JSON):
 ${JSON.stringify(facts)}
 Open questions: ${openQuestions.length === 0 ? "none" : openQuestions.join("; ")}
-Answer: answer (direct, a few paragraphs at most); confidence (high, medium or low); claims (the key claims of the answer, most important first, each with its sources); contradictions between sources; gaps (what the facts do not settle). Use only the facts; say so when they are not enough.`);
+Answer: answer (direct, a few paragraphs at most); confidence (high, medium or low); claims (the key claims of the answer, most important first${plan.claims > 0 && plan.skeptics > 0 ? `, at most ${plan.claims}` : ""}, each with its sources); contradictions between sources; gaps (what the facts do not settle). Use only the facts; say so when they are not enough.`);
 if (draft === null) {
   throw new Error("research: the synthesis agent gave no answer");
 }
 
 // R7.2: skeptics try to refute the key claims; a strict majority of refutations drops one.
+// R7.3 (review B-6): a claim is verified only when a skeptic upheld it; claims over the cap,
+// cut by the plan or the budget, or that no skeptic upheld stay in the evidence marked
+// `verified: false` and count as unverified.
 const refutedClaims = [];
-let unverifiedClaims = 0;
-let evidence = draft.claims;
+const verifiedClaims = new Set();
+const refuted = new Set();
 if (plan.claims > 0 && plan.skeptics > 0 && draft.claims.length > 0) {
   phase("Verify");
   const checked = draft.claims.slice(0, plan.claims);
+  if (draft.claims.length > checked.length) {
+    log(`Verify: ${plural(draft.claims.length - checked.length, "claim")} over the cap of ${plan.claims} not checked`);
+  }
   const covered = await affordable(checked.length * plan.skeptics, "Verify");
   const checking = checked.slice(0, Math.floor(covered / plan.skeptics));
-  unverifiedClaims += checked.length - checking.length;
   const verdicts = await pipeline(checking, async (claim) => {
     const votes = await parallel(Array.from({ length: plan.skeptics }, (_, index) => () =>
       ask("verify", `verify claim ${checking.indexOf(claim) + 1}.${index + 1}`, SCHEMAS.check, `You are an independent skeptic. Try to refute this claim about the question ${JSON.stringify(question)}.
@@ -338,22 +343,29 @@ Check the sources and the code yourself. Answer "upheld" only if the claim holds
       }
     }
     const answered = tally.upheld + tally.refuted + tally.uncertain;
-    return { claim, verdict: answered === 0 ? "unverified" : 2 * tally.refuted > answered ? "refuted" : "kept" };
+    const verdict = answered === 0 ? "unverified" : 2 * tally.refuted > answered ? "refuted" : tally.upheld === 0 ? "unverified" : "upheld";
+    return { claim, verdict };
   });
-  const refuted = new Set();
   verdicts.forEach((result, index) => {
-    if (result === null || result.verdict === "unverified") {
-      unverifiedClaims += 1;
-    } else if (result.verdict === "refuted") {
+    if (result !== null && result.verdict === "refuted") {
       refuted.add(checking[index]);
       refutedClaims.push(checking[index].claim);
       log(`claim refuted: ${checking[index].claim}`);
+    } else if (result !== null && result.verdict === "upheld") {
+      verifiedClaims.add(checking[index]);
     }
   });
-  evidence = draft.claims.filter((claim) => !refuted.has(claim));
   if (refutedClaims.length > 0) {
     notes.push(`${plural(refutedClaims.length, "key claim")} refuted by skeptics and left out of evidence; the answer text predates the check`);
   }
+}
+const evidence = draft.claims
+  .filter((claim) => !refuted.has(claim))
+  .map((claim) => ({ claim: claim.claim, sources: claim.sources, verified: verifiedClaims.has(claim) }));
+const unverifiedClaims = evidence.filter((item) => !item.verified).length;
+if (unverifiedClaims > 0) {
+  const why = row.claims === 0 ? ` (effort ${level} checks no claims)` : plan.claims === 0 ? " (the plan checks no claims)" : "";
+  note(`${plural(unverifiedClaims, "claim")} of the evidence not verified by a skeptic${why}`);
 }
 
 log(`research: ${plural(evidence.length, "claim")} with evidence, ${plural(refutedClaims.length, "refuted claim")}`);

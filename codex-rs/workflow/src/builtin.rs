@@ -79,9 +79,11 @@ const REVIEW_ARG_ORDER: &[&str] = &[
 ];
 
 /// UC9, R9.4: the user turn that `/code-review` and `codex exec review --workflow` submit: it
-/// names the `workflow` call with `name: "review"` and `args` as compact JSON and tells the
-/// model how to report the run's result. Keys of `args` keep the order of `meta.args`, so
-/// the text does not depend on how JSON maps order keys.
+/// names the `workflow` call with `name: "builtin-review"` and `args` as compact JSON and
+/// tells the model how to report the run's result. The `builtin-` name keeps a project or
+/// `$CODEX_HOME` script named `review` from taking the built-in's place (review B-8); a
+/// model's own `{name: "review"}` call still reaches such a script. Keys of `args` keep the
+/// order of `meta.args`, so the text does not depend on how JSON maps order keys.
 pub fn review_turn_text(args: &Value) -> String {
     let args_json = match args {
         Value::Object(object) => ordered_object_json(object, REVIEW_ARG_ORDER),
@@ -89,7 +91,7 @@ pub fn review_turn_text(args: &Value) -> String {
         other => other.to_string(),
     };
     format!(
-        "Run the built-in code review workflow: call the `workflow` tool with {{\"name\":\"review\",\"args\":{args_json}}}. Do not review the code yourself. When the run's notification arrives, get the full result with `workflow_status` if the preview is cut, then report the findings as returned, most severe first: `[P1] <title> — <file>:<line>`, the failure scenario, and the verdict with its votes; then the summary, the omitted counts and the coverage notes. If the run fails or you do not have the `workflow` tool (it needs the workflows and builtin_workflows features and multi-agent v2), say so and stop."
+        "Run the built-in code review workflow: call the `workflow` tool with {{\"name\":\"{BUILTIN_PREFIX}review\",\"args\":{args_json}}}; the `{BUILTIN_PREFIX}` name runs the script built into Codex even when the project or $CODEX_HOME has its own `review`. Do not review the code yourself. When the run's notification arrives, get the full result with `workflow_status` if the preview is cut, then report the findings as returned, most severe first: `[P1] <title> — <file>:<line>`, the failure scenario, and the verdict with its votes; then the summary, the omitted counts and the coverage notes. If the run fails or you do not have the `workflow` tool (it needs the workflows and builtin_workflows features and multi-agent v2), say so and stop."
     )
 }
 

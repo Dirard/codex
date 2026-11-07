@@ -58,6 +58,28 @@ fn prelude_embeds_args_budget_and_limits() {
     assert!(build_cell_source("", "1", Some(42), &ENGINE).contains("limit: 42"));
 }
 
+/// Builtin-workflows review B-1: `args` that contain the text of a prelude placeholder reach
+/// the script as given and leave the other literals of the prelude intact.
+#[test]
+fn args_naming_placeholders_stay_intact() {
+    let args_json = r#"{"q":"where is __ENGINE_JSON__ replaced? __BUDGET_LIMIT__ __MAX_FAN_OUT__ __ARGS_JSON__"}"#;
+    let source = build_cell_source("", args_json, Some(7), &ENGINE);
+    let first = source.lines().next().expect("first line");
+    let args_literal = serde_json::to_string(args_json).expect("literal");
+    assert!(
+        first.contains(&format!(
+            "const args = deepFreeze(JSON.parse({args_literal}));"
+        )),
+        "{first}"
+    );
+    assert!(
+        first.contains(r#"const engine = deepFreeze(JSON.parse("{\"max_concurrent_agents\":4,\"max_agents_per_run\":20,\"worktree_isolation\":false,\"read_only_explorers\":true}"));"#),
+        "{first}"
+    );
+    assert!(first.contains("limit: 7,"), "{first}");
+    assert!(first.contains("at most 4096 thunks"), "{first}");
+}
+
 /// UC12, R12.1: a nested script's first line stays on line 1 of its function, and V8 names
 /// it after the saved script.
 #[test]
