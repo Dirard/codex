@@ -393,10 +393,12 @@ async fn managed_force_shutdown_exits_with_blocked_rollout_writer() -> Result<()
     create_config_toml(home.path(), mock.uri(), "never")?;
     let config_path = home.path().join("config.toml");
     let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        config_path,
-        format!("{config}\n[features.multi_agent_v2]\nenabled = true\n"),
-    )?;
+    // Fork: upstream feature defaults (fork-features-default-on UC6).
+    let config = codex_config::pin_default_on_fork_features_off(&format!(
+        "{config}\n[features.multi_agent_v2]\nenabled = true\n"
+    ))
+    .map_err(std::io::Error::other)?;
+    std::fs::write(config_path, config)?;
     let socket_path = home.path().join("control/server.sock");
     let mut server = spawn_server(home.path(), &socket_path)?;
     let mut client = connect_default_daemon_client(&socket_path).await?;

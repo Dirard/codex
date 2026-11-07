@@ -33,6 +33,12 @@ mod merge;
 // Fork: turning off a fork feature keeps its settings table (explorer-and-questions, R1.6).
 mod feature_toggle_fork;
 pub use feature_toggle_fork::fork_feature_clear_keeps_table;
+// Fork: upstream tests keep upstream feature defaults (fork-features-default-on, UC6).
+mod test_defaults_fork;
+pub use test_defaults_fork::default_on_fork_features_unset_in;
+pub use test_defaults_fork::pin_default_on_fork_features_off;
+pub use test_defaults_fork::upstream_test_feature_overrides;
+pub use test_defaults_fork::upstream_test_packaged_defaults_toml;
 mod model_provider_defaults;
 mod model_provider_requirements;
 mod overrides;

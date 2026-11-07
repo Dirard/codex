@@ -59,7 +59,8 @@ fn experimental_features_display_metadata() {
         Feature::Workflows,
         Feature::BuiltinWorkflows, // Fork: built-in workflows (builtin-workflows UC1)
         Feature::AgentWorktreeIsolation,
-        Feature::OutputStyles,     // Fork: output styles R5.1
+        Feature::ExplorerProfile, // Fork: on by default (fork-features-default-on R2.1)
+        Feature::OutputStyles,    // Fork: output styles R5.1
         Feature::ScheduledWakeups, // Fork: scheduled wakeups R1.1
     ] {
         let stage = feature.stage();

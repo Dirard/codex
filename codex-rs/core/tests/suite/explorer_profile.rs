@@ -134,12 +134,11 @@ fn build_test(
                 .enable(feature)
                 .expect("test config should allow feature update");
         }
-        if explorer_profile {
-            config
-                .features
-                .enable(Feature::ExplorerProfile)
-                .expect("test config should allow feature update");
-        }
+        // On by default: the "off" cases set it too (fork-features-default-on R6.4, R6.6).
+        config
+            .features
+            .set_enabled(Feature::ExplorerProfile, explorer_profile)
+            .expect("test config should allow feature update");
         config.model_catalog =
             Some(bundled_models_response().expect("bundled models.json should parse"));
         config.model = Some(PARENT_MODEL.to_string());

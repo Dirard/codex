@@ -51,6 +51,7 @@ pub use runtime_auth::RuntimeAuthMode;
 // Fork: settings and `FeaturesToml` entries of the fork's features.
 pub use feature_configs::fork::*;
 mod fork;
+pub use fork::fork_default_on_features;
 pub use fork::fork_owns_stage;
 
 /// High-level lifecycle stage for a feature.
@@ -1255,7 +1256,7 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Background commands can notify the model when they exit or print a matching line, so it does not poll them; codex exec waits for these notifications before it exits.",
             announcement: "",
         },
-        default_enabled: false,
+        default_enabled: true,
     },
     // Fork: full output of truncated tools (specs/tool-output-spill-2026-11-07.md).
     FeatureSpec {
@@ -1276,7 +1277,7 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "The model can run a JavaScript workflow that fans out subagents in the background and reports back once when it ends; workflow agents start without your conversation.",
             announcement: "",
         },
-        default_enabled: false,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::BuiltinWorkflows,
@@ -1753,7 +1754,7 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Explorer subagents only read, start without your conversation, use a low reasoning effort and return short answers with file:line references.",
             announcement: "",
         },
-        default_enabled: false,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::AgentWorktreeIsolation,
@@ -1763,7 +1764,7 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Subagents can work in their own git worktree and the parent agent applies their changes with apply_agent_worktree; local git checkouts only, not on Windows.",
             announcement: "",
         },
-        default_enabled: false,
+        default_enabled: !cfg!(windows),
     },
     // Fork end
     FeatureSpec {

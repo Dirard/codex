@@ -1,6 +1,5 @@
 use anyhow::Result;
 use codex_config::CONFIG_TOML_FILE;
-use codex_config::LoaderOverrides;
 use codex_config::loader::project_trust_key;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::TurnInputRequest;
@@ -439,7 +438,10 @@ async fn migrating_only_the_project_agent_setting_preserves_v1_tools() -> Result
     let config = || {
         ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
-            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+            // Fork: upstream feature defaults (fork-features-default-on UC6).
+            .loader_overrides(
+                core_test_support::fork_defaults::upstream_test_loader_overrides(home.path()),
+            )
             .harness_overrides(ConfigOverrides {
                 cwd: Some(project.path().to_path_buf()),
                 ..Default::default()

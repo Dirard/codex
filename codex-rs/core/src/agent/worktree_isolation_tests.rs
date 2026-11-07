@@ -556,9 +556,13 @@ async fn describe_agent_worktree_requires_the_feature_and_the_owner() {
     )
     .expect("write record");
 
-    let disabled = load_config(&home, "", Some(&repository))
-        .await
-        .expect("config without the feature");
+    let disabled = load_config(
+        &home,
+        "[features]\nagent_worktree_isolation = false\n",
+        Some(&repository),
+    )
+    .await
+    .expect("config without the feature");
     assert_eq!(
         describe_agent_worktree(&disabled, thread_id, &checkout.root).await,
         None

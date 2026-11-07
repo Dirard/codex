@@ -145,7 +145,11 @@ fn codex_apps_mcp_protocol_can_be_enabled_independently_of_generic_mcp() {
 fn default_enabled_features_have_shipped() {
     for spec in crate::FEATURES {
         // Instant interrupts are enabled by default while retaining their development stage.
-        if spec.default_enabled && spec.id != Feature::InstantInterrupt {
+        if spec.default_enabled
+            && spec.id != Feature::InstantInterrupt
+            // Fork: default-on fork features stay Experimental (fork-features-default-on R2.2).
+            && !crate::fork_owns_stage(spec.id)
+        {
             assert!(
                 matches!(
                     spec.stage,

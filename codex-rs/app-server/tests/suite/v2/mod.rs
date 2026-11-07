@@ -201,6 +201,8 @@ mod tool_output_spill;
 mod output_style;
 // Fork: scheduled wakeups and /loop (specs/scheduled-wakeups-2026-11-07.md).
 mod scheduled_wakeups;
+// Fork: the fork's features that are on by default (specs/fork-features-default-on-2026-11-07.md).
+mod fork_default_features;
 mod workspace_routing;
 
 mod user_verification;

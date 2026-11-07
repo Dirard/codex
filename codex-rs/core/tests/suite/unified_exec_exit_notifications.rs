@@ -42,14 +42,14 @@ const NOTIFICATION_MARKER: &str = "<background_terminal_notification>";
 const ARMED_LINE: &str = "Exit notification: on";
 const EVENT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Sets the feature explicitly both ways: it is on by default, and the "off" cases must not
+/// depend on a test harness default (fork-features-default-on R6.4, R6.6).
 fn builder(exit_notifications: bool) -> TestCodexBuilder {
     test_codex().with_config(move |config| {
-        if exit_notifications {
-            config
-                .features
-                .enable(Feature::ExecExitNotifications)
-                .expect("enable exit notifications");
-        }
+        config
+            .features
+            .set_enabled(Feature::ExecExitNotifications, exit_notifications)
+            .expect("set exit notifications");
     })
 }
 
@@ -2551,6 +2551,11 @@ text(JSON.stringify({ keys: Object.keys(bg).sort() }));
                 .features
                 .enable(Feature::CodeMode)
                 .expect("enable Code Mode");
+            // On by default (fork-features-default-on R6.6).
+            config
+                .features
+                .disable(Feature::ExecExitNotifications)
+                .expect("disable exit notifications");
         })
         .build(&server)
         .await?;

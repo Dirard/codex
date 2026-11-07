@@ -54,7 +54,7 @@
       "description": "The commit an isolated child's worktree starts from.",
       "oneOf": [
         {
-          "description": "The parent's HEAD plus tracked modifications and untracked, non-ignored files. Those files are written to the repository's object store and become part of the agent branch's history, as with `git stash --include-untracked`; keep secrets in ignored files or use `head`, and do not push `codex/agents/*` branches.",
+          "description": "The parent's HEAD plus tracked modifications and untracked, non-ignored files. Those files are written to the repository's object store and become part of the agent branch's history, as with `git stash --include-untracked`; keep secrets in ignored files or use `head`, and do not push `codex/agents/*` branches. It applies only to a child spawned with `isolation: \"worktree\"`, which subagent worktrees, on by default, never pick on their own.",
           "enum": [
             "working_tree"
           ],
@@ -71,7 +71,7 @@
     },
     "AgentWorktreeIsolationConfigToml": {
       "additionalProperties": false,
-      "description": "`[features.agent_worktree_isolation]` settings for isolated MultiAgentV2 children. While the feature is enabled, MultiAgentV2 tools use the namespace `agents` unless `features.multi_agent_v2.tool_namespace` is set; the reserved namespace `collaboration` turns the feature off with a startup warning. Agent worktrees share the managed root with Codex Desktop, whose automatic cleanup removes them like the worktrees of inactive threads once the root holds more than `[desktop] worktree-keep-count`. Codex restores such a worktree before the agent's next turn from what it recorded on the agent's branch at the end of each turn; edits made after the agent's last turn ended survive only in Desktop's own snapshot ref, and ignored files such as build output are lost. Raise `worktree-keep-count` or set `worktree-auto-cleanup-enabled = false` to keep them.",
+      "description": "`[features.agent_worktree_isolation]` settings for isolated MultiAgentV2 children. The feature is on by default except on Windows, where isolated children are not supported; a child works in a worktree only when `spawn_agent` asks for `isolation: \"worktree\"` or `default_isolation` says so. While the feature is enabled, MultiAgentV2 tools use the namespace `agents` unless `features.multi_agent_v2.tool_namespace` is set. The reserved namespace `collaboration` turns the feature off for the session: silently while the feature is on only by default, with a startup warning when a config layer turns it on. Set `[features] agent_worktree_isolation = false` to keep the upstream namespace and tools. Agent worktrees share the managed root with Codex Desktop, whose automatic cleanup removes them like the worktrees of inactive threads once the root holds more than `[desktop] worktree-keep-count`. Codex restores such a worktree before the agent's next turn from what it recorded on the agent's branch at the end of each turn; edits made after the agent's last turn ended survive only in Desktop's own snapshot ref, and ignored files such as build output are lost. Raise `worktree-keep-count` or set `worktree-auto-cleanup-enabled = false` to keep them.",
       "properties": {
         "base": {
           "allOf": [
@@ -5395,7 +5395,7 @@
           "type": "boolean"
         },
         "max_age_days": {
-          "description": "Days after which a saved output is removed, checked once per Codex process. Defaults to 7, at least 1.",
+          "description": "Days after which a saved output is removed, checked when a session starts and at most hourly while Codex saves outputs, with the feature on or off. Defaults to 7, at least 1.",
           "format": "uint64",
           "minimum": 1.0,
           "type": "integer"
@@ -5413,7 +5413,7 @@
           "type": "integer"
         },
         "max_total_bytes": {
-          "description": "Largest size of the saved outputs of all threads, in bytes, checked once per Codex process; the oldest files go first. Defaults to 2147483648 (2 GiB), at least `max_thread_bytes`.",
+          "description": "Largest size of the saved outputs of all threads, in bytes, checked when a session starts and at most hourly while Codex saves outputs; the oldest files go first. Defaults to 2147483648 (2 GiB), at least `max_thread_bytes`.",
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"

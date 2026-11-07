@@ -14,7 +14,8 @@ pub(super) async fn test_config() -> (tempfile::TempDir, Config) {
         .expect("tempdir");
     let mut config = Config::load_default_with_cli_overrides_for_codex_home(
         codex_home.path().to_path_buf(),
-        Vec::new(),
+        // Fork: upstream tests keep upstream feature defaults (fork-features-default-on UC6).
+        codex_config::upstream_test_feature_overrides(),
     )
     .await
     .expect("config");

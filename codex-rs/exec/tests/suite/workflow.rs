@@ -87,7 +87,22 @@ async fn run_exec(
     agent_delay: Duration,
     extra: &[&str],
 ) -> anyhow::Result<(String, Vec<&'static str>)> {
-    let test = test_codex_exec();
+    run_exec_with_flags(
+        test_codex_exec(),
+        agent_delay,
+        &["features.workflows=true"],
+        extra,
+    )
+    .await
+}
+
+/// [`run_exec`] in `test` with `flags` instead of an explicit `features.workflows=true`.
+async fn run_exec_with_flags(
+    test: core_test_support::test_codex_exec::TestCodexExecBuilder,
+    agent_delay: Duration,
+    flags: &[&str],
+    extra: &[&str],
+) -> anyhow::Result<(String, Vec<&'static str>)> {
     let server = responses::start_mock_server().await;
     let routed = Routed {
         served: Arc::default(),
@@ -107,10 +122,8 @@ async fn run_exec(
         .arg("-c")
         .arg("features.collab=true")
         .arg("-c")
-        .arg("features.multi_agent_v2=true")
-        .arg("-c")
-        .arg("features.workflows=true");
-    for arg in extra {
+        .arg("features.multi_agent_v2=true");
+    for arg in flags.iter().chain(extra) {
         cmd.arg("-c").arg(arg);
     }
     let output = cmd
@@ -132,6 +145,18 @@ async fn run_exec(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn exec_waits_for_workflow_runs_and_prints_the_notification_turn() -> anyhow::Result<()> {
     let (stdout, served) = run_exec(Duration::from_millis(1500), &[]).await?;
+    assert!(stdout.contains("FINAL: the workflow finished"), "{stdout}");
+    assert_eq!(served, vec!["start", "after_tool", "agent", "notified"]);
+    Ok(())
+}
+
+/// Fork-features-default-on R4.2: `workflows` is on by default, and exec waits for a run the
+/// same way without an explicit flag (production defaults, without the harness pins of UC6).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exec_waits_for_workflow_runs_with_the_default() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+    core_test_support::fork_defaults::use_production_feature_defaults(test.home_path());
+    let (stdout, served) = run_exec_with_flags(test, Duration::from_millis(1500), &[], &[]).await?;
     assert!(stdout.contains("FINAL: the workflow finished"), "{stdout}");
     assert_eq!(served, vec!["start", "after_tool", "agent", "notified"]);
     Ok(())
@@ -187,7 +212,7 @@ impl Respond for ReviewRouted {
             )
         } else {
             let arguments =
-                json!({ "name": "review", "args": { "effort": "low", "base": "main" } })
+                json!({ "name": "builtin-review", "args": { "effort": "low", "base": "main" } })
                     .to_string();
             (
                 "start",

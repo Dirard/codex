@@ -59,6 +59,10 @@ pub(crate) struct TerminalWait {
     timeout: Duration,
     thread_id: String,
     waiting: Option<Waiting>,
+    /// Exec waited for a notification at least once. Only then does it name the terminals it
+    /// leaves running: a run that armed no notification exits as with the feature off
+    /// (`specs/fork-features-default-on-2026-11-07.md`, R4.1).
+    waited: bool,
     expired: bool,
     /// A turn started on the thread while exec waits, and it has not completed yet.
     turn_in_progress: bool,
@@ -76,6 +80,7 @@ impl TerminalWait {
             timeout: Duration::from_millis(config.exec_exit_notifications.exec_wait_timeout_ms),
             thread_id: thread_id.to_string(),
             waiting: None,
+            waited: false,
             expired: false,
             turn_in_progress: false,
             last_completed_turn: None,
@@ -126,7 +131,8 @@ impl TerminalWait {
     /// After a turn completed: keep waiting while the thread still owes the model a
     /// background terminal notification (R7.1). Returns whether exec waits. When exec stops,
     /// it names the terminals it leaves: after an interrupted turn those still owed (P3-5),
-    /// otherwise those still running that nothing waits for (P2-3).
+    /// otherwise, once it waited for something, those still running that nothing waits for
+    /// (P2-3; fork-features-default-on R4.1).
     pub(crate) async fn keep_waiting(
         &mut self,
         client: &InProcessAppServerClient,
@@ -157,10 +163,13 @@ impl TerminalWait {
         let owed = pending.as_ref().is_some_and(|pending| self.owes(pending));
         if !owed {
             self.waiting = None;
-            self.name_running_terminals(client, request_ids, event_processor)
-                .await;
+            if self.waited {
+                self.name_running_terminals(client, request_ids, event_processor)
+                    .await;
+            }
             return false;
         }
+        self.waited = true;
         let now = Instant::now();
         let timeout = self.timeout;
         let waiting = self.waiting.get_or_insert_with(|| Waiting {

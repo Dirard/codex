@@ -96,6 +96,8 @@ mod explorer_profile;
 #[cfg(not(target_os = "windows"))]
 mod extension_sandbox;
 mod external_auth;
+// Fork: the fork's features that are on by default (specs/fork-features-default-on-2026-11-07.md).
+mod fork_default_features;
 mod fork_thread;
 mod gcp;
 mod git_enrichment;

@@ -93,13 +93,13 @@ pub struct ToolOutputSpillConfigToml {
     /// to 268435456 (256 MiB), at least `max_file_bytes`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_thread_bytes: Option<u64>,
-    /// Largest size of the saved outputs of all threads, in bytes, checked once per Codex
-    /// process; the oldest files go first. Defaults to 2147483648 (2 GiB), at least
-    /// `max_thread_bytes`.
+    /// Largest size of the saved outputs of all threads, in bytes, checked when a session
+    /// starts and at most hourly while Codex saves outputs; the oldest files go first. Defaults
+    /// to 2147483648 (2 GiB), at least `max_thread_bytes`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_total_bytes: Option<u64>,
-    /// Days after which a saved output is removed, checked once per Codex process. Defaults to
-    /// 7, at least 1.
+    /// Days after which a saved output is removed, checked when a session starts and at most
+    /// hourly while Codex saves outputs, with the feature on or off. Defaults to 7, at least 1.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]
     pub max_age_days: Option<u64>,
@@ -165,17 +165,24 @@ pub enum AgentWorktreeBase {
     /// The parent's HEAD plus tracked modifications and untracked, non-ignored files. Those
     /// files are written to the repository's object store and become part of the agent
     /// branch's history, as with `git stash --include-untracked`; keep secrets in ignored
-    /// files or use `head`, and do not push `codex/agents/*` branches.
+    /// files or use `head`, and do not push `codex/agents/*` branches. It applies only to a
+    /// child spawned with `isolation: "worktree"`, which subagent worktrees, on by default,
+    /// never pick on their own.
     #[default]
     WorkingTree,
     /// The parent's HEAD commit.
     Head,
 }
 
-/// `[features.agent_worktree_isolation]` settings for isolated MultiAgentV2 children. While the
-/// feature is enabled, MultiAgentV2 tools use the namespace `agents` unless
-/// `features.multi_agent_v2.tool_namespace` is set; the reserved namespace `collaboration` turns
-/// the feature off with a startup warning. Agent worktrees share the managed root with Codex
+/// `[features.agent_worktree_isolation]` settings for isolated MultiAgentV2 children. The
+/// feature is on by default except on Windows, where isolated children are not supported; a
+/// child works in a worktree only when `spawn_agent` asks for `isolation: "worktree"` or
+/// `default_isolation` says so. While the feature is enabled, MultiAgentV2 tools use the
+/// namespace `agents` unless `features.multi_agent_v2.tool_namespace` is set. The reserved
+/// namespace `collaboration` turns the feature off for the session: silently while the feature
+/// is on only by default, with a startup warning when a config layer turns it on. Set
+/// `[features] agent_worktree_isolation = false` to keep the upstream namespace and tools.
+/// Agent worktrees share the managed root with Codex
 /// Desktop, whose automatic cleanup removes them like the worktrees of inactive threads once
 /// the root holds more than `[desktop] worktree-keep-count`. Codex restores such a worktree
 /// before the agent's next turn from what it recorded on the agent's branch at the end of each

@@ -18,6 +18,10 @@ impl TestCodexExecBuilder {
             .env("CODEX_HOME", self.home.path())
             .env("CODEX_SQLITE_HOME", self.home.path())
             .env(CODEX_API_KEY_ENV_VAR, "dummy");
+        // Fork: upstream tests keep upstream feature defaults (fork-features-default-on UC6).
+        cmd.args(crate::fork_defaults::upstream_test_exec_args(
+            self.home.path(),
+        ));
         cmd
     }
     pub fn cmd_with_server(&self, server: &MockServer) -> assert_cmd::Command {

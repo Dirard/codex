@@ -1,0 +1,17 @@
+---
+source: tui/src/bottom_pane/experimental_features_view_tests.rs
+expression: buffer_text(&buffer)
+---
+
+  Experimental features
+  Checked features are configured on. Some experimental features take effect
+  only in new tasks or after restarting the Codex server.
+
+
+› [x] Read-only explorer subagents  Explorer subagents only read, start without
+                                    your conversation, use a low reasoning
+                                    effort and return short answers with
+                                    file:line references.
+
+
+  space toggle · enter save · esc save/close

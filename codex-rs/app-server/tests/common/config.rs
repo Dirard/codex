@@ -131,10 +131,8 @@ impl MockResponsesConfig {
             format!("[features]\n{feature_entries}\n\n")
         };
 
-        std::fs::write(
-            codex_home.join("config.toml"),
-            format!(
-                r#"
+        let config_toml = format!(
+            r#"
 model = "{model}"
 approval_policy = "{approval_policy}"
 sandbox_mode = "{sandbox_mode}"
@@ -151,8 +149,11 @@ stream_max_retries = 0
 
 {extra_config}
 "#
-            ),
-        )
+        );
+        // Fork: upstream tests keep upstream feature defaults (fork-features-default-on UC6).
+        let config_toml = codex_config::pin_default_on_fork_features_off(&config_toml)
+            .map_err(std::io::Error::other)?;
+        std::fs::write(codex_home.join("config.toml"), config_toml)
     }
 }
 

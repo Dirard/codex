@@ -135,12 +135,32 @@ async fn run_exec_with(arguments: Value, overrides: &[&str]) -> anyhow::Result<E
     run_exec_routed(arguments, Duration::ZERO, overrides).await
 }
 
+/// [`run_exec_with`] without overrides and with the production feature defaults: the harness
+/// does not turn the default-on fork features off (fork-features-default-on R6.5).
+async fn run_exec_with_production_defaults(arguments: Value) -> anyhow::Result<ExecRun> {
+    run_exec_in(production_defaults_exec(), arguments, Duration::ZERO, &[]).await
+}
+
+fn production_defaults_exec() -> core_test_support::test_codex_exec::TestCodexExecBuilder {
+    let test = test_codex_exec();
+    core_test_support::fork_defaults::use_production_feature_defaults(test.home_path());
+    test
+}
+
 async fn run_exec_routed(
     arguments: Value,
     after_tool_delay: Duration,
     overrides: &[&str],
 ) -> anyhow::Result<ExecRun> {
-    let test = test_codex_exec();
+    run_exec_in(test_codex_exec(), arguments, after_tool_delay, overrides).await
+}
+
+async fn run_exec_in(
+    test: core_test_support::test_codex_exec::TestCodexExecBuilder,
+    arguments: Value,
+    after_tool_delay: Duration,
+    overrides: &[&str],
+) -> anyhow::Result<ExecRun> {
     let server = responses::start_mock_server().await;
     let routed = Routed {
         served: Arc::default(),
@@ -218,6 +238,26 @@ async fn exec_waits_for_a_background_terminal_and_prints_the_notification_turn()
     Ok(())
 }
 
+/// Fork-features-default-on R4.2: the feature is on by default, and exec waits for an armed
+/// notification the same way without an explicit flag.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exec_waits_for_a_background_terminal_with_the_default() -> anyhow::Result<()> {
+    let run = run_exec_with_production_defaults(notify_on_exit("sleep 2; echo built-ok")).await?;
+    assert!(
+        run.success,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    assert!(
+        run.stdout.contains("FINAL: the build printed built-ok"),
+        "stdout: {}\nstderr: {}",
+        run.stdout,
+        run.stderr
+    );
+    assert_eq!(run.served, vec!["start", "after_tool", "notified"]);
+    Ok(())
+}
+
 /// R7.3: after `exec_wait_timeout_ms` exec names the terminal it did not wait for, stops
 /// it and exits with code 1.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -255,9 +295,14 @@ async fn exec_gives_up_on_background_terminals_after_the_timeout() -> anyhow::Re
 }
 
 /// R7.5, R1.4: without the feature exec offers no notifications and ends after the turn.
+/// The feature is on by default, so the test turns it off (fork-features-default-on R6.6).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn exec_without_the_feature_ends_after_the_first_turn() -> anyhow::Result<()> {
-    let run = run_exec("sleep 60; echo never", &[]).await?;
+    let run = run_exec(
+        "sleep 60; echo never",
+        &["features.exec_exit_notifications=false"],
+    )
+    .await?;
     assert!(
         run.success,
         "stdout: {}\nstderr: {}",
@@ -270,6 +315,39 @@ async fn exec_without_the_feature_ends_after_the_first_turn() -> anyhow::Result<
     assert!(!first.contains("notify_on_exit"), "{first}");
     assert!(!first.contains("notify_on_output"), "{first}");
     assert!(!run.stderr.contains("stopped waiting"), "{}", run.stderr);
+    Ok(())
+}
+
+/// Fork-features-default-on R4.1: with the features on by default and a config that names
+/// none of them, a run whose model arms no notification exits as with the feature off: after
+/// the turn, without a wait, a line on stderr or another model request, although a background
+/// command still runs. The notification parameters are offered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exec_with_default_fork_features_exits_without_waiting() -> anyhow::Result<()> {
+    let run = run_exec_with_production_defaults(json!({
+        "cmd": "sleep 60; echo never",
+        "yield_time_ms": 250,
+        "login": false,
+    }))
+    .await?;
+    assert_eq!(
+        run.code,
+        Some(0),
+        "stdout: {}\nstderr: {}",
+        run.stdout,
+        run.stderr
+    );
+    assert!(run.elapsed < Duration::from_secs(30), "{:?}", run.elapsed);
+    assert_eq!(run.served, vec!["start", "after_tool"]);
+    let first = first_request_text(&run.bodies);
+    assert!(first.contains("notify_on_exit"), "{first}");
+    for line in [
+        "codex exec is waiting",
+        "codex exec is exiting while background terminals still run",
+        "codex exec stopped waiting",
+    ] {
+        assert!(!run.stderr.contains(line), "{line}\nstderr: {}", run.stderr);
+    }
     Ok(())
 }
 

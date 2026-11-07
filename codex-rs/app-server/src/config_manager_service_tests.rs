@@ -816,11 +816,11 @@ async fn clearing_a_fork_feature_table_keeps_its_settings() -> Result<()> {
 }
 
 /// Fork (fork-features-experimental R2.2): `/experimental` saves toggles as one batch write of
-/// `features."<key>"`, `true` to turn a default-off feature on and a clear to turn it off. For
-/// the fork's Experimental features that keeps their settings tables and leaves the top-level
-/// `[workflows]` table alone, and the config still loads: worktree isolation turned on without
-/// a tool namespace gives the MultiAgentV2 tools the namespace `agents`
-/// (agent-worktree-isolation R1.5).
+/// `features."<key>"`. These fork features are on by default (fork-features-default-on R2.4,
+/// R2.5), so it writes `true` and `false` explicitly. That keeps their settings tables and
+/// leaves the top-level `[workflows]` table alone, and the config still loads: worktree
+/// isolation turned on without a tool namespace gives the MultiAgentV2 tools the namespace
+/// `agents` (agent-worktree-isolation R1.5).
 #[tokio::test]
 async fn experimental_toggles_keep_fork_feature_settings() -> Result<()> {
     use codex_features::Feature;
@@ -839,11 +839,7 @@ async fn experimental_toggles_keep_fork_feature_settings() -> Result<()> {
             .iter()
             .map(|feature| codex_app_server_protocol::ConfigEdit {
                 key_path: format!("features.{}", serde_json::json!(feature.key())),
-                value: if enabled {
-                    serde_json::json!(true)
-                } else {
-                    serde_json::Value::Null
-                },
+                value: serde_json::json!(enabled),
                 merge_strategy: MergeStrategy::Replace,
             })
             .collect(),
@@ -859,12 +855,7 @@ async fn experimental_toggles_keep_fork_feature_settings() -> Result<()> {
             WriteStatus::Ok
         );
         let expected = format!(
-            "{}{}",
-            if enabled {
-                "[features]\nworkflows = true\n\n"
-            } else {
-                ""
-            },
+            "[features]\nworkflows = {enabled}\n\n{}",
             settings
                 .replace(
                     "[features.exec_exit_notifications]\n",

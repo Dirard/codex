@@ -923,7 +923,8 @@ fn sample_thread_start_response() -> ThreadStartResponse {
 
 /// Fork: `codex exec` keeps the configured `exec_exit_notifications` and its wait timeout:
 /// with the feature on, exec waits for background terminal notifications
-/// (background-exec-notifications R1.4, UC7).
+/// (background-exec-notifications R1.4, UC7). The feature is on by default and an explicit
+/// `false` turns it off (fork-features-default-on R1.1, R1.4).
 #[tokio::test]
 async fn exec_overrides_keep_the_exit_notifications_flag() {
     async fn build(raw_overrides: Vec<String>) -> codex_core::config::Config {
@@ -944,13 +945,20 @@ async fn exec_overrides_keep_the_exit_notifications_flag() {
 
     let default = build(Vec::new()).await;
     assert!(
-        !default
+        default
             .features
             .enabled(codex_features::Feature::ExecExitNotifications)
     );
     assert_eq!(
         default.exec_exit_notifications.exec_wait_timeout_ms,
         30 * 60 * 1000
+    );
+
+    let disabled = build(vec![format!("features.{key}=false")]).await;
+    assert!(
+        !disabled
+            .features
+            .enabled(codex_features::Feature::ExecExitNotifications)
     );
 
     let enabled = build(vec![format!("features.{key}=true")]).await;

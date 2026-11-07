@@ -137,9 +137,9 @@ async fn profile_table_survives_boolean_toggles() {
     );
 }
 
-/// R1.6 (review 2026-10-27, item 3): turning the profile off (`codex features disable`, a
-/// clear of `features.explorer_profile`) writes `enabled = false` and keeps the settings; a
-/// table with only `enabled` is still cleared, as upstream does.
+/// R1.6 (review 2026-10-27, item 3): turning the profile off (`codex features disable`)
+/// writes `enabled = false` and keeps the settings. Fork-features-default-on R2.4: the profile
+/// is on by default, so turning it off writes `false` in every form instead of clearing it.
 #[test]
 fn disabling_the_profile_keeps_its_settings() {
     for (initial, disabled) in [
@@ -147,8 +147,15 @@ fn disabling_the_profile_keeps_its_settings() {
             "[features.explorer_profile]\nenabled = true\nmodel = \"cheap-model\"\nmax_result_tokens = 500\n",
             "[features.explorer_profile]\nenabled = false\nmodel = \"cheap-model\"\nmax_result_tokens = 500\n",
         ),
-        ("[features.explorer_profile]\nenabled = true\n", ""),
-        ("[features]\nexplorer_profile = true\n", ""),
+        (
+            "[features.explorer_profile]\nenabled = true\n",
+            "[features.explorer_profile]\nenabled = false\n",
+        ),
+        (
+            "[features]\nexplorer_profile = true\n",
+            "[features]\nexplorer_profile = false\n",
+        ),
+        ("", "[features]\nexplorer_profile = false\n"),
     ] {
         let home = TempDir::new().expect("create temp dir");
         let config_path = home.path().join("config.toml");
@@ -174,7 +181,8 @@ fn disabling_the_profile_keeps_its_settings() {
 
 #[tokio::test]
 async fn profile_applies_only_to_explorer_role_when_enabled() {
-    let (_home, disabled) = config_with(&[]).await;
+    let (_home, disabled) =
+        config_with(&[("features.explorer_profile", TomlValue::Boolean(false))]).await;
     let (_home, enabled_config) =
         config_with(&[("features.explorer_profile", TomlValue::Boolean(true))]).await;
 
@@ -444,7 +452,8 @@ fn role_texts_describe_the_enforced_limits() {
 async fn sandbox_bypass_and_tool_denials_apply_only_to_explorers() {
     let (_home, enabled_config) =
         config_with(&[("features.explorer_profile", TomlValue::Boolean(true))]).await;
-    let (_home, disabled) = config_with(&[]).await;
+    let (_home, disabled) =
+        config_with(&[("features.explorer_profile", TomlValue::Boolean(false))]).await;
     let explorer = explorer_source(Some("explorer"));
     let worker = explorer_source(Some("worker"));
 

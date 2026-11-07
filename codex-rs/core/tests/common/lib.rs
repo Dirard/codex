@@ -9,7 +9,6 @@ use std::sync::OnceLock;
 use tempfile::TempDir;
 
 use codex_config::CloudConfigBundleLoader;
-use codex_config::LoaderOverrides;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::CodexThread;
 use codex_core::config::Config;
@@ -29,6 +28,8 @@ pub mod apps_test_server;
 pub mod code_mode_host;
 pub mod context_snapshot;
 pub mod exec_server;
+// Fork: upstream tests keep upstream feature defaults (fork-features-default-on UC6).
+pub mod fork_defaults;
 pub mod hooks;
 pub mod oauth;
 pub mod process;
@@ -213,7 +214,10 @@ pub async fn load_default_config_for_test_with_cloud_config_bundle(
     cloud_config_bundle: CloudConfigBundleLoader,
 ) -> Config {
     ConfigBuilder::default()
-        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        // Fork: upstream tests keep upstream feature defaults (fork-features-default-on UC6).
+        .loader_overrides(fork_defaults::upstream_test_loader_overrides(
+            codex_home.path(),
+        ))
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(default_test_overrides())
         .cloud_config_bundle(cloud_config_bundle)

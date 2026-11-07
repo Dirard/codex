@@ -278,9 +278,11 @@ pub struct ToolOutputSpillConfig {
     pub max_file_bytes: u64,
     /// Largest size of one thread's directory; the oldest files go first.
     pub max_thread_bytes: u64,
-    /// Largest size of all threads' saved outputs, checked once per process.
+    /// Largest size of all threads' saved outputs, checked when a session starts and at most
+    /// hourly after saves.
     pub max_total_bytes: u64,
-    /// Days after which a saved output is removed, checked once per process.
+    /// Days after which a saved output is removed, checked like `max_total_bytes`, with the
+    /// feature on or off.
     pub max_age_days: u64,
 }
 
@@ -548,12 +550,16 @@ pub(super) fn warn_removed_agents_keys(
 ///   check is not limited to `features.multi_agent_v2`: the model catalog selects MultiAgentV2
 ///   for most models without it.
 /// - Worktree isolation with the namespace set to the reserved default: the session runs
-///   without isolation (no `isolation` parameter, `apply_agent_worktree` or worktree sweep) and
-///   starts with a warning that says how to get it back, instead of failing to load.
+///   without isolation (no `isolation` parameter, `apply_agent_worktree` or worktree sweep)
+///   instead of failing to load. When a config layer turned isolation on, the session starts
+///   with a warning that says how to get it back; when isolation is on only by default, the
+///   reserved namespace is a legitimate upstream setting and the choice is logged at `debug`
+///   (`specs/fork-features-default-on-2026-11-07.md`, R3.2, R3.3).
 /// - Plaintext delivery keeps its own check on the resulting namespace, so it still fails
 ///   without a namespace unless worktree isolation chose one.
 ///
-/// The upstream namespace check accepts both the reserved default and
+/// This is the "resolve tool namespace" step of fork-features-default-on UC3. The upstream
+/// namespace check accepts both the reserved default and
 /// [`AGENT_WORKTREE_ISOLATION_TOOL_NAMESPACE`], so running it first does not matter.
 pub(super) fn resolve_tool_namespace(
     features_toml: Option<&FeaturesToml>,
@@ -589,9 +595,37 @@ pub(super) fn resolve_tool_namespace(
                     ),
                 )
             })?;
-        startup_warnings.push(AGENT_WORKTREE_ISOLATION_RESERVED_NAMESPACE_WARNING.to_owned());
+        if agent_worktree_isolation_is_configured(features_toml) {
+            startup_warnings.push(AGENT_WORKTREE_ISOLATION_RESERVED_NAMESPACE_WARNING.to_owned());
+        } else {
+            tracing::debug!(
+                "features.agent_worktree_isolation is on by default and features.multi_agent_v2.tool_namespace is the reserved \"{DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE}\"; subagent worktrees are off for this session"
+            );
+        }
     }
     Ok((features, multi_agent_v2))
+}
+
+/// Whether a config layer sets `agent_worktree_isolation`, as a boolean in `[features]` or as
+/// the `enabled` of its settings table (fork-features-default-on R3.2, R3.3).
+fn agent_worktree_isolation_is_configured(features_toml: Option<&FeaturesToml>) -> bool {
+    features_toml.is_some_and(|features| {
+        features
+            .entries()
+            .contains_key(Feature::AgentWorktreeIsolation.key())
+    })
+}
+
+/// Fork: core unit tests load configurations with the fork's default-on features off unless the
+/// test sets them in any layer or enables them after loading, so upstream tests keep upstream
+/// feature defaults and the MultiAgentV2 namespace `collaboration`
+/// (`specs/fork-features-default-on-2026-11-07.md`, UC6, R6.1). The production defaults are
+/// tested through `core/tests/suite/fork_default_features.rs`, which loads without this hook.
+#[cfg(test)]
+pub(super) fn pin_default_on_features_off_for_unit_tests(cfg: &mut ConfigToml) {
+    cfg.features
+        .get_or_insert_with(FeaturesToml::default)
+        .pin_fork_default_on_features_off();
 }
 
 /// Fork: whether `ConfigEdit::ClearPath { segments }` of a fork feature should write

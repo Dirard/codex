@@ -190,6 +190,11 @@ mod tests {
             .build()
             .await
             .expect("config");
+        // `workflows` is on by default (fork-features-default-on R1.1).
+        config
+            .features
+            .disable(Feature::Workflows)
+            .expect("feature");
         let args = parse(&["--workflow=high", "--base", "main"]);
         let error = fork_review_workflow_operation(&args, &config)
             .err()

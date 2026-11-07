@@ -3455,6 +3455,9 @@ impl Config {
         config_layer_stack.validate_project_mitm_profiles()?;
         // Keep the large config-construction future off small test thread stacks.
         Box::pin(async move {
+        // Fork: unit tests keep upstream feature defaults (fork-features-default-on UC6).
+        #[cfg(test)]
+        fork::pin_default_on_features_off_for_unit_tests(&mut cfg);
         if cfg.experimental_thread_store_endpoint.is_some() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
