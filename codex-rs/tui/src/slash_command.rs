@@ -47,6 +47,12 @@ pub enum SlashCommand {
     Agents,
     // Fork: dynamic workflows (specs/dynamic-workflow-2026-10-25.md, UC 8.1).
     Workflows,
+    // Fork: multi-agent code review (specs/builtin-workflows-2026-11-07.md, UC9).
+    CodeReview,
+    // Fork: output styles (specs/output-styles-2026-11-07.md, UC5).
+    OutputStyle,
+    // Fork: scheduled wakeups (specs/scheduled-wakeups-2026-11-07.md, UC9).
+    Loop,
     Side,
     Btw,
     Copy,
@@ -146,6 +152,11 @@ impl SlashCommand {
             SlashCommand::Agents => "open the agent command center",
             SlashCommand::MultiAgents => "switch between this session's subagents",
             SlashCommand::Workflows => "list and manage workflow runs of this thread", // Fork
+            SlashCommand::CodeReview => {
+                "review changes with several agents and keep only verified findings" // Fork
+            }
+            SlashCommand::OutputStyle => "choose how Codex communicates", // Fork
+            SlashCommand::Loop => "repeat a prompt on an interval or at the model's pace", // Fork
             SlashCommand::Side | SlashCommand::Btw => {
                 "start a side conversation in an ephemeral fork"
             }
@@ -199,6 +210,9 @@ impl SlashCommand {
                 | SlashCommand::Side
                 | SlashCommand::Btw
                 | SlashCommand::Resume
+                | SlashCommand::OutputStyle // Fork: `/output-style <name>`
+                | SlashCommand::CodeReview // Fork: `/code-review [effort] [target]`
+                | SlashCommand::Loop // Fork: `/loop [<interval>] <prompt>`, `/loop stop`
         )
     }
 
@@ -313,6 +327,9 @@ impl SlashCommand {
             SlashCommand::TestApproval => true,
             SlashCommand::Agents | SlashCommand::MultiAgents => true,
             SlashCommand::Workflows => true, // Fork: UC 8.1, R8.6.1
+            SlashCommand::CodeReview => false, // Fork: submits a turn, like `/init` (R9.1)
+            SlashCommand::OutputStyle => true, // Fork: applies from the next model step (R5.4)
+            SlashCommand::Loop => true,      // Fork: scheduled wakeups R9.4
             SlashCommand::Config | SlashCommand::Theme | SlashCommand::Pets => false,
         }
     }

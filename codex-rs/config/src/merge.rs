@@ -81,6 +81,10 @@ pub fn is_structured_feature_path<S: AsRef<str>>(path: &[S]) -> bool {
                 | "agent_worktree_isolation"
                 // Fork: background exec notification settings (fork-features-experimental R2.2).
                 | "exec_exit_notifications"
+                // Fork: full output of truncated tools (specs/tool-output-spill-2026-11-07.md).
+                | "tool_output_spill"
+                // Fork: scheduled wakeup settings (specs/scheduled-wakeups-2026-11-07.md).
+                | "scheduled_wakeups"
         )
 }
 

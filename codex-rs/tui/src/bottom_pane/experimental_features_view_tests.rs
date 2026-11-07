@@ -57,7 +57,10 @@ fn experimental_features_display_metadata() {
         // Fork: Experimental stages of the fork's features (fork-features-experimental R2.1).
         Feature::ExecExitNotifications,
         Feature::Workflows,
+        Feature::BuiltinWorkflows, // Fork: built-in workflows (builtin-workflows UC1)
         Feature::AgentWorktreeIsolation,
+        Feature::OutputStyles,     // Fork: output styles R5.1
+        Feature::ScheduledWakeups, // Fork: scheduled wakeups R1.1
     ] {
         let stage = feature.stage();
         let (app_tx, _app_rx) = tokio::sync::mpsc::unbounded_channel();

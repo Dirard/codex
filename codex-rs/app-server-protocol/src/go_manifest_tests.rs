@@ -2361,6 +2361,10 @@ fn expected_server_notification_routes() -> Vec<(&'static str, ExpectedRouting)>
             "thread/workflow/updated",
             ExpectedRouting::Routed(&["threadId"]),
         ),
+        (
+            "thread/wakeup/updated",
+            ExpectedRouting::Routed(&["threadId"]),
+        ),
         ("project/changed", ExpectedRouting::Routed(&["projectId"])),
         (
             "thread/project/updated",

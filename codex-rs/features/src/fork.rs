@@ -19,7 +19,11 @@ pub fn fork_owns_stage(feature: Feature) -> bool {
         Feature::ExplorerProfile
             | Feature::AgentWorktreeIsolation
             | Feature::ExecExitNotifications
+            | Feature::ToolOutputSpill
             | Feature::Workflows
+            | Feature::BuiltinWorkflows
+            | Feature::ScheduledWakeups
+            | Feature::OutputStyles
             | Feature::DefaultModeRequestUserInput
     )
 }
@@ -47,6 +51,20 @@ impl FeaturesToml {
             .and_then(FeatureToml::enabled)
         {
             entries.insert(Feature::ExecExitNotifications.key().to_string(), enabled);
+        }
+        if let Some(enabled) = self
+            .tool_output_spill
+            .as_ref()
+            .and_then(FeatureToml::enabled)
+        {
+            entries.insert(Feature::ToolOutputSpill.key().to_string(), enabled);
+        }
+        if let Some(enabled) = self
+            .scheduled_wakeups
+            .as_ref()
+            .and_then(FeatureToml::enabled)
+        {
+            entries.insert(Feature::ScheduledWakeups.key().to_string(), enabled);
         }
     }
 }

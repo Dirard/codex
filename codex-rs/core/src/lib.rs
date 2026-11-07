@@ -65,6 +65,7 @@ pub use session::background_terminal::PendingBackgroundTerminals; // Fork: R7.4
 pub use session::background_terminal::discard_background_terminal_journals; // Fork: R2.14
 pub use session::turn_context::TurnContext;
 pub use thread_startup_metadata::ThreadStartupMetadata;
+pub use tools::output_spill::discard_tool_output_spills; // Fork: tool-output-spill R5.3
 mod agent;
 pub use agent::api::AgentConfigUpdate;
 pub use agent::api::AgentControl;
@@ -186,8 +187,14 @@ pub(crate) mod web_search;
 pub(crate) mod windows_sandbox_read_grants;
 // Fork: background workflow runs (specs/dynamic-workflow-2026-10-25.md).
 mod workflow;
+// Fork: output styles (specs/output-styles-2026-11-07.md).
+pub mod output_style;
 // Fork: who can post to a thread's message board, for wait_agent.
 pub mod agent_message_board_fork;
+// Fork: what core knows about scheduled wakeups (specs/scheduled-wakeups-2026-11-07.md).
+pub mod fork_wakeup;
+// Fork: files under CODEX_HOME that only the user may read (journals, saved tool output).
+mod fork_private_fs;
 pub use agent::control::ThreadEvictionOutcome;
 // Fork: agent worktrees for app-server threads (specs/agent-worktree-isolation-2026-10-25.md).
 pub use agent::worktree_isolation::AgentWorktreeView;

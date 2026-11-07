@@ -182,6 +182,7 @@ pub(crate) struct MessageProcessor {
     thread_goal_processor: ThreadGoalRequestProcessor,
     thread_queue_processor: ThreadQueueRequestProcessor,
     thread_workflow_processor: crate::request_processors::ThreadWorkflowRequestProcessor, // Fork
+    thread_output_style_processor: crate::request_processors::ThreadOutputStyleRequestProcessor, // Fork
     thread_processor: ThreadRequestProcessor,
     turn_processor: TurnRequestProcessor,
     windows_sandbox_processor: WindowsSandboxRequestProcessor,
@@ -681,6 +682,11 @@ impl MessageProcessor {
             // Fork: thread/workflow/* requests.
             thread_workflow_processor:
                 crate::request_processors::ThreadWorkflowRequestProcessor::new(Arc::clone(
+                    &thread_manager,
+                )),
+            // Fork: thread/outputStyle/* requests (specs/output-styles-2026-11-07.md).
+            thread_output_style_processor:
+                crate::request_processors::ThreadOutputStyleRequestProcessor::new(Arc::clone(
                     &thread_manager,
                 )),
             thread_processor,
@@ -1513,8 +1519,17 @@ impl MessageProcessor {
             request @ (ClientRequest::ThreadWorkflowList { .. }
             | ClientRequest::ThreadWorkflowRead { .. }
             | ClientRequest::ThreadWorkflowCancel { .. }
-            | ClientRequest::ThreadBackgroundTerminalsPending { .. }) => {
+            | ClientRequest::ThreadBackgroundTerminalsPending { .. }
+            // Fork: scheduled wakeups (specs/scheduled-wakeups-2026-11-07.md).
+            | ClientRequest::ThreadWakeupRead { .. }
+            | ClientRequest::ThreadWakeupCancel { .. }
+            | ClientRequest::ThreadLoopStart { .. }) => {
                 self.thread_workflow_processor.handle(request).await
+            }
+            // Fork: output style of a loaded thread (specs/output-styles-2026-11-07.md).
+            request @ (ClientRequest::ThreadOutputStyleList { .. }
+            | ClientRequest::ThreadOutputStyleSet { .. }) => {
+                self.thread_output_style_processor.handle(request).await
             }
             ClientRequest::ThreadMetadataUpdate { params, .. } => {
                 self.thread_processor.thread_metadata_update(params).await

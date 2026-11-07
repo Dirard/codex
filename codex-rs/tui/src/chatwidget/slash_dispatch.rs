@@ -422,6 +422,9 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
             SlashCommand::Workflows => self.open_workflows(), // Fork: UC 8.1, R8.6.2
+            SlashCommand::CodeReview => self.fork_code_review(""), // Fork: builtin workflows UC9
+            SlashCommand::OutputStyle => self.open_output_style_picker(), // Fork: R5.2
+            SlashCommand::Loop => self.fork_loop_command(""), // Fork: scheduled wakeups R9.1
             SlashCommand::Permissions => {
                 // Hold queued prompts while the app checks whether it can open the menu.
                 self.set_queue_autosend_suppressed(/*suppressed*/ true);
@@ -1142,6 +1145,14 @@ impl ChatWidget {
             SlashCommand::Pets if !trimmed.is_empty() => {
                 self.select_pet_by_id(args);
             }
+            // Fork: `/code-review [effort] [target]` (specs/builtin-workflows-2026-11-07.md, R9.2).
+            SlashCommand::CodeReview if !trimmed.is_empty() => self.fork_code_review(trimmed),
+            // Fork: `/output-style <name>` (specs/output-styles-2026-11-07.md, R5.3).
+            SlashCommand::OutputStyle if !trimmed.is_empty() => {
+                self.select_output_style_by_name(trimmed.to_string());
+            }
+            // Fork: `/loop [<interval>] <prompt>` (specs/scheduled-wakeups-2026-11-07.md, R9.1).
+            SlashCommand::Loop if !trimmed.is_empty() => self.fork_loop_command(trimmed),
             _ => self.dispatch_command_from_source(cmd, source),
         }
         if source == SlashCommandDispatchSource::Live && cmd != SlashCommand::Goal {
@@ -1284,6 +1295,9 @@ impl ChatWidget {
             allow_elevate_sandbox,
             side_conversation_active: self.active_side_conversation,
             workflows_command_enabled: self.config.features.enabled(Feature::Workflows), // Fork
+            code_review_command_enabled: self.fork_code_review_enabled(),                // Fork
+            output_style_command_enabled: self.config.features.enabled(Feature::OutputStyles), // Fork
+            wakeups_command_enabled: self.config.features.enabled(Feature::ScheduledWakeups), // Fork
         }
     }
 
@@ -1357,6 +1371,9 @@ impl ChatWidget {
             | SlashCommand::Agents
             | SlashCommand::MultiAgents
             | SlashCommand::Workflows // Fork: opens a view, like `/subagents`
+            | SlashCommand::CodeReview // Fork: submits a turn, like `/init`
+            | SlashCommand::OutputStyle // Fork: opens a view
+            | SlashCommand::Loop // Fork: may start a loop iteration
             | SlashCommand::Permissions
             | SlashCommand::ElevateSandbox
             | SlashCommand::Experimental

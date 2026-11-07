@@ -242,6 +242,8 @@ mod token_budget;
 mod token_usage_rollout;
 mod tool_harness;
 mod tool_lifecycle;
+// Fork: specs/tool-output-spill-2026-11-07.md.
+mod tool_output_spill;
 mod tool_parallelism;
 mod tool_registration_metrics;
 mod tools;
@@ -273,6 +275,8 @@ mod websocket_fallback;
 mod window_headers;
 // Fork: background workflow runs.
 mod workflow;
+// Fork: output styles (specs/output-styles-2026-11-07.md).
+mod output_style;
 mod workspace_roots;
 mod worktree_trust;
 

@@ -669,7 +669,10 @@ pub(crate) struct ChatComposer {
     goal_command_enabled: bool,
     voice_command_enabled: bool,
     worktrees_enabled: bool,
-    workflows_command_enabled: bool, // Fork: R8.6.1
+    workflows_command_enabled: bool,    // Fork: R8.6.1
+    code_review_command_enabled: bool,  // Fork: builtin workflows R9.1
+    output_style_command_enabled: bool, // Fork: output styles R5.1
+    wakeups_command_enabled: bool,      // Fork: scheduled wakeups R9.1
     windows_degraded_sandbox_active: bool,
     side_conversation_active: bool,
     history_search: Option<HistorySearchSession>,
@@ -855,6 +858,9 @@ impl ChatComposer {
             voice_command_enabled: false,
             worktrees_enabled: false,
             workflows_command_enabled: false,
+            code_review_command_enabled: false,
+            output_style_command_enabled: false,
+            wakeups_command_enabled: false,
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
             history_search: None,

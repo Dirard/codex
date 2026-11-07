@@ -3375,6 +3375,10 @@ impl App {
             }
             // Fork: the `/workflows` screen (specs/dynamic-workflow-2026-10-25.md, UC 8.1).
             AppEvent::Workflows(event) => self.handle_workflows_event(app_server, event),
+            // Fork: `/loop` (specs/scheduled-wakeups-2026-11-07.md, UC9).
+            AppEvent::Wakeups(event) => self.handle_wakeups_event(app_server, event),
+            // Fork: `/output-style` (specs/output-styles-2026-11-07.md, UC5).
+            AppEvent::OutputStyle(event) => self.handle_output_style_event(app_server, event),
             AppEvent::StartSide {
                 parent_thread_id,
                 user_message,

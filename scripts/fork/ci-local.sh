@@ -110,6 +110,7 @@ fork_clippy_packages=(
   codex-tui
   codex-utils-output-truncation
   codex-utils-string
+  codex-wakeup-extension
   codex-workflow
   codex-worktree
   core_test_support
@@ -152,6 +153,7 @@ default_test_packages=(
   codex-tools
   codex-tui
   codex-utils-output-truncation
+  codex-wakeup-extension
   core_test_support
 )
 

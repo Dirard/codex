@@ -365,6 +365,13 @@ pub struct ConfigToml {
     /// the first developer message) or `instructions` (the top-level field). Responses Lite
     /// requests always use `input`.
     pub model_instructions_placement: Option<ModelInstructionsPlacement>,
+
+    /// Fork: output style of root threads: how Codex communicates with you. Built-in styles:
+    /// `default`, `outcome-first`, `explanatory`, `learning`; custom styles are Markdown files
+    /// with `name` and `description` frontmatter in `$CODEX_HOME/output-styles/` or the
+    /// `.codex/output-styles/` folder of a trusted project. Takes effect only while
+    /// `features.output_styles` is enabled.
+    pub output_style: Option<Box<String>>,
     // Fork end
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).

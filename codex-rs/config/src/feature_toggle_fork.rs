@@ -4,10 +4,12 @@
 use crate::is_structured_feature_path;
 
 /// Fork features configured by a `[features.<key>]` table with settings besides `enabled`.
-const FORK_FEATURE_TABLES: [&str; 3] = [
+const FORK_FEATURE_TABLES: &[&str] = &[
     "explorer_profile",
     "agent_worktree_isolation",
     "exec_exit_notifications",
+    "tool_output_spill",
+    "scheduled_wakeups",
 ];
 
 /// Whether clearing the structured feature path `path` (as `/experimental` and

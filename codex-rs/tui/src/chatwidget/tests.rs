@@ -312,6 +312,12 @@ mod usage;
 // Fork: workflow display.
 #[path = "tests/workflow_tests.rs"]
 mod workflow_tests;
+// Fork: `/output-style` (specs/output-styles-2026-11-07.md).
+#[path = "tests/output_style_tests.rs"]
+mod output_style_tests;
+// Fork: `/loop` and scheduled wakeups (specs/scheduled-wakeups-2026-11-07.md).
+#[path = "tests/wakeup_tests.rs"]
+mod wakeup_tests;
 #[path = "tests/worktree_picker_tests.rs"]
 mod worktree_picker;
 

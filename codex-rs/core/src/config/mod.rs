@@ -1193,12 +1193,19 @@ pub struct Config {
     pub agent_worktree_isolation: Box<AgentWorktreeIsolationConfig>,
     /// Fork: how long `codex exec` waits for background terminal notifications.
     pub exec_exit_notifications: Box<ExecExitNotificationsConfig>,
+    /// Fork: limits of the saved full output of truncated tool results
+    /// (`[features.tool_output_spill]`); the feature flag gates the behavior.
+    pub tool_output_spill: Box<ToolOutputSpillConfig>,
+    /// Fork: limits of scheduled wakeups and `/loop` (`[features.scheduled_wakeups]`).
+    pub scheduled_wakeups: Box<ScheduledWakeupsConfig>,
     /// Fork: context tokens the compactions of one turn may replace
     /// (`model_auto_compact_turn_token_limit`); `None` keeps the default, `Some(0)` is off.
     pub model_auto_compact_turn_token_limit: Option<u64>,
     /// Fork: where standard Responses requests carry the base instructions
     /// (`model_instructions_placement`).
     pub model_instructions_placement: ModelInstructionsPlacement,
+    /// Fork: the output style of root threads (`output_style`), resolved and frozen at load.
+    pub output_style: Arc<crate::output_style::OutputStyleConfig>,
     // Fork end
     /// Context-window token budget configuration, when enabled.
     pub token_budget: Option<TokenBudgetConfig>,
@@ -4652,6 +4659,16 @@ impl Config {
             profile_workspace_roots,
         )
         .map_err(std::io::Error::from)?;
+        // Fork: output styles (specs/output-styles-2026-11-07.md, UC2).
+        let output_style = crate::output_style::resolve_output_style(
+            fs,
+            cfg.output_style.as_deref().map(String::as_str),
+            features.enabled(Feature::OutputStyles),
+            &codex_home,
+            &config_layer_stack,
+            &mut startup_warnings,
+        )
+        .await;
         let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
         let mut config = Self {
             plugins: cfg.plugins,
@@ -4871,8 +4888,15 @@ impl Config {
             exec_exit_notifications: Box::new(ExecExitNotificationsConfig::from_features_toml(
                 cfg.features.as_ref(),
             )),
+            tool_output_spill: Box::new(ToolOutputSpillConfig::from_features_toml(
+                cfg.features.as_ref(),
+            )?),
+            scheduled_wakeups: Box::new(ScheduledWakeupsConfig::from_features_toml(
+                cfg.features.as_ref(),
+            )?),
             model_auto_compact_turn_token_limit: cfg.model_auto_compact_turn_token_limit,
             model_instructions_placement: cfg.model_instructions_placement.unwrap_or_default(),
+            output_style,
             // Fork end
             token_budget,
             token_budget_startup_config: None,

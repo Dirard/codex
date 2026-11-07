@@ -183,6 +183,9 @@ impl<'a> SlashInput<'a> {
                 windows_degraded_sandbox_active: self.command_flags.allow_elevate_sandbox,
                 side_conversation_active: self.command_flags.side_conversation_active,
                 workflows_command_enabled: self.command_flags.workflows_command_enabled,
+                code_review_command_enabled: self.command_flags.code_review_command_enabled,
+                output_style_command_enabled: self.command_flags.output_style_command_enabled,
+                wakeups_command_enabled: self.command_flags.wakeups_command_enabled, // Fork
             },
             self.service_tier_commands.to_vec(),
         );
@@ -223,6 +226,9 @@ impl ChatComposer {
             allow_elevate_sandbox: self.windows_degraded_sandbox_active,
             side_conversation_active: self.side_conversation_active,
             workflows_command_enabled: self.workflows_command_enabled,
+            code_review_command_enabled: self.code_review_command_enabled,
+            output_style_command_enabled: self.output_style_command_enabled,
+            wakeups_command_enabled: self.wakeups_command_enabled, // Fork
         }
     }
 
@@ -239,6 +245,27 @@ impl ChatComposer {
     /// Fork: `/workflows` follows `features.workflows` (specs/dynamic-workflow-2026-10-25.md).
     pub fn set_workflows_command_enabled(&mut self, enabled: bool) {
         self.update_slash_command_catalog(|composer| composer.workflows_command_enabled = enabled);
+    }
+
+    /// Fork: `/code-review` follows `features.workflows` and `features.builtin_workflows`
+    /// (specs/builtin-workflows-2026-11-07.md, R9.1).
+    pub fn set_code_review_command_enabled(&mut self, enabled: bool) {
+        self.update_slash_command_catalog(|composer| {
+            composer.code_review_command_enabled = enabled
+        });
+    }
+
+    /// Fork: `/output-style` follows `features.output_styles` (specs/output-styles-2026-11-07.md).
+    pub fn set_output_style_command_enabled(&mut self, enabled: bool) {
+        self.update_slash_command_catalog(|composer| {
+            composer.output_style_command_enabled = enabled
+        });
+    }
+
+    /// Fork: `/loop` follows `features.scheduled_wakeups`
+    /// (specs/scheduled-wakeups-2026-11-07.md, R9.1).
+    pub fn set_wakeups_command_enabled(&mut self, enabled: bool) {
+        self.update_slash_command_catalog(|composer| composer.wakeups_command_enabled = enabled);
     }
 
     /// Handle key event when the slash-command popup is visible.

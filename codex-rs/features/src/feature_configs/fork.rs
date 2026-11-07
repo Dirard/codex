@@ -73,6 +73,79 @@ impl FeatureConfig for ExecExitNotificationsConfigToml {
     }
 }
 
+/// Fork: `[features.tool_output_spill]` settings (`specs/tool-output-spill-2026-11-07.md`, UC6).
+/// When a tool result is cut to fit the context, Codex saves its full text to
+/// `$CODEX_HOME/tool_outputs/<thread_id>/` and tells the model the path. The files hold the
+/// complete tool output, secrets included, readable by the user only (directories `0700`, files
+/// `0600`). They are removed with their thread (`thread/delete`) or ephemeral session, and by the
+/// limits below; `thread/archive` keeps them.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ToolOutputSpillConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Largest saved file, in bytes; a larger output keeps its first and last halves. Defaults
+    /// to 8388608 (8 MiB), at least 65536.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 65536))]
+    pub max_file_bytes: Option<u64>,
+    /// Largest size of one thread's saved outputs, in bytes; the oldest files go first. Defaults
+    /// to 268435456 (256 MiB), at least `max_file_bytes`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_thread_bytes: Option<u64>,
+    /// Largest size of the saved outputs of all threads, in bytes, checked once per Codex
+    /// process; the oldest files go first. Defaults to 2147483648 (2 GiB), at least
+    /// `max_thread_bytes`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_total_bytes: Option<u64>,
+    /// Days after which a saved output is removed, checked once per Codex process. Defaults to
+    /// 7, at least 1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub max_age_days: Option<u64>,
+}
+
+impl FeatureConfig for ToolOutputSpillConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+}
+
+/// Fork: settings of scheduled wakeups and `/loop` (`specs/scheduled-wakeups-2026-11-07.md`,
+/// R1.1, R1.5). Wakeups last only while Codex runs.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScheduledWakeupsConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Shortest delay of a wakeup or `/loop` interval, in seconds; shorter requests are raised
+    /// to it. Defaults to 60; from 1 to `max_delay_seconds`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_delay_seconds: Option<u32>,
+    /// Longest delay of a wakeup or `/loop` interval, in seconds; longer requests are lowered
+    /// to it. Defaults to 3600; from `min_delay_seconds` to 86400.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_delay_seconds: Option<u32>,
+    /// Wakeups the model may run since the user's last message, and iterations of one
+    /// `/loop`. Defaults to 50; from 1 to 1000.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_wakeups: Option<u32>,
+    /// How long a chain of wakeups since the user's last message, or one `/loop`, may last,
+    /// in minutes. Defaults to 720; from 1 to 10080.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_duration_minutes: Option<u32>,
+    /// How long `codex exec` waits for scheduled wakeups before it cancels them and exits with
+    /// code 1, in milliseconds. Defaults to 3600000 (1 hour); at least 1000.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exec_wait_timeout_ms: Option<u64>,
+}
+
+impl FeatureConfig for ScheduledWakeupsConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+}
+
 // Fork: worktree isolation for MultiAgentV2 children.
 /// Where a MultiAgentV2 child runs relative to its parent's checkout.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]

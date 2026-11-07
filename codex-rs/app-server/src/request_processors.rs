@@ -577,10 +577,13 @@ mod thread_enrichment;
 mod thread_fork_goal;
 mod thread_input;
 mod thread_memory;
+// Fork: output styles (specs/output-styles-2026-11-07.md).
+mod thread_output_style_processor;
 mod thread_processor;
 mod thread_queue_processor;
 mod thread_read_state;
 mod thread_sections;
+mod thread_wakeup_fork; // Fork: scheduled wakeups (specs/scheduled-wakeups-2026-11-07.md)
 mod thread_workflow_processor;
 mod token_usage_replay;
 mod turn_processor;
@@ -607,9 +610,11 @@ pub(crate) use projects::ProjectRequestProcessor;
 pub(crate) use remote_control_processor::RemoteControlRequestProcessor;
 pub(crate) use search::SearchRequestProcessor;
 pub(crate) use thread_goal_processor::ThreadGoalRequestProcessor;
+pub(crate) use thread_output_style_processor::ThreadOutputStyleRequestProcessor; // Fork
 pub(crate) use thread_processor::ThreadRequestProcessor;
 pub(crate) use thread_processor::ThreadResumeTarget;
 pub(crate) use thread_queue_processor::ThreadQueueRequestProcessor;
+pub(crate) use thread_wakeup_fork::wakeup_updated_notification; // Fork: scheduled wakeups
 pub(crate) use thread_workflow_processor::ThreadWorkflowRequestProcessor;
 pub(crate) use turn_processor::TurnRequestProcessor;
 pub(crate) use windows_sandbox_processor::WindowsSandboxRequestProcessor;

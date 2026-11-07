@@ -662,6 +662,21 @@ impl BottomPane {
         self.composer.set_workflows_command_enabled(enabled);
     }
 
+    /// Fork: `/code-review` follows `features.workflows` and `features.builtin_workflows`.
+    pub fn set_code_review_command_enabled(&mut self, enabled: bool) {
+        self.composer.set_code_review_command_enabled(enabled);
+    }
+
+    /// Fork: `/output-style` follows `features.output_styles`.
+    pub fn set_output_style_command_enabled(&mut self, enabled: bool) {
+        self.composer.set_output_style_command_enabled(enabled);
+    }
+
+    /// Fork: `/loop` follows `features.scheduled_wakeups`.
+    pub fn set_wakeups_command_enabled(&mut self, enabled: bool) {
+        self.composer.set_wakeups_command_enabled(enabled);
+    }
+
     /// Fork: whether a view with `view_id` is on the stack (the `/workflows` screen).
     pub(crate) fn has_view(&self, view_id: &'static str) -> bool {
         self.view_stack

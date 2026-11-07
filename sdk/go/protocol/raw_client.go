@@ -196,6 +196,36 @@ func (c RawClient) ThreadBackgroundTerminalsPending(ctx context.Context, params 
 	return result, err
 }
 
+func (c RawClient) ThreadOutputStyleList(ctx context.Context, params ThreadOutputStyleListParams) (ThreadOutputStyleListResponse, error) {
+	var result ThreadOutputStyleListResponse
+	err := c.sender.Call(ctx, "thread/outputStyle/list", params, &result, MethodMetadataByMethod["thread/outputStyle/list"])
+	return result, err
+}
+
+func (c RawClient) ThreadOutputStyleSet(ctx context.Context, params ThreadOutputStyleSetParams) (ThreadOutputStyleSetResponse, error) {
+	var result ThreadOutputStyleSetResponse
+	err := c.sender.Call(ctx, "thread/outputStyle/set", params, &result, MethodMetadataByMethod["thread/outputStyle/set"])
+	return result, err
+}
+
+func (c RawClient) ThreadWakeupRead(ctx context.Context, params ThreadWakeupReadParams) (ThreadWakeupReadResponse, error) {
+	var result ThreadWakeupReadResponse
+	err := c.sender.Call(ctx, "thread/wakeup/read", params, &result, MethodMetadataByMethod["thread/wakeup/read"])
+	return result, err
+}
+
+func (c RawClient) ThreadWakeupCancel(ctx context.Context, params ThreadWakeupCancelParams) (ThreadWakeupCancelResponse, error) {
+	var result ThreadWakeupCancelResponse
+	err := c.sender.Call(ctx, "thread/wakeup/cancel", params, &result, MethodMetadataByMethod["thread/wakeup/cancel"])
+	return result, err
+}
+
+func (c RawClient) ThreadLoopStart(ctx context.Context, params ThreadLoopStartParams) (ThreadLoopStartResponse, error) {
+	var result ThreadLoopStartResponse
+	err := c.sender.Call(ctx, "thread/loop/start", params, &result, MethodMetadataByMethod["thread/loop/start"])
+	return result, err
+}
+
 func (c RawClient) ThreadMetadataUpdate(ctx context.Context, params ThreadMetadataUpdateParams) (ThreadMetadataUpdateResponse, error) {
 	var result ThreadMetadataUpdateResponse
 	err := c.sender.Call(ctx, "thread/metadata/update", params, &result, MethodMetadataByMethod["thread/metadata/update"])

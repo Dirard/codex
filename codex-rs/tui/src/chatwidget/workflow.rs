@@ -44,7 +44,7 @@ const REFRESH_MAX_INTERVAL: Duration = Duration::from_secs(3);
 #[derive(Default)]
 pub(super) struct WorkflowState {
     /// R8.4: non-terminal runs of the shown thread by run id.
-    active: BTreeMap<String, WorkflowRun>,
+    pub(super) active: BTreeMap<String, WorkflowRun>, // Fork: read by `wakeup_fork.rs`
     /// UC 8.1: runs and the open run of the screen.
     screen: Option<WorkflowScreen>,
     /// The run the user asked to open and still waits for (R8.6.3).
@@ -54,6 +54,9 @@ pub(super) struct WorkflowState {
     /// Tests count how often a view was built.
     #[cfg(test)]
     views_built: usize,
+    /// Fork: the shown thread's scheduled wakeups (specs/scheduled-wakeups-2026-11-07.md, UC9);
+    /// kept here so `ChatWidget` needs no field of its own.
+    pub(super) wakeups: super::wakeup_fork::WakeupState,
 }
 
 /// UC 8.1, type `WorkflowScreen`.
@@ -198,8 +201,8 @@ impl ChatWidget {
                 .active
                 .insert(run.run_id.clone(), run.clone());
         }
-        self.bottom_pane
-            .set_workflow_status_indicator(workflow_status_indicator(&self.workflows.active));
+        // Fork: the wakeup indicator shares the line (scheduled wakeups R9.2).
+        self.fork_refresh_status_indicator();
         if let Some(thread_id) = self.thread_id {
             self.apply_workflow_screen_update(thread_id, run);
         }
@@ -209,8 +212,7 @@ impl ChatWidget {
     pub(super) fn on_workflow_item(&mut self, item: WorkflowItem) {
         if item.status.is_terminal() {
             self.workflows.active.remove(&item.run_id);
-            self.bottom_pane
-                .set_workflow_status_indicator(workflow_status_indicator(&self.workflows.active));
+            self.fork_refresh_status_indicator();
             let summary = item
                 .notification
                 .as_deref()
@@ -240,12 +242,28 @@ impl ChatWidget {
     pub(crate) fn fork_sync_workflows_command(&mut self) {
         self.bottom_pane
             .set_workflows_command_enabled(self.config.features.enabled(Feature::Workflows));
+        // Fork: `/code-review` needs `workflows` too (builtin workflows R9.1).
+        self.fork_sync_code_review_command();
+        // Fork: `/output-style` follows `features.output_styles` (output styles R5.1).
+        self.fork_sync_output_style_command();
+        // Fork: `/loop` follows `features.scheduled_wakeups` (scheduled wakeups R9.1).
+        self.fork_sync_wakeups_command();
     }
 
-    /// R8.6.1: a runtime toggle of `features.workflows` shows or hides `/workflows`.
+    /// R8.6.1: a runtime toggle of `features.workflows` shows or hides `/workflows`; output
+    /// styles R5.1: one of `features.output_styles` shows or hides `/output-style`.
     pub(super) fn fork_on_feature_toggled(&mut self, feature: Feature) {
         if feature == Feature::Workflows {
             self.fork_sync_workflows_command();
+        }
+        if feature == Feature::OutputStyles {
+            self.fork_sync_output_style_command();
+        }
+        if feature == Feature::ScheduledWakeups {
+            self.fork_sync_wakeups_command();
+        }
+        if feature == Feature::BuiltinWorkflows {
+            self.fork_sync_code_review_command();
         }
     }
 

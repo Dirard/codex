@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "intervalSeconds": {
+      "default": null,
+      "description": "Repeat this many seconds after each iteration ends; omit for a self-paced loop.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "maxIterations": {
+      "default": null,
+      "description": "At most this many iterations; defaults to `features.scheduled_wakeups.max_wakeups`.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "prompt": {
+      "description": "The prompt each iteration runs as user input.",
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "prompt",
+    "threadId"
+  ],
+  "title": "ThreadLoopStartParams",
+  "type": "object"
+}

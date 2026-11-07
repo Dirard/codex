@@ -302,6 +302,10 @@ mod working_directory;
 mod workspace_hud;
 // Fork: the `/workflows` screen (specs/dynamic-workflow-2026-10-25.md, UC 8.1).
 mod workflows_fork;
+// Fork: `/loop` requests (specs/scheduled-wakeups-2026-11-07.md, UC9).
+mod wakeups_fork;
+// Fork: `/output-style` (specs/output-styles-2026-11-07.md, UC5).
+mod output_style_fork;
 // Fork: agent worktrees in `/subagents` (specs/agent-worktree-isolation-2026-10-25.md, R9.5).
 mod agent_worktree_fork;
 

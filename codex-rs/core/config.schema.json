@@ -969,6 +969,9 @@
             "browser_use_full_cdp_access": {
               "type": "boolean"
             },
+            "builtin_workflows": {
+              "type": "boolean"
+            },
             "chronicle": {
               "type": "boolean"
             },
@@ -1299,6 +1302,9 @@
             "omit_skill_descriptions": {
               "type": "boolean"
             },
+            "output_styles": {
+              "type": "boolean"
+            },
             "output_token_replay": {
               "type": "boolean"
             },
@@ -1389,6 +1395,9 @@
             "runtime_metrics": {
               "type": "boolean"
             },
+            "scheduled_wakeups": {
+              "$ref": "#/definitions/FeatureToml_for_ScheduledWakeupsConfigToml"
+            },
             "search_tool": {
               "type": "boolean"
             },
@@ -1475,6 +1484,9 @@
             },
             "tool_call_mcp_elicitation": {
               "type": "boolean"
+            },
+            "tool_output_spill": {
+              "$ref": "#/definitions/FeatureToml_for_ToolOutputSpillConfigToml"
             },
             "tool_registry": {
               "$ref": "#/definitions/ToolRegistryConfigToml"
@@ -2102,6 +2114,16 @@
         }
       ]
     },
+    "FeatureToml_for_ScheduledWakeupsConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/ScheduledWakeupsConfigToml"
+        }
+      ]
+    },
     "FeatureToml_for_SleepToolConfigToml": {
       "anyOf": [
         {
@@ -2119,6 +2141,16 @@
         },
         {
           "$ref": "#/definitions/TokenBudgetConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_ToolOutputSpillConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/ToolOutputSpillConfigToml"
         }
       ]
     },
@@ -5048,6 +5080,46 @@
       },
       "type": "object"
     },
+    "ScheduledWakeupsConfigToml": {
+      "additionalProperties": false,
+      "description": "Fork: settings of scheduled wakeups and `/loop` (`specs/scheduled-wakeups-2026-11-07.md`, R1.1, R1.5). Wakeups last only while Codex runs.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "exec_wait_timeout_ms": {
+          "description": "How long `codex exec` waits for scheduled wakeups before it cancels them and exits with code 1, in milliseconds. Defaults to 3600000 (1 hour); at least 1000.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_delay_seconds": {
+          "description": "Longest delay of a wakeup or `/loop` interval, in seconds; longer requests are lowered to it. Defaults to 3600; from `min_delay_seconds` to 86400.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_duration_minutes": {
+          "description": "How long a chain of wakeups since the user's last message, or one `/loop`, may last, in minutes. Defaults to 720; from 1 to 10080.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_wakeups": {
+          "description": "Wakeups the model may run since the user's last message, and iterations of one `/loop`. Defaults to 50; from 1 to 1000.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "min_delay_seconds": {
+          "description": "Shortest delay of a wakeup or `/loop` interval, in seconds; shorter requests are raised to it. Defaults to 60; from 1 to `max_delay_seconds`.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "SessionPickerViewMode": {
       "description": "Preferred layout for the resume/fork session picker.",
       "enum": [
@@ -5314,6 +5386,40 @@
           "type": "string"
         }
       ]
+    },
+    "ToolOutputSpillConfigToml": {
+      "additionalProperties": false,
+      "description": "Fork: `[features.tool_output_spill]` settings (`specs/tool-output-spill-2026-11-07.md`, UC6). When a tool result is cut to fit the context, Codex saves its full text to `$CODEX_HOME/tool_outputs/<thread_id>/` and tells the model the path. The files hold the complete tool output, secrets included, readable by the user only (directories `0700`, files `0600`). They are removed with their thread (`thread/delete`) or ephemeral session, and by the limits below; `thread/archive` keeps them.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "max_age_days": {
+          "description": "Days after which a saved output is removed, checked once per Codex process. Defaults to 7, at least 1.",
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "max_file_bytes": {
+          "description": "Largest saved file, in bytes; a larger output keeps its first and last halves. Defaults to 8388608 (8 MiB), at least 65536.",
+          "format": "uint64",
+          "minimum": 65536.0,
+          "type": "integer"
+        },
+        "max_thread_bytes": {
+          "description": "Largest size of one thread's saved outputs, in bytes; the oldest files go first. Defaults to 268435456 (256 MiB), at least `max_file_bytes`.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_total_bytes": {
+          "description": "Largest size of the saved outputs of all threads, in bytes, checked once per Codex process; the oldest files go first. Defaults to 2147483648 (2 GiB), at least `max_thread_bytes`.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
     },
     "ToolRegistryConfigToml": {
       "additionalProperties": false,
@@ -8314,6 +8420,9 @@
         "browser_use_full_cdp_access": {
           "type": "boolean"
         },
+        "builtin_workflows": {
+          "type": "boolean"
+        },
         "chronicle": {
           "type": "boolean"
         },
@@ -8644,6 +8753,9 @@
         "omit_skill_descriptions": {
           "type": "boolean"
         },
+        "output_styles": {
+          "type": "boolean"
+        },
         "output_token_replay": {
           "type": "boolean"
         },
@@ -8734,6 +8846,9 @@
         "runtime_metrics": {
           "type": "boolean"
         },
+        "scheduled_wakeups": {
+          "$ref": "#/definitions/FeatureToml_for_ScheduledWakeupsConfigToml"
+        },
         "search_tool": {
           "type": "boolean"
         },
@@ -8820,6 +8935,9 @@
         },
         "tool_call_mcp_elicitation": {
           "type": "boolean"
+        },
+        "tool_output_spill": {
+          "$ref": "#/definitions/FeatureToml_for_ToolOutputSpillConfigToml"
         },
         "tool_registry": {
           "$ref": "#/definitions/ToolRegistryConfigToml"
@@ -9213,6 +9331,10 @@
         }
       ],
       "description": "OTEL configuration."
+    },
+    "output_style": {
+      "description": "Fork: output style of root threads: how Codex communicates with you. Built-in styles: `default`, `outcome-first`, `explanatory`, `learning`; custom styles are Markdown files with `name` and `description` frontmatter in `$CODEX_HOME/output-styles/` or the `.codex/output-styles/` folder of a trusted project. Takes effect only while `features.output_styles` is enabled.",
+      "type": "string"
     },
     "output_truncation": {
       "allOf": [

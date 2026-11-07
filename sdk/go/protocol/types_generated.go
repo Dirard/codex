@@ -651,6 +651,76 @@ func (v ClientRequest) ThreadBackgroundTerminalsPendingParams() (ThreadBackgroun
 	return params, true, nil
 }
 
+func (v ClientRequest) ThreadOutputStyleListParams() (ThreadOutputStyleListParams, bool, error) {
+	if v.Method != "thread/outputStyle/list" {
+		return ThreadOutputStyleListParams{}, false, nil
+	}
+	var params ThreadOutputStyleListParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) ThreadOutputStyleSetParams() (ThreadOutputStyleSetParams, bool, error) {
+	if v.Method != "thread/outputStyle/set" {
+		return ThreadOutputStyleSetParams{}, false, nil
+	}
+	var params ThreadOutputStyleSetParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) ThreadWakeupReadParams() (ThreadWakeupReadParams, bool, error) {
+	if v.Method != "thread/wakeup/read" {
+		return ThreadWakeupReadParams{}, false, nil
+	}
+	var params ThreadWakeupReadParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) ThreadWakeupCancelParams() (ThreadWakeupCancelParams, bool, error) {
+	if v.Method != "thread/wakeup/cancel" {
+		return ThreadWakeupCancelParams{}, false, nil
+	}
+	var params ThreadWakeupCancelParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) ThreadLoopStartParams() (ThreadLoopStartParams, bool, error) {
+	if v.Method != "thread/loop/start" {
+		return ThreadLoopStartParams{}, false, nil
+	}
+	var params ThreadLoopStartParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
 func (v ClientRequest) ThreadMetadataUpdateParams() (ThreadMetadataUpdateParams, bool, error) {
 	if v.Method != "thread/metadata/update" {
 		return ThreadMetadataUpdateParams{}, false, nil
@@ -5488,6 +5558,20 @@ func (v ServerNotification) ThreadWorkflowUpdatedParams() (ThreadWorkflowUpdated
 		return ThreadWorkflowUpdatedNotification{}, false, nil
 	}
 	var params ThreadWorkflowUpdatedNotification
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ServerNotification) ThreadWakeupUpdatedParams() (ThreadWakeupUpdatedNotification, bool, error) {
+	if v.Method != "thread/wakeup/updated" {
+		return ThreadWakeupUpdatedNotification{}, false, nil
+	}
+	var params ThreadWakeupUpdatedNotification
 	if len(bytes.TrimSpace(v.Params)) == 0 {
 		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
 	}
@@ -17626,6 +17710,40 @@ func (v *OtelToolResultLogConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type OutputStyleInfo struct {
+	Description string                    `json:"description"`
+	Name        string                    `json:"name"`
+	Path        Optional[AbsolutePathBuf] `json:"path,omitzero"`
+	Source      OutputStyleSource         `json:"source"`
+}
+
+var outputStyleInfoSpec = objectSpec{
+	fields: []objectField{
+		{name: "description", flags: fieldRequired | fieldRejectNull},
+		{name: "name", flags: fieldRequired | fieldRejectNull},
+		{name: "path"},
+		{name: "source", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v OutputStyleInfo) MarshalJSON() ([]byte, error) {
+	type wire OutputStyleInfo
+	return json.Marshal(wire(v))
+}
+
+func (v *OutputStyleInfo) UnmarshalJSON(data []byte) error {
+	type wire OutputStyleInfo
+	return decodeObject(data, &outputStyleInfoSpec, (*wire)(v))
+}
+
+type OutputStyleSource string
+
+const (
+	OutputStyleSourceBuiltin OutputStyleSource = "builtin"
+	OutputStyleSourceUser    OutputStyleSource = "user"
+	OutputStyleSourceProject OutputStyleSource = "project"
+)
+
 type OverriddenMetadata struct {
 	EffectiveValue  json.RawMessage     `json:"effectiveValue"`
 	Message         string              `json:"message"`
@@ -25640,6 +25758,119 @@ func (v *ThreadLoadedListResponse) UnmarshalJSON(data []byte) error {
 	return decodeObject(data, &threadLoadedListResponseSpec, (*wire)(v))
 }
 
+type ThreadLoop struct {
+	EndsAt          int64            `json:"endsAt"`
+	ID              string           `json:"id"`
+	IntervalSeconds Optional[uint32] `json:"intervalSeconds,omitzero"`
+	Iteration       uint32           `json:"iteration"`
+	MaxIterations   uint32           `json:"maxIterations"`
+	Prompt          string           `json:"prompt"`
+	StartedAt       int64            `json:"startedAt"`
+}
+
+var threadLoopSpec = objectSpec{
+	fields: []objectField{
+		{name: "endsAt", flags: fieldRequired | fieldRejectNull},
+		{name: "id", flags: fieldRequired | fieldRejectNull},
+		{name: "intervalSeconds"},
+		{name: "iteration", flags: fieldRequired | fieldRejectNull},
+		{name: "maxIterations", flags: fieldRequired | fieldRejectNull},
+		{name: "prompt", flags: fieldRequired | fieldRejectNull},
+		{name: "startedAt", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadLoop) MarshalJSON() ([]byte, error) {
+	type wire ThreadLoop
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadLoop) UnmarshalJSON(data []byte) error {
+	type wire ThreadLoop
+	var s objectScan
+	if _, err := s.begin(data, &threadLoopSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if valueIntervalSeconds, ok := v.IntervalSeconds.Value(); ok {
+		if valueIntervalSeconds < 0 {
+			return DecodeError{Field: "intervalSeconds", Reason: "below minimum 0"}
+		}
+	}
+	if v.Iteration < 0 {
+		return DecodeError{Field: "iteration", Reason: "below minimum 0"}
+	}
+	if v.MaxIterations < 0 {
+		return DecodeError{Field: "maxIterations", Reason: "below minimum 0"}
+	}
+	return nil
+}
+
+type ThreadLoopStartParams struct {
+	IntervalSeconds Optional[uint32] `json:"intervalSeconds,omitzero"`
+	MaxIterations   Optional[uint32] `json:"maxIterations,omitzero"`
+	Prompt          string           `json:"prompt"`
+	ThreadID        string           `json:"threadId"`
+}
+
+var threadLoopStartParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "intervalSeconds"},
+		{name: "maxIterations"},
+		{name: "prompt", flags: fieldRequired | fieldRejectNull},
+		{name: "threadId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadLoopStartParams) MarshalJSON() ([]byte, error) {
+	type wire ThreadLoopStartParams
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadLoopStartParams) UnmarshalJSON(data []byte) error {
+	type wire ThreadLoopStartParams
+	var s objectScan
+	if _, err := s.begin(data, &threadLoopStartParamsSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if valueIntervalSeconds, ok := v.IntervalSeconds.Value(); ok {
+		if valueIntervalSeconds < 0 {
+			return DecodeError{Field: "intervalSeconds", Reason: "below minimum 0"}
+		}
+	}
+	if valueMaxIterations, ok := v.MaxIterations.Value(); ok {
+		if valueMaxIterations < 0 {
+			return DecodeError{Field: "maxIterations", Reason: "below minimum 0"}
+		}
+	}
+	return nil
+}
+
+type ThreadLoopStartResponse struct {
+	State ThreadWakeupState `json:"state"`
+}
+
+var threadLoopStartResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "state", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadLoopStartResponse) MarshalJSON() ([]byte, error) {
+	type wire ThreadLoopStartResponse
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadLoopStartResponse) UnmarshalJSON(data []byte) error {
+	type wire ThreadLoopStartResponse
+	return decodeObject(data, &threadLoopStartResponseSpec, (*wire)(v))
+}
+
 type ThreadMemoryMode string
 
 const (
@@ -25822,6 +26053,92 @@ func (v ThreadNameUpdatedNotification) MarshalJSON() ([]byte, error) {
 func (v *ThreadNameUpdatedNotification) UnmarshalJSON(data []byte) error {
 	type wire ThreadNameUpdatedNotification
 	return decodeObject(data, &threadNameUpdatedNotificationSpec, (*wire)(v))
+}
+
+type ThreadOutputStyleListParams struct {
+	ThreadID string `json:"threadId"`
+}
+
+var threadOutputStyleListParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "threadId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadOutputStyleListParams) MarshalJSON() ([]byte, error) {
+	type wire ThreadOutputStyleListParams
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadOutputStyleListParams) UnmarshalJSON(data []byte) error {
+	type wire ThreadOutputStyleListParams
+	return decodeObject(data, &threadOutputStyleListParamsSpec, (*wire)(v))
+}
+
+type ThreadOutputStyleListResponse struct {
+	Current  string            `json:"current"`
+	Styles   []OutputStyleInfo `json:"styles"`
+	Warnings []string          `json:"warnings"`
+}
+
+var threadOutputStyleListResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "current", flags: fieldRequired | fieldRejectNull},
+		{name: "styles", flags: fieldRequired | fieldRejectNull},
+		{name: "warnings", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadOutputStyleListResponse) MarshalJSON() ([]byte, error) {
+	type wire ThreadOutputStyleListResponse
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadOutputStyleListResponse) UnmarshalJSON(data []byte) error {
+	type wire ThreadOutputStyleListResponse
+	return decodeObject(data, &threadOutputStyleListResponseSpec, (*wire)(v))
+}
+
+type ThreadOutputStyleSetParams struct {
+	Name     string `json:"name"`
+	ThreadID string `json:"threadId"`
+}
+
+var threadOutputStyleSetParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "name", flags: fieldRequired | fieldRejectNull},
+		{name: "threadId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadOutputStyleSetParams) MarshalJSON() ([]byte, error) {
+	type wire ThreadOutputStyleSetParams
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadOutputStyleSetParams) UnmarshalJSON(data []byte) error {
+	type wire ThreadOutputStyleSetParams
+	return decodeObject(data, &threadOutputStyleSetParamsSpec, (*wire)(v))
+}
+
+type ThreadOutputStyleSetResponse struct {
+	Style OutputStyleInfo `json:"style"`
+}
+
+var threadOutputStyleSetResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "style", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadOutputStyleSetResponse) MarshalJSON() ([]byte, error) {
+	type wire ThreadOutputStyleSetResponse
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadOutputStyleSetResponse) UnmarshalJSON(data []byte) error {
+	type wire ThreadOutputStyleSetResponse
+	return decodeObject(data, &threadOutputStyleSetResponseSpec, (*wire)(v))
 }
 
 type ThreadPredictionRequestParams struct {
@@ -29293,6 +29610,259 @@ func (v ThreadUsageBreakdownGroup) MarshalJSON() ([]byte, error) {
 func (v *ThreadUsageBreakdownGroup) UnmarshalJSON(data []byte) error {
 	type wire ThreadUsageBreakdownGroup
 	return decodeObject(data, &threadUsageBreakdownGroupSpec, (*wire)(v))
+}
+
+type ThreadWakeup struct {
+	DelaySeconds          uint32             `json:"delaySeconds"`
+	Due                   bool               `json:"due"`
+	DueAt                 int64              `json:"dueAt"`
+	ID                    string             `json:"id"`
+	Origin                ThreadWakeupOrigin `json:"origin"`
+	Prompt                Optional[string]   `json:"prompt,omitzero"`
+	Reason                Optional[string]   `json:"reason,omitzero"`
+	RequestedDelaySeconds uint32             `json:"requestedDelaySeconds"`
+	ScheduledInTurnID     Optional[string]   `json:"scheduledInTurnId,omitzero"`
+}
+
+var threadWakeupSpec = objectSpec{
+	fields: []objectField{
+		{name: "delaySeconds", flags: fieldRequired | fieldRejectNull},
+		{name: "due", flags: fieldRequired | fieldRejectNull},
+		{name: "dueAt", flags: fieldRequired | fieldRejectNull},
+		{name: "id", flags: fieldRequired | fieldRejectNull},
+		{name: "origin", flags: fieldRequired | fieldRejectNull},
+		{name: "prompt"},
+		{name: "reason"},
+		{name: "requestedDelaySeconds", flags: fieldRequired | fieldRejectNull},
+		{name: "scheduledInTurnId"},
+	},
+}
+
+func (v ThreadWakeup) MarshalJSON() ([]byte, error) {
+	type wire ThreadWakeup
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadWakeup) UnmarshalJSON(data []byte) error {
+	type wire ThreadWakeup
+	var s objectScan
+	if _, err := s.begin(data, &threadWakeupSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if v.DelaySeconds < 0 {
+		return DecodeError{Field: "delaySeconds", Reason: "below minimum 0"}
+	}
+	if v.RequestedDelaySeconds < 0 {
+		return DecodeError{Field: "requestedDelaySeconds", Reason: "below minimum 0"}
+	}
+	return nil
+}
+
+type ThreadWakeupCancelParams struct {
+	ThreadID string `json:"threadId"`
+}
+
+var threadWakeupCancelParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "threadId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadWakeupCancelParams) MarshalJSON() ([]byte, error) {
+	type wire ThreadWakeupCancelParams
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadWakeupCancelParams) UnmarshalJSON(data []byte) error {
+	type wire ThreadWakeupCancelParams
+	return decodeObject(data, &threadWakeupCancelParamsSpec, (*wire)(v))
+}
+
+type ThreadWakeupCancelReason string
+
+const (
+	ThreadWakeupCancelReasonModel        ThreadWakeupCancelReason = "model"
+	ThreadWakeupCancelReasonUser         ThreadWakeupCancelReason = "user"
+	ThreadWakeupCancelReasonInterrupt    ThreadWakeupCancelReason = "interrupt"
+	ThreadWakeupCancelReasonLimit        ThreadWakeupCancelReason = "limit"
+	ThreadWakeupCancelReasonFailures     ThreadWakeupCancelReason = "failures"
+	ThreadWakeupCancelReasonReplaced     ThreadWakeupCancelReason = "replaced"
+	ThreadWakeupCancelReasonCompleted    ThreadWakeupCancelReason = "completed"
+	ThreadWakeupCancelReasonThreadClosed ThreadWakeupCancelReason = "threadClosed"
+)
+
+type ThreadWakeupCancelResponse struct {
+	Cancelled bool              `json:"cancelled"`
+	State     ThreadWakeupState `json:"state"`
+}
+
+var threadWakeupCancelResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "cancelled", flags: fieldRequired | fieldRejectNull},
+		{name: "state", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadWakeupCancelResponse) MarshalJSON() ([]byte, error) {
+	type wire ThreadWakeupCancelResponse
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadWakeupCancelResponse) UnmarshalJSON(data []byte) error {
+	type wire ThreadWakeupCancelResponse
+	return decodeObject(data, &threadWakeupCancelResponseSpec, (*wire)(v))
+}
+
+type ThreadWakeupChain struct {
+	EndsAt     Optional[int64] `json:"endsAt,omitzero"`
+	Fired      uint32          `json:"fired"`
+	MaxWakeups uint32          `json:"maxWakeups"`
+}
+
+var threadWakeupChainSpec = objectSpec{
+	fields: []objectField{
+		{name: "endsAt"},
+		{name: "fired", flags: fieldRequired | fieldRejectNull},
+		{name: "maxWakeups", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadWakeupChain) MarshalJSON() ([]byte, error) {
+	type wire ThreadWakeupChain
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadWakeupChain) UnmarshalJSON(data []byte) error {
+	type wire ThreadWakeupChain
+	var s objectScan
+	if _, err := s.begin(data, &threadWakeupChainSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if v.Fired < 0 {
+		return DecodeError{Field: "fired", Reason: "below minimum 0"}
+	}
+	if v.MaxWakeups < 0 {
+		return DecodeError{Field: "maxWakeups", Reason: "below minimum 0"}
+	}
+	return nil
+}
+
+type ThreadWakeupChange string
+
+const (
+	ThreadWakeupChangeScheduled   ThreadWakeupChange = "scheduled"
+	ThreadWakeupChangeReplaced    ThreadWakeupChange = "replaced"
+	ThreadWakeupChangeFired       ThreadWakeupChange = "fired"
+	ThreadWakeupChangeCancelled   ThreadWakeupChange = "cancelled"
+	ThreadWakeupChangeLoopStarted ThreadWakeupChange = "loopStarted"
+	ThreadWakeupChangeLoopEnded   ThreadWakeupChange = "loopEnded"
+)
+
+type ThreadWakeupOrigin string
+
+const (
+	ThreadWakeupOriginModel ThreadWakeupOrigin = "model"
+	ThreadWakeupOriginLoop  ThreadWakeupOrigin = "loop"
+)
+
+type ThreadWakeupReadParams struct {
+	ThreadID string `json:"threadId"`
+}
+
+var threadWakeupReadParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "threadId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadWakeupReadParams) MarshalJSON() ([]byte, error) {
+	type wire ThreadWakeupReadParams
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadWakeupReadParams) UnmarshalJSON(data []byte) error {
+	type wire ThreadWakeupReadParams
+	return decodeObject(data, &threadWakeupReadParamsSpec, (*wire)(v))
+}
+
+type ThreadWakeupReadResponse struct {
+	Available bool              `json:"available"`
+	State     ThreadWakeupState `json:"state"`
+}
+
+var threadWakeupReadResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "available", flags: fieldRequired | fieldRejectNull},
+		{name: "state", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadWakeupReadResponse) MarshalJSON() ([]byte, error) {
+	type wire ThreadWakeupReadResponse
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadWakeupReadResponse) UnmarshalJSON(data []byte) error {
+	type wire ThreadWakeupReadResponse
+	return decodeObject(data, &threadWakeupReadResponseSpec, (*wire)(v))
+}
+
+type ThreadWakeupState struct {
+	Chain  ThreadWakeupChain      `json:"chain"`
+	Loop   Optional[ThreadLoop]   `json:"loop,omitzero"`
+	Wakeup Optional[ThreadWakeup] `json:"wakeup,omitzero"`
+}
+
+var threadWakeupStateSpec = objectSpec{
+	fields: []objectField{
+		{name: "chain", flags: fieldRequired | fieldRejectNull},
+		{name: "loop"},
+		{name: "wakeup"},
+	},
+}
+
+func (v ThreadWakeupState) MarshalJSON() ([]byte, error) {
+	type wire ThreadWakeupState
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadWakeupState) UnmarshalJSON(data []byte) error {
+	type wire ThreadWakeupState
+	return decodeObject(data, &threadWakeupStateSpec, (*wire)(v))
+}
+
+type ThreadWakeupUpdatedNotification struct {
+	CancelReason Optional[ThreadWakeupCancelReason] `json:"cancelReason,omitzero"`
+	Change       ThreadWakeupChange                 `json:"change"`
+	State        ThreadWakeupState                  `json:"state"`
+	ThreadID     string                             `json:"threadId"`
+	TurnID       Optional[string]                   `json:"turnId,omitzero"`
+}
+
+var threadWakeupUpdatedNotificationSpec = objectSpec{
+	fields: []objectField{
+		{name: "cancelReason"},
+		{name: "change", flags: fieldRequired | fieldRejectNull},
+		{name: "state", flags: fieldRequired | fieldRejectNull},
+		{name: "threadId", flags: fieldRequired | fieldRejectNull},
+		{name: "turnId"},
+	},
+}
+
+func (v ThreadWakeupUpdatedNotification) MarshalJSON() ([]byte, error) {
+	type wire ThreadWakeupUpdatedNotification
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadWakeupUpdatedNotification) UnmarshalJSON(data []byte) error {
+	type wire ThreadWakeupUpdatedNotification
+	return decodeObject(data, &threadWakeupUpdatedNotificationSpec, (*wire)(v))
 }
 
 type ThreadWorkflowCancelParams struct {

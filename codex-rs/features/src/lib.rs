@@ -179,8 +179,16 @@ pub enum Feature {
     UnifiedExecTty,
     /// Fork: let `exec_command` notify the thread when a background process exits.
     ExecExitNotifications,
+    /// Fork: save the full text of a truncated tool result to a file the model can read.
+    ToolOutputSpill,
     /// Fork: let the model run background workflow scripts that orchestrate agents.
     Workflows,
+    /// Fork: ship built-in workflow scripts and the `/code-review` command.
+    BuiltinWorkflows,
+    /// Fork: let the model schedule its own wakeups and the user repeat a prompt with `/loop`.
+    ScheduledWakeups,
+    /// Fork: let the user choose how Codex communicates (`output_style`, `/output-style`).
+    OutputStyles,
     /// Removed compatibility flag for the retired patched zsh backend.
     ShellZshFork,
     /// Removed compatibility flag for the retired patched zsh backend.
@@ -984,6 +992,10 @@ pub struct FeaturesToml {
     pub agent_worktree_isolation: Option<FeatureToml<AgentWorktreeIsolationConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exec_exit_notifications: Option<FeatureToml<ExecExitNotificationsConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_output_spill: Option<FeatureToml<ToolOutputSpillConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_wakeups: Option<FeatureToml<ScheduledWakeupsConfigToml>>,
     // Fork end
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<FeatureToml<TokenBudgetConfigToml>>,
@@ -1245,12 +1257,55 @@ pub const FEATURES: &[FeatureSpec] = &[
         },
         default_enabled: false,
     },
+    // Fork: full output of truncated tools (specs/tool-output-spill-2026-11-07.md).
+    FeatureSpec {
+        id: Feature::ToolOutputSpill,
+        key: "tool_output_spill",
+        stage: Stage::Experimental {
+            name: "Full output of truncated tools",
+            menu_description: "When a tool result is cut to fit the context, Codex saves the full output to a private file and tells the model its path, so it can read the rest; not for remote environments or Windows.",
+            announcement: "",
+        },
+        default_enabled: false,
+    },
     FeatureSpec {
         id: Feature::Workflows,
         key: "workflows",
         stage: Stage::Experimental {
             name: "Dynamic workflows",
             menu_description: "The model can run a JavaScript workflow that fans out subagents in the background and reports back once when it ends; workflow agents start without your conversation.",
+            announcement: "",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::BuiltinWorkflows,
+        key: "builtin_workflows",
+        stage: Stage::Experimental {
+            name: "Built-in workflows",
+            menu_description: "Adds built-in review, understand and research workflows and the /code-review command; needs Dynamic workflows.",
+            announcement: "",
+        },
+        default_enabled: false,
+    },
+    // Fork: scheduled wakeups (specs/scheduled-wakeups-2026-11-07.md).
+    FeatureSpec {
+        id: Feature::ScheduledWakeups,
+        key: "scheduled_wakeups",
+        stage: Stage::Experimental {
+            name: "Scheduled wakeups",
+            menu_description: "The model can end its turn and resume this thread later, for example to poll CI or a deploy, and /loop repeats a prompt; wakeups last only while Codex runs.",
+            announcement: "",
+        },
+        default_enabled: false,
+    },
+    // Fork: output styles (specs/output-styles-2026-11-07.md).
+    FeatureSpec {
+        id: Feature::OutputStyles,
+        key: "output_styles",
+        stage: Stage::Experimental {
+            name: "Output styles",
+            menu_description: "Choose how Codex communicates (outcome first, explanatory, learning, or your own Markdown style) with /output-style or output_style in config.toml.",
             announcement: "",
         },
         default_enabled: false,

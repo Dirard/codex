@@ -54,6 +54,9 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) windows_degraded_sandbox_active: bool,
     pub(crate) side_conversation_active: bool,
     pub(crate) workflows_command_enabled: bool, // Fork: R8.6.1
+    pub(crate) code_review_command_enabled: bool, // Fork: builtin workflows R9.1
+    pub(crate) output_style_command_enabled: bool, // Fork: output styles R5.1
+    pub(crate) wakeups_command_enabled: bool,   // Fork: scheduled wakeups R9.1
 }
 
 impl From<CommandPopupFlags> for BuiltinCommandFlags {
@@ -71,6 +74,9 @@ impl From<CommandPopupFlags> for BuiltinCommandFlags {
             allow_elevate_sandbox: value.windows_degraded_sandbox_active,
             side_conversation_active: value.side_conversation_active,
             workflows_command_enabled: value.workflows_command_enabled,
+            code_review_command_enabled: value.code_review_command_enabled,
+            output_style_command_enabled: value.output_style_command_enabled,
+            wakeups_command_enabled: value.wakeups_command_enabled,
         }
     }
 }
@@ -680,6 +686,9 @@ mod tests {
                 windows_degraded_sandbox_active: false,
                 side_conversation_active: false,
                 workflows_command_enabled: false,
+                code_review_command_enabled: false,
+                output_style_command_enabled: false,
+                wakeups_command_enabled: false,
             },
             Vec::new(),
         );

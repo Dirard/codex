@@ -469,6 +469,12 @@ pub(crate) enum AppEvent {
     /// Fork: the `/workflows` screen (specs/dynamic-workflow-2026-10-25.md, UC 8.1).
     Workflows(crate::workflows::WorkflowsEvent),
 
+    /// Fork: `/loop` (specs/scheduled-wakeups-2026-11-07.md, UC9).
+    Wakeups(crate::wakeups::WakeupsEvent),
+
+    /// Fork: `/output-style` (specs/output-styles-2026-11-07.md, UC5).
+    OutputStyle(crate::chatwidget::output_style::OutputStyleEvent),
+
     /// Open a transient side conversation for the current thread.
     StartSide {
         parent_thread_id: ThreadId,

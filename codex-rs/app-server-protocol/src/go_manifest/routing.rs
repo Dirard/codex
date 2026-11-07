@@ -62,6 +62,7 @@ pub(crate) fn notification_routing_strategy(method: &'static str) -> Notificatio
         | "thread/goal/cleared"
         | "thread/queue/changed"
         | "thread/workflow/updated"
+        | "thread/wakeup/updated" // Fork: scheduled wakeups
         | "thread/settings/updated"
         | "guardianWarning"
         | "thread/realtime/started"

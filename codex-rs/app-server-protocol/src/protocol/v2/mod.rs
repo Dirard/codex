@@ -26,6 +26,7 @@ mod model;
 mod model_provider;
 mod model_provider_error;
 mod notification;
+mod output_style; // Fork: output styles (specs/output-styles-2026-11-07.md)
 mod permissions;
 mod plugin;
 mod plugin_search;
@@ -43,8 +44,9 @@ mod thread_sample;
 mod thread_usage;
 mod turn;
 mod user_verification;
+mod wakeup;
 mod windows_sandbox;
-mod workflow;
+mod workflow; // Fork: scheduled wakeups (specs/scheduled-wakeups-2026-11-07.md)
 // Fork: agent worktrees (specs/agent-worktree-isolation-2026-10-25.md, UC9).
 mod agent_worktree;
 
@@ -75,6 +77,7 @@ pub use model::*;
 pub use model_provider::*;
 pub use model_provider_error::*;
 pub use notification::*;
+pub use output_style::*;
 pub use permissions::*;
 pub use plugin::*;
 pub use plugin_search::*;
@@ -93,8 +96,9 @@ pub use thread_sample::*;
 pub use thread_usage::*;
 pub use turn::*;
 pub use user_verification::*;
+pub use wakeup::*;
 pub use windows_sandbox::*;
-pub use workflow::*;
+pub use workflow::*; // Fork: scheduled wakeups
 
 #[cfg(test)]
 mod tests;

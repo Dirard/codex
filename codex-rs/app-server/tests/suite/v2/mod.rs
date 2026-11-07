@@ -195,6 +195,12 @@ mod windows_sandbox_setup;
 mod workflow;
 // Fork: background terminal notifications a thread still owes the model.
 mod background_terminals_pending;
+// Fork: saved full output of truncated tools (specs/tool-output-spill-2026-11-07.md).
+mod tool_output_spill;
+// Fork: output styles (specs/output-styles-2026-11-07.md).
+mod output_style;
+// Fork: scheduled wakeups and /loop (specs/scheduled-wakeups-2026-11-07.md).
+mod scheduled_wakeups;
 mod workspace_routing;
 
 mod user_verification;

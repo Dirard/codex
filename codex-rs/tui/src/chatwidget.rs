@@ -294,6 +294,12 @@ mod questions;
 mod startup_submission;
 // Fork: workflow progress and history cells.
 mod workflow;
+// Fork: scheduled wakeups and `/loop` (specs/scheduled-wakeups-2026-11-07.md, UC9).
+mod wakeup_fork;
+// Fork: `/code-review` (specs/builtin-workflows-2026-11-07.md, UC9).
+mod code_review_fork;
+// Fork: `/output-style` (specs/output-styles-2026-11-07.md, UC5).
+pub(crate) mod output_style;
 use self::interrupts::InterruptManager;
 mod keymap_picker;
 mod mcp_startup;

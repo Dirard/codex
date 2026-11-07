@@ -732,6 +732,38 @@ fork_with_go_manifest! { client_request_definitions {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadBackgroundTerminalsPendingResponse,
     },
+    // Fork: output style of a loaded thread (specs/output-styles-2026-11-07.md).
+    #[experimental("thread/outputStyle/list")]
+    ThreadOutputStyleList => "thread/outputStyle/list" {
+        params: v2::ThreadOutputStyleListParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadOutputStyleListResponse,
+    },
+    #[experimental("thread/outputStyle/set")]
+    ThreadOutputStyleSet => "thread/outputStyle/set" {
+        params: v2::ThreadOutputStyleSetParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadOutputStyleSetResponse,
+    },
+    // Fork: scheduled wakeups and /loop (specs/scheduled-wakeups-2026-11-07.md).
+    #[experimental("thread/wakeup/read")]
+    ThreadWakeupRead => "thread/wakeup/read" {
+        params: v2::ThreadWakeupReadParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadWakeupReadResponse,
+    },
+    #[experimental("thread/wakeup/cancel")]
+    ThreadWakeupCancel => "thread/wakeup/cancel" {
+        params: v2::ThreadWakeupCancelParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadWakeupCancelResponse,
+    },
+    #[experimental("thread/loop/start")]
+    ThreadLoopStart => "thread/loop/start" {
+        params: v2::ThreadLoopStartParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadLoopStartResponse,
+    },
     // Fork end
     ThreadMetadataUpdate => "thread/metadata/update" {
         params: v2::ThreadMetadataUpdateParams,
@@ -2093,6 +2125,9 @@ fork_with_go_manifest! { server_notification_definitions {
     // Fork: a dynamic workflow run of the thread changed.
     #[experimental("thread/workflow/updated")]
     ThreadWorkflowUpdated => "thread/workflow/updated" (v2::ThreadWorkflowUpdatedNotification),
+    // Fork: the scheduled wakeups of the thread changed (specs/scheduled-wakeups-2026-11-07.md).
+    #[experimental("thread/wakeup/updated")]
+    ThreadWakeupUpdated => "thread/wakeup/updated" (v2::ThreadWakeupUpdatedNotification),
     #[experimental("project/changed")]
     ProjectChanged => "project/changed" (v2::ProjectChangedNotification),
     #[experimental("thread/project/updated")]

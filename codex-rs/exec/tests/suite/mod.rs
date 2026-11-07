@@ -29,4 +29,8 @@ mod startup_warnings;
 mod workflow;
 // Fork: exec waits for background terminal notifications.
 mod background_terminals;
+// Fork: exec waits for scheduled wakeups (specs/scheduled-wakeups-2026-11-07.md).
+mod scheduled_wakeup;
+// Fork: output styles through `-c` (specs/output-styles-2026-11-07.md).
+mod output_style;
 mod worktree;

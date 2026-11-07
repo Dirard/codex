@@ -268,6 +268,91 @@ impl ExecExitNotificationsConfig {
         }
     }
 }
+
+/// Fork: resolved `[features.tool_output_spill]` limits
+/// (`specs/tool-output-spill-2026-11-07.md`, UC6, R6.2, R6.3). The feature flag gates the
+/// behavior; these limits apply while it is enabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ToolOutputSpillConfig {
+    /// Largest saved file; a larger output keeps its first and last halves.
+    pub max_file_bytes: u64,
+    /// Largest size of one thread's directory; the oldest files go first.
+    pub max_thread_bytes: u64,
+    /// Largest size of all threads' saved outputs, checked once per process.
+    pub max_total_bytes: u64,
+    /// Days after which a saved output is removed, checked once per process.
+    pub max_age_days: u64,
+}
+
+pub const DEFAULT_TOOL_OUTPUT_SPILL_MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
+pub const DEFAULT_TOOL_OUTPUT_SPILL_MAX_THREAD_BYTES: u64 = 256 * 1024 * 1024;
+pub const DEFAULT_TOOL_OUTPUT_SPILL_MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub const DEFAULT_TOOL_OUTPUT_SPILL_MAX_AGE_DAYS: u64 = 7;
+pub const MIN_TOOL_OUTPUT_SPILL_MAX_FILE_BYTES: u64 = 64 * 1024;
+
+impl Default for ToolOutputSpillConfig {
+    fn default() -> Self {
+        Self {
+            max_file_bytes: DEFAULT_TOOL_OUTPUT_SPILL_MAX_FILE_BYTES,
+            max_thread_bytes: DEFAULT_TOOL_OUTPUT_SPILL_MAX_THREAD_BYTES,
+            max_total_bytes: DEFAULT_TOOL_OUTPUT_SPILL_MAX_TOTAL_BYTES,
+            max_age_days: DEFAULT_TOOL_OUTPUT_SPILL_MAX_AGE_DAYS,
+        }
+    }
+}
+
+impl ToolOutputSpillConfig {
+    /// Resolves the limits from a features table, keeping defaults for omitted values; a limit
+    /// below its minimum is an error that names the key (R6.3).
+    pub(crate) fn from_features_toml(features: Option<&FeaturesToml>) -> std::io::Result<Self> {
+        let configured = match features.and_then(|features| features.tool_output_spill.as_ref()) {
+            Some(FeatureToml::Config(config)) => Some(config),
+            Some(FeatureToml::Enabled(_)) | None => None,
+        };
+        let defaults = Self::default();
+        let resolved = Self {
+            max_file_bytes: configured
+                .and_then(|config| config.max_file_bytes)
+                .unwrap_or(defaults.max_file_bytes),
+            max_thread_bytes: configured
+                .and_then(|config| config.max_thread_bytes)
+                .unwrap_or(defaults.max_thread_bytes),
+            max_total_bytes: configured
+                .and_then(|config| config.max_total_bytes)
+                .unwrap_or(defaults.max_total_bytes),
+            max_age_days: configured
+                .and_then(|config| config.max_age_days)
+                .unwrap_or(defaults.max_age_days),
+        };
+        let invalid = |message: String| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("features.tool_output_spill.{message}"),
+            ))
+        };
+        if resolved.max_file_bytes < MIN_TOOL_OUTPUT_SPILL_MAX_FILE_BYTES {
+            return invalid(format!(
+                "max_file_bytes must be at least {MIN_TOOL_OUTPUT_SPILL_MAX_FILE_BYTES}"
+            ));
+        }
+        if resolved.max_thread_bytes < resolved.max_file_bytes {
+            return invalid(format!(
+                "max_thread_bytes must be at least max_file_bytes ({})",
+                resolved.max_file_bytes
+            ));
+        }
+        if resolved.max_total_bytes < resolved.max_thread_bytes {
+            return invalid(format!(
+                "max_total_bytes must be at least max_thread_bytes ({})",
+                resolved.max_thread_bytes
+            ));
+        }
+        if resolved.max_age_days == 0 {
+            return invalid("max_age_days must be at least 1".to_string());
+        }
+        Ok(resolved)
+    }
+}
 pub const MIN_EXPLORER_PROFILE_MAX_RESULT_TOKENS: usize = 200;
 
 impl Default for ExplorerProfileConfig {
@@ -520,6 +605,103 @@ pub(crate) fn clear_keeps_feature_table(root: &toml_edit::Item, segments: &[Stri
         .is_some_and(|table| {
             codex_config::fork_feature_clear_keeps_table(segments, table.iter().map(|(key, _)| key))
         })
+}
+
+/// Fork: resolved `[features.scheduled_wakeups]` settings
+/// (`specs/scheduled-wakeups-2026-11-07.md`, R1.1, R1.5). The feature flag gates the behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ScheduledWakeupsConfig {
+    /// Shortest wakeup delay and `/loop` interval, in seconds.
+    pub min_delay_seconds: u32,
+    /// Longest wakeup delay and `/loop` interval, in seconds.
+    pub max_delay_seconds: u32,
+    /// Wakeups per chain since the user's last message, and iterations per `/loop`.
+    pub max_wakeups: u32,
+    /// How long one chain or `/loop` may last, in minutes.
+    pub max_duration_minutes: u32,
+    /// How long `codex exec` waits for wakeups before it cancels them.
+    pub exec_wait_timeout_ms: u64,
+}
+
+pub const DEFAULT_WAKEUP_MIN_DELAY_SECONDS: u32 = 60;
+pub const DEFAULT_WAKEUP_MAX_DELAY_SECONDS: u32 = 3_600;
+pub const DEFAULT_MAX_WAKEUPS: u32 = 50;
+pub const DEFAULT_WAKEUP_MAX_DURATION_MINUTES: u32 = 720;
+pub const DEFAULT_WAKEUP_EXEC_WAIT_TIMEOUT_MS: u64 = 60 * 60 * 1000;
+
+impl Default for ScheduledWakeupsConfig {
+    fn default() -> Self {
+        Self {
+            min_delay_seconds: DEFAULT_WAKEUP_MIN_DELAY_SECONDS,
+            max_delay_seconds: DEFAULT_WAKEUP_MAX_DELAY_SECONDS,
+            max_wakeups: DEFAULT_MAX_WAKEUPS,
+            max_duration_minutes: DEFAULT_WAKEUP_MAX_DURATION_MINUTES,
+            exec_wait_timeout_ms: DEFAULT_WAKEUP_EXEC_WAIT_TIMEOUT_MS,
+        }
+    }
+}
+
+impl ScheduledWakeupsConfig {
+    /// Resolves the settings from a features table, keeping defaults for omitted values; a
+    /// value outside its range is an error that names the key and the range (R1.5).
+    pub(crate) fn from_features_toml(features: Option<&FeaturesToml>) -> std::io::Result<Self> {
+        let configured = match features.and_then(|features| features.scheduled_wakeups.as_ref()) {
+            Some(FeatureToml::Config(config)) => Some(config),
+            Some(FeatureToml::Enabled(_)) | None => None,
+        };
+        let defaults = Self::default();
+        let resolved = Self {
+            min_delay_seconds: configured
+                .and_then(|config| config.min_delay_seconds)
+                .unwrap_or(defaults.min_delay_seconds),
+            max_delay_seconds: configured
+                .and_then(|config| config.max_delay_seconds)
+                .unwrap_or(defaults.max_delay_seconds),
+            max_wakeups: configured
+                .and_then(|config| config.max_wakeups)
+                .unwrap_or(defaults.max_wakeups),
+            max_duration_minutes: configured
+                .and_then(|config| config.max_duration_minutes)
+                .unwrap_or(defaults.max_duration_minutes),
+            exec_wait_timeout_ms: configured
+                .and_then(|config| config.exec_wait_timeout_ms)
+                .unwrap_or(defaults.exec_wait_timeout_ms),
+        };
+        let out_of_range = |key: &str, range: String| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("features.scheduled_wakeups.{key} must be {range}"),
+            ))
+        };
+        if !(1..=resolved.max_delay_seconds).contains(&resolved.min_delay_seconds) {
+            return out_of_range(
+                "min_delay_seconds",
+                format!(
+                    "from 1 to max_delay_seconds ({})",
+                    resolved.max_delay_seconds
+                ),
+            );
+        }
+        if resolved.max_delay_seconds > 86_400 {
+            return out_of_range(
+                "max_delay_seconds",
+                format!(
+                    "from min_delay_seconds ({}) to 86400",
+                    resolved.min_delay_seconds
+                ),
+            );
+        }
+        if !(1..=1_000).contains(&resolved.max_wakeups) {
+            return out_of_range("max_wakeups", "from 1 to 1000".to_owned());
+        }
+        if !(1..=10_080).contains(&resolved.max_duration_minutes) {
+            return out_of_range("max_duration_minutes", "from 1 to 10080".to_owned());
+        }
+        if resolved.exec_wait_timeout_ms < 1_000 {
+            return out_of_range("exec_wait_timeout_ms", "at least 1000".to_owned());
+        }
+        Ok(resolved)
+    }
 }
 
 #[cfg(test)]

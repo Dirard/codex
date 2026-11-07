@@ -6202,6 +6202,42 @@
       },
       "type": "object"
     },
+    "ThreadLoopStartParams": {
+      "properties": {
+        "intervalSeconds": {
+          "default": null,
+          "description": "Repeat this many seconds after each iteration ends; omit for a self-paced loop.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxIterations": {
+          "default": null,
+          "description": "At most this many iterations; defaults to `features.scheduled_wakeups.max_wakeups`.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prompt": {
+          "description": "The prompt each iteration runs as user input.",
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadMemoryMode": {
       "enum": [
         "enabled",
@@ -6294,6 +6330,33 @@
         }
       },
       "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadOutputStyleListParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadOutputStyleSetParams": {
+      "properties": {
+        "name": {
+          "description": "A style name from `thread/outputStyle/list`, compared case-insensitively.",
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
         "threadId"
       ],
       "type": "object"
@@ -7952,6 +8015,28 @@
       ],
       "type": "object"
     },
+    "ThreadWakeupCancelParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadWakeupReadParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadWorkflowCancelParams": {
       "properties": {
         "runId": {
@@ -9538,6 +9623,126 @@
         "params"
       ],
       "title": "Thread/backgroundTerminals/pendingRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/outputStyle/list"
+          ],
+          "title": "Thread/outputStyle/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadOutputStyleListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/outputStyle/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/outputStyle/set"
+          ],
+          "title": "Thread/outputStyle/setRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadOutputStyleSetParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/outputStyle/setRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/wakeup/read"
+          ],
+          "title": "Thread/wakeup/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadWakeupReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/wakeup/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/wakeup/cancel"
+          ],
+          "title": "Thread/wakeup/cancelRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadWakeupCancelParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/wakeup/cancelRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/loop/start"
+          ],
+          "title": "Thread/loop/startRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadLoopStartParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/loop/startRequest",
       "type": "object"
     },
     {

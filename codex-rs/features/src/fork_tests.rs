@@ -39,6 +39,27 @@ fn background_workflow_and_worktree_features_are_experimental() {
             "JavaScript workflow that fans out subagents",
             "start without your conversation",
         ),
+        // Builtin-workflows UC1, R9.1: built-in scripts and `/code-review` over `workflows`.
+        (
+            Feature::BuiltinWorkflows,
+            "Built-in workflows",
+            "built-in review, understand and research workflows and the /code-review command",
+            "needs Dynamic workflows",
+        ),
+        // Scheduled-wakeups R1.1: model wakeups and `/loop`, only while Codex runs.
+        (
+            Feature::ScheduledWakeups,
+            "Scheduled wakeups",
+            "resume this thread later",
+            "only while Codex runs",
+        ),
+        // Tool-output-spill R6.1: the full output of truncated tools, local environments only.
+        (
+            Feature::ToolOutputSpill,
+            "Full output of truncated tools",
+            "saves the full output",
+            "not for remote environments or Windows",
+        ),
         (
             Feature::AgentWorktreeIsolation,
             "Subagent worktrees",
@@ -57,4 +78,26 @@ fn background_workflow_and_worktree_features_are_experimental() {
         assert!(!feature.default_enabled(), "{feature:?}");
         assert!(crate::fork_owns_stage(feature), "{feature:?}");
     }
+}
+
+/// Output-styles R2.2: `output_styles` is offered in `/experimental` with a menu name and a
+/// description naming the command and the config key, without a startup announcement, stays
+/// off by default and keeps its key out of `x-codex-beta-features`.
+#[test]
+fn output_styles_is_experimental() {
+    let feature = Feature::OutputStyles;
+    assert_eq!(feature.key(), "output_styles");
+    let stage = feature.stage();
+    assert_eq!(stage.experimental_menu_name(), Some("Output styles"));
+    let description = stage
+        .experimental_menu_description()
+        .expect("output_styles has a /experimental description");
+    assert!(description.contains("/output-style"), "{description}");
+    assert!(
+        description.contains("output_style in config.toml"),
+        "{description}"
+    );
+    assert_eq!(stage.experimental_announcement(), None);
+    assert!(!feature.default_enabled());
+    assert!(crate::fork_owns_stage(feature));
 }

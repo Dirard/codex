@@ -1,0 +1,199 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadLoop": {
+      "description": "The `/loop` of a thread.",
+      "properties": {
+        "endsAt": {
+          "description": "Unix time in seconds.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "intervalSeconds": {
+          "description": "Null for a self-paced loop, whose next iteration the model schedules.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "iteration": {
+          "description": "Iterations started so far.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "maxIterations": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "prompt": {
+          "description": "The user's prompt each iteration runs.",
+          "type": "string"
+        },
+        "startedAt": {
+          "description": "Unix time in seconds.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "endsAt",
+        "id",
+        "iteration",
+        "maxIterations",
+        "prompt",
+        "startedAt"
+      ],
+      "type": "object"
+    },
+    "ThreadWakeup": {
+      "description": "The pending wakeup of a thread.",
+      "properties": {
+        "delaySeconds": {
+          "description": "The effective delay in seconds.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "due": {
+          "description": "Due and waiting for the thread to become idle.",
+          "type": "boolean"
+        },
+        "dueAt": {
+          "description": "Unix time in seconds.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/definitions/ThreadWakeupOrigin"
+        },
+        "prompt": {
+          "description": "The model's note for the wakeup.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Model-authored; control characters are replaced.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestedDelaySeconds": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "scheduledInTurnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "delaySeconds",
+        "due",
+        "dueAt",
+        "id",
+        "origin",
+        "requestedDelaySeconds"
+      ],
+      "type": "object"
+    },
+    "ThreadWakeupChain": {
+      "description": "The model's wakeups since the user's last message.",
+      "properties": {
+        "endsAt": {
+          "description": "Unix time in seconds; null before the chain's first wakeup.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fired": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "maxWakeups": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "fired",
+        "maxWakeups"
+      ],
+      "type": "object"
+    },
+    "ThreadWakeupOrigin": {
+      "description": "Who scheduled a wakeup.",
+      "enum": [
+        "model",
+        "loop"
+      ],
+      "type": "string"
+    },
+    "ThreadWakeupState": {
+      "description": "A thread's pending wakeup, its `/loop` and the model's wakeup chain.",
+      "properties": {
+        "chain": {
+          "$ref": "#/definitions/ThreadWakeupChain"
+        },
+        "loop": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadLoop"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wakeup": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadWakeup"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "chain"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "cancelled": {
+      "description": "Whether a wakeup or loop was cancelled; false when a wakeup's turn already started.",
+      "type": "boolean"
+    },
+    "state": {
+      "$ref": "#/definitions/ThreadWakeupState"
+    }
+  },
+  "required": [
+    "cancelled",
+    "state"
+  ],
+  "title": "ThreadWakeupCancelResponse",
+  "type": "object"
+}

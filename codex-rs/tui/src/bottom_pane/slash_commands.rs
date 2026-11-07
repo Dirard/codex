@@ -68,6 +68,13 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) side_conversation_active: bool,
     /// Fork: `features.workflows` (specs/dynamic-workflow-2026-10-25.md, R8.6.1).
     pub(crate) workflows_command_enabled: bool,
+    /// Fork: `features.workflows` and `features.builtin_workflows`
+    /// (specs/builtin-workflows-2026-11-07.md, R9.1).
+    pub(crate) code_review_command_enabled: bool,
+    /// Fork: `features.output_styles` (specs/output-styles-2026-11-07.md, R5.1).
+    pub(crate) output_style_command_enabled: bool,
+    /// Fork: `features.scheduled_wakeups` (specs/scheduled-wakeups-2026-11-07.md, R9.1).
+    pub(crate) wakeups_command_enabled: bool,
 }
 
 /// Return the built-ins that should be visible/usable for the current input.
@@ -83,6 +90,9 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.worktrees_enabled || *cmd != SlashCommand::Worktree)
         .filter(|(_, cmd)| flags.voice_command_enabled || *cmd != SlashCommand::Voice)
         .filter(|(_, cmd)| flags.workflows_command_enabled || *cmd != SlashCommand::Workflows)
+        .filter(|(_, cmd)| flags.code_review_command_enabled || *cmd != SlashCommand::CodeReview)
+        .filter(|(_, cmd)| flags.output_style_command_enabled || *cmd != SlashCommand::OutputStyle)
+        .filter(|(_, cmd)| flags.wakeups_command_enabled || *cmd != SlashCommand::Loop)
         .filter(|(_, cmd)| {
             flags.daybreak_command_description.is_some() || *cmd != SlashCommand::Daybreak
         })
@@ -194,6 +204,9 @@ mod tests {
             allow_elevate_sandbox: true,
             side_conversation_active: false,
             workflows_command_enabled: true,
+            code_review_command_enabled: true,
+            output_style_command_enabled: true,
+            wakeups_command_enabled: true,
         }
     }
 
@@ -207,6 +220,42 @@ mod tests {
             find_builtin_command("worktree", all_enabled_flags()),
             Some(SlashCommand::Worktree)
         );
+    }
+
+    /// Fork: output styles R5.1, R5.4: `/output-style` follows `features.output_styles`,
+    /// works while a task runs and is not offered in side conversations.
+    #[test]
+    fn output_style_command_follows_the_feature() {
+        let mut flags = all_enabled_flags();
+        flags.output_style_command_enabled = false;
+        assert_eq!(find_builtin_command("output-style", flags), None);
+        assert_eq!(
+            find_builtin_command("output-style", all_enabled_flags()),
+            Some(SlashCommand::OutputStyle)
+        );
+        assert!(SlashCommand::OutputStyle.available_during_task());
+        assert!(SlashCommand::OutputStyle.supports_inline_args());
+        assert!(!SlashCommand::OutputStyle.available_in_side_conversation());
+        let mut side = all_enabled_flags();
+        side.side_conversation_active = true;
+        assert!(
+            !builtins_for_input(side)
+                .iter()
+                .any(|(_, command)| *command == SlashCommand::OutputStyle)
+        );
+    }
+
+    /// Fork: builtin workflows R9.1: `/code-review` follows its flag and waits for a free turn.
+    #[test]
+    fn code_review_command_follows_its_flag() {
+        let mut flags = all_enabled_flags();
+        flags.code_review_command_enabled = false;
+        assert_eq!(find_builtin_command("code-review", flags), None);
+        assert_eq!(
+            find_builtin_command("code-review", all_enabled_flags()),
+            Some(SlashCommand::CodeReview)
+        );
+        assert!(!SlashCommand::CodeReview.available_during_task());
     }
 
     #[test]
