@@ -69,6 +69,9 @@ impl ThreadRequestProcessor {
             &delete_order,
         )
         .await;
+        // Fork: saved full outputs of truncated tools go with the thread (tool-output-spill R5.3).
+        codex_core::discard_tool_output_spills(self.config.codex_home.as_path(), &delete_order)
+            .await;
 
         deleted_thread_ids.extend(
             delete_order

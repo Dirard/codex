@@ -73,6 +73,13 @@ pub trait ToolOutput: Send {
     fn tool_result_metadata(&self) -> Option<&JsonValue> {
         None
     }
+
+    // Fork: the full output of truncated tools (specs/tool-output-spill-2026-11-07.md, UC2).
+    /// The complete text of this result, which may be saved to a file when its model-visible
+    /// output is truncated. `None`, the default, keeps the result out of that feature.
+    fn spill_text(&self) -> Option<std::borrow::Cow<'_, str>> {
+        None
+    }
 }
 
 impl<T> ToolOutput for Box<T>
@@ -125,6 +132,10 @@ where
 
     fn tool_result_metadata(&self) -> Option<&JsonValue> {
         (**self).tool_result_metadata()
+    }
+
+    fn spill_text(&self) -> Option<std::borrow::Cow<'_, str>> {
+        (**self).spill_text() // Fork: tool-output-spill R2.1
     }
 }
 

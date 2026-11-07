@@ -52,3 +52,44 @@ fn code_mode_text_preserves_message_content() {
         )
     );
 }
+
+/// Tool-output-spill R2.1: a result is not eligible for spilling unless its type returns the
+/// full text, and a boxed result forwards it.
+#[test]
+fn spill_text_defaults_to_none_and_box_forwards_it() {
+    use super::JsonToolOutput;
+    use super::ToolOutput;
+    use crate::ToolPayload;
+
+    struct Spilled;
+
+    impl ToolOutput for Spilled {
+        fn log_output(&self) -> String {
+            String::new()
+        }
+
+        fn success_for_logging(&self) -> bool {
+            true
+        }
+
+        fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
+            JsonToolOutput::new(serde_json::Value::Null).to_response_item(
+                call_id,
+                &ToolPayload::Function {
+                    arguments: String::new(),
+                },
+            )
+        }
+
+        fn spill_text(&self) -> Option<std::borrow::Cow<'_, str>> {
+            Some("full text".into())
+        }
+    }
+
+    let plain: Box<dyn ToolOutput> = Box::new(JsonToolOutput::new(serde_json::json!("x")));
+    assert_eq!(plain.spill_text(), None);
+    let boxed: Box<dyn ToolOutput> = Box::new(Spilled);
+    assert_eq!(boxed.spill_text().as_deref(), Some("full text"));
+    let twice: Box<Box<dyn ToolOutput>> = Box::new(boxed);
+    assert_eq!(twice.spill_text().as_deref(), Some("full text"));
+}

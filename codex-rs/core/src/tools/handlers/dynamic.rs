@@ -4,8 +4,8 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
-use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::output_spill::fork_dynamic_tool_output; // Fork: tool-output-spill R2.4
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolExposure;
@@ -175,7 +175,7 @@ impl DynamicToolHandler {
             .into_iter()
             .map(FunctionCallOutputContentItem::from)
             .collect::<Vec<_>>();
-        Ok(boxed_tool_output(FunctionToolOutput::from_content(
+        Ok(fork_dynamic_tool_output(FunctionToolOutput::from_content(
             body,
             Some(success),
         )))

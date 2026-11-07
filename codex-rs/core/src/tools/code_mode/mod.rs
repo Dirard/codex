@@ -295,12 +295,14 @@ fn handle_runtime_response(
     let mut content_items = into_function_call_output_content_items(content_items);
     sanitize_image_detail_items(supports_original, &mut content_items);
     let success = error_text.is_none();
+    let mut spill_text = None; // Fork: tool-output-spill R2.5
     if output_truncation == CodeModeOutputTruncation::Client {
         if let Some(error_text) = error_text {
             content_items.push(FunctionCallOutputContentItem::InputText {
                 text: format!("Script error:\n{error_text}"),
             });
         }
+        spill_text = output_budget_fork::fork_spill_text(step_context, &content_items);
         content_items = truncate_code_mode_result(
             content_items,
             max_output_tokens,
@@ -317,6 +319,7 @@ fn handle_runtime_response(
         host_duration,
         step_context.output_truncation(),
     )
+    .fork_with_spill_text(spill_text)
 }
 
 fn format_script_status(response: &RuntimeResponse) -> String {

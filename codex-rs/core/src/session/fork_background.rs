@@ -43,12 +43,21 @@ impl Session {
     /// Fork: after the shutdown stopped the session's processes, records what their armed
     /// background terminals owe the model while persistence is still open, so a resumed thread
     /// learns what happened to them (background-exec-notifications R2.5); then interrupts
-    /// workflow runs and their agents (dynamic workflow, R9.3).
+    /// workflow runs and their agents (dynamic workflow, R9.3). An ephemeral thread also removes
+    /// its saved tool outputs (tool-output-spill, R5.5).
     pub(crate) async fn fork_on_processes_terminated(&self, terminated: TerminatedProcesses) {
         self.record_background_terminals_at_shutdown(terminated)
             .await;
         if let Some(workflows) = crate::workflow::WorkflowRegistry::existing(self) {
             workflows.shutdown().await;
+        }
+        let config = self.get_config().await;
+        if config.ephemeral {
+            crate::tools::output_spill::store::discard_threads(
+                config.codex_home.as_path(),
+                &[self.thread_id],
+            )
+            .await;
         }
     }
 

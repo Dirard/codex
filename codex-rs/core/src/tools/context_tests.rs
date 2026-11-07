@@ -1006,3 +1006,89 @@ fn exec_command_output_reports_the_output_watch() {
             .is_none()
     );
 }
+
+/// Tool-output-spill R2.2: the full text of an exec result is its collected output, with the
+/// collection omission marker when the 1 MiB cap dropped bytes, and without the header.
+#[test]
+fn exec_spill_text_is_the_collected_output() {
+    let exec = |raw_output: CapturedStream| ExecCommandToolOutput {
+        event_call_id: "call-spill".to_string(),
+        chunk_id: "abc123".to_string(),
+        wall_time: std::time::Duration::from_millis(/*millis*/ 1250),
+        raw_output,
+        truncation: truncation(TruncationPolicy::Tokens(10)),
+        max_output_tokens: Some(4),
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: Some(42_000),
+        hook_command: None,
+        tool_cwd: None,
+        armed_notifications: Default::default(),
+    };
+    let complete = exec("all of the output".into());
+    assert_eq!(complete.spill_text().as_deref(), Some("all of the output"));
+
+    let marker = format_output_omission_marker(/*omitted_bytes*/ 123_456);
+    let with_marker = format!("HEAD\n{marker}\nTAIL");
+    let capped = exec(CapturedStream {
+        text: with_marker.clone(),
+        omitted_bytes: 123_456,
+    });
+    assert_eq!(capped.spill_text().as_deref(), Some(with_marker.as_str()));
+    let marker_elsewhere = exec(CapturedStream {
+        text: "remaining output".to_string(),
+        omitted_bytes: 123_456,
+    });
+    assert_eq!(
+        marker_elsewhere.spill_text().as_deref(),
+        Some(format!("{marker}\nremaining output").as_str())
+    );
+}
+
+/// Tool-output-spill R2.3: the full text of an MCP result is what the model would see without
+/// truncation and without the `Wall time` header: texts joined with "\n", the serialized
+/// `structuredContent` when it is the body, and no media or encrypted content.
+#[test]
+fn mcp_spill_text_is_the_untruncated_body() {
+    let mcp =
+        |content: Vec<serde_json::Value>, structured: Option<serde_json::Value>| McpToolOutput {
+            result: CallToolResult {
+                content,
+                structured_content: structured,
+                is_error: Some(false),
+                meta: None,
+            },
+            tool_input: json!({}),
+            result_metadata_capture_allowed: false,
+            wall_time: std::time::Duration::from_millis(1250),
+            original_image_detail_supported: false,
+            truncation: truncation(TruncationPolicy::Tokens(1)),
+        };
+    let texts = mcp(
+        vec![
+            json!({ "type": "text", "text": "first" }),
+            json!({ "type": "image", "data": "AAAA", "mimeType": "image/png" }),
+            json!({ "type": "text", "text": "second" }),
+            json!({
+                "type": "text",
+                "text": "sealed",
+                "_meta": { "codex/encryptedContent": true },
+            }),
+        ],
+        None,
+    );
+    assert_eq!(texts.spill_text().as_deref(), Some("first\nsecond"));
+
+    let structured = mcp(
+        vec![json!({ "type": "text", "text": "ignored" })],
+        Some(json!({ "rows": [1, 2, 3] })),
+    );
+    assert_eq!(
+        structured.spill_text().as_deref(),
+        Some(r#"{"rows":[1,2,3]}"#)
+    );
+    let plain = mcp(vec![json!({ "type": "text", "text": "body" })], None);
+    let spill_text = plain.spill_text().expect("an MCP result is eligible");
+    assert!(!spill_text.contains("Wall time"));
+    assert_eq!(spill_text, "body");
+}

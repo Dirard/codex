@@ -15,6 +15,8 @@ mod native_tool_review;
 pub(crate) use native_tool_review::review as review_native_tool_call;
 pub(crate) mod network_approval;
 pub(crate) mod orchestrator;
+// Fork: the full output of truncated tools (specs/tool-output-spill-2026-11-07.md).
+pub(crate) mod output_spill;
 pub(crate) mod parallel;
 pub(crate) mod registry;
 pub(crate) mod router;

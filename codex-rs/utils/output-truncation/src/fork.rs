@@ -222,3 +222,16 @@ pub fn truncate_function_output_payload_lines(
         }
     }
 }
+
+/// Applies `truncation` to a tool output in the order history records it: the line limit
+/// first, then the byte/token policy with the upstream [`crate::truncate_function_output_payload`].
+/// The full output of a truncated tool result (`specs/tool-output-spill-2026-11-07.md`, R4.1)
+/// computes its preview with it, so the preview is exactly what history keeps.
+pub fn apply_output_truncation(
+    output: &mut FunctionCallOutputPayload,
+    truncation: OutputTruncation,
+    estimate_audio_token_count: impl Fn(&str) -> usize,
+) {
+    truncate_function_output_payload_lines(output, truncation.max_lines);
+    crate::truncate_function_output_payload(output, truncation.policy, estimate_audio_token_count);
+}

@@ -227,6 +227,10 @@ impl ToolOutput for McpToolOutput {
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
         serde_json::to_value(&self.result).ok()
     }
+
+    fn spill_text(&self) -> Option<std::borrow::Cow<'_, str>> {
+        self.fork_spill_text() // Fork: specs/tool-output-spill-2026-11-07.md, R2.3
+    }
 }
 
 impl McpToolOutput {
@@ -546,6 +550,10 @@ impl ToolOutput for ExecCommandToolOutput {
         serde_json::to_value(result).unwrap_or_else(|err| {
             JsonValue::String(format!("failed to serialize exec result: {err}"))
         })
+    }
+
+    fn spill_text(&self) -> Option<std::borrow::Cow<'_, str>> {
+        self.fork_spill_text() // Fork: specs/tool-output-spill-2026-11-07.md, R2.2
     }
 }
 

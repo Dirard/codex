@@ -107,6 +107,30 @@ impl CodeModeOutputBudget {
     }
 }
 
+/// Fork: the full text of a cell before its budget, kept only while `tool_output_spill` is
+/// enabled, so a cell output is not copied without the feature
+/// (specs/tool-output-spill-2026-11-07.md, R2.5). Called only when Codex, not the host, truncates
+/// the cell (`CodeModeOutputTruncation::Client`).
+pub(super) fn fork_spill_text(
+    step_context: &crate::session::step_context::StepContext,
+    items: &[codex_protocol::models::FunctionCallOutputContentItem],
+) -> Option<String> {
+    step_context
+        .turn
+        .config
+        .features
+        .enabled(codex_features::Feature::ToolOutputSpill)
+        .then(|| crate::tools::output_spill::item_text(items).into_owned())
+}
+
+impl super::output::CodeModeToolOutput {
+    /// Fork: attaches the cell's full text for the full output of truncated tools.
+    pub(super) fn fork_with_spill_text(mut self, spill_text: Option<String>) -> Self {
+        self.spill_text = spill_text;
+        self
+    }
+}
+
 #[cfg(test)]
 #[path = "output_budget_fork_tests.rs"]
 mod tests;

@@ -4,6 +4,11 @@
 //!
 //! Raw events and traces keep the upstream byte/token bound only: history applies the line
 //! limits, and repeating them earlier would truncate the omission marker.
+//!
+//! The full text of exec and MCP results for the full output of truncated tools
+//! (`specs/tool-output-spill-2026-11-07.md`, UC2).
+
+use std::borrow::Cow;
 
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -35,6 +40,20 @@ pub(super) const OUTPUT_WATCH_UNCHANGED_LINE: &str = "Output watch: unchanged (a
 pub(super) const OUTPUT_WATCH_ASCII_NOTE: &str = ". The pattern was too large with Unicode classes, so it is matched with ASCII classes: \\w, \\d, \\s, \\b and (?i) see ASCII letters and digits only, and . matches one byte.";
 
 impl McpToolOutput {
+    /// The text of the result as the model would see it without truncation and without the
+    /// `Wall time` header: text items joined with `"\n"` after the `mcp_max_lines` join, or the
+    /// serialized `structuredContent`; no media or encrypted content (R2.3).
+    pub(super) fn fork_spill_text(&self) -> Option<Cow<'_, str>> {
+        let mut payload = self.result.as_function_call_output_payload();
+        self.join_text_for_mcp_line_limit(&mut payload);
+        Some(Cow::Owned(match payload.body {
+            FunctionCallOutputBody::Text(text) => text,
+            FunctionCallOutputBody::ContentItems(items) => {
+                crate::tools::output_spill::item_text(&items).into_owned()
+            }
+        }))
+    }
+
     /// With `mcp_max_lines` configured, a text-only result becomes one text so the history
     /// line limit cuts it as a whole. Structured or encrypted results keep their shape.
     pub(super) fn join_text_for_mcp_line_limit(&self, payload: &mut FunctionCallOutputPayload) {
@@ -80,6 +99,19 @@ fn mcp_text_content_for_line_limit(result: &CallToolResult) -> Option<String> {
 }
 
 impl ExecCommandToolOutput {
+    /// The collected output, with the collection omission marker when the 1 MiB cap dropped
+    /// bytes (R2.2).
+    pub(super) fn fork_spill_text(&self) -> Option<Cow<'_, str>> {
+        Some(if self.raw_output.omitted_bytes == 0 {
+            Cow::Borrowed(self.raw_output.text.as_str())
+        } else {
+            Cow::Owned(
+                self.raw_output
+                    .render(/*policy*/ None, /*original_tokens*/ None),
+            )
+        })
+    }
+
     /// The process outlived this call and will report its exit (R1.2) and matching output
     /// (R6.3, R6.4, R6.8) to the thread.
     pub(super) fn fork_notification_lines(&self) -> Vec<String> {

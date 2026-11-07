@@ -1031,6 +1031,8 @@ impl ToolRegistry {
                         });
                     }
                 }
+                // Fork: keep the full text of a truncated result (specs/tool-output-spill-2026-11-07.md).
+                super::output_spill::spill_truncated_output(&invocation, &mut result).await;
                 tool.on_tool_result_accepted(&invocation, result.result.as_ref());
                 dispatch_trace.record_completed(
                     &invocation,

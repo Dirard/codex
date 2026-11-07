@@ -34,7 +34,6 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::fs::File;
-use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
@@ -216,38 +215,10 @@ fn remove_if_present(path: &Path) {
     }
 }
 
-/// Creates the journal directory readable by the user only, and narrows one that an older
-/// version created by the umask (P3-3).
-fn create_private_dir(dir: &Path) -> std::io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        use std::os::unix::fs::PermissionsExt;
-        builder.mode(0o700);
-        builder.create(dir)?;
-        let metadata = fs::metadata(dir)?;
-        if metadata.permissions().mode() & 0o077 != 0 {
-            fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
-        }
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    {
-        builder.create(dir)
-    }
-}
-
-fn open_options() -> OpenOptions {
-    let mut options = OpenOptions::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-    }
-    options
-}
+// The journal directory is readable by the user only, and one that an older version created by
+// the umask is narrowed; files are `0600` and never a symlink (P3-3).
+use crate::fork_private_fs::create_private_dir;
+use crate::fork_private_fs::private_file_options as open_options;
 
 /// Whether `file` is still the file at `path`: a resume removes the lock file of an owner it
 /// found dead, and an owner that opened it a moment before must not lock the removed file.

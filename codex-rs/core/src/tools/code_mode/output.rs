@@ -17,6 +17,8 @@ pub(super) struct CodeModeToolOutput {
     status: String,
     host_duration: Option<Duration>,
     truncation: OutputTruncation,
+    /// Fork: the cell's full text before its budget (specs/tool-output-spill-2026-11-07.md, R2.5).
+    pub(super) spill_text: Option<String>,
 }
 
 impl CodeModeToolOutput {
@@ -40,6 +42,7 @@ impl CodeModeToolOutput {
             status,
             host_duration,
             truncation,
+            spill_text: None, // Fork: tool-output-spill R2.5
         }
     }
 }
@@ -81,6 +84,10 @@ impl ToolOutput for CodeModeToolOutput {
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
         self.output.to_response_item(call_id, payload)
+    }
+
+    fn spill_text(&self) -> Option<std::borrow::Cow<'_, str>> {
+        self.spill_text.as_deref().map(std::borrow::Cow::Borrowed) // Fork: tool-output-spill R2.5
     }
 }
 

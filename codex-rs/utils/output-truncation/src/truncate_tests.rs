@@ -613,3 +613,52 @@ fn owned_mixed_output_moves_a_preserved_image_across_text_truncation() {
     };
     assert_eq!(image_url.as_ptr(), url_ptr);
 }
+
+/// Tool-output-spill R4.1: `apply_output_truncation` cuts lines first and then bytes/tokens,
+/// as `truncate_text_with_config` and `truncate_function_output_items_with_config` do and as
+/// history records a tool output.
+#[test]
+fn apply_output_truncation_cuts_lines_then_the_policy() {
+    use codex_protocol::models::FunctionCallOutputBody;
+    use codex_protocol::models::FunctionCallOutputPayload;
+
+    let text = (1..=400)
+        .map(|line| format!("line {line} with some padding text"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for truncation in [
+        OutputTruncation::new(TruncationPolicy::Tokens(300), Some(100)),
+        OutputTruncation::new(TruncationPolicy::Bytes(500), Some(10)),
+        OutputTruncation::new(TruncationPolicy::Tokens(50), None),
+        OutputTruncation::new(TruncationPolicy::Tokens(100_000), Some(3)),
+    ] {
+        let mut payload = FunctionCallOutputPayload::from_text(text.clone());
+        crate::apply_output_truncation(&mut payload, truncation, |_| 0);
+        assert_eq!(
+            payload.body,
+            FunctionCallOutputBody::Text(truncate_text_with_config(&text, truncation)),
+            "{truncation:?}"
+        );
+
+        let items = vec![
+            FunctionCallOutputContentItem::InputText { text: text.clone() },
+            FunctionCallOutputContentItem::InputText {
+                text: "tail item".to_string(),
+            },
+        ];
+        let mut payload = FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::ContentItems(items.clone()),
+            success: Some(true),
+        };
+        crate::apply_output_truncation(&mut payload, truncation, |_| 0);
+        assert_eq!(
+            payload.body,
+            FunctionCallOutputBody::ContentItems(truncate_function_output_items_with_config(
+                &items,
+                truncation,
+                |_| 0,
+            )),
+            "{truncation:?}"
+        );
+    }
+}
