@@ -223,6 +223,14 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
+      # The v8 crate comes from a git fork with submodules whose paths exceed
+      # MAX_PATH; cargo's checkout fails on Windows without long paths, as
+      # upstream's setup-ci enables them.
+      - name: Enable Git long paths (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: git config --global core.longpaths true
+
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         shell: bash
