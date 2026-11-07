@@ -138,6 +138,10 @@ fn invocation_context(tool: &rmcp::model::Tool) -> Option<&JsonValue> {
         .filter(|context| context.is_object())
 }
 
+// Fork: a turn's discovery carried to a later step's binding (CI web search race, 2026-11-07).
+#[path = "model_search_fork.rs"]
+mod fork;
+
 #[cfg(test)]
 #[path = "model_search_tests.rs"]
 mod tests;

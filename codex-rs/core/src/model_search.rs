@@ -380,7 +380,9 @@ pub(crate) async fn resolve(
     let cached = turn
         .extension_data
         .get::<CachedSearch>()
-        .filter(|cached| Arc::ptr_eq(&cached.base, base) && cached.request == request);
+        .filter(|cached| Arc::ptr_eq(&cached.base, base) && cached.request == request)
+        // Fork: a recaptured binding of a later step keeps the turn's discovery.
+        .or_else(|| fork::rebase_cached_search(turn, base, &request));
     let fresh = cached.is_none();
     let cached = match cached {
         Some(cached) => cached,
@@ -454,3 +456,7 @@ pub(crate) fn with_search_context(
     envelope.insert("mcp_request_meta".into(), Value::Object(meta));
     Ok(())
 }
+
+// Fork: a turn's discovery carried to a later step's binding (CI web search race, 2026-11-07).
+#[path = "model_search_fork.rs"]
+mod fork;
