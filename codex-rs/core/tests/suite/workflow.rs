@@ -2546,16 +2546,19 @@ async fn hard_budget_interrupts_running_agents() -> Result<()> {
     Ok(())
 }
 
+/// `TASK-RB` times out in the first run, whose answer comes 30 s late, and answers live in the
+/// resumed run. Its timeout starts with the agent's turn, so it leaves room for a loaded CI host:
+/// with 300 ms the live answer of the resumed run timed out as well (fork-ci run 42474037397).
 const RESUMABLE_SCRIPT: &str = r#"export const meta = { name: 'resumable', description: 'Three agents' };
 const a = await agent('TASK-RA');
-const b = await agent('TASK-RB', { timeout_ms: 300 });
+const b = await agent('TASK-RB', { timeout_ms: 5000 });
 const c = await agent('TASK-RC');
 return { a, b, c };
 "#;
 
 const RESUMED_SCRIPT: &str = r#"export const meta = { name: 'resumable', description: 'Three agents, the last one replaced' };
 const a = await agent('TASK-RA');
-const b = await agent('TASK-RB', { timeout_ms: 300 });
+const b = await agent('TASK-RB', { timeout_ms: 5000 });
 const d = await agent('TASK-RD');
 return { a, b, d };
 "#;

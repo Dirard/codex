@@ -101,6 +101,7 @@ fork_clippy_packages=(
   codex-linux-sandbox
   codex-mcp
   codex-models-manager
+  codex-prompts
   codex-protocol
   codex-rollout
   codex-rollout-trace
@@ -145,6 +146,7 @@ default_test_packages=(
   codex-history
   codex-mcp
   codex-models-manager
+  codex-prompts
   codex-protocol
   codex-rollout
   codex-rollout-trace

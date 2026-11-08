@@ -226,8 +226,9 @@ fn a_file_of_long_lines_gets_reads_that_do_not_return_whole_lines() {
         ..at_the_limit
     };
     assert!(
-        notice::spill_notice(&above_the_limit, "tools.exec_command")
-            .contains("The lines are very long: read only the part you need with tools.exec_command,")
+        notice::spill_notice(&above_the_limit, "tools.exec_command").contains(
+            "The lines are very long: read only the part you need with tools.exec_command,"
+        )
     );
 }
 
