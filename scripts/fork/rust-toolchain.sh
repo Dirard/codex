@@ -5,8 +5,8 @@
 #
 # .github/actions/fork-rust-toolchain installs this channel, so fork CI and the
 # release builds use the toolchain that upstream pins instead of a copy of it.
-# Written for bash 3.2 and POSIX awk: release builds run it on macOS and
-# Windows runners too.
+# Keeps to portable shell and POSIX awk: release builds also run it in Git Bash
+# on Windows runners.
 
 set -euo pipefail
 

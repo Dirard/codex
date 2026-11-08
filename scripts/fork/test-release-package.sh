@@ -6,7 +6,7 @@
 # part: packs fake release directories (a shell-script codex answers
 # --version; a stub strip records its calls) and checks the archive, the
 # stripping per platform and the refusals. assemble: merges hand-made parts of
-# all five targets, whose fake binaries carry valid ELF, Mach-O and PE headers,
+# every release target, whose fake binaries carry valid ELF and PE headers,
 # into packages that verify-release.sh --skip-runtime accepts, and checks the
 # refusals for packaging mistakes (R1.4, R1.5, R2.1-R2.3).
 
@@ -33,8 +33,6 @@ fi
 
 version="1.2.3"
 targets=(
-  aarch64-apple-darwin
-  x86_64-apple-darwin
   aarch64-unknown-linux-gnu
   x86_64-unknown-linux-gnu
   x86_64-pc-windows-msvc
@@ -45,7 +43,6 @@ bundle_files() {
   case "$2:$1" in
     primary:*linux*) echo "bwrap codex codex-responses-api-proxy" ;;
     primary:*windows*) echo "codex-command-runner.exe codex-responses-api-proxy.exe codex-windows-sandbox-setup.exe codex.exe" ;;
-    primary:*) echo "codex codex-responses-api-proxy" ;;
     app-server:*windows*) echo "codex-app-server.exe codex-code-mode-host.exe" ;;
     app-server:*) echo "codex-app-server codex-code-mode-host" ;;
   esac
@@ -53,8 +50,6 @@ bundle_files() {
 
 format_for() {
   case "$1" in
-    aarch64-apple-darwin) echo macho-arm64 ;;
-    x86_64-apple-darwin) echo macho-x86_64 ;;
     aarch64-unknown-linux-gnu) echo elf-aarch64 ;;
     x86_64-unknown-linux-gnu) echo elf-x86_64 ;;
     x86_64-pc-windows-msvc) echo pe-x86_64 ;;
@@ -73,10 +68,6 @@ def elf(machine):
     return ident + header
 
 
-def macho(cputype, cpusubtype):
-    return struct.pack("<IiiIIIII", 0xFEEDFACF, cputype, cpusubtype, 2, 0, 0, 0, 0)
-
-
 def pe_x86_64():
     dos = bytearray(64)
     dos[0:2] = b"MZ"
@@ -91,8 +82,6 @@ def pe_x86_64():
 FORMATS = {
     "elf-x86_64": lambda: elf(0x3E),
     "elf-aarch64": lambda: elf(0xB7),
-    "macho-x86_64": lambda: macho(0x01000007, 3),
-    "macho-arm64": lambda: macho(0x0100000C, 0),
     "pe-x86_64": pe_x86_64,
 }
 
@@ -156,6 +145,11 @@ done
 check bins-unknown-bundle fail "unknown bundle 'cli'" "${package}" bins --target x86_64-unknown-linux-gnu --bundle cli
 check bins-unknown-target fail "unknown target 'riscv64gc-unknown-linux-gnu'" \
   "${package}" bins --target riscv64gc-unknown-linux-gnu --bundle primary
+# macOS is no release target (R1.1).
+for target in aarch64-apple-darwin x86_64-apple-darwin; do
+  check "bins-${target}-rejected" fail "unknown target '${target}' \\(want one of: ${targets[*]}\\)" \
+    "${package}" bins --target "${target}" --bundle primary
+done
 
 # --- part --------------------------------------------------------------------
 
@@ -210,14 +204,14 @@ tar -xf "${linux_part}" -C "${work}/unpacked-linux"
 expect part-linux-content-unchanged cmp -s "${rel}/bwrap" "${work}/unpacked-linux/bin/bwrap"
 
 : >"${work}/strip.calls"
-rel="$(release_dir mac aarch64-apple-darwin)"
-PATH="${part_path}" check part-macos-app-server ok "wrote .*codex-parts-${version}-aarch64-apple-darwin-app-server\.tar" \
-  "${package}" part --version "${version}" --target aarch64-apple-darwin --bundle app-server \
-  --release-dir "${rel}" --out "${work}/parts-mac"
-expect part-macos-strip-s-x test "$(sed "s#${work}/[^ ]*/bin/##" "${work}/strip.calls" | LC_ALL=C sort | xargs)" = \
-  "strip -S -x codex-app-server strip -S -x codex-code-mode-host"
-expect part-macos-app-server-listing test \
-  "$(part_listing "${work}/parts-mac/codex-parts-${version}-aarch64-apple-darwin-app-server.tar" | xargs)" = \
+rel="$(release_dir arm aarch64-unknown-linux-gnu)"
+PATH="${part_path}" check part-linux-app-server ok "wrote .*codex-parts-${version}-aarch64-unknown-linux-gnu-app-server\.tar" \
+  "${package}" part --version "${version}" --target aarch64-unknown-linux-gnu --bundle app-server \
+  --release-dir "${rel}" --out "${work}/parts-arm"
+expect part-linux-app-server-strips-all test "$(sed "s#${work}/[^ ]*/bin/##" "${work}/strip.calls" | LC_ALL=C sort | xargs)" = \
+  "strip --strip-debug --strip-unneeded codex-app-server strip --strip-debug --strip-unneeded codex-code-mode-host"
+expect part-linux-app-server-listing test \
+  "$(part_listing "${work}/parts-arm/codex-parts-${version}-aarch64-unknown-linux-gnu-app-server.tar" | xargs)" = \
   "drwxr-xr-x 0/0 bin/ -rwxr-xr-x 0/0 bin/codex-app-server -rwxr-xr-x 0/0 bin/codex-code-mode-host"
 
 : >"${work}/strip.calls"
@@ -236,35 +230,26 @@ PATH="${part_path}" check part-version-mismatch fail "codex --version printed 'c
   --release-dir "${rel}" --out "${work}/parts-old-version"
 expect part-version-mismatch-no-archive test ! -e "${work}/parts-old-version/codex-parts-${version}-x86_64-unknown-linux-gnu-primary.tar"
 
-rel="$(release_dir missing x86_64-apple-darwin)"
-rm "${rel}/codex-code-mode-host"
-PATH="${part_path}" check part-missing-binary fail 'x86_64-apple-darwin app-server: missing binary .*/codex-code-mode-host$' \
-  "${package}" part --version "${version}" --target x86_64-apple-darwin --bundle app-server \
+rel="$(release_dir missing x86_64-pc-windows-msvc)"
+rm "${rel}/codex-code-mode-host.exe"
+PATH="${part_path}" check part-missing-binary fail 'x86_64-pc-windows-msvc app-server: missing binary .*/codex-code-mode-host\.exe$' \
+  "${package}" part --version "${version}" --target x86_64-pc-windows-msvc --bundle app-server \
   --release-dir "${rel}" --out "${work}/parts-missing"
 
-# Without GNU tar (bsdtar on a macOS runner without gtar) part relies on the
-# 0755 modes it set: this tar rejects the GNU-only options and does not call
-# itself GNU tar.
+# Every build runner has GNU tar (Linux, Git Bash on Windows); another tar is
+# refused before anything is packed.
 mkdir -p "${work}/plain-tar"
 cat >"${work}/plain-tar/tar" <<STUB
 #!/usr/bin/env bash
 if [[ "\${1-}" == --version ]]; then echo "bsdtar 3.7.4 - libarchive 3.7.4"; exit 0; fi
-for arg in "\$@"; do
-  case "\${arg}" in
-    --owner=* | --group=* | --numeric-owner | --mode=* | --sort=*) echo "tar: Option \${arg} is not supported" >&2; exit 1 ;;
-  esac
-done
 exec "$(command -v tar)" "\$@"
 STUB
 chmod 0755 "${work}/plain-tar/tar"
-rel="$(release_dir plain-tar x86_64-apple-darwin)"
-PATH="${work}/plain-tar:${part_path}" check part-without-gnu-tar ok '^==> codex --version: codex-cli 1\.2\.3$' \
-  "${package}" part --version "${version}" --target x86_64-apple-darwin --bundle primary \
+rel="$(release_dir plain-tar x86_64-unknown-linux-gnu)"
+PATH="${work}/plain-tar:${part_path}" check part-requires-gnu-tar fail '^release-package: part requires GNU tar' \
+  "${package}" part --version "${version}" --target x86_64-unknown-linux-gnu --bundle primary \
   --release-dir "${rel}" --out "${work}/parts-plain-tar"
-expect part-without-gnu-tar-listing test \
-  "$(tar -tvf "${work}/parts-plain-tar/codex-parts-${version}-x86_64-apple-darwin-primary.tar" |
-    awk '{ print $NF, $1 }' | LC_ALL=C sort | xargs)" = \
-  "bin/ drwxr-xr-x bin/codex -rwxr-xr-x bin/codex-responses-api-proxy -rwxr-xr-x"
+expect part-requires-gnu-tar-no-archive test -z "$(find "${work}/parts-plain-tar" -mindepth 1 -print -quit 2>/dev/null)"
 
 PATH="${part_path}" check part-existing-archive fail 'already exists' \
   "${package}" part --version "${version}" --target x86_64-unknown-linux-gnu --bundle primary \
@@ -330,9 +315,9 @@ expect assembled-zip-layout test \
 
 # Members are the part files, byte for byte.
 mkdir -p "${work}/members/part" "${work}/members/package"
-tar -xf "${good_parts}/codex-parts-${version}-aarch64-apple-darwin-primary.tar" -C "${work}/members/part"
-tar -xf "${good_parts}/codex-parts-${version}-aarch64-apple-darwin-app-server.tar" -C "${work}/members/part"
-tar -xzf "${work}/dist-good/codex-package-aarch64-apple-darwin.tar.gz" -C "${work}/members/package"
+tar -xf "${good_parts}/codex-parts-${version}-aarch64-unknown-linux-gnu-primary.tar" -C "${work}/members/part"
+tar -xf "${good_parts}/codex-parts-${version}-aarch64-unknown-linux-gnu-app-server.tar" -C "${work}/members/part"
+tar -xzf "${work}/dist-good/codex-package-aarch64-unknown-linux-gnu.tar.gz" -C "${work}/members/package"
 expect assembled-members-identical diff -r "${work}/members/part" "${work}/members/package"
 mkdir -p "${work}/members/zip-part" "${work}/members/zip-package"
 tar -xf "${good_parts}/codex-parts-${version}-x86_64-pc-windows-msvc-primary.tar" -C "${work}/members/zip-part"
@@ -365,15 +350,15 @@ check assemble-from-part-output ok 'embed the bwrap SHA-256' \
 
 # Rejected: the four mistakes of the spec, then more.
 parts="$(variant_parts missing-part)"
-rm "${parts}/codex-parts-${version}-x86_64-apple-darwin-app-server.tar"
-check assemble-missing-part fail "^release-package: x86_64-apple-darwin: missing app-server part codex-parts-${version}-x86_64-apple-darwin-app-server\.tar$" \
+rm "${parts}/codex-parts-${version}-x86_64-unknown-linux-gnu-app-server.tar"
+check assemble-missing-part fail "^release-package: x86_64-unknown-linux-gnu: missing app-server part codex-parts-${version}-x86_64-unknown-linux-gnu-app-server\.tar$" \
   "${assemble[@]}" --parts "${parts}" --dist "${work}/dist-missing-part"
 
 hook_add_codex() { python3 -I "${work}/fake.py" "$(format_for "$2")" "$1/codex" && chmod 0755 "$1/codex"; }
 parts="$(variant_parts both-parts)"
-rm "${parts}/codex-parts-${version}-aarch64-apple-darwin-app-server.tar"
-make_part aarch64-apple-darwin app-server "${parts}" hook_add_codex
-check assemble-file-in-both-parts fail '^release-package: aarch64-apple-darwin: both parts contain codex$' \
+rm "${parts}/codex-parts-${version}-aarch64-unknown-linux-gnu-app-server.tar"
+make_part aarch64-unknown-linux-gnu app-server "${parts}" hook_add_codex
+check assemble-file-in-both-parts fail '^release-package: aarch64-unknown-linux-gnu: both parts contain codex$' \
   "${assemble[@]}" --parts "${parts}" --dist "${work}/dist-both-parts"
 
 hook_extra_file() { cp "$1/codex" "$1/codex-extra" && chmod 0755 "$1/codex-extra"; }
@@ -400,16 +385,16 @@ check assemble-bwrap-rebuilt fail '^release-package: aarch64-unknown-linux-gnu: 
 
 hook_group_writable() { chmod 0775 "$1/codex"; }
 parts="$(variant_parts mode)"
-rm "${parts}/codex-parts-${version}-aarch64-apple-darwin-primary.tar"
-make_part aarch64-apple-darwin primary "${parts}" hook_group_writable
-check assemble-mode-0775 fail '^release-package: aarch64-apple-darwin: unexpected entries' \
+rm "${parts}/codex-parts-${version}-x86_64-unknown-linux-gnu-primary.tar"
+make_part x86_64-unknown-linux-gnu primary "${parts}" hook_group_writable
+check assemble-mode-0775 fail '^release-package: x86_64-unknown-linux-gnu: unexpected entries' \
   "${assemble[@]}" --parts "${parts}" --dist "${work}/dist-mode"
 
 hook_symlink() { rm "$1/codex-code-mode-host" && ln -s codex-app-server "$1/codex-code-mode-host"; }
 parts="$(variant_parts symlink)"
-rm "${parts}/codex-parts-${version}-x86_64-apple-darwin-app-server.tar"
-make_part x86_64-apple-darwin app-server "${parts}" hook_symlink
-check assemble-symlink fail '^release-package: x86_64-apple-darwin: unexpected entries' \
+rm "${parts}/codex-parts-${version}-aarch64-unknown-linux-gnu-app-server.tar"
+make_part aarch64-unknown-linux-gnu app-server "${parts}" hook_symlink
+check assemble-symlink fail '^release-package: aarch64-unknown-linux-gnu: unexpected entries' \
   "${assemble[@]}" --parts "${parts}" --dist "${work}/dist-symlink"
 
 # GNU tar strips ".." on create, so Python writes the entry that escapes bin/.

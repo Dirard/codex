@@ -3,8 +3,8 @@
 #
 #   scripts/fork/test-verify-release.sh [--codex PATH]
 #
-# Builds release packages for all five targets from fake binaries that carry
-# valid ELF, Mach-O and PE headers, checks that verify-release.sh accepts them,
+# Builds release packages for every release target from fake binaries that
+# carry valid ELF and PE headers, checks that verify-release.sh accepts them,
 # and checks that it rejects common packaging mistakes. With --codex, the Linux
 # x86_64 package carries that real binary, so the runtime checks (`codex
 # --version` and the Go SDK strict handshake) run as well; the expected version
@@ -67,10 +67,6 @@ def elf(machine):
     return ident + header
 
 
-def macho(cputype, cpusubtype):
-    return struct.pack("<IiiIIIII", 0xFEEDFACF, cputype, cpusubtype, 2, 0, 0, 0, 0)
-
-
 def pe_x86_64():
     dos = bytearray(64)
     dos[0:2] = b"MZ"
@@ -85,8 +81,6 @@ def pe_x86_64():
 FORMATS = {
     "elf-x86_64": lambda: elf(0x3E),
     "elf-aarch64": lambda: elf(0xB7),
-    "macho-x86_64": lambda: macho(0x01000007, 3),
-    "macho-arm64": lambda: macho(0x0100000C, 0),
     "pe-x86_64": pe_x86_64,
 }
 
@@ -108,8 +102,6 @@ else:
 PY
 
 targets=(
-  aarch64-apple-darwin
-  x86_64-apple-darwin
   aarch64-unknown-linux-gnu
   x86_64-unknown-linux-gnu
   x86_64-pc-windows-msvc
@@ -117,7 +109,6 @@ targets=(
 
 bins_for() {
   case "$1" in
-    *apple-darwin) echo "codex codex-app-server codex-code-mode-host codex-responses-api-proxy" ;;
     *linux-gnu) echo "bwrap codex codex-app-server codex-code-mode-host codex-responses-api-proxy" ;;
     *windows-msvc) echo "codex.exe codex-app-server.exe codex-code-mode-host.exe codex-command-runner.exe codex-responses-api-proxy.exe codex-windows-sandbox-setup.exe" ;;
   esac
@@ -125,8 +116,6 @@ bins_for() {
 
 format_for() {
   case "$1" in
-    aarch64-apple-darwin) echo macho-arm64 ;;
-    x86_64-apple-darwin) echo macho-x86_64 ;;
     aarch64-unknown-linux-gnu) echo elf-aarch64 ;;
     x86_64-unknown-linux-gnu) echo elf-x86_64 ;;
     x86_64-pc-windows-msvc) echo pe-x86_64 ;;
@@ -248,23 +237,31 @@ expect_ok existing-sums-match "${good}"
 
 subset="${work}/dist-subset"
 mkdir -p "${subset}"
-ln "${good}/codex-package-aarch64-apple-darwin.tar.gz" "${subset}/"
+ln "${good}/codex-package-aarch64-unknown-linux-gnu.tar.gz" "${subset}/"
 ln "${good}/codex-package-x86_64-pc-windows-msvc.zip" "${subset}/"
-expect_ok target-subset "${subset}" --targets "aarch64-apple-darwin x86_64-pc-windows-msvc"
+expect_ok target-subset "${subset}" --targets "aarch64-unknown-linux-gnu x86_64-pc-windows-msvc"
+
+# macOS is no release target: requested, it is refused before any check; its
+# package next to the others breaks the package set.
+expect_fail macos-target "unknown target aarch64-apple-darwin" "${good}" \
+  --targets "aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu x86_64-pc-windows-msvc aarch64-apple-darwin"
+dist="$(copy_dist macos-package)"
+cp "${good}/codex-package-aarch64-unknown-linux-gnu.tar.gz" "${dist}/codex-package-aarch64-apple-darwin.tar.gz"
+expect_fail macos-package "package set mismatch" "${dist}"
 
 hook_group_writable() { chmod 0775 "$1/codex"; }
 hook_extra_binary() { cp "$1/codex" "$1/extra"; }
 hook_missing_binary() { rm "$1/codex-responses-api-proxy"; }
 hook_symlink() { rm "$1/bwrap" && ln -s codex "$1/bwrap"; }
-hook_wrong_arch() { python3 "${work}/fake.py" macho-arm64 "$1/codex"; }
+hook_wrong_arch() { python3 "${work}/fake.py" elf-aarch64 "$1/codex"; }
 hook_unsafe_name() { cp "$1/codex.exe" "$1/-rf.exe"; }
 
 dist="$(copy_dist mode)"
-make_package aarch64-apple-darwin "${dist}" hook_group_writable
+make_package x86_64-unknown-linux-gnu "${dist}" hook_group_writable
 expect_fail mode-0775 "unexpected tar entry type or mode" "${dist}"
 
 dist="$(copy_dist extra)"
-make_package x86_64-apple-darwin "${dist}" hook_extra_binary
+make_package x86_64-unknown-linux-gnu "${dist}" hook_extra_binary
 expect_fail extra-binary "layout mismatch" "${dist}"
 
 dist="$(copy_dist missing)"
@@ -276,8 +273,8 @@ make_package aarch64-unknown-linux-gnu "${dist}" hook_symlink
 expect_fail symlink "unexpected tar entry type or mode" "${dist}"
 
 dist="$(copy_dist arch)"
-make_package x86_64-apple-darwin "${dist}" hook_wrong_arch
-expect_fail wrong-arch "has unexpected type" "${dist}"
+make_package x86_64-unknown-linux-gnu "${dist}" hook_wrong_arch
+expect_fail wrong-arch "x86_64-unknown-linux-gnu: codex has unexpected type: ELF 64-bit LSB" "${dist}"
 
 dist="$(copy_dist unsafe)"
 make_package x86_64-pc-windows-msvc "${dist}" hook_unsafe_name
@@ -292,8 +289,8 @@ echo notes >"${dist}/notes.txt"
 expect_fail extra-file "package set mismatch" "${dist}"
 
 dist="$(copy_dist corrupt)"
-rm "${dist}/codex-package-x86_64-apple-darwin.tar.gz"
-head -c 100 "${good}/codex-package-x86_64-apple-darwin.tar.gz" >"${dist}/codex-package-x86_64-apple-darwin.tar.gz"
+rm "${dist}/codex-package-aarch64-unknown-linux-gnu.tar.gz"
+head -c 100 "${good}/codex-package-aarch64-unknown-linux-gnu.tar.gz" >"${dist}/codex-package-aarch64-unknown-linux-gnu.tar.gz"
 expect_fail corrupt-archive "gzip integrity test failed" "${dist}"
 
 dist="$(copy_dist bad-sums)"

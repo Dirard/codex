@@ -15,10 +15,10 @@
 # bins      prints the bundle's binaries (cargo names, without .exe) on one line.
 # part      runs on the build runner after cargo build: copies the bundle's
 #           binaries from DIR (target/<target>/release), strips them as the
-#           packages always were (macOS strip -S -x; Linux strip --strip-debug
-#           --strip-unneeded except bwrap, which the build already stripped to
-#           export its digest; nothing on Windows), requires `codex --version` to
-#           print `codex-cli X.Y.Z` in the primary bundle, and writes
+#           packages always were (Linux strip --strip-debug --strip-unneeded
+#           except bwrap, which the build already stripped to export its digest;
+#           nothing on Windows), requires `codex --version` to print
+#           `codex-cli X.Y.Z` in the primary bundle, and writes
 #           OUT/codex-parts-<version>-<target>-<bundle>.tar: a ustar archive of
 #           bin/ holding exactly the bundle's binaries as 0755 regular files
 #           (R1.4, R1.5).
@@ -32,15 +32,15 @@
 #           (R2.1, R2.3). DIR must hold exactly the parts of the targets.
 #           scripts/fork/verify-release.sh checks the packages next.
 #
-# part runs on Linux, macOS (GNU tar as gtar when installed, else bsdtar) and
-# Windows (Git Bash) runners and keeps to bash 3.2 and portable tool options.
-# assemble requires GNU tar, sha256sum and python3, as on the Linux verify
-# runner.
+# part runs on the Linux and Windows (Git Bash) build runners and requires GNU
+# tar, which both have. assemble requires GNU tar, sha256sum and python3, as on
+# the Linux verify runner.
 
 set -euo pipefail
 
 version_re='^[0-9]+\.[0-9]+\.[0-9]+(-(alpha(\.[0-9]+){0,2}|beta(\.[0-9]+)?))?$'
-all_targets="aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu x86_64-pc-windows-msvc"
+# The release targets, as in scripts/fork/release.sh default_matrix.
+all_targets="aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu x86_64-pc-windows-msvc"
 all_bundles="primary app-server"
 
 # Staging directory of the current part or package, removed on exit.
@@ -88,7 +88,6 @@ bundle_bins() {
       case "$1" in
         *-linux-*) echo "codex codex-responses-api-proxy bwrap" ;;
         *-windows-*) echo "codex codex-responses-api-proxy codex-command-runner codex-windows-sandbox-setup" ;;
-        *) echo "codex codex-responses-api-proxy" ;;
       esac
       ;;
     app-server) echo "codex-app-server codex-code-mode-host" ;;
@@ -122,22 +121,12 @@ package_name() {
   esac
 }
 
-# The tar every command uses: GNU tar where there is one (gtar on the macOS
-# images), otherwise the system tar (bsdtar on macOS).
-tar_cmd=tar
-
-# is_gnu_tar [TAR]: a plain capture, not a pipe into grep -q, whose early exit
-# could fail the pipeline and read as "not GNU tar".
+# is_gnu_tar: a plain capture, not a pipe into grep -q, whose early exit could
+# fail the pipeline and read as "not GNU tar".
 is_gnu_tar() {
   local banner
-  banner="$("${1:-${tar_cmd}}" --version 2>/dev/null || true)"
+  banner="$(tar --version 2>/dev/null || true)"
   [[ "${banner}" == *"GNU tar"* ]]
-}
-
-pick_tar() {
-  if ! is_gnu_tar tar && command -v gtar >/dev/null 2>&1 && is_gnu_tar gtar; then
-    tar_cmd=gtar
-  fi
 }
 
 # Absolute form of an existing directory. Git Bash prints /d/a/... for
@@ -151,9 +140,9 @@ abs_dir() {
 # and prints the NAMEs, sorted. ARCHIVE is a path without a drive colon.
 part_files() {
   local label="$1" archive="$2" listing bad
-  listing="$("${tar_cmd}" -tvf "${archive}")" || die "${label}: cannot list ${archive}"
-  # GNU tar and bsdtar both print the mode first and the name last; a symlink
-  # or hard link line ends in its target and fails the mode check.
+  listing="$(tar -tvf "${archive}")" || die "${label}: cannot list ${archive}"
+  # tar -tv prints the mode first and the name last; a symlink or hard link
+  # line ends in its target and fails the mode check.
   bad="$(awk '
     $NF == "bin/" { if ($1 != "drwxr-xr-x") print; next }
     $1 != "-rwxr-xr-x" || $NF !~ /^bin\/[A-Za-z0-9][A-Za-z0-9._-]*$/ { print }
@@ -192,6 +181,7 @@ cmd_part() {
   check_version "${version}"
   check_target "${target}"
   check_bundle "${bundle}"
+  is_gnu_tar || die "part requires GNU tar (the Linux runners and Git Bash on Windows have it)"
   [[ -d "${release_dir}" ]] || die "missing release directory '${release_dir}'"
   [[ -n "${out}" ]] || die "--out is required"
   release_dir="$(abs_dir "${release_dir}")"
@@ -212,15 +202,10 @@ cmd_part() {
     dest="${stage}/bin/${bin}${suffix}"
     cp -- "${src}" "${dest}"
     chmod 0755 "${dest}"
-    case "${target}" in
-      *-apple-darwin) strip -S -x "${dest}" ;;
-      *-linux-*)
-        # bwrap was stripped before its digest went into CODEX_BWRAP_SHA256.
-        if [[ "${bin}" != bwrap ]]; then
-          strip --strip-debug --strip-unneeded "${dest}"
-        fi
-        ;;
-    esac
+    # bwrap was stripped before its digest went into CODEX_BWRAP_SHA256.
+    if [[ "${target}" == *-linux-* && "${bin}" != bwrap ]]; then
+      strip --strip-debug --strip-unneeded "${dest}"
+    fi
   done
   chmod 0755 "${stage}/bin"
 
@@ -232,18 +217,11 @@ cmd_part() {
     log "codex --version: ${printed}"
   fi
 
-  # ustar keeps macOS extended attributes out, and COPYFILE_DISABLE keeps
-  # bsdtar from adding AppleDouble ._ entries. GNU tar (Linux, Git Bash, gtar)
-  # also records 0755 and root ownership regardless of how the file system
-  # reports them. The archive is written inside the stage with a relative name.
-  pick_tar
-  local tar_create="${tar_cmd} --format=ustar"
-  if is_gnu_tar; then
-    tar_create="${tar_create} --owner=0 --group=0 --numeric-owner --mode=0755 --sort=name"
-  fi
-  # shellcheck disable=SC2086 # tar_create holds options without spaces
-  (cd "${stage}" && COPYFILE_DISABLE=1 ${tar_create} -cf part.tar bin) ||
-    die "${label}: cannot write the part archive"
+  # A ustar archive with 0755 modes and root ownership, recorded regardless of
+  # how the file system (NTFS under Git Bash) reports them. The archive is
+  # written inside the stage with a relative name.
+  (cd "${stage}" && tar --format=ustar --owner=0 --group=0 --numeric-owner --mode=0755 --sort=name \
+    -cf part.tar bin) || die "${label}: cannot write the part archive"
 
   local got want
   got="$(cd "${stage}" && part_files "${label}" part.tar)"
@@ -281,7 +259,7 @@ ${app_server}"
   stage="$(mktemp -d "${TMPDIR:-/tmp}/release-package.XXXXXX")"
   local bundle
   for bundle in ${all_bundles}; do
-    "${tar_cmd}" -xf "${parts}/$(part_name "${version}" "${target}" "${bundle}")" -C "${stage}" \
+    tar -xf "${parts}/$(part_name "${version}" "${target}" "${bundle}")" -C "${stage}" \
       --no-same-owner --no-same-permissions || die "${target}: cannot extract the ${bundle} part"
   done
   chmod 0755 "${stage}/bin"
@@ -325,7 +303,7 @@ with zipfile.ZipFile(archive, "x", zipfile.ZIP_DEFLATED, strict_timestamps=False
         out.write(os.path.join(bin_dir, name), "bin/" + name)
 PY
   else
-    "${tar_cmd}" -C "${stage}" --sort=name --owner=0 --group=0 --numeric-owner -czf "${archive}" bin ||
+    tar -C "${stage}" --sort=name --owner=0 --group=0 --numeric-owner -czf "${archive}" bin ||
       die "${target}: cannot write ${archive}"
   fi
   rm -rf -- "${stage}"
@@ -350,7 +328,6 @@ cmd_assemble() {
   for target in ${targets}; do
     check_target "${target}"
   done
-  pick_tar
   is_gnu_tar || die "assemble requires GNU tar"
   command -v python3 >/dev/null 2>&1 || die "assemble requires python3"
   [[ -d "${parts}" ]] || die "missing parts directory '${parts}'"

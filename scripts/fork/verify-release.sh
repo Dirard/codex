@@ -8,7 +8,8 @@
 # an optional SHA256SUMS.
 #
 # Options:
-#   --targets "T ..."   targets that must be present (default: all five)
+#   --targets "T ..."   targets that must be present (default: every release
+#                       target, as in scripts/fork/release.sh default_matrix)
 #   --work-dir DIR      empty extraction directory to keep (default: a temporary
 #                       one, removed on exit)
 #   --go-sdk DIR        Go SDK module for the strict handshake (default: sdk/go of
@@ -52,8 +53,6 @@ cleanup() {
 trap cleanup EXIT
 
 all_targets=(
-  aarch64-apple-darwin
-  x86_64-apple-darwin
   aarch64-unknown-linux-gnu
   x86_64-unknown-linux-gnu
   x86_64-pc-windows-msvc
@@ -101,8 +100,6 @@ expected_bins() {
 # Extended regular expression that `file -b` output must match.
 expected_file_type() {
   case "$1" in
-    aarch64-apple-darwin) printf '%s\n' '^Mach-O 64-bit arm64 executable' ;;
-    x86_64-apple-darwin) printf '%s\n' '^Mach-O 64-bit x86_64 executable' ;;
     aarch64-unknown-linux-gnu) printf '%s\n' '^ELF 64-bit LSB [^,]*, ARM aarch64,' ;;
     x86_64-unknown-linux-gnu) printf '%s\n' '^ELF 64-bit LSB [^,]*, x86-64,' ;;
     x86_64-pc-windows-msvc) printf '%s\n' '^PE32\+ executable.*x86-64' ;;

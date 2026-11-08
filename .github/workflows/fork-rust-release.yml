@@ -6,8 +6,10 @@ name: fork-rust-release
 # commands.
 #
 # Each target builds in two bundle jobs, primary and app-server
-# (scripts/fork/release-package.sh); verify merges their parts into the five
-# packages and checks them with scripts/fork/verify-release.sh.
+# (scripts/fork/release-package.sh); verify merges their parts into one package
+# per target and checks them with scripts/fork/verify-release.sh. The targets
+# are the default_matrix of scripts/fork/release.sh: Linux x86_64, Linux aarch64
+# and Windows x86_64.
 #
 # A push to codex/fork prebuilds and verifies the packages of the pushed commit
 # (version from codex-rs/Cargo.toml) and keeps them for 30 days. It never
@@ -28,7 +30,8 @@ name: fork-rust-release
 #   gh workflow run fork-rust-release.yml --ref codex/fork \
 #     -f release_version=X.Y.Z -f checkout_ref=<full SHA>
 # A full-matrix dispatch reuses the prebuilt parts (and skips the build when
-# all ten exist), and skips fork-ci when its push run for the commit succeeded.
+# every part exists), and skips fork-ci when its push run for the commit
+# succeeded.
 # Dispatch once the prebuild is green:
 #   gh run list --workflow fork-rust-release.yml --event push
 # create_draft=false skips the tag and release checks, so a dispatch can
@@ -206,8 +209,9 @@ jobs:
       && needs.draft-precheck.result != 'failure'
       && needs.preflight.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
-    # macOS arm64 took 201 minutes for 0.164.0 in one job; hosted jobs stop at 360.
-    timeout-minutes: 330
+    # The longest part, Windows primary, took about 97 minutes in prebuild
+    # 42420107865; hosted jobs stop at 360.
+    timeout-minutes: 240
     defaults:
       run:
         working-directory: codex-rs

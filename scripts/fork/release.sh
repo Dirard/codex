@@ -25,7 +25,7 @@
 # preflight    validates the dispatch inputs before hours of building: the
 #              version format, a full 40-character commit SHA that matches the
 #              checkout, the workspace version in codex-rs/Cargo.toml, and the
-#              build matrix (known targets, allowed runners). The output matrix
+#              build matrix (release targets, allowed runners). The output matrix
 #              has one entry per target and bundle (release-package.sh bins);
 #              targets and full_matrix count targets. With --repo and
 #              --create-draft true (the default) it also requires that
@@ -61,11 +61,12 @@
 #              that sees drafts): repeats the tag checks and fails when a
 #              release for rust-vX.Y.Z is published or exists as a draft that is
 #              not resumable. Reports resumable drafts that draft will replace.
-# draft        checks DIR against its SHA256SUMS (all five packages plus the sums
-#              file), runs the draft-check classification, deletes resumable
-#              drafts (re-read by id first), creates a draft release at SHA with
-#              every file of DIR as an asset, and compares the uploaded asset
-#              names, sizes and digests with SHA256SUMS. It never creates or
+# draft        checks DIR against its SHA256SUMS (one package per target of the
+#              default matrix plus the sums file), runs the draft-check
+#              classification, deletes resumable drafts (re-read by id first),
+#              creates a draft release at SHA with every file of DIR as an
+#              asset, and compares the uploaded asset names, sizes and digests
+#              with SHA256SUMS. It never creates or
 #              deletes tags and never publishes or edits a release; the summary
 #              lists the manual publication steps. --ci-run-url names a reused
 #              fork-ci run and --reused-runs the prebuild runs whose bundle parts
@@ -96,12 +97,11 @@ version_re='^[0-9]+\.[0-9]+\.[0-9]+(-(alpha(\.[0-9]+){0,2}|beta(\.[0-9]+)?))?$'
 sha_re='^[0-9a-f]{40}$'
 repo_re='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
 
-# Runner and target pairs built by default; the order is the build order.
+# Runner and target pairs built by default; the order is the build order. These
+# are the release targets: a release holds one package per target.
 default_matrix='[
   {"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},
   {"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-gnu"},
-  {"runner":"macos-15-intel","target":"x86_64-apple-darwin"},
-  {"runner":"macos-15","target":"aarch64-apple-darwin"},
   {"runner":"windows-2025","target":"x86_64-pc-windows-msvc"}
 ]'
 
@@ -110,8 +110,6 @@ default_matrix='[
 runner_allowlist='{
   "x86_64-unknown-linux-gnu": ["ubuntu-24.04", "ubuntu-22.04"],
   "aarch64-unknown-linux-gnu": ["ubuntu-24.04-arm", "ubuntu-22.04-arm"],
-  "x86_64-apple-darwin": ["macos-15-intel"],
-  "aarch64-apple-darwin": ["macos-15", "macos-14"],
   "x86_64-pc-windows-msvc": ["windows-2025", "windows-2022"]
 }'
 
@@ -148,7 +146,7 @@ compare_file_limit=300
 # Newest push runs searched for parts to reuse.
 reuse_run_limit=20
 # A reused part must stay unexpired this many more seconds, so that it outlives
-# the longest build job (330 minutes) and its queue.
+# the longest build job (240 minutes) and its queue.
 reuse_expiry_margin=$((12 * 3600))
 
 # Files that decide what the release workflow builds, checks and runs with a
@@ -679,6 +677,14 @@ cmd_preflight() {
     die "codex-rs/Cargo.toml has workspace version '${workspace_version}', not '${version}'"
 
   [[ -n "${matrix}" ]] || matrix="${default_matrix}"
+  # A target outside the release set is named first (R1.2); the check below
+  # rejects every other malformed matrix.
+  local unknown
+  unknown="$(jq -r --argjson allowed "${runner_allowlist}" '
+    [.[] | .target | strings | select($allowed[.] == null)] | unique | join(" ")
+  ' <<<"${matrix}" 2>/dev/null)" || unknown=""
+  [[ -z "${unknown}" ]] ||
+    die "build_matrix names targets outside the release set: ${unknown} (release targets: $(all_targets | xargs))"
   matrix="$(jq -ce --argjson allowed "${runner_allowlist}" '
     if type == "array" and length > 0
       and all(.[]; type == "object"
@@ -822,12 +828,16 @@ cmd_draft() {
   dist="$(cd -- "${dist}" && pwd)"
   local tag="rust-v${version}"
 
-  # The assets are exactly the five packages listed in SHA256SUMS plus that file.
+  # The assets are exactly the packages of the release targets, listed in
+  # SHA256SUMS, plus that file.
   [[ -f "${dist}/SHA256SUMS" ]] || die "missing ${dist}/SHA256SUMS"
   local expected listed actual
   expected="$(all_targets | while read -r target; do package_name "${target}"; done | LC_ALL=C sort)"
   listed="$(awk '{print $2}' "${dist}/SHA256SUMS" | LC_ALL=C sort)"
-  [[ "${listed}" == "${expected}" ]] || die "SHA256SUMS does not list exactly the five release packages:
+  [[ "${listed}" == "${expected}" ]] || die "SHA256SUMS does not list exactly the $(grep -c . <<<"${expected}") release packages
+expected:
+${expected}
+listed:
 ${listed}"
   actual="$(find "${dist}" -mindepth 1 -maxdepth 1 ! -name SHA256SUMS -printf '%f\n' | LC_ALL=C sort)"
   [[ "${actual}" == "${expected}" ]] || die "unexpected files in ${dist}:

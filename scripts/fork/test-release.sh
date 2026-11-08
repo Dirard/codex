@@ -140,7 +140,6 @@ case "${args}" in
         | capture("^codex-parts-.*-(?<target>(x86_64|aarch64)-[a-z0-9_]+-[a-z0-9_]+(-[a-z0-9_]+)?)-(?<bundle>primary|app-server)$")
         | {name: "Build \(.target) \(.bundle)", status: "completed", conclusion: "success",
            labels: [{"x86_64-unknown-linux-gnu": "ubuntu-24.04", "aarch64-unknown-linux-gnu": "ubuntu-24.04-arm",
-             "x86_64-apple-darwin": "macos-15-intel", "aarch64-apple-darwin": "macos-15",
              "x86_64-pc-windows-msvc": "windows-2025"}[.target]]}]}' \
         "${state}/artifacts-${id}" 2>/dev/null || echo '{"total_count":0,"jobs":[]}'
     fi
@@ -315,11 +314,9 @@ output_value() { sed -n "s/^$2=//p" "$1"; }
 # targets and full_matrix still count targets.
 bundle_binaries='{
   "primary": {"linux": "codex codex-responses-api-proxy bwrap",
-              "windows": "codex codex-responses-api-proxy codex-command-runner codex-windows-sandbox-setup",
-              "apple": "codex codex-responses-api-proxy"},
+              "windows": "codex codex-responses-api-proxy codex-command-runner codex-windows-sandbox-setup"},
   "app-server": {"linux": "codex-app-server codex-code-mode-host",
-                 "windows": "codex-app-server codex-code-mode-host",
-                 "apple": "codex-app-server codex-code-mode-host"}
+                 "windows": "codex-app-server codex-code-mode-host"}
 }'
 # bundle_matrix_ok MATRIX COUNT: COUNT entries, each target twice (primary, then
 # app-server, in target order), each with the binaries of the bundles table.
@@ -330,14 +327,16 @@ bundle_matrix_ok() {
     and ([.[] | .target] | [range(0; length; 2) as $i | .[$i] == .[$i + 1]] | all)
     and all(.[]; keys == ["binaries", "bundle", "runner", "target"]
       and .binaries == $want[.bundle][.target | if test("linux") then "linux"
-        elif test("windows") then "windows" else "apple" end])
+        elif test("windows") then "windows" else "other" end])
   ' <<<"$1" >/dev/null
 }
+# The release targets: Linux x86_64, Linux aarch64 and Windows x86_64, two
+# bundles each.
 expect preflight-bundle-matrix-full \
-  bundle_matrix_ok "$(output_value "${work}/github-output" matrix)" 10
+  bundle_matrix_ok "$(output_value "${work}/github-output" matrix)" 6
 expect preflight-targets-per-target test \
   "$(output_value "${work}/github-output" targets)" = \
-  "x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin x86_64-pc-windows-msvc"
+  "x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-msvc"
 expect preflight-offline-no-reuse test \
   "$(grep -E '^(ci_run_url|build|reused_parts|reused_runs)=' "${work}/github-output" | tr '\n' ' ')" = \
   "ci_run_url= build=true reused_parts=[] reused_runs= "
@@ -352,18 +351,41 @@ check preflight-bad-mode fail '--mode must be release or prebuild' \
   "${release}" preflight --mode nightly --version "${version}" --sha "${head}"
 check preflight-bad-create-draft fail '--create-draft must be true or false' \
   "${release}" preflight --version "${version}" --sha "${head}" --create-draft yes
-check preflight-unknown-target fail 'build_matrix must be' \
+release_targets='release targets: aarch64-unknown-linux-gnu x86_64-pc-windows-msvc x86_64-unknown-linux-gnu'
+check preflight-unknown-target fail \
+  "outside the release set: riscv64gc-unknown-linux-gnu \\(${release_targets}\\)$" \
   "${release}" preflight --version "${version}" --sha "${head}" \
   --matrix '[{"runner":"ubuntu-24.04","target":"riscv64gc-unknown-linux-gnu"}]'
+# R1.2: macOS is no release target, on its own runner or with the others.
+check preflight-macos-target fail 'outside the release set: aarch64-apple-darwin \(' \
+  "${release}" preflight --version "${version}" --sha "${head}" \
+  --matrix '[{"runner":"macos-15","target":"aarch64-apple-darwin"}]'
+check preflight-macos-in-full-matrix fail 'outside the release set: aarch64-apple-darwin x86_64-apple-darwin \(' \
+  "${release}" preflight --version "${version}" --sha "${head}" \
+  --matrix '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},
+    {"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-gnu"},
+    {"runner":"macos-15-intel","target":"x86_64-apple-darwin"},
+    {"runner":"macos-15","target":"aarch64-apple-darwin"},
+    {"runner":"windows-2025","target":"x86_64-pc-windows-msvc"}]'
 check preflight-duplicate-target fail 'build_matrix must be' \
   "${release}" preflight --version "${version}" --sha "${head}" \
-  --matrix '[{"runner":"macos-15-intel","target":"x86_64-apple-darwin"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin"}]'
+  --matrix '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},{"runner":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu"}]'
 check preflight-self-hosted-runner fail 'runner allowlist' \
   "${release}" preflight --version "${version}" --sha "${head}" \
   --matrix '[{"runner":"self-hosted","target":"x86_64-unknown-linux-gnu"}]'
+# R1.2: a macOS runner is allowed for no target.
 check preflight-runner-other-os fail 'runner allowlist' \
   "${release}" preflight --version "${version}" --sha "${head}" \
   --matrix '[{"runner":"macos-15","target":"x86_64-unknown-linux-gnu"}]'
+check preflight-macos-runner-for-windows fail 'runner allowlist' \
+  "${release}" preflight --version "${version}" --sha "${head}" \
+  --matrix '[{"runner":"macos-15-intel","target":"x86_64-pc-windows-msvc"}]'
+# The refusal prints the allowlist: release targets and their runners only.
+allowlist_printed="$(sed -n 's/^release: build_matrix must be .*allowlist: //p' "${work}/preflight-runner-other-os.log")"
+expect preflight-allowlist-without-macos test \
+  "$(jq -r 'keys | join(" ")' <<<"${allowlist_printed}"):$(jq -r '[.[][] | select(test("macos"))] | length' <<<"${allowlist_printed}")" = \
+  "aarch64-unknown-linux-gnu x86_64-pc-windows-msvc x86_64-unknown-linux-gnu:0"
+
 check preflight-allowed-alternative-runner ok '^full_matrix=false$' \
   "${release}" preflight --version "${version}" --sha "${head}" \
   --matrix '[{"runner":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu"}]'
@@ -401,7 +423,7 @@ check preflight-prebuild ok "^version=${version//./\\.}$" \
   "${release}" preflight --mode prebuild --sha "${head}" --output "${work}/prebuild-output"
 expect preflight-prebuild-no-gh-calls test ! -s "${FAKE_GH_STATE}/calls"
 expect preflight-prebuild-full-matrix grep -qx 'full_matrix=true' "${work}/prebuild-output"
-expect preflight-prebuild-bundles bundle_matrix_ok "$(output_value "${work}/prebuild-output" matrix)" 10
+expect preflight-prebuild-bundles bundle_matrix_ok "$(output_value "${work}/prebuild-output" matrix)" 6
 expect preflight-prebuild-no-reuse test \
   "$(grep -E '^(ci_run_url|build|reused_parts)=' "${work}/prebuild-output" | tr '\n' ' ')" = \
   "ci_run_url= build=true reused_parts=[] "
@@ -490,13 +512,12 @@ check find-run-no-parts-version fail 'unknown find-run option: --parts-version' 
 
 # --- reuse of bundle parts (R6.1-R6.5) ----------------------------------------
 
-all_targets=(x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin
-  aarch64-apple-darwin x86_64-pc-windows-msvc)
+all_targets=(x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-msvc)
 default_matrix_json='[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},
   {"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-gnu"},
-  {"runner":"macos-15-intel","target":"x86_64-apple-darwin"},
-  {"runner":"macos-15","target":"aarch64-apple-darwin"},
   {"runner":"windows-2025","target":"x86_64-pc-windows-msvc"}]'
+# Two bundle parts per target: 6.
+part_count=$((2 * ${#all_targets[@]}))
 part() { printf 'codex-parts-%s-%s-%s\n' "${PARTS_VERSION:-${version}}" "$1" "$2"; }
 win_primary="$(part x86_64-pc-windows-msvc primary)"
 win_app="$(part x86_64-pc-windows-msvc app-server)"
@@ -507,7 +528,7 @@ x86_linux_app="$(part x86_64-unknown-linux-gnu app-server)"
 sha_b="$(printf '%040d' 0 | tr 0 b)"
 
 # parts_listing [--expired NAME] [--expiring NAME] [DROP...]: a run artifacts
-# API response with the ten parts of ${PARTS_VERSION:-version} but DROP (NAME
+# API response with every part of ${PARTS_VERSION:-version} but DROP (NAME
 # expired, or expiring within an hour), their timings and the packages.
 parts_listing() {
   local expired="" expiring="" target bundle
@@ -567,13 +588,13 @@ all_from() {
 # release_runs RUN_JSON...: the fork-rust-release.yml runs of the stub.
 release_runs() { runs_listing "$@" >"${FAKE_GH_STATE}/runs-fork-rust-release.yml"; }
 
-# A failed run of the same commit: its seven built parts are reused, the three
-# that failed are built (the prebuild of a968c301d1).
+# A failed run of the same commit: the parts it built are reused, the three that
+# failed are built (as in the prebuild of a968c301d1).
 FAKE_GH_STATE="$(new_state)"
 release_runs "$(run_json 401 "${release_path}" push codex/fork "${head}" failure 2026-11-07T10:00:00Z)"
 parts_listing "${win_primary}" "${win_app}" "${arm_primary}" >"${FAKE_GH_STATE}/artifacts-401"
 # The aarch64 Linux app-server part is built again with its primary (R6.7).
-prebuild_reuse reuse-failed-run reuse-401 'reusing 6 of 10 parts'
+prebuild_reuse reuse-failed-run reuse-401 "reusing 2 of ${part_count} parts"
 expect reuse-failed-run-parts test "$(reused_from reuse-401)" = \
   "$(all_from 401 "${win_primary}" "${win_app}" "${arm_primary}" "${arm_app}")"
 expect reuse-failed-run-builds-rest test "$(built reuse-401)" = \
@@ -592,7 +613,7 @@ parts_listing >"${FAKE_GH_STATE}/artifacts-402"
 prebuild_reuse reuse-all reuse-402 'every part is reused; the build job is skipped'
 expect reuse-all-build-false grep -qx 'build=false' "${work}/reuse-402"
 expect reuse-all-empty-matrix grep -qx 'matrix=\[\]' "${work}/reuse-402"
-expect reuse-all-targets-kept test "$(output_value "${work}/reuse-402" targets | wc -w)" -eq 5
+expect reuse-all-targets-kept test "$(output_value "${work}/reuse-402" targets | wc -w)" -eq "${#all_targets[@]}"
 expect reuse-all-parts test "$(reused_from reuse-402)" = "$(all_from 402)"
 
 # candidate_state STATUS FILE...: a fresh stub state with run 403 of commit
@@ -623,7 +644,7 @@ done
 mapfile -t many < <(seq -f 'docs/f%g.md' 1 300)
 candidate_state ahead "${many[@]}"
 prebuild_reuse reuse-truncated-compare reuse-truncated 'lists 300 files, possibly truncated'
-expect reuse-truncated-builds-all test "$(built reuse-truncated | tr ',' '\n' | wc -l)" -eq 10
+expect reuse-truncated-builds-all test "$(built reuse-truncated | tr ',' '\n' | wc -l)" -eq "${part_count}"
 
 candidate_state diverged docs/a.md
 prebuild_reuse reuse-diverged reuse-diverged 'not in one line of history \(compare: diverged\)'
@@ -692,20 +713,20 @@ expect reuse-newest-per-part-runs grep -qx "reused_runs=${runs_url}/410 ${runs_u
 FAKE_GH_STATE="$(new_state)"
 release_runs "$(run_json 420 "${release_path}" push codex/fork "${head}" "" 2026-11-07T10:00:00Z | jq -c '.status = "in_progress"')"
 parts_listing "${win_primary}" >"${FAKE_GH_STATE}/artifacts-420"
-prebuild_reuse reuse-running-run reuse-running 'reusing 9 of 10 parts'
+prebuild_reuse reuse-running-run reuse-running "reusing 5 of ${part_count} parts"
 
 # Expired parts, parts of another version and runs that do not qualify.
 FAKE_GH_STATE="$(new_state)"
 release_runs "$(run_json 412 "${release_path}" push codex/fork "${head}" success 2026-11-07T10:00:00Z)"
 parts_listing --expired "${win_primary}" >"${FAKE_GH_STATE}/artifacts-412"
-prebuild_reuse reuse-expired reuse-expired 'reusing 9 of 10 parts'
+prebuild_reuse reuse-expired reuse-expired "reusing 5 of ${part_count} parts"
 expect reuse-expired-builds-it test "$(built reuse-expired)" = "x86_64-pc-windows-msvc primary"
 
 # A part that expires before a build could finish is built again (R6.1).
 FAKE_GH_STATE="$(new_state)"
 release_runs "$(run_json 421 "${release_path}" push codex/fork "${head}" success 2026-11-07T10:00:00Z)"
 parts_listing --expiring "${win_primary}" >"${FAKE_GH_STATE}/artifacts-421"
-prebuild_reuse reuse-expiring reuse-expiring 'reusing 9 of 10 parts'
+prebuild_reuse reuse-expiring reuse-expiring "reusing 5 of ${part_count} parts"
 expect reuse-expiring-builds-it test "$(built reuse-expiring)" = "x86_64-pc-windows-msvc primary"
 
 # A part whose build job failed after the upload (or was re-run and failed) is
@@ -714,18 +735,18 @@ FAKE_GH_STATE="$(new_state)"
 release_runs "$(run_json 422 "${release_path}" push codex/fork "${head}" failure 2026-11-07T10:00:00Z)"
 parts_listing >"${FAKE_GH_STATE}/artifacts-422"
 FAKE_GH_STATE="${FAKE_GH_STATE}" "${work}/bin/gh" api "repos/${repo}/actions/runs/422/jobs?filter=latest&per_page=100" |
-  jq -c --arg job "Build x86_64-apple-darwin primary" \
+  jq -c --arg job "Build x86_64-pc-windows-msvc app-server" \
     '.jobs |= map(if .name == $job then .conclusion = "failure" else . end)' >"${work}/jobs-422"
 mv "${work}/jobs-422" "${FAKE_GH_STATE}/jobs-422"
-prebuild_reuse reuse-failed-job reuse-failed-job 'reusing 9 of 10 parts'
-expect reuse-failed-job-builds-it test "$(built reuse-failed-job)" = "x86_64-apple-darwin primary"
+prebuild_reuse reuse-failed-job reuse-failed-job "reusing 5 of ${part_count} parts"
+expect reuse-failed-job-builds-it test "$(built reuse-failed-job)" = "x86_64-pc-windows-msvc app-server"
 
 # Parts built on another runner than the matrix asks for are built again (R6.6):
 # a full-matrix dispatch on ubuntu-22.04 for x86_64 Linux.
 FAKE_GH_STATE="$(new_state)"
 release_runs "$(run_json 423 "${release_path}" push codex/fork "${head}" success 2026-11-07T10:00:00Z)"
 parts_listing >"${FAKE_GH_STATE}/artifacts-423"
-check reuse-other-runner ok 'reusing 8 of 10 parts' \
+check reuse-other-runner ok "reusing 4 of ${part_count} parts" \
   "${release}" preflight --version "${version}" --sha "${head}" --repo "${repo}" --create-draft false \
   --matrix "$(jq -c 'map(if .target == "x86_64-unknown-linux-gnu" then .runner = "ubuntu-22.04" else . end)' <<<"${default_matrix_json}")" \
   --output "${work}/reuse-other-runner"
@@ -800,7 +821,7 @@ check preflight-rebuild ok 'rebuild is true' \
   "${release}" preflight --version "${version}" --sha "${head}" --repo "${repo}" --rebuild true \
   --output "${work}/rebuild-output"
 expect preflight-rebuild-no-reuse grep -qx 'reused_parts=\[\]' "${work}/rebuild-output"
-expect preflight-rebuild-builds-all test "$(built rebuild-output | tr ',' '\n' | wc -l)" -eq 10
+expect preflight-rebuild-builds-all test "$(built rebuild-output | tr ',' '\n' | wc -l)" -eq "${part_count}"
 expect preflight-rebuild-no-lookup no_calls_match 'fork-rust-release.yml/runs|/artifacts'
 expect preflight-rebuild-keeps-ci grep -qx "ci_run_url=${runs_url}/301" "${work}/rebuild-output"
 
@@ -900,7 +921,7 @@ check provenance-bad-base fail 'invalid dispatched commit' "${provenance[@]}" --
 
 dist="${work}/dist"
 mkdir -p "${dist}"
-for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
+for target in aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
   echo "package ${target}" >"${dist}/codex-package-${target}.tar.gz"
 done
 echo "package windows" >"${dist}/codex-package-x86_64-pc-windows-msvc.zip"
@@ -923,7 +944,8 @@ FAKE_GH_STATE="$(new_state)"
 check draft-create ok 'Publication stays manual' \
   "${draft[@]}" --dist "${dist}" --run-url https://github.com/example/codex/actions/runs/1
 expect draft-create-arguments calls_match "^gh release create rust-v${version} --repo ${repo} --draft --target ${head} "
-expect draft-create-six-assets test "$(wc -l <"${FAKE_GH_STATE}/assets-4243")" -eq 6
+# Three packages and SHA256SUMS.
+expect draft-create-four-assets test "$(wc -l <"${FAKE_GH_STATE}/assets-4243")" -eq 4
 expect draft-create-no-tags-or-publish no_calls_match 'git tag|-F draft=false|-X DELETE|-X PATCH'
 expect draft-notes-carry-marker grep -qF "${marker}" "${FAKE_GH_STATE}/notes"
 expect draft-summary-uses-created-id grep -q 'releases/4243 -F draft=false' "${work}/draft-create.log"
@@ -1020,15 +1042,24 @@ check draft-tag-moved fail "tag rust-v${version} points at ${other_sha}" "${draf
 
 FAKE_GH_STATE="$(new_state)"
 bad="$(variant_dist tampered)"
-rm "${bad}/codex-package-x86_64-apple-darwin.tar.gz"
-echo tampered >"${bad}/codex-package-x86_64-apple-darwin.tar.gz"
+rm "${bad}/codex-package-aarch64-unknown-linux-gnu.tar.gz"
+echo tampered >"${bad}/codex-package-aarch64-unknown-linux-gnu.tar.gz"
 check draft-tampered-package fail 'packages do not match SHA256SUMS' "${draft[@]}" --dist "${bad}"
 
 FAKE_GH_STATE="$(new_state)"
 bad="$(variant_dist missing)"
 rm "${bad}/codex-package-x86_64-pc-windows-msvc.zip" "${bad}/SHA256SUMS"
 (cd "${bad}" && sha256sum codex-package-* >SHA256SUMS)
-check draft-partial-set fail 'does not list exactly the five release packages' "${draft[@]}" --dist "${bad}"
+check draft-partial-set fail 'does not list exactly the 3 release packages' "${draft[@]}" --dist "${bad}"
+
+# A macOS package (as in releases up to 0.167.0) is no release asset any more.
+FAKE_GH_STATE="$(new_state)"
+bad="$(variant_dist macos)"
+echo "package macos" >"${bad}/codex-package-aarch64-apple-darwin.tar.gz"
+rm "${bad}/SHA256SUMS"
+(cd "${bad}" && sha256sum codex-package-* >SHA256SUMS)
+check draft-macos-package fail 'does not list exactly the 3 release packages' "${draft[@]}" --dist "${bad}"
+expect draft-macos-package-no-release no_calls_match 'release create'
 
 FAKE_GH_STATE="$(new_state)"
 bad="$(variant_dist extra)"
@@ -1199,6 +1230,8 @@ expect workflow-build-after-cheap-checks contains "${build_if}" \
   "!cancelled() && needs.preflight.result == 'success' && needs.draft-precheck.result != 'failure'"
 expect workflow-build-only-missing-parts contains "${build_if}" "needs.preflight.outputs.build == 'true'"
 expect workflow-build-recipe grep -qxF '      FORK_BUILD_RECIPE: "1"' <<<"${build_job}"
+# R1.5: sized for the longest remaining part (Windows primary, about 97 minutes).
+expect workflow-build-timeout grep -qxF '    timeout-minutes: 240' <<<"${build_job}"
 # shellcheck disable=SC2016 # ${{ }} is workflow syntax
 expect workflow-build-bundle-binaries grep -qxF '          BINARIES: ${{ matrix.binaries }}' <<<"${build_job}"
 expect workflow-build-no-debuginfo grep -qxF '      CARGO_PROFILE_RELEASE_DEBUG: "0"' <<<"${build_job}"
