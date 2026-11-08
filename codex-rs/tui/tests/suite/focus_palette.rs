@@ -374,9 +374,9 @@ impl PtyCodex {
         if let Some(editor) = editor {
             command.env("VISUAL", editor);
         }
-        // Fork: upstream PTY tests fake daemons of another build; the fork's guard test opts in.
-        if super::daemon_version_fork::allow_other_daemon_build() {
-            command.env("CODEX_FORK_ALLOW_OTHER_DAEMON_BUILD", "1");
+        // Fork: upstream PTY tests keep the upstream daemon policy; the fork's tests opt out.
+        if super::daemon_version_fork::upstream_daemon_policy() {
+            command.env("CODEX_FORK_UPSTREAM_DAEMON_POLICY", "1");
         }
         let child = command
             .args(extra_args)

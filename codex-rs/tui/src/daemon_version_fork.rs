@@ -1,48 +1,33 @@
-//! Fork: the TUI runs turns only through a background server of its own build.
-//! A daemon whose version or fork protocol digest differs is replaced by the embedded
-//! app-server with a startup warning. When the managed installation already holds this
-//! version and the terminal is interactive, the recovery screen also offers a confirmed
-//! restart, checked once afterwards. Explicit endpoints are never checked.
+//! Fork: the TUI runs turns only through a background server of its own build, and a
+//! background server it cannot use never stops the TUI. A daemon whose version or fork
+//! protocol digest differs, a daemon that does not answer, and a failed daemon start all
+//! leave the session on the embedded app-server with one startup warning that names the
+//! cause and the remedy. There is no blocking screen and no exit. A matching daemon keeps
+//! the upstream flow; explicit endpoints are never checked.
 //! Spec: `specs/daemon-version-guard-2026-11-08.md`.
 
 use crate::AppServerTarget;
-use crate::app_event::AppEvent;
-use crate::app_event_sender::AppEventSender;
-use crate::bottom_pane::BottomPaneView;
-use crate::bottom_pane::ListSelectionView;
-use crate::bottom_pane::SelectionItem;
-use crate::bottom_pane::SelectionViewParams;
 use crate::daemon_startup;
-use crate::keymap::RuntimeKeymap;
-use crate::legacy_core::config::Config;
-use crate::render::renderable::ColumnRenderable;
-use crate::render::renderable::Renderable;
 use crate::startup_draft::StartupDraft;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_client::RemoteAppServerEndpoint;
 use codex_app_server_daemon::AppServerIdentity;
 use codex_app_server_daemon::LifecycleCommand;
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEventKind;
-use crossterm::event::KeyModifiers;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Wrap;
-use std::collections::BTreeMap;
+use codex_app_server_daemon::LifecycleOutput;
 use std::io;
-use std::io::IsTerminal;
-use std::path::Path;
 use std::path::PathBuf;
-use tokio::sync::mpsc::unbounded_channel;
-use tokio_stream::StreamExt;
 
 /// `daemon_exclusion` reason after falling back to the embedded app-server.
-pub(crate) const EXCLUSION: &str = "a background server of another Codex build";
+pub(crate) const EXCLUSION: &str = "an unusable background server";
 
-/// Set by the shared PTY test harness so upstream tests can keep faking daemons of another
-/// build. Honored only in debug builds; release builds always check.
-const ALLOW_OTHER_BUILD_ENV: &str = "CODEX_FORK_ALLOW_OTHER_DAEMON_BUILD";
+/// Set by the shared PTY test harness so upstream tests keep the upstream daemon policy
+/// (fake daemons of another build, exit on a failed start). Honored only in debug builds;
+/// release builds always apply the fork policy.
+const UPSTREAM_POLICY_ENV: &str = "CODEX_FORK_UPSTREAM_DAEMON_POLICY";
+
+fn upstream_policy() -> bool {
+    cfg!(debug_assertions) && std::env::var_os(UPSTREAM_POLICY_ENV).is_some()
+}
 
 /// The build this TUI was compiled as.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +58,7 @@ pub(crate) enum Mismatch {
 }
 
 impl Mismatch {
-    /// What the background server runs, as a predicate of "it" / "the background server".
+    /// What the background server runs, as a predicate of "it".
     fn predicate(&self) -> String {
         match self {
             Self::Version {
@@ -106,12 +91,6 @@ pub(crate) enum Hint {
     None,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Route {
-    OfferRestart,
-    Fallback(Hint),
-}
-
 /// UC2 "compare with this TUI build": an exact version string and the same fork protocol
 /// digest; a missing version or digest is a mismatch.
 pub(crate) fn mismatch(daemon: &AppServerIdentity, tui: &BuildIdentity) -> Option<Mismatch> {
@@ -128,27 +107,21 @@ pub(crate) fn mismatch(daemon: &AppServerIdentity, tui: &BuildIdentity) -> Optio
     })
 }
 
-/// UC2 "decide the recovery route": offer a restart only when it switches a managed daemon
-/// to this version and someone can answer; otherwise fall back with the applicable remedy.
-pub(crate) fn route(install: &DaemonInstall, tui_version: &str, interactive: bool) -> Route {
+/// UC2 "choose the remedy": suggest a restart only when it switches a managed daemon to
+/// this version; otherwise name what would.
+pub(crate) fn hint(install: &DaemonInstall, tui_version: &str) -> Hint {
     if !install.managed {
-        return Route::Fallback(Hint::Unmanaged);
+        return Hint::Unmanaged;
     }
     match install.installed_version.as_deref() {
-        Some(installed) if installed == tui_version => {
-            if interactive {
-                Route::OfferRestart
-            } else {
-                Route::Fallback(Hint::RestartFixes)
-            }
-        }
-        _ if install.can_copy_this_cli => Route::Fallback(Hint::InstallThisCli),
-        Some(installed) => Route::Fallback(Hint::InstalledOther(installed.to_string())),
-        None => Route::Fallback(Hint::None),
+        Some(installed) if installed == tui_version => Hint::RestartFixes,
+        _ if install.can_copy_this_cli => Hint::InstallThisCli,
+        Some(installed) => Hint::InstalledOther(installed.to_string()),
+        None => Hint::None,
     }
 }
 
-/// The startup warning shown when the session uses the embedded app-server instead.
+/// The startup warning for a daemon of another build.
 pub(crate) fn fallback_warning(mismatch: &Mismatch, hint: &Hint) -> String {
     let hint = match hint {
         Hint::RestartFixes => {
@@ -172,53 +145,85 @@ pub(crate) fn fallback_warning(mismatch: &Mismatch, hint: &Hint) -> String {
     )
 }
 
-/// UC2 "probe daemon identity → compare with this TUI build → decide the recovery route".
+/// The startup warning for a daemon that did not answer the identity probe.
+pub(crate) fn no_response_warning(cause: &str) -> String {
+    format!(
+        "Running without the shared background server: it does not respond ({cause}). Run `codex app-server daemon restart`, or use --no-daemon."
+    )
+}
+
+/// The startup warning for a daemon that could not start or be installed. The cause comes
+/// from the upstream start error, without its fatal `--no-daemon` hint.
+pub(crate) fn start_failure_warning(error: &io::Error) -> String {
+    let message = error.to_string();
+    let cause = message
+        .strip_suffix(daemon_startup::FAILURE_HINT)
+        .unwrap_or(&message)
+        .trim()
+        .trim_end_matches('.');
+    format!(
+        "Running without the shared background server: it could not start ({cause}). Use --no-daemon or set features.daemon_auto_start = false to skip starting it."
+    )
+}
+
+/// UC3 "fall back when the daemon cannot start": a start or installation error becomes
+/// the startup warning and leaves the session without a daemon, instead of ending it.
+pub(crate) fn started(
+    result: io::Result<Option<LifecycleOutput>>,
+    warning: &mut Option<String>,
+) -> io::Result<Option<LifecycleOutput>> {
+    if upstream_policy() {
+        return result;
+    }
+    Ok(result.unwrap_or_else(|error| {
+        let message = start_failure_warning(&error);
+        tracing::warn!("{message}");
+        *warning = Some(message);
+        None
+    }))
+}
+
+/// UC2 "probe daemon identity → compare with this TUI build → choose the remedy".
 /// Returns the startup warning after switching `target` to the embedded app-server, or
 /// `None` when the session may use the daemon (or the guard does not apply).
 pub(crate) async fn check(
     startup: &mut StartupDraft,
     target: &mut AppServerTarget,
-    config: &Config,
     implicit_connection: bool,
 ) -> io::Result<Option<String>> {
     let Some(socket_path) = daemon_socket(target).filter(|_| implicit_connection) else {
         return Ok(None);
     };
-    if cfg!(debug_assertions) && std::env::var_os(ALLOW_OTHER_BUILD_ENV).is_some() {
+    if upstream_policy() {
         return Ok(None);
     }
-    // An unreachable daemon is left to the upstream compatibility check.
-    let Ok(identity) = startup
+    let tui = BuildIdentity::current();
+    let warning = match startup
         .run_until(codex_app_server_daemon::probe_app_server_identity(
             &socket_path,
         ))
         .await?
-    else {
-        return Ok(None);
-    };
-    let tui = BuildIdentity::current();
-    let Some(mismatch) = mismatch(&identity, &tui) else {
-        return Ok(None);
-    };
-    let status = startup
-        .run_until(codex_app_server_daemon::run(LifecycleCommand::Version))
-        .await?
-        .ok();
-    let install = DaemonInstall {
-        managed: status
-            .as_ref()
-            .is_some_and(|status| status.backend.is_some()),
-        installed_version: status.and_then(|status| status.managed_codex_version),
-        can_copy_this_cli: codex_install_context::InstallContext::current()
-            .package_layout
-            .is_some(),
-    };
-    let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
-    let warning = match route(&install, &tui.version, interactive) {
-        Route::Fallback(hint) => Some(fallback_warning(&mismatch, &hint)),
-        Route::OfferRestart => {
-            offer_restart(startup, &socket_path, config, &mismatch, &tui).await?
-        }
+    {
+        Err(error) => Some(no_response_warning(&format!("{error:#}"))),
+        Ok(identity) => match mismatch(&identity, &tui) {
+            None => None,
+            Some(mismatch) => {
+                let status = startup
+                    .run_until(codex_app_server_daemon::run(LifecycleCommand::Version))
+                    .await?
+                    .ok();
+                let install = DaemonInstall {
+                    managed: status
+                        .as_ref()
+                        .is_some_and(|status| status.backend.is_some()),
+                    installed_version: status.and_then(|status| status.managed_codex_version),
+                    can_copy_this_cli: codex_install_context::InstallContext::current()
+                        .package_layout
+                        .is_some(),
+                };
+                Some(fallback_warning(&mismatch, &hint(&install, &tui.version)))
+            }
+        },
     };
     if let Some(warning) = &warning {
         tracing::warn!("{warning}");
@@ -235,170 +240,6 @@ fn daemon_socket(target: &AppServerTarget) -> Option<PathBuf> {
         } => Some(socket_path.as_path().to_path_buf()),
         _ => None,
     }
-}
-
-/// UC2.1 "show the recovery screen → apply the choice". Restarts at most once and checks
-/// the restarted daemon once; returns the warning when the session falls back.
-async fn offer_restart(
-    startup: &mut StartupDraft,
-    socket_path: &Path,
-    config: &Config,
-    mismatch: &Mismatch,
-    tui: &BuildIdentity,
-) -> io::Result<Option<String>> {
-    startup.flush_pending_events().await?;
-    let keymap = RuntimeKeymap::from_config(&config.tui_keymap).map_err(io::Error::other)?;
-    let mut view = recovery_view(mismatch, &tui.version, &keymap);
-    let selection = run_view(startup.tui_mut(), &mut view, &keymap).await?;
-    match selection {
-        Some(0) => Ok(Some(fallback_warning(mismatch, &Hint::RestartFixes))),
-        Some(1) => {
-            let restarted = startup
-                .tui_mut()
-                .with_restored(crate::tui::TerminalHandoff::Restore, || async {
-                    crossterm::terminal::disable_raw_mode()?;
-                    codex_app_server_daemon::run(LifecycleCommand::Restart {
-                        feature_overrides: BTreeMap::new(),
-                    })
-                    .await
-                    .map_err(|err| io::Error::other(format!("{err:#}")))
-                })
-                .await;
-            if let Err(err) = restarted {
-                return Ok(Some(format!(
-                    "Running without the shared background server: restarting it failed: {err}."
-                )));
-            }
-            let warning = match startup
-                .run_until(codex_app_server_daemon::probe_app_server_identity(
-                    socket_path,
-                ))
-                .await?
-            {
-                Ok(identity) => self::mismatch(&identity, tui).map(|mismatch| {
-                    format!(
-                        "Running without the shared background server: after a restart, it {}.",
-                        mismatch.predicate()
-                    )
-                }),
-                Err(err) => Some(format!(
-                    "Running without the shared background server: the restarted server did not answer: {err:#}."
-                )),
-            };
-            Ok(warning)
-        }
-        Some(_) | None => Err(io::Error::other(format!(
-            "Cannot use the shared background server: it {}.\n{}",
-            mismatch.predicate(),
-            daemon_startup::FAILURE_HINT
-        ))),
-    }
-}
-
-/// Mirrors the event loop of `daemon_recovery::check` for the fork's own screen.
-async fn run_view(
-    tui: &mut crate::tui::Tui,
-    view: &mut ListSelectionView,
-    keymap: &RuntimeKeymap,
-) -> io::Result<Option<usize>> {
-    let mut chord_matcher = crate::keymap::KeyChordMatcher::default();
-    tui.discard_pending_input_before_interactive_screen()?;
-    let selection = {
-        let events = tui.event_stream();
-        tokio::pin!(events);
-        loop {
-            let height = view.desired_height(tui.terminal.size()?.width);
-            tui.draw(height, |frame| {
-                view.render(frame.area(), frame.buffer_mut())
-            })?;
-            let Some(event) = events.next().await else {
-                break None;
-            };
-            tui.screen_size_for_event(&event)?;
-            if matches!(
-                &event,
-                crate::tui::TuiEvent::Paste(_) | crate::tui::TuiEvent::FocusLost
-            ) || matches!(&event, crate::tui::TuiEvent::Mouse(mouse) if mouse.kind != crossterm::event::MouseEventKind::Moved)
-            {
-                chord_matcher.cancel();
-            }
-            if let crate::tui::TuiEvent::Key(key) = event
-                && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-            {
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && matches!(key.code, KeyCode::Char('c' | 'd'))
-                {
-                    break None;
-                }
-                let key = match chord_matcher.advance(
-                    key,
-                    &keymap.chords,
-                    crate::keymap::KeymapContextSet::new(crate::keymap::KeymapContext::List),
-                ) {
-                    crate::keymap::KeyChordMatch::PassThrough => key,
-                    crate::keymap::KeyChordMatch::Completed(key) => key,
-                    crate::keymap::KeyChordMatch::Pending(_)
-                    | crate::keymap::KeyChordMatch::Cancelled
-                    | crate::keymap::KeyChordMatch::Ignored => continue,
-                };
-                view.handle_key_event(key);
-            }
-            if view.is_complete() {
-                break view.take_last_selected_index();
-            }
-        }
-    };
-    tui.terminal.clear()?;
-    Ok(selection)
-}
-
-fn recovery_view(
-    mismatch: &Mismatch,
-    tui_version: &str,
-    keymap: &RuntimeKeymap,
-) -> ListSelectionView {
-    let mut header = ColumnRenderable::new();
-    header.push(Line::from(
-        "Background server runs another Codex build".bold(),
-    ));
-    header.push(
-        Paragraph::new(format!("The background server {}.", mismatch.predicate()))
-            .wrap(Wrap { trim: false }),
-    );
-    header.push(
-        Paragraph::new(format!(
-            "Its installation already holds Codex {tui_version}, so a restart switches it to this build. Restart may interrupt active or queued work in other chats."
-        ))
-        .wrap(Wrap { trim: false }),
-    );
-    let (tx, _rx) = unbounded_channel::<AppEvent>();
-    ListSelectionView::new(
-        SelectionViewParams {
-            header: Box::new(header),
-            initial_selected_idx: Some(0),
-            items: vec![
-                SelectionItem {
-                    name: "Run without daemon this time".to_string(),
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-                SelectionItem {
-                    name: "Restart background server (recommended)".to_string(),
-                    dismiss_on_select: true,
-                    require_explicit_confirmation: true,
-                    ..Default::default()
-                },
-                SelectionItem {
-                    name: "Cancel".to_string(),
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-            ],
-            ..SelectionViewParams::picker()
-        },
-        AppEventSender::new(tx),
-        keymap.list.clone(),
-    )
 }
 
 #[cfg(test)]

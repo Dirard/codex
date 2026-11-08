@@ -1,8 +1,5 @@
 use super::*;
-use crossterm::event::KeyEvent;
 use pretty_assertions::assert_eq;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
 
 fn tui_build() -> BuildIdentity {
     BuildIdentity {
@@ -64,55 +61,26 @@ fn only_the_same_version_and_fork_protocol_digest_match() {
 }
 
 #[test]
-fn restart_is_offered_only_when_it_switches_a_managed_daemon_to_this_build() {
+fn restart_is_suggested_only_when_it_switches_a_managed_daemon_to_this_build() {
     let install = |managed: bool, installed: Option<&str>, can_copy: bool| DaemonInstall {
         managed,
         installed_version: installed.map(str::to_string),
         can_copy_this_cli: can_copy,
     };
-    for (install, interactive, expected) in [
-        (
-            install(true, Some("0.167.0"), false),
-            true,
-            Route::OfferRestart,
-        ),
-        // Nobody can answer: fall back and name the restart command.
-        (
-            install(true, Some("0.167.0"), true),
-            false,
-            Route::Fallback(Hint::RestartFixes),
-        ),
-        (
-            install(true, Some("0.156.0"), true),
-            true,
-            Route::Fallback(Hint::InstallThisCli),
-        ),
+    for (install, expected) in [
+        (install(true, Some("0.167.0"), false), Hint::RestartFixes),
+        (install(true, Some("0.167.0"), true), Hint::RestartFixes),
+        (install(true, Some("0.156.0"), true), Hint::InstallThisCli),
+        // The owner's case: a managed installation of an old build.
         (
             install(true, Some("0.156.0"), false),
-            true,
-            Route::Fallback(Hint::InstalledOther("0.156.0".to_string())),
+            Hint::InstalledOther("0.156.0".to_string()),
         ),
-        (
-            install(true, None, false),
-            true,
-            Route::Fallback(Hint::None),
-        ),
-        (
-            install(true, None, true),
-            true,
-            Route::Fallback(Hint::InstallThisCli),
-        ),
-        (
-            install(false, Some("0.167.0"), true),
-            true,
-            Route::Fallback(Hint::Unmanaged),
-        ),
+        (install(true, None, false), Hint::None),
+        (install(true, None, true), Hint::InstallThisCli),
+        (install(false, Some("0.167.0"), true), Hint::Unmanaged),
     ] {
-        assert_eq!(
-            route(&install, "0.167.0", interactive),
-            expected,
-            "{install:?}, interactive: {interactive}"
-        );
+        assert_eq!(hint(&install, "0.167.0"), expected, "{install:?}");
     }
 }
 
@@ -158,52 +126,35 @@ fn fallback_warning_names_both_builds_and_the_remedy() {
     ] {
         assert_eq!(fallback_warning(mismatch, &hint), expected);
     }
+    assert_eq!(
+        no_response_warning("timed out identifying the app-server"),
+        "Running without the shared background server: it does not respond (timed out identifying the app-server). Run `codex app-server daemon restart`, or use --no-daemon."
+    );
 }
 
 #[test]
-fn recovery_screen_defaults_to_running_without_daemon_and_confirms_restart() {
-    let mismatch = Mismatch::Version {
-        daemon: Some("0.156.0".to_string()),
-        tui: "0.167.0".to_string(),
-    };
-    let keymap = RuntimeKeymap::defaults();
-    let mut view = recovery_view(&mismatch, "0.167.0", &keymap);
-    let area = Rect::new(
-        /*x*/ 0,
-        /*y*/ 0,
-        /*width*/ 90,
-        view.desired_height(/*width*/ 90),
+fn a_failed_daemon_start_becomes_a_warning_instead_of_ending_the_session() {
+    // The upstream start error, as `startup_orchestration` builds it.
+    let error = io::Error::other(format!(
+        "{:#}\n{}",
+        anyhow::anyhow!(
+            "this CLI has no complete local package; install a packaged Codex CLI or use the standalone installer"
+        ),
+        daemon_startup::FAILURE_HINT
+    ));
+    let mut warning = None;
+    let output = started(Err(error), &mut warning).expect("a failed start must not end startup");
+    assert_eq!(output, None);
+    assert_eq!(
+        warning.as_deref(),
+        Some(
+            "Running without the shared background server: it could not start (this CLI has no complete local package; install a packaged Codex CLI or use the standalone installer). Use --no-daemon or set features.daemon_auto_start = false to skip starting it."
+        )
     );
-    let mut buffer = Buffer::empty(area);
-    view.render(area, &mut buffer);
-    let text = buffer
-        .content
-        .chunks(90)
-        .map(|row| {
-            row.iter()
-                .map(ratatui::buffer::Cell::symbol)
-                .collect::<String>()
-                .trim_end()
-                .to_string()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    insta::assert_snapshot!("daemon_version_recovery_menu", text);
-    view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(view.take_last_selected_index(), Some(0));
 
-    let mut view = recovery_view(&mismatch, "0.167.0", &keymap);
-    view.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
-    assert!(
-        !view.is_complete(),
-        "restart needs an explicit confirmation"
-    );
-    view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(view.take_last_selected_index(), Some(1));
-
-    let mut view = recovery_view(&mismatch, "0.167.0", &keymap);
-    view.handle_key_event(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
-    assert_eq!(view.take_last_selected_index(), Some(2));
+    let mut warning = None;
+    let output = started(Ok(None), &mut warning).expect("a passed-through result");
+    assert_eq!((output, warning), (None, None));
 }
 
 #[test]
