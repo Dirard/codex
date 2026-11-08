@@ -1241,6 +1241,9 @@ expect workflow-build-bwrap-linux-only test "$(step_if "${build_job}" 'Build bwr
 expect workflow-build-bwrap-first in_order "${build_job}" 'name: Build bwrap and export digest' 'name: Build release binaries'
 expect workflow-build-swap-linux-only test "$(step_if "${build_job}" 'Add swap (Linux)')" = "runner.os == 'Linux'"
 expect workflow-build-swap-before-cargo in_order "${build_job}" 'name: Add swap (Linux)' 'name: Build bwrap and export digest'
+expect workflow-build-swap-action grep -qxF '        uses: ./.github/actions/fork-add-swap' <<<"${build_job}"
+# fork-ci Rust jobs hit the same memory peak: fork-setup-rust adds swap before it builds anything.
+expect workflow-setup-rust-adds-swap in_order "$(cat "${setup_rust}")" 'uses: ./.github/actions/fork-add-swap' 'uses: ./.github/actions/fork-rust-toolchain'
 expect workflow-build-part-after-cargo in_order "${build_job}" 'name: Build release binaries' 'release-package.sh part'
 # shellcheck disable=SC2016 # ${{ }} is workflow syntax
 expect workflow-build-uploads-part grep -qxF \
@@ -1320,7 +1323,8 @@ while IFS= read -r local_use; do
     covered=0
   fi
 done < <(cat "${fork_ci}" "${fork_release}" "${setup_rust}" "${rust_toolchain}" "${repo_root}"/.github/actions/setup-rusty-v8/action.yml \
-  "${repo_root}"/.github/actions/setup-msvc-env/action.yml "${repo_root}"/.github/actions/check-clean-worktree/action.yml |
+  "${repo_root}"/.github/actions/setup-msvc-env/action.yml "${repo_root}"/.github/actions/check-clean-worktree/action.yml \
+  "${repo_root}"/.github/actions/fork-add-swap/action.yml |
   grep -oE 'uses: \./[A-Za-z0-9_./-]+' | sed 's/^uses: //' | sort -u)
 expect machinery-covers-local-actions test "${covered}" -eq 1
 expect machinery-covers-scripts grep -qx 'scripts/fork/' <<<"${machinery}"

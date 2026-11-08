@@ -154,6 +154,7 @@ reuse_expiry_margin=$((12 * 3600))
 machinery_paths=(
   .github/workflows/fork-rust-release.yml
   .github/workflows/fork-ci.yml
+  .github/actions/fork-add-swap/
   .github/actions/fork-rust-toolchain/
   .github/actions/fork-setup-rust/
   .github/actions/setup-rusty-v8/

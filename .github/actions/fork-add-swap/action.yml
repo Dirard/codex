@@ -1,0 +1,40 @@
+name: fork-add-swap
+description: Add a swap file on a Linux runner, so the memory peak of a Rust build does not take the runner down.
+# A 16 GB runner that runs out of memory loses its runner ("The runner has received a shutdown
+# signal", exit 143) while codex-tui and codex-exec compile in parallel: twice in a row for the
+# aarch64 release bundle, then for a fork-ci test shard on x86_64 (run 42483587685). Swap lets the
+# peak pass; the step prints memory and disk for the next diagnosis.
+inputs:
+  max-gb:
+    description: Largest swap file to add, in GB.
+    required: false
+    default: "16"
+  reserve-gb:
+    description: Free space on / to keep for codex-rs/target, in GB.
+    required: false
+    default: "40"
+
+runs:
+  using: composite
+  steps:
+    - name: Add swap
+      shell: bash
+      env:
+        MAX_GB: ${{ inputs.max-gb }}
+        RESERVE_GB: ${{ inputs.reserve-gb }}
+      run: |
+        set -euo pipefail
+        free -m
+        swapon --show
+        df -h /
+        avail_gb="$(df --output=avail -BG / | tail -n 1 | tr -dc '0-9')"
+        size_gb=$((avail_gb - RESERVE_GB < MAX_GB ? avail_gb - RESERVE_GB : MAX_GB))
+        if ((size_gb >= 4)); then
+          sudo fallocate -l "${size_gb}G" /swapfile-fork
+          sudo chmod 600 /swapfile-fork
+          sudo mkswap /swapfile-fork >/dev/null
+          sudo swapon /swapfile-fork
+        else
+          echo "::warning::only ${avail_gb} GB free on /; no swap added"
+        fi
+        free -m
