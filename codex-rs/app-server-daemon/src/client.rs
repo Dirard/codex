@@ -34,6 +34,9 @@ const INITIALIZE_REQUEST_ID: RequestId = RequestId::Integer(1);
 #[serde(rename_all = "camelCase")]
 pub(crate) struct InitializeInfo {
     pub(crate) user_agent: String,
+    // Fork: optional, so upstream app-servers still parse (`specs/daemon-version-guard-2026-11-08.md`).
+    #[serde(default)]
+    pub(crate) experimental_protocol_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +195,10 @@ fn parse_version_from_user_agent(user_agent: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("app-server user-agent omitted version"))?;
     Ok(version.to_string())
 }
+
+// Fork: identifies the running app-server's build for clients that need their own build.
+#[path = "client_fork.rs"]
+pub(crate) mod fork;
 
 #[cfg(all(test, unix))]
 mod tests {

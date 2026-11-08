@@ -605,6 +605,8 @@ pub(super) async fn run_main_inner(
         daemon_exclusion = Some(daemon_startup::WSL_DRVFS_EXCLUSION);
     }
     let mut managed_daemon = false;
+    // Fork: why this session runs without a background server it would otherwise use.
+    let mut fork_daemon_warning = None;
     if auto_start_daemon && daemon_exclusion.is_none() {
         let output = startup_draft
             .run_until(async {
@@ -627,7 +629,9 @@ pub(super) async fn run_main_inner(
                     ))),
                 }
             })
-            .await??;
+            .await?;
+        // Fork: a daemon that cannot start leaves the session on the embedded app-server.
+        let output = daemon_version_fork::started(output, &mut fork_daemon_warning)?;
         if let Some(output) = output {
             managed_daemon = output.backend.is_some();
             app_server_target = AppServerTarget::LocalDaemon {
@@ -640,6 +644,18 @@ pub(super) async fn run_main_inner(
             app_server_target = AppServerTarget::Embedded;
             daemon_exclusion = Some("this Windows launcher");
         }
+    }
+    // Fork: a daemon of another build must not run this session's turns.
+    if fork_daemon_warning.is_none() {
+        fork_daemon_warning = daemon_version_fork::check(
+            &mut startup_draft,
+            &mut app_server_target,
+            implicit_connection,
+        )
+        .await?;
+    }
+    if fork_daemon_warning.is_some() {
+        daemon_exclusion = Some(daemon_version_fork::EXCLUSION);
     }
     let compatibility_warning = daemon_recovery::check(
         &mut startup_draft,
@@ -659,6 +675,7 @@ pub(super) async fn run_main_inner(
     let daemon_startup_warning = elevated_warning
         .map(str::to_string)
         .or(compatibility_warning)
+        .or(fork_daemon_warning)
         .or_else(|| {
             daemon_exclusion
             .filter(|_| auto_start_daemon)
