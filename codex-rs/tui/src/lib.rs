@@ -2575,6 +2575,8 @@ fn should_show_provider_setup_wizard(
 mod daemon_recovery;
 mod daemon_startup;
 mod daemon_telemetry;
+// Fork: no turns through a daemon of another build (`specs/daemon-version-guard-2026-11-08.md`).
+mod daemon_version_fork;
 
 #[cfg(test)]
 #[path = "lib_tests.rs"]

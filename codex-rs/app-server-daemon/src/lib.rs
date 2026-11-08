@@ -9,6 +9,9 @@ pub use backend::windows::is_elevated;
 #[cfg(windows)]
 use backend::windows::try_lock_file;
 mod client;
+// Fork: build identity of a running app-server (`specs/daemon-version-guard-2026-11-08.md`).
+pub use client::fork::AppServerIdentity;
+pub use client::fork::probe_app_server_identity;
 mod diagnostics;
 mod install_lock;
 mod launch;

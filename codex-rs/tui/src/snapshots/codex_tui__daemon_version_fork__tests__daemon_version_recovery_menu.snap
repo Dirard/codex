@@ -1,0 +1,14 @@
+---
+source: tui/src/daemon_version_fork_tests.rs
+expression: text
+---
+
+  Background server runs another Codex build
+  The background server runs Codex 0.156.0, not this session's Codex 0.167.0.
+  Its installation already holds Codex 0.167.0, so a restart switches it to this build.
+  Restart may interrupt active or queued work in other chats.
+
+
+› 1. Run without daemon this time
+  2. Restart background server (recommended)
+  3. Cancel

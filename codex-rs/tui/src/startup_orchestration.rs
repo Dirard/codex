@@ -641,6 +641,17 @@ pub(super) async fn run_main_inner(
             daemon_exclusion = Some("this Windows launcher");
         }
     }
+    // Fork: a daemon of another build must not run this session's turns.
+    let version_warning = daemon_version_fork::check(
+        &mut startup_draft,
+        &mut app_server_target,
+        &config,
+        implicit_connection,
+    )
+    .await?;
+    if version_warning.is_some() {
+        daemon_exclusion = Some(daemon_version_fork::EXCLUSION);
+    }
     let compatibility_warning = daemon_recovery::check(
         &mut startup_draft,
         &app_server_target,
@@ -659,6 +670,7 @@ pub(super) async fn run_main_inner(
     let daemon_startup_warning = elevated_warning
         .map(str::to_string)
         .or(compatibility_warning)
+        .or(version_warning)
         .or_else(|| {
             daemon_exclusion
             .filter(|_| auto_start_daemon)

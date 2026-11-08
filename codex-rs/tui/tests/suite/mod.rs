@@ -1,6 +1,9 @@
 // Aggregates all former standalone integration tests as modules.
 #[cfg(unix)]
 mod daemon_compatibility;
+// Fork: no turns through a daemon of another build (`specs/daemon-version-guard-2026-11-08.md`).
+#[cfg(unix)]
+mod daemon_version_fork;
 #[cfg(unix)]
 mod directory_trust;
 #[cfg(unix)]
