@@ -678,3 +678,65 @@ async fn message_resume_config_keeps_requirement_constraints() {
             .is_ok()
     );
 }
+
+/// Fork tool guidance UC2, Q1 (owner's decision of 2026-11-08): with the profile the bundled
+/// "explicit request only" mode lets the model start explorers on its own; the proactive mode,
+/// threads that cannot spawn and a disabled profile keep the upstream mode.
+#[tokio::test]
+async fn explicit_mode_allows_explorers_with_the_profile() {
+    use codex_protocol::config_types::MultiAgentMode;
+    const BUNDLED: &str = "Do not spawn sub-agents unless asked.";
+
+    let (_home, profiled) =
+        config_with(&[("features.explorer_profile", TomlValue::Boolean(true))]).await;
+    let (_home, disabled) =
+        config_with(&[("features.explorer_profile", TomlValue::Boolean(false))]).await;
+    let explicit = MultiAgentMode::ExplicitRequestOnly;
+
+    assert_eq!(
+        multi_agent_mode(&profiled, &SessionSource::Cli, explicit.clone(), BUNDLED),
+        MultiAgentMode::Custom(format!("{BUNDLED} {EXPLICIT_MODE_EXPLORER_EXCEPTION}"))
+    );
+    assert!(
+        EXPLICIT_MODE_EXPLORER_EXCEPTION
+            .contains("you may start read-only `explorer` agents on your own")
+    );
+    assert!(EXPLICIT_MODE_EXPLORER_EXCEPTION.contains("start other agents only on request"));
+    // A worker that spawns its own agents may start explorers too.
+    assert_eq!(
+        multi_agent_mode(
+            &profiled,
+            &explorer_source(Some("worker")),
+            explicit.clone(),
+            BUNDLED
+        ),
+        MultiAgentMode::Custom(format!("{BUNDLED} {EXPLICIT_MODE_EXPLORER_EXCEPTION}"))
+    );
+
+    for (config, source, mode) in [
+        (&disabled, SessionSource::Cli, explicit.clone()),
+        (&profiled, SessionSource::Cli, MultiAgentMode::Proactive),
+        (
+            &profiled,
+            explorer_source(Some("explorer")),
+            explicit.clone(),
+        ),
+    ] {
+        assert_eq!(
+            multi_agent_mode(config, &source, mode.clone(), BUNDLED),
+            mode,
+            "{source:?}"
+        );
+    }
+    let mut workflow_agent = profiled.clone();
+    workflow_agent.multi_agent_v2.disable_native_tools = true;
+    assert_eq!(
+        multi_agent_mode(
+            &workflow_agent,
+            &SessionSource::Cli,
+            explicit.clone(),
+            BUNDLED
+        ),
+        explicit
+    );
+}

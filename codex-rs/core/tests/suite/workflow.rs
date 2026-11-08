@@ -1553,6 +1553,20 @@ async fn worktree_isolation_reaches_workflow_agents() -> Result<()> {
         "{:?}",
         run.logs_tail
     );
+    // `specs/fork-tool-guidance-2026-11-08.md` UC3, R3.1: the notification lists every
+    // isolated agent with its `apply_agent_worktree` target, whatever the log tail keeps.
+    wait_for_served(&responses, "parent_notified", 1).await;
+    let notified = responses.served("parent_notified");
+    assert!(
+        notified[0].contains("Isolated agents of this run (1, all listed)"),
+        "{}",
+        notified[0]
+    );
+    assert!(
+        notified[0].contains(&format!("/{child}` (call 1): ")),
+        "{}",
+        notified[0]
+    );
     Ok(())
 }
 

@@ -355,6 +355,10 @@ pub struct ArmedNotifications {
     pub output_watch: OutputWatchState,
     /// The watch the call started matches with ASCII classes (review of the fixes, P3-4).
     pub output_watch_ascii: bool,
+    /// The process runs and nothing reports its exit, but `write_stdin` `notify_on_exit` can
+    /// arm it: the response says so instead of letting the model poll
+    /// (`specs/fork-tool-guidance-2026-11-08.md` UC1, R1.1).
+    pub exit_available: bool,
 }
 
 /// Fork state of a process output buffer: when output last arrived (R4.5) and the watch

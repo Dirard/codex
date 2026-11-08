@@ -85,6 +85,8 @@ mod tests {
             Feature::OutputStyles,
             Feature::ExplorerProfile,
             Feature::AgentWorktreeIsolation,
+            // The fork's Experimental stage of `wake_on_agent_messages` (fork tool guidance).
+            Feature::WakeOnAgentMessages,
             Feature::DefaultModeRequestUserInput,
         ];
         for feature in fork_features

@@ -461,3 +461,75 @@ async fn code_mode_descriptions_name_the_configured_output_budget() {
         );
     }
 }
+
+/// Fork tool guidance UC2 (`specs/fork-tool-guidance-2026-11-08.md`): `spawn_agent` and
+/// `wait_agent` mention workflows exactly where the turn offers the `workflow` tool, and say that
+/// agent results wake the caller only for a root with `wake_on_agent_messages`.
+#[tokio::test]
+async fn agent_tool_guidance_follows_the_turn() {
+    use crate::tools::registry::ToolRegistry;
+    use crate::tools::spec_plan::fork;
+
+    for (workflows, child, workflows_available) in [
+        (true, false, true),
+        (true, false, false),
+        (true, true, true),
+        (false, false, true),
+    ] {
+        let (_session, mut turn) = make_session_and_context().await;
+        set_feature(&mut turn, Feature::MultiAgentV2, /*enabled*/ true);
+        set_feature(&mut turn, Feature::Workflows, workflows);
+        if child {
+            turn.session_source = explorer_source("worker");
+        }
+        let mut workflow_tools = ToolRegistry::default();
+        crate::workflow::add_workflow_tools(&turn, workflows_available, &mut workflow_tools);
+        let offered = workflow_tools.entries().next().is_some();
+        let case = format!("workflows {workflows}, child {child}, available {workflows_available}");
+        assert_eq!(
+            offered,
+            workflows && !child && workflows_available,
+            "{case}"
+        );
+        assert_eq!(
+            fork::wait_agent_options(&turn, workflows_available).workflows,
+            offered,
+            "{case}"
+        );
+        assert_eq!(
+            fork::spawn_agent_options(&turn, workflows_available).workflows,
+            offered,
+            "{case}"
+        );
+    }
+
+    // UC6, R6.4: `codex exec` ends with the turn, so its root must collect answers itself.
+    for (wake, child, exec, expected) in [
+        (false, false, false, false),
+        (true, false, false, true),
+        (true, true, false, false),
+        (true, false, true, false),
+    ] {
+        let (_session, mut turn) = make_session_and_context().await;
+        set_feature(&mut turn, Feature::MultiAgentV2, /*enabled*/ true);
+        set_feature(&mut turn, Feature::WakeOnAgentMessages, wake);
+        // The test session is an `exec` one; name the source of each case explicitly.
+        turn.session_source = if child {
+            explorer_source("worker")
+        } else if exec {
+            codex_protocol::protocol::SessionSource::Exec
+        } else {
+            codex_protocol::protocol::SessionSource::Cli
+        };
+        assert_eq!(
+            fork::wait_agent_options(&turn, /*workflows_available*/ false).agent_results_wake,
+            expected,
+            "wake {wake}, child {child}, exec {exec}"
+        );
+        assert_eq!(
+            fork::spawn_agent_options(&turn, /*workflows_available*/ false).agent_results_wake,
+            expected,
+            "wake {wake}, child {child}, exec {exec}"
+        );
+    }
+}

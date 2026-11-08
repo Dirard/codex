@@ -1074,7 +1074,9 @@ async fn exit_report(
 impl super::UnifiedExecContext {
     /// `exec_command` returned a session ID, so the exit is reported later and, with
     /// `notify_on_output`, the output watch starts now. A process that already exited is
-    /// queued before this call returns (R2.1, R6.3, R6.9).
+    /// queued before this call returns (R2.1, R6.3, R6.9). A process that reports nothing says
+    /// that `write_stdin` can still arm it (`specs/fork-tool-guidance-2026-11-08.md` UC1,
+    /// R1.1).
     pub(crate) async fn arm_exit_notification(
         &self,
         response_process_id: Option<i32>,
@@ -1106,6 +1108,7 @@ impl super::UnifiedExecContext {
                     .output
                     .as_ref()
                     .is_some_and(|pattern| pattern.ascii_classes()),
+            exit_available: !notify.exit && !watching,
         }
     }
 
@@ -1130,7 +1133,9 @@ impl super::UnifiedExecContext {
     /// stops the output watch, and a started watch arms the exit notification (R6.3, R6.4);
     /// then `notify_on_exit` turns waiting for the exit on or off (R6.15, live recheck N1).
     /// The caller holds the interaction lock, so the exit watcher reports only after this. A
-    /// watch that cannot start says why (P3-6).
+    /// watch that cannot start says why (P3-6). A call that changes nothing on a process whose
+    /// exit nothing reports, and that the model did not turn off, says that `notify_on_exit`
+    /// can arm it (`specs/fork-tool-guidance-2026-11-08.md` UC1, R1.1).
     pub(crate) async fn change_notifications(
         &self,
         response_process_id: Option<i32>,
@@ -1151,6 +1156,8 @@ impl super::UnifiedExecContext {
         if change.output_watch.is_none() && change.notify_on_exit.is_none() {
             return ArmedNotifications {
                 output_watch: unchanged,
+                exit_available: exit_notifier
+                    .is_some_and(|notifier| !notifier.is_armed() && !notifier.exit_turned_off()),
                 ..ArmedNotifications::default()
             };
         }
@@ -1199,6 +1206,7 @@ impl super::UnifiedExecContext {
             exit_off,
             output_watch_ascii: ascii && output_watch.started().is_some(),
             output_watch,
+            exit_available: false,
         }
     }
 

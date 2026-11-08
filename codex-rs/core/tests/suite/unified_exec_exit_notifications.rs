@@ -2225,10 +2225,20 @@ async fn write_stdin_turns_on_the_exit_notification_of_a_running_process() -> Re
         .function_call_output_text("bg-call")
         .expect("exec_command output");
     assert!(!start_output.contains(ARMED_LINE), "{start_output}");
+    // Tool guidance UC1 (`specs/fork-tool-guidance-2026-11-08.md`, R1.1): the unarmed session
+    // says how to arm it, and the armed one no longer does.
+    assert!(
+        start_output.contains("Exit notification: not requested"),
+        "{start_output}"
+    );
     let arm_output = requests[2]
         .function_call_output_text("arm-call")
         .expect("write_stdin output");
     assert!(arm_output.contains(ARMED_LINE), "{arm_output}");
+    assert!(
+        !arm_output.contains("Exit notification: not requested"),
+        "{arm_output}"
+    );
 
     wait_for_requests(&mock, 4).await;
     let delivered = notifications(&mock.requests()[3]);
@@ -2502,7 +2512,9 @@ text(JSON.stringify({ started: bg.notes, empty: empty.notes, rearmed: rearmed.no
         "This process already matched an output watch, so codex exec and wait_agent wait for this one only while matching lines keep coming, not for a first match; set notify_on_exit to wait for the process to exit.",
         "Output watch: not started (at most 8 terminals can watch their output at a time; stop a watch with write_stdin stop_output_watch true)",
         r#"\"refused_watch\":null"#,
-        r#"\"plain\":null"#,
+        // Tool guidance UC1 (`specs/fork-tool-guidance-2026-11-08.md`, R1.1): a running process
+        // whose exit nothing reports says how to arm it instead of polling.
+        r#"\"plain\":[\"Exit notification: not requested (to be told when this process exits instead of polling it, call write_stdin with this session_id and notify_on_exit true)\"]"#,
         // Review of the fixes 3, T-2: with notify_on_exit on, the process is awaited until it
         // exits, so the note about the watch's own window, and its advice, are left out.
         r#"\"awaited_watch_on\":true"#,

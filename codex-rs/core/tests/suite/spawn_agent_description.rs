@@ -879,3 +879,53 @@ wait_agent_enabled = {wait_agent_enabled}
 
     Ok(())
 }
+
+/// Fork tool guidance UC2, Q1 (owner's decision of 2026-11-08): with the explorer profile the
+/// "explicit request only" mode lets the model start explorers on its own; without the profile
+/// the mode text stays upstream.
+#[test_case(true; "explorer profile adds the exception")]
+#[test_case(false; "without the profile the mode stays upstream")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_multi_agent_mode_names_the_explorer_exception(
+    explorer_profile: bool,
+) -> Result<()> {
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let test = test_codex()
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+            if explorer_profile {
+                config.features.enable(Feature::ExplorerProfile)
+            } else {
+                config.features.disable(Feature::ExplorerProfile)
+            }
+            .expect("test config should allow feature update");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("hello").await?;
+
+    let developer_messages = response.single_request().message_input_texts("developer");
+    let mode = developer_messages
+        .iter()
+        .find(|message| message.contains(MULTI_AGENT_MODE_OPEN_TAG))
+        .expect("the first request carries the multi-agent mode");
+    assert!(
+        mode.contains("Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask"),
+        "{mode}"
+    );
+    assert_eq!(
+        mode.contains("Exception: you may start read-only `explorer` agents on your own"),
+        explorer_profile,
+        "{mode}"
+    );
+    Ok(())
+}

@@ -835,6 +835,7 @@ fn exec_command_output_reports_armed_exit_notification() {
         ArmedNotifications {
             exit: true,
             exit_off: None,
+            exit_available: false,
             output_watch_ascii: false,
             output_watch: OutputWatchState::Unchanged,
         },
@@ -862,6 +863,71 @@ fn exec_command_output_reports_armed_exit_notification() {
             .code_mode_result(&payload)
             .get("exit_notification")
             .is_none()
+    );
+    assert!(
+        !unarmed
+            .response_text()
+            .contains(EXIT_NOTIFICATION_NOT_REQUESTED_LINE)
+    );
+}
+
+/// Fork (`specs/fork-tool-guidance-2026-11-08.md` UC1, R1.1): a running process whose exit
+/// nothing reports says how to arm it instead of polling, in the header and the Code Mode notes;
+/// the armed line says what to do instead of polling.
+#[test]
+fn exec_command_output_says_how_to_arm_an_unreported_exit() {
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+    let available = armed_output(
+        Some(1000),
+        ArmedNotifications {
+            exit_available: true,
+            ..ArmedNotifications::default()
+        },
+    );
+    assert!(
+        available.response_text().contains(&format!(
+            "Process running with session ID 1000\n{EXIT_NOTIFICATION_NOT_REQUESTED_LINE}\n"
+        )),
+        "{}",
+        available.response_text()
+    );
+    assert!(
+        EXIT_NOTIFICATION_NOT_REQUESTED_LINE
+            .contains("call write_stdin with this session_id and notify_on_exit true")
+    );
+    assert_eq!(
+        available.code_mode_result(&payload)["notes"],
+        serde_json::json!([EXIT_NOTIFICATION_NOT_REQUESTED_LINE])
+    );
+    assert!(EXIT_NOTIFICATION_ARMED_LINE.contains("continue other work or end your turn"));
+
+    // An armed exit and a process that already exited do not get the hint.
+    let armed = armed_output(
+        Some(1000),
+        ArmedNotifications {
+            exit: true,
+            exit_available: true,
+            ..ArmedNotifications::default()
+        },
+    );
+    assert!(
+        !armed
+            .response_text()
+            .contains(EXIT_NOTIFICATION_NOT_REQUESTED_LINE)
+    );
+    let exited = armed_output(
+        None,
+        ArmedNotifications {
+            exit_available: true,
+            ..ArmedNotifications::default()
+        },
+    );
+    assert!(
+        !exited
+            .response_text()
+            .contains(EXIT_NOTIFICATION_NOT_REQUESTED_LINE)
     );
 }
 
@@ -897,6 +963,7 @@ fn exec_command_output_reports_the_output_watch() {
         ArmedNotifications {
             exit: true,
             exit_off: None,
+            exit_available: false,
             output_watch_ascii: false,
             output_watch: OutputWatchState::On("ready|ERROR".to_string()),
         },
@@ -918,6 +985,7 @@ fn exec_command_output_reports_the_output_watch() {
         ArmedNotifications {
             exit: true,
             exit_off: None,
+            exit_available: false,
             output_watch_ascii: true,
             output_watch: OutputWatchState::On(".{0,255}Z".to_string()),
         },
@@ -936,6 +1004,7 @@ fn exec_command_output_reports_the_output_watch() {
         ArmedNotifications {
             exit: true,
             exit_off: None,
+            exit_available: false,
             output_watch_ascii: false,
             output_watch: OutputWatchState::Off,
         },
@@ -953,6 +1022,7 @@ fn exec_command_output_reports_the_output_watch() {
         ArmedNotifications {
             exit: false,
             exit_off: None,
+            exit_available: false,
             output_watch_ascii: false,
             output_watch: OutputWatchState::NotStarted(OutputWatchRefusal::Limit),
         },
@@ -980,6 +1050,7 @@ fn exec_command_output_reports_the_output_watch() {
             ArmedNotifications {
                 exit: false,
                 exit_off: None,
+                exit_available: false,
                 output_watch_ascii: false,
                 output_watch: OutputWatchState::NotStarted(refusal),
             },
@@ -994,6 +1065,7 @@ fn exec_command_output_reports_the_output_watch() {
         ArmedNotifications {
             exit: true,
             exit_off: None,
+            exit_available: false,
             output_watch_ascii: false,
             output_watch: OutputWatchState::On("ready".to_string()),
         },

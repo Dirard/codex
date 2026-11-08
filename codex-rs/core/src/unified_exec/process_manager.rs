@@ -1140,7 +1140,7 @@ impl UnifiedExecProcessManager {
             context.observe_exit(exit_notifier.as_deref()).await;
         }
         // Fork: `notify_on_output` and `notify_on_exit` of a live process (UC6, R6.15).
-        let armed_notifications = context
+        let mut armed_notifications = context
             .change_notifications(
                 process_id,
                 &process,
@@ -1152,6 +1152,9 @@ impl UnifiedExecProcessManager {
                 ),
             )
             .await;
+        // Fork: only a poll that waits gets the hint to arm the exit instead, not a write to an
+        // interactive program (`specs/fork-tool-guidance-2026-11-08.md` UC1, R1.1).
+        armed_notifications.exit_available &= request.input.is_empty();
         let response = ExecCommandToolOutput {
             event_call_id,
             chunk_id,

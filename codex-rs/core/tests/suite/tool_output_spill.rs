@@ -125,7 +125,7 @@ async fn exec_command_long_output_is_saved_and_named_in_model_input() -> Result<
     assert_eq!(std::fs::read_to_string(&path)?, seq_output(5000));
     let notice = &output[output.rfind(NOTICE_PREFIX).unwrap_or_default()..];
     assert!(
-        notice.contains("(5000 lines, 23893 bytes, ~5974 tokens). Read the omitted part with exec_command, e.g. sed -n 'A,Bp' or rg -n 'PATTERN' on that file."),
+        notice.contains("(5000 lines, 23893 bytes, ~5974 tokens). Read only the part you need with exec_command: rg -n 'PATTERN' to find it, then sed -n 'A,Bp' for a range no larger than the preview above; a larger read is cut again."),
         "{notice}"
     );
     assert!(output.contains("tokens truncated"), "{output}");
@@ -432,7 +432,7 @@ text(r.output);"#;
     assert_eq!(std::fs::read_to_string(&path)?, seq_output(5000));
     let notice = &text[text.rfind(NOTICE_PREFIX).unwrap_or_default()..];
     assert!(
-        notice.contains("(5000 lines, 23893 bytes, ~5974 tokens). Read the omitted part with tools.exec_command, e.g. sed -n 'A,Bp' or rg -n 'PATTERN' on that file."),
+        notice.contains("(5000 lines, 23893 bytes, ~5974 tokens). Read only the part you need with tools.exec_command: rg -n 'PATTERN' to find it, then sed -n 'A,Bp' for a range no larger than the preview above; a larger read is cut again."),
         "{notice}"
     );
     assert!(text.ends_with(notice), "{text}");

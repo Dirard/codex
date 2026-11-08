@@ -952,7 +952,9 @@ fn environment_protects_source(
 }
 
 /// Developer instructions appended for an isolated child (R3.5); a read-only explorer gets its
-/// own note without edit instructions (explorer-and-questions spec, R9.3).
+/// own note without edit instructions (explorer-and-questions spec, R9.3). The note overrides
+/// the upstream "shared directory" role text and warns of a cold build
+/// (`specs/fork-tool-guidance-2026-11-08.md` UC2, R2.1).
 pub(crate) fn isolation_developer_note(binding: &AgentWorktreeBinding) -> String {
     let metadata = binding.metadata();
     if binding.read_only_explorer() {
@@ -973,7 +975,7 @@ pub(crate) fn isolation_developer_note(binding: &AgentWorktreeBinding) -> String
         )
     };
     format!(
-        "You are working in an isolated git worktree at {cwd}. It was created from the {base_description} ({base_short}) of the parent checkout {source_root}, which is {protection} for you. Keep all edits inside your working directory and prefer relative paths. Do not run git commands that write repository metadata (add, commit, switch, stash, merge): {git_writes}. Do not request escalated permissions to edit the parent checkout. When you finish, Codex records your changes on branch {branch} and appends an <agent_worktree> block with the merge command to your result; do not write that block yourself.",
+        "You are working in an isolated git worktree at {cwd}. It was created from the {base_description} ({base_short}) of the parent checkout {source_root}, which is {protection} for you. Keep all edits inside your working directory and prefer relative paths. Do not run git commands that write repository metadata (add, commit, switch, stash, merge): {git_writes}. Do not request escalated permissions to edit the parent checkout. When you finish, Codex records your changes on branch {branch} and appends an <agent_worktree> block to your result; do not write that block yourself. Your edits stay in this worktree until your parent applies them, and edits made elsewhere do not reach you, whatever other instructions say about a shared directory. Ignored files such as build output and installed dependencies are not here, so the first build starts from scratch.",
         cwd = binding.cwd.display(),
         base_description = metadata.base_kind.description(),
         base_short = short_sha(&metadata.base_sha),

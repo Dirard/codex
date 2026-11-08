@@ -25,6 +25,7 @@ pub fn fork_owns_stage(feature: Feature) -> bool {
             | Feature::ScheduledWakeups
             | Feature::OutputStyles
             | Feature::DefaultModeRequestUserInput
+            | Feature::WakeOnAgentMessages
     )
 }
 

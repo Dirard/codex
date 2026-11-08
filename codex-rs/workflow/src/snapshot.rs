@@ -10,6 +10,7 @@ use serde::Serialize;
 use crate::journal::JournalEvent;
 use crate::journal::JournalRecord;
 use crate::journal::TokenCharge;
+use crate::notification::IsolatedAgent;
 use crate::null_reason;
 
 /// Longest recorded `log()` message, in characters (R2.8).
@@ -184,6 +185,10 @@ pub struct RunTracker {
     /// Calls whose tokens were settled from their agent's total (R5.1): live charges that
     /// arrive later are already part of that total.
     settled_tokens: HashSet<u64>,
+    /// Isolated agents by call and where their changes are; kept out of the snapshot, so
+    /// clients and the run index stay as they were (`specs/fork-tool-guidance-2026-11-08.md`
+    /// UC3, R3.1).
+    isolated: BTreeMap<u64, IsolatedAgent>,
 }
 
 impl RunTracker {
@@ -221,6 +226,7 @@ impl RunTracker {
             current_phase_seq: 0,
             agents: BTreeMap::new(),
             settled_tokens: HashSet::new(),
+            isolated: BTreeMap::new(),
         };
         for phase in declared_phases {
             tracker.phase_slot(phase);
@@ -239,6 +245,17 @@ impl RunTracker {
     /// Tokens charged to the run so far: the run's budget counts exactly these (R5.1).
     pub fn charged_tokens(&self) -> u64 {
         self.snapshot.charged_tokens
+    }
+
+    /// `specs/fork-tool-guidance-2026-11-08.md` UC3, R3.1: record where the isolated agent of
+    /// a call left its changes; a later entry of the same call replaces the earlier one.
+    pub fn isolated_agent(&mut self, entry: IsolatedAgent) {
+        self.isolated.insert(entry.call, entry);
+    }
+
+    /// UC3, R3.1: every isolated agent of the run, in call order.
+    pub fn isolated_agents(&self) -> Vec<IsolatedAgent> {
+        self.isolated.values().cloned().collect()
     }
 
     /// The snapshot, with the per-call list only when `include_agents` is set.
@@ -579,9 +596,18 @@ impl RunTracker {
                     reason,
                     tokens,
                     cached,
+                    worktree_details,
                     ..
                 } => {
                     let seq = call_of(*call, key, *ordinal);
+                    // UC3, R3.1 of `specs/fork-tool-guidance-2026-11-08.md`: the journal keeps
+                    // the worktree details of every answered isolated agent.
+                    if let Some(entry) = worktree_details
+                        .as_ref()
+                        .and_then(|details| IsolatedAgent::from_details(seq, details))
+                    {
+                        tracker.isolated_agent(entry);
+                    }
                     if *cached {
                         served += 1;
                         tracker.agent_cached(seq, label.clone(), phase.clone());

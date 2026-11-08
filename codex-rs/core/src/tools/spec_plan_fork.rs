@@ -116,22 +116,66 @@ pub(super) fn exec_exit_notifications_enabled(turn_context: &TurnContext) -> boo
     features.enabled(Feature::UnifiedExec) && features.enabled(Feature::ExecExitNotifications)
 }
 
-/// A catalog description replaces the bundled `wait_agent` one, so it gets the
-/// exit-notification sentence too (background-exec-notifications R4.6).
+/// A catalog description replaces the bundled `wait_agent` one, so it gets the fork's
+/// additions too (background-exec-notifications R4.6, `specs/fork-tool-guidance-2026-11-08.md`
+/// UC2, R2.2).
 pub(super) fn wait_agent_description(
     model_messages: ResolvedModelMessages<'_>,
-    exit_notifications: bool,
+    options: crate::tools::handlers::multi_agents_spec::WaitAgentForkOptions,
 ) -> Option<String> {
     model_messages
         .multi_agent_tool_description_override("wait_agent")
         .map(|description| {
-            if exit_notifications {
-                let guidance = crate::tools::handlers::multi_agents_spec::WAIT_AGENT_EXIT_NOTIFICATION_GUIDANCE;
-                format!("{description}{guidance}")
-            } else {
-                description.to_string()
-            }
+            let guidance =
+                crate::tools::handlers::multi_agents_spec::wait_agent_catalog_guidance(options);
+            format!("{description}{guidance}")
         })
+}
+
+/// What the `wait_agent` description adds for this turn: background terminals, whether agent
+/// results wake the caller, and workflow runs (`specs/fork-tool-guidance-2026-11-08.md` UC2).
+pub(super) fn wait_agent_options(
+    turn_context: &TurnContext,
+    workflows_available: bool,
+) -> crate::tools::handlers::multi_agents_spec::WaitAgentForkOptions {
+    crate::tools::handlers::multi_agents_spec::WaitAgentForkOptions {
+        exit_notifications: exec_exit_notifications_enabled(turn_context),
+        workflows: workflow_tools_offered(turn_context, workflows_available),
+        agent_results_wake: agent_results_wake(turn_context),
+    }
+}
+
+/// Whether a finished agent's answer starts a new turn of this idle thread that someone sees:
+/// only a root with `wake_on_agent_messages` (`Session::should_wake_on_agent_messages`), and not
+/// in `codex exec`, which ends with the turn and stops the agents instead of waiting for them
+/// (`specs/fork-tool-guidance-2026-11-08.md` UC6, R6.4).
+fn agent_results_wake(turn_context: &TurnContext) -> bool {
+    turn_context
+        .config
+        .features
+        .enabled(Feature::WakeOnAgentMessages)
+        && !turn_context.session_source.is_non_root_agent()
+        && !matches!(
+            turn_context.session_source,
+            codex_protocol::protocol::SessionSource::Exec
+        )
+}
+
+/// Whether this turn offers the `workflow` tool; mirrors the guard of
+/// `crate::workflow::add_workflow_tools`, which spawned agents never pass.
+fn workflow_tools_offered(turn_context: &TurnContext, workflows_available: bool) -> bool {
+    workflows_available
+        && turn_context.config.features.enabled(Feature::Workflows)
+        && turn_context.multi_agent_version == codex_protocol::protocol::MultiAgentVersion::V2
+        && !matches!(
+            turn_context.session_source,
+            codex_protocol::protocol::SessionSource::SubAgent(_)
+                | codex_protocol::protocol::SessionSource::Internal(_)
+        )
+        && turn_context
+            .session_source
+            .get_agent_path()
+            .is_none_or(|path| path.is_root())
 }
 
 /// The explorer profile needs `agent_type` even without user-defined roles.
@@ -154,13 +198,19 @@ pub(super) fn hide_explorer_tools(
     );
 }
 
-/// The `spawn_agent` (V2) options of the explorer profile and worktree isolation.
+/// The `spawn_agent` (V2) options of the explorer profile, worktree isolation and the fork's
+/// delegation guidance (`specs/fork-tool-guidance-2026-11-08.md` UC2).
 pub(super) fn spawn_agent_options(
-    config: &crate::config::Config,
+    turn_context: &TurnContext,
+    workflows_available: bool,
 ) -> crate::tools::handlers::multi_agents_spec::SpawnAgentForkOptions {
+    let config = &turn_context.config;
     crate::tools::handlers::multi_agents_spec::SpawnAgentForkOptions {
         explorer_profile: crate::agent::explorer_profile::enabled(config),
         worktree_isolation: config.features.enabled(Feature::AgentWorktreeIsolation),
+        workflows: workflow_tools_offered(turn_context, workflows_available),
+        wait_agent: config.multi_agent_v2.wait_agent_enabled,
+        agent_results_wake: agent_results_wake(turn_context),
     }
 }
 

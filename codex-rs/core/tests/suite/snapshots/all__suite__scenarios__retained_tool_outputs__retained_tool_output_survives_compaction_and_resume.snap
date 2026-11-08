@@ -6,15 +6,15 @@ Scenario: Retained thread instructions stop emergency tool-output trimming. Comp
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=f8f7ab75600ca7f3):
-        - namespace/functions; hash=5568e862ee5be100
+00:additional_tools/developer (3; hash=2234e3763ca62113):
+        - namespace/functions; hash=279cf5d33f9490ea
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=db3ab187547b8354
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=00a897e32979d598
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
@@ -48,15 +48,15 @@ Scenario: Retained thread instructions stop emergency tool-output trimming. Comp
 
 ## Window 2 (after request 4: input diverged at item 06)
 -- request 5 (turn) --
-00:additional_tools/developer (3; hash=f8f7ab75600ca7f3):
-        - namespace/functions; hash=5568e862ee5be100
+00:additional_tools/developer (3; hash=2234e3763ca62113):
+        - namespace/functions; hash=279cf5d33f9490ea
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=db3ab187547b8354
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=00a897e32979d598
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents

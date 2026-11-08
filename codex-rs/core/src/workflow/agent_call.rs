@@ -18,6 +18,7 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::turn_input::TurnStartOptions;
 use codex_workflow::CachedAnswer;
+use codex_workflow::IsolatedAgent;
 use codex_workflow::JournalEvent;
 use codex_workflow::TokenCharge;
 use codex_workflow::WORKFLOW_AGENT_INSTRUCTIONS;
@@ -183,6 +184,7 @@ pub(super) async fn run_agent_call(
         ordinal,
         schema_in_prompt: AtomicBool::new(false),
         worktree_report: std::sync::Mutex::new(None),
+        agent_path: std::sync::Mutex::new(None),
     };
     let (outcome, tokens) = call.execute(&cell_cancel).await;
     call.record(outcome, tokens)
@@ -254,6 +256,15 @@ fn record_cached(
         )),
     };
     let script_value = script_value(details, &value, script_worktree);
+    // `specs/fork-tool-guidance-2026-11-08.md` UC3, R3.1: the reused answer's agent is listed
+    // with the worktree details its source journal recorded.
+    if isolated
+        && let Some(entry) = worktree_details
+            .as_ref()
+            .and_then(|details| IsolatedAgent::from_details(seq, details))
+    {
+        run.record_isolated_agent(entry);
+    }
     run.journal(JournalEvent::AgentFinished {
         call: Some(seq),
         key,
@@ -335,6 +346,9 @@ struct AgentCall<'a> {
     /// the answer, so a resume that reuses it can report them (R6.3), and returned to a call
     /// with `details: true` (R3.13).
     worktree_report: std::sync::Mutex<Option<WorkflowWorktreeReport>>,
+    /// The canonical task name of the spawned agent, once it started
+    /// (`specs/fork-tool-guidance-2026-11-08.md` UC3, R3.1).
+    agent_path: std::sync::Mutex<Option<String>>,
 }
 
 struct SpawnedChild {
@@ -562,6 +576,10 @@ impl AgentCall<'_> {
             mut outcomes,
         } = spawned;
         let runtime = &self.session.services.local_agent_runtime;
+        *self
+            .agent_path
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(path.to_string());
         self.run.register_child(self.seq, thread_id);
         self.run.journal(JournalEvent::AgentStarted {
             call: Some(self.seq),
@@ -866,6 +884,39 @@ impl AgentCall<'_> {
             .map_err(|error| error.to_string())
     }
 
+    /// `specs/fork-tool-guidance-2026-11-08.md` UC3, R3.1: list an isolated agent that
+    /// started, with its recorded worktree details or why Codex recorded no changes, so the
+    /// parent finds every `apply_agent_worktree` target without the cut log tail.
+    fn record_isolated(&self, outcome: &CallOutcome, report: Option<&WorkflowWorktreeReport>) {
+        if self.isolation() != AgentIsolation::Worktree {
+            return;
+        }
+        let recorded =
+            report.and_then(|report| IsolatedAgent::from_details(self.seq, &report.details));
+        let entry = match recorded {
+            Some(entry) => entry,
+            None => {
+                // An agent that never started has no worktree to apply.
+                let Some(agent) = self
+                    .agent_path
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+                else {
+                    return;
+                };
+                let note = match outcome {
+                    CallOutcome::Value(_) => {
+                        "Codex could not report its worktree; the run log says why".to_string()
+                    }
+                    CallOutcome::Null { reason, .. } => format!("no answer ({reason})"),
+                };
+                IsolatedAgent::unrecorded(self.seq, agent, note)
+            }
+        };
+        self.run.record_isolated_agent(entry);
+    }
+
     /// Journal the call, update the snapshot and build the script's view of the result.
     fn record(&self, outcome: CallOutcome, tokens: TokenCharge) -> JsonValue {
         // R8.5: agents by outcome and null reason.
@@ -880,13 +931,14 @@ impl AgentCall<'_> {
                 &[("outcome", reason)],
             );
         }
+        let report = self
+            .worktree_report
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        self.record_isolated(&outcome, report.as_ref());
         match outcome {
             CallOutcome::Value(value) => {
-                let report = self
-                    .worktree_report
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .take();
                 let (worktree, worktree_details) = match report {
                     Some(report) => (Some(report.text), Some(report.details)),
                     None => (None, None),

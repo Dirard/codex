@@ -70,3 +70,21 @@ fn tool_call_without_summary_requires_final_message_after_last_call() {
         assert_eq!(tool_call_without_summary(&output), expected, "{name}");
     }
 }
+
+/// `specs/fork-tool-guidance-2026-11-08.md` UC4, R4.4: local compaction requests carry the
+/// step's tools, so the bundled compaction prompt forbids calling them before the reminder is
+/// ever needed; its opening line, which snapshots recognize, stays the same.
+#[test]
+fn bundled_compaction_prompt_forbids_tool_calls() {
+    let prompt = crate::compact::SUMMARIZATION_PROMPT;
+    assert!(
+        prompt.starts_with("You are performing a CONTEXT CHECKPOINT COMPACTION."),
+        "{prompt}"
+    );
+    assert!(
+        prompt
+            .trim_end()
+            .ends_with("Do not call tools: reply with the summary as plain text."),
+        "{prompt}"
+    );
+}

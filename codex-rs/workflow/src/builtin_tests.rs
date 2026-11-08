@@ -231,6 +231,65 @@ fn listing_names_every_builtin_once() {
     }
 }
 
+/// `specs/fork-tool-guidance-2026-11-08.md` UC3, R3.3: the listing asks for a built-in over a
+/// script of the model's own, and its agent counts of `review` are the worst case of the
+/// plan for many files at each effort: `1 + lenses × groups × rounds + critics + verifyCap ×
+/// votes` with `groups = max(1, ⌊findersPerRound / lenses⌋)` (`worstCase()` and `startOf()` in
+/// `review.js`), read from the script's own `EFFORT` table.
+#[test]
+fn listing_gives_the_review_agents_per_effort() {
+    assert!(
+        BUILTIN_LISTING.contains("prefer them to a script of your own for these jobs"),
+        "{BUILTIN_LISTING}"
+    );
+    let review = find_builtin("review").expect("review").source;
+    let start = review.find("const EFFORT = ").expect("EFFORT table") + "const EFFORT = ".len();
+    let mut depth = 0usize;
+    let mut end = start;
+    for (offset, ch) in review[start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = start + offset + 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let table = parse_literal(&review[start..end]).expect("EFFORT is a literal");
+    let counts: Vec<String> = REVIEW_EFFORTS
+        .iter()
+        .map(|effort| {
+            let row = &table[*effort];
+            let count = |key: &str| {
+                row[key]
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("{effort}.{key}"))
+            };
+            let len = |key: &str| {
+                row[key]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{effort}.{key}"))
+                    .len() as u64
+            };
+            let lenses = len("lenses");
+            let groups = (count("findersPerRound") / lenses).max(1);
+            (1 + lenses * groups * count("rounds")
+                + count("critics")
+                + count("verifyCap") * len("skeptics"))
+            .to_string()
+        })
+        .collect();
+    assert_eq!(counts, ["10", "31", "74", "132", "373"]);
+    assert!(
+        BUILTIN_LISTING.contains(&format!("at most {} agents", counts.join(", "))),
+        "{BUILTIN_LISTING}"
+    );
+}
+
 /// Builtin-workflows R9.4: the canonical review turn names the `builtin-review` call with
 /// compact args in the order of `meta.args`, and the reporting instructions.
 #[test]

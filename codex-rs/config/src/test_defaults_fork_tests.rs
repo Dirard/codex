@@ -36,10 +36,12 @@ fn pins_only_the_default_on_fork_features_a_document_does_not_set() {
     assert!(keys.contains(&"workflows"), "{keys:?}");
     assert!(keys.contains(&"exec_exit_notifications"), "{keys:?}");
 
+    // Boolean-only features (`workflows`, `wake_on_agent_messages`) keep their default without a
+    // `[features]` table in the document.
     assert_eq!(
         resolved(""),
         keys.iter()
-            .map(|key| (*key, *key == "workflows"))
+            .map(|key| (*key, matches!(*key, "workflows" | "wake_on_agent_messages")))
             .collect::<Vec<_>>()
     );
 
@@ -76,7 +78,10 @@ fn pins_only_the_default_on_fork_features_a_document_does_not_set() {
         keys.iter()
             .map(|key| (
                 *key,
-                matches!(*key, "workflows" | "exec_exit_notifications")
+                matches!(
+                    *key,
+                    "workflows" | "exec_exit_notifications" | "wake_on_agent_messages"
+                )
             ))
             .collect::<Vec<_>>()
     );

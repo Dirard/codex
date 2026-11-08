@@ -15,7 +15,7 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (10; hash=df014a900ade6f24):
+  tools (10; hash=72a5c8923638e070):
     - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
     - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
     - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
@@ -25,7 +25,7 @@ Settings:
       - function/sleep
     - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
     - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[path]; hash=1908de9c0be7118a
-    - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=db3ab187547b8354
+    - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=00a897e32979d598
       - function/followup_task
       - function/interrupt_agent
       - function/list_agents
@@ -50,7 +50,7 @@ Settings:
 
 ## Window 2 (after request 1)
 Settings: relative to window 1
-  tools (10; hash=0147a05625541f58):
+  tools (10; hash=a36006d7cd403db4):
     - removed function/release
     + function/deployment: Check deployment.; args=[]; hash=2e9a71e9a20e43ad
 -- request 2 (turn) --
@@ -80,7 +80,7 @@ Settings: relative to window 1
 
 ## Window 3 (after request 4)
 Settings: relative to window 2
-  tools (9; hash=22a84621bdc13268):
+  tools (9; hash=c4be73a050f897e4):
     - removed function/deployment
 -- request 5 (turn) --
 00:message/developer:

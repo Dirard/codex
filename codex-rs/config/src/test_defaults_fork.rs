@@ -73,10 +73,10 @@ pub fn upstream_test_feature_overrides() -> Vec<(String, toml::Value)> {
 /// - a feature with a settings table (`features.<key>` is a structured feature path) gets a
 ///   `[features.<key>]` table with `enabled = false`, or `enabled = false` in its existing table
 ///   without `enabled`, which keeps meaning what it meant while the feature was off by default;
-/// - a boolean-only feature (`workflows`) gets `<key> = false` only in a `[features]` table the
-///   document already defines. Without one it keeps its default: a `[features]` table added
-///   here would clash with one the test appends. Its tools also need MultiAgentV2, which tests
-///   usually turn on in `[features]`.
+/// - a boolean-only feature (`workflows`, `wake_on_agent_messages`) gets `<key> = false` only in a
+///   `[features]` table the document already defines. Without one it keeps its default: a
+///   `[features]` table added here would clash with one the test appends. Their behavior needs
+///   sub-agents, which tests usually turn on in `[features]` (`multi_agent_v2`).
 pub fn pin_default_on_fork_features_off(config_toml: &str) -> Result<String, TomlError> {
     let features_to_pin = fork_default_on_features();
     if features_to_pin.is_empty() {

@@ -4842,8 +4842,11 @@ async fn manual_local_compaction_retries_tool_call_once_for_summary() -> Result<
     let first_attempt = requests[1].body_json().to_string();
     let retry = requests[2].body_json().to_string();
     assert!(body_contains_text(&first_attempt, SUMMARIZATION_PROMPT));
-    assert!(!first_attempt.contains("Do not call tools"));
-    assert!(retry.contains("Do not call tools"));
+    // specs/fork-tool-guidance-2026-11-08.md UC4, R4.4: the prompt forbids tool calls up front;
+    // the reminder is sent only on the retry.
+    assert!(first_attempt.contains("Do not call tools: reply with the summary as plain text."));
+    assert!(!first_attempt.contains("Reply with the handoff summary as plain text."));
+    assert!(retry.contains("Reply with the handoff summary as plain text. Do not call tools."));
     assert!(!retry.contains("call-compaction-tool"));
     let follow_up = requests[3].body_json().to_string();
     assert!(body_contains_text(
@@ -5053,8 +5056,11 @@ async fn local_compaction_retries_tool_call_response_for_summary(
     let first_attempt = requests[1].body_json().to_string();
     let retry = requests[2].body_json().to_string();
     assert!(body_contains_text(&first_attempt, SUMMARIZATION_PROMPT));
-    assert!(!first_attempt.contains("Do not call tools"));
-    assert!(retry.contains("Do not call tools"));
+    // specs/fork-tool-guidance-2026-11-08.md UC4, R4.4: the prompt forbids tool calls up front;
+    // the reminder is sent only on the retry.
+    assert!(first_attempt.contains("Do not call tools: reply with the summary as plain text."));
+    assert!(!first_attempt.contains("Reply with the handoff summary as plain text."));
+    assert!(retry.contains("Reply with the handoff summary as plain text. Do not call tools."));
     // Neither the unanswered call nor its preamble was recorded.
     assert!(!retry.contains("call-compaction-tool"));
     assert!(!retry.contains(PREAMBLE));

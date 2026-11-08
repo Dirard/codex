@@ -44,30 +44,55 @@ fn clock_namespace(tool: ResponsesApiTool) -> ToolSpec {
     })
 }
 
-/// Data `tool_specs` of the spec, with the clamp range of the effective config (R2.8).
-pub(crate) fn schedule_wakeup_spec(limits: &ScheduledWakeupsConfig) -> ToolSpec {
+/// How to wait when background notifications are on: prefer an event over a timer, leave
+/// sub-agents to `wait_agent` (whether their answers wake an idle thread depends on
+/// `wake_on_agent_messages` and the mode, which this extension does not know), keep at most one
+/// long fallback and cancel it (`specs/fork-tool-guidance-2026-11-08.md` UC1, R1.1, R1.2;
+/// replaces UC1 of `specs/wakeup-trigger-guidance-2026-11-08.md`).
+const WAIT_WITH_EVENTS: &str = "Resume this thread after a delay, with `prompt` as new input; end your turn after the call. To wake up when something happens, prefer exec_command with notify_on_exit or notify_on_output: Codex resumes you as soon as the command exits or prints a matching line, so one bounded background check loop beats a series of wakeups. Use a wakeup for what no shell command can check: a state you can see only through other tools or your own judgment, a moment within the next hour, or the pace of a /loop. Do not schedule wakeups to wait for background commands that already notify you or for sub-agents (wait_agent says how their answers reach you), except one long fallback (20-60 minutes) in case one hangs; cancel it with clock.cancel_wakeup once the work reports.";
+/// The same without background notifications: no reference to `notify_on_*` (fork tool
+/// guidance UC1, R1.2, R1.3).
+const WAIT_WITHOUT_EVENTS: &str = "Resume this thread after a delay, with `prompt` as new input; end your turn after the call. Use it to check CI, a deploy or a long job instead of sleeping or polling. Do not schedule wakeups to wait for sub-agents (wait_agent says how their answers reach you), except one long fallback (20-60 minutes) in case one hangs; cancel it with clock.cancel_wakeup once the work reports.";
+/// Delay choice and lifetime, shared by both variants (wakeup trigger guidance R1.3).
+const WAKEUP_DELAY_AND_LIFETIME: &str = " Pick the delay from how fast the state changes: a build of about 8 minutes deserves one check after about 8 minutes, not eight checks a minute apart. One wakeup per thread; a new call replaces it. It lasts only while this Codex session runs.";
+
+/// Model chooses how to wait: the wakeup tool, with the clamp range of the effective config
+/// and, when background notifications are on, a pointer to waking on events instead
+/// (`specs/wakeup-trigger-guidance-2026-11-08.md` UC1, `specs/fork-tool-guidance-2026-11-08.md`
+/// UC1).
+pub(crate) fn schedule_wakeup_spec(
+    limits: &ScheduledWakeupsConfig,
+    exit_notifications: bool,
+) -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "delay_seconds".to_string(),
             JsonSchema::integer(Some(format!(
-                "Seconds from now; clamped to {}-{}.",
+                "Seconds from now; clamped to {}-{}. Match it to what you wait for.",
                 limits.min_delay_seconds, limits.max_delay_seconds
             ))),
         ),
         (
             "prompt".to_string(),
             JsonSchema::string(Some(
-                "What to do on wakeup, for your future self. Optional inside a /loop.".to_string(),
+                "Instructions for your future self that stand on their own: what to check and what to do next. Required except in a self-paced /loop.".to_string(),
             )),
         ),
         (
             "reason".to_string(),
-            JsonSchema::string(Some("Short reason shown to the user.".to_string())),
+            JsonSchema::string(Some(
+                "Short reason shown to the user: what you are waiting for.".to_string(),
+            )),
         ),
     ]);
+    let guidance = if exit_notifications {
+        WAIT_WITH_EVENTS
+    } else {
+        WAIT_WITHOUT_EVENTS
+    };
     clock_namespace(ResponsesApiTool {
         name: SCHEDULE_WAKEUP_TOOL_NAME.to_string(),
-        description: "End your turn and resume this thread later with `prompt` as new input, e.g. to poll CI, a deploy or a long job instead of sleeping. One wakeup per thread; a new call replaces it.".to_string(),
+        description: format!("{guidance}{WAKEUP_DELAY_AND_LIFETIME}"),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(
@@ -79,10 +104,12 @@ pub(crate) fn schedule_wakeup_spec(limits: &ScheduledWakeupsConfig) -> ToolSpec 
     })
 }
 
+/// `clock.cancel_wakeup`, with when to call it (`specs/fork-tool-guidance-2026-11-08.md` UC1,
+/// R1.1).
 pub(crate) fn cancel_wakeup_spec() -> ToolSpec {
     clock_namespace(ResponsesApiTool {
         name: CANCEL_WAKEUP_TOOL_NAME.to_string(),
-        description: "Cancel this thread's pending wakeup and stop its /loop.".to_string(),
+        description: "Cancel this thread's pending wakeup and stop its /loop: a fallback once the work it guarded has reported, or a loop whose goal is met.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(BTreeMap::new(), Some(Vec::new()), Some(false.into())),
@@ -172,7 +199,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ScheduleWakeupTool {
     }
 
     fn spec(&self) -> ToolSpec {
-        schedule_wakeup_spec(&self.state.limits())
+        schedule_wakeup_spec(&self.state.limits(), self.state.exit_notifications())
     }
 
     fn exposure(&self) -> ToolExposure {

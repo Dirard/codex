@@ -386,6 +386,55 @@ fn replay_keeps_labels_and_phases_of_calls_without_an_agent() {
     );
 }
 
+/// `specs/fork-tool-guidance-2026-11-08.md` UC3, R3.1: a rebuilt run lists every answered
+/// isolated agent from the worktree details of its journal, cached answers included; the
+/// list stays out of the snapshot.
+#[test]
+fn replay_lists_isolated_agents_from_their_worktree_details() {
+    let records: Vec<JournalRecord> = [
+        r#"{"seq":1,"kind":"run_started","run_id":"wf-00000005","name":"fix","script_sha256":"s","args_sha256":"a","parent_turn_id":"t","resume_from":"wf-00000001","resume_source_results":1}"#,
+        r#"{"seq":2,"kind":"agent_finished","call":1,"key":"a","ordinal":0,"ok":true,"value":"x","reason":null,"tokens":{"charged":0,"cached":0},"cached":true,"worktree":"<agent_worktree>","worktree_details":{"agent":"/root/wf_00000001_1","branch":"codex/agents/wf_00000001_1-1","files_total":3,"error":null}}"#,
+        r#"{"seq":3,"kind":"agent_finished","call":2,"key":"b","ordinal":0,"ok":true,"value":"y","reason":null,"tokens":{"charged":5,"cached":0}}"#,
+        r#"{"seq":4,"kind":"agent_finished","call":3,"key":"c","ordinal":0,"ok":true,"value":"z","reason":null,"tokens":{"charged":5,"cached":0},"worktree":"<agent_worktree>","worktree_details":{"agent":"/root/wf_00000005_3","branch":null,"files_total":0,"error":null}}"#,
+        r#"{"seq":5,"kind":"run_finished","status":"completed","result_bytes":3,"tokens":{"charged":10,"cached":0},"error":null}"#,
+    ]
+    .iter()
+    .map(|line| serde_json::from_str(line).expect("record"))
+    .collect();
+    let tracker = RunTracker::replay(
+        "wf-00000005".to_string(),
+        String::new(),
+        &[],
+        &records,
+        /*fallback_ms*/ 1,
+        /*result_preview*/ None,
+    );
+    assert_eq!(
+        tracker.isolated_agents(),
+        vec![
+            IsolatedAgent {
+                call: 1,
+                agent: "/root/wf_00000001_1".to_string(),
+                branch: Some("codex/agents/wf_00000001_1-1".to_string()),
+                changed_files: 3,
+                note: None,
+            },
+            IsolatedAgent {
+                call: 3,
+                agent: "/root/wf_00000005_3".to_string(),
+                branch: None,
+                changed_files: 0,
+                note: None,
+            },
+        ]
+    );
+    assert!(
+        !serde_json::to_string(&tracker.snapshot(true))
+            .expect("snapshot")
+            .contains("wf_00000005_3")
+    );
+}
+
 #[test]
 fn finish_is_terminal_once() {
     let mut tracker = tracker();

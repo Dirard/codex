@@ -21,7 +21,10 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolSpec;
 
-/// Sent only on the single retry after a local compaction response called a tool.
+/// Sent only on the single retry after a local compaction response called a tool. The bundled
+/// compaction prompt (`prompts/templates/compact/prompt.md`) already forbids tool calls, because
+/// local compaction requests carry the step's tools (`specs/fork-tool-guidance-2026-11-08.md`
+/// UC4, R4.4); a custom `compact_prompt` keeps its own text, and this reminder covers both.
 const LOCAL_COMPACTION_SUMMARY_REMINDER: &str =
     "Reply with the handoff summary as plain text. Do not call tools.";
 /// A terminal, non-network failure once the corrective retry called a tool again.

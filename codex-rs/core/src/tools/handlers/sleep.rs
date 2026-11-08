@@ -27,7 +27,23 @@ const NAMESPACE: &str = "clock";
 const TOOL_NAME: &str = "sleep";
 const MAX_SLEEP_DURATION_MS: u64 = 12 * 60 * 60 * 1000;
 
-pub struct SleepHandler;
+pub struct SleepHandler {
+    /// Fork: background terminal notifications are on, so the description says that one also
+    /// ends the sleep (`specs/fork-tool-guidance-2026-11-08.md` UC1, R1.1).
+    exit_notifications: bool,
+}
+
+impl SleepHandler {
+    /// Fork: the sleep tool, described with background terminal notifications when they are on.
+    pub(crate) fn new(exit_notifications: bool) -> Self {
+        Self { exit_notifications }
+    }
+}
+
+/// Fork: what ends a sleep besides new input when background terminal notifications are on; the
+/// wake comes from the same input activity (`InputQueueActivity::BackgroundTerminal`)
+/// (`specs/fork-tool-guidance-2026-11-08.md` UC1, R1.1).
+const SLEEP_EXIT_NOTIFICATION_GUIDANCE: &str = " A notification from a background terminal with notify_on_exit or notify_on_output also ends it early, so do not poll that terminal between sleeps.";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,7 +51,7 @@ struct SleepArgs {
     duration_ms: u64,
 }
 
-fn create_sleep_tool() -> ToolSpec {
+fn create_sleep_tool(exit_notifications: bool) -> ToolSpec {
     let properties = BTreeMap::from([(
         "duration_ms".to_string(),
         JsonSchema::number(Some(format!(
@@ -48,8 +64,14 @@ fn create_sleep_tool() -> ToolSpec {
         description: "Tools for reading and waiting on time.".to_string(),
         tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
             name: TOOL_NAME.to_string(),
-            description: "Pause execution for a specified duration. The sleep ends early when new input arrives for the active turn. Returns the elapsed wall-clock time."
-                .to_string(),
+            description: format!(
+                "Pause execution for a specified duration. The sleep ends early when new input arrives for the active turn. Returns the elapsed wall-clock time.{}",
+                if exit_notifications {
+                    SLEEP_EXIT_NOTIFICATION_GUIDANCE
+                } else {
+                    ""
+                }
+            ),
             strict: false,
             defer_loading: None,
             parameters: JsonSchema::object(
@@ -68,7 +90,7 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
     }
 
     fn spec(&self) -> ToolSpec {
-        create_sleep_tool()
+        create_sleep_tool(self.exit_notifications)
     }
 
     fn exposure(&self) -> ToolExposure {
@@ -163,5 +185,33 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
 impl CoreToolRuntime for SleepHandler {
     fn is_builtin_control_tool(&self) -> bool {
         true
+    }
+}
+
+/// Fork (`specs/fork-tool-guidance-2026-11-08.md` UC1, R1.1): only with background terminal
+/// notifications does the description say that one ends the sleep.
+#[cfg(test)]
+mod fork_tests {
+    use super::*;
+
+    fn description(exit_notifications: bool) -> String {
+        let ToolSpec::Namespace(namespace) = create_sleep_tool(exit_notifications) else {
+            panic!("sleep is namespaced");
+        };
+        let [ResponsesApiNamespaceTool::Function(tool)] = namespace.tools.as_slice() else {
+            panic!("one sleep function");
+        };
+        tool.description.clone()
+    }
+
+    #[test]
+    fn the_description_names_notifications_only_when_they_are_on() {
+        assert!(
+            description(/*exit_notifications*/ true).ends_with(SLEEP_EXIT_NOTIFICATION_GUIDANCE)
+        );
+        assert_eq!(
+            description(/*exit_notifications*/ false),
+            "Pause execution for a specified duration. The sleep ends early when new input arrives for the active turn. Returns the elapsed wall-clock time."
+        );
     }
 }

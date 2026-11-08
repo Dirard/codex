@@ -285,6 +285,10 @@ pub struct WakeupThreadState {
     weak_self: Weak<Self>,
     enabled: AtomicBool,
     limits: Mutex<ScheduledWakeupsConfig>,
+    /// `exec_command` offers `notify_on_*` (`unified_exec` and `exec_exit_notifications`): the
+    /// tool description points to them (wakeup trigger guidance UC1, R1.1, R1.5; fork tool
+    /// guidance UC1, R1.3).
+    exit_notifications: AtomicBool,
     eligibility: Mutex<Eligibility>,
     /// A MultiAgentV2 child: only its parent starts its turns (D17).
     child: bool,
@@ -337,6 +341,7 @@ impl WakeupThreadState {
             weak_self: weak_self.clone(),
             enabled: AtomicBool::new(enabled),
             limits: Mutex::new(limits),
+            exit_notifications: AtomicBool::new(false),
             eligibility: Mutex::new(eligibility),
             child: eligibility == Eligibility::PendingCheck,
             inner: Mutex::new(Inner::default()),
@@ -368,6 +373,15 @@ impl WakeupThreadState {
     pub(crate) fn set_config(&self, enabled: bool, limits: ScheduledWakeupsConfig) {
         self.enabled.store(enabled, Ordering::Relaxed);
         *lock(&self.limits) = limits;
+    }
+
+    /// Whether background exit and output notifications are on for this thread.
+    pub(crate) fn exit_notifications(&self) -> bool {
+        self.exit_notifications.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_exit_notifications(&self, enabled: bool) {
+        self.exit_notifications.store(enabled, Ordering::Relaxed);
     }
 
     pub(crate) fn set_eligibility(&self, eligibility: Eligibility) {

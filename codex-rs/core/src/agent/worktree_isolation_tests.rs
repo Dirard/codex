@@ -360,6 +360,19 @@ fn isolation_note_describes_the_worktree_and_protection() {
     assert!(unprotected.contains(
         "(add, commit, switch, stash, merge): they would change the repository metadata shared with the parent checkout."
     ));
+    // Fork tool guidance UC2: the note overrides the upstream "shared directory" role text and
+    // warns of a cold build without the parent's ignored files.
+    for note in [&protected, &unprotected] {
+        assert!(
+            note.contains("Your edits stay in this worktree until your parent applies them, and edits made elsewhere do not reach you, whatever other instructions say about a shared directory."),
+            "{note}"
+        );
+        assert!(
+            note.contains("Ignored files such as build output and installed dependencies are not here, so the first build starts from scratch."),
+            "{note}"
+        );
+        assert!(!note.contains("with the merge command"), "{note}");
+    }
 }
 
 /// Explorer-and-questions R9.3: a read-only explorer's note names the worktree but gives no

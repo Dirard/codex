@@ -106,7 +106,13 @@ pub(crate) fn effective_multi_agent_mode(step_context: &StepContext) -> Option<M
                 };
             match message {
                 ResolvedMessage::Catalog(text) => MultiAgentMode::Custom(text.to_owned()),
-                ResolvedMessage::Bundled(_) => builtin,
+                // Fork: the explorer profile lets the model start explorers on its own.
+                ResolvedMessage::Bundled(text) => crate::agent::explorer_profile::multi_agent_mode(
+                    &turn_context.config,
+                    &turn_context.session_source,
+                    builtin,
+                    text,
+                ),
             }
         }
     };

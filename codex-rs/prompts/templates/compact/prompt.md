@@ -7,3 +7,5 @@ Include:
 - Any critical data, examples, or references needed to continue
 
 Be concise, structured, and focused on helping the next LLM seamlessly continue the work.
+
+Do not call tools: reply with the summary as plain text.

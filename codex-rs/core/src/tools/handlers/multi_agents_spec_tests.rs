@@ -376,7 +376,7 @@ fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
             min_timeout_ms: 10_000,
             max_timeout_ms: 3_600_000,
         },
-        /*exit_notifications*/ false,
+        WaitAgentForkOptions::default(),
     )
     else {
         panic!("wait_agent should be a function tool");
@@ -392,9 +392,12 @@ fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
         .expect("wait_agent should use object params");
     assert!(!properties.contains_key("targets"));
     assert!(properties.contains_key("timeout_ms"));
+    // Fork tool guidance UC2: the result is a short status, the answers arrive as messages.
     assert!(description.contains(
-        "Does not return the content; returns either a summary of which agents have updates (if any)"
+        "Does not return the content: the result is a short status (completed, interrupted by new user input, no active agents, or a timeout snapshot)"
     ));
+    assert!(description.contains("final answers arrive as separate messages right after it"));
+    assert!(!description.contains("summary of which agents have updates"));
     assert!(description.contains("For normal background work, omit `timeout_ms`"));
     assert!(description.contains("Passing `0` performs one immediate check"));
     assert_eq!(
@@ -526,4 +529,258 @@ fn spawn_agent_tool_v2_exposes_isolation_only_when_enabled() {
         );
         assert!(!description.contains("git diff-tree"), "{isolation}");
     }
+}
+
+fn wait_agent_description(fork_options: WaitAgentForkOptions) -> String {
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) =
+        create_wait_agent_tool_v2(WaitAgentTimeoutOptions::default(), fork_options)
+    else {
+        panic!("wait_agent should be a function tool");
+    };
+    description
+}
+
+fn spawn_agent_tool(
+    fork: SpawnAgentForkOptions,
+    description_override: Option<&str>,
+) -> ResponsesApiTool {
+    let ToolSpec::Function(tool) = create_spawn_agent_tool_v2(
+        SpawnAgentToolOptions {
+            agent_type_description: "Available roles:\nexplorer: {\nRead-only.\n}".to_string(),
+            multi_agent_version: MultiAgentVersion::V2,
+            fork,
+            ..Default::default()
+        },
+        description_override,
+    ) else {
+        panic!("spawn_agent should be a function tool");
+    };
+    tool
+}
+
+/// Fork tool guidance UC2, R2.2: agent results do not start a turn, so `wait_agent` tells the
+/// model to keep its turn open while agents run; with `wake_on_agent_messages` they do.
+#[test]
+fn wait_agent_tool_v2_says_whether_agent_results_start_a_turn() {
+    let waits = wait_agent_description(WaitAgentForkOptions::default());
+    assert!(
+        waits.contains("While agents you started are running, do not end your turn: their answers do not start a new turn by themselves"),
+        "{waits}"
+    );
+    assert!(waits.contains("Call wait_agent to collect them"), "{waits}");
+    assert!(!waits.contains("background terminal"), "{waits}");
+    assert!(!waits.contains("workflow"), "{waits}");
+
+    let wakes = wait_agent_description(WaitAgentForkOptions {
+        agent_results_wake: true,
+        ..Default::default()
+    });
+    assert!(
+        wakes.contains("their answers start a new turn when they arrive (not in Plan mode or after the user interrupts), so you may end your turn instead of waiting idly"),
+        "{wakes}"
+    );
+    assert!(!wakes.contains("do not end your turn"), "{wakes}");
+}
+
+/// Fork tool guidance UC2, R1.4, R2.3: terminals, agents and workflow runs read as one text:
+/// terminals may end the turn, agents may not, and workflow runs are not waited for.
+#[test]
+fn wait_agent_tool_v2_orders_terminals_agents_and_workflow_runs() {
+    let description = wait_agent_description(WaitAgentForkOptions {
+        exit_notifications: true,
+        workflows: true,
+        agent_results_wake: false,
+    });
+    let terminals = description
+        .find(" It also returns when a background terminal started with exec_command notify_on_exit or notify_on_output exits")
+        .expect("terminal sentence");
+    let end_turn = description
+        .find("To wait only for terminals, end your turn instead: their notifications start a new turn.")
+        .expect("terminals may end the turn");
+    let agents = description
+        .find("do not end your turn")
+        .expect("agents keep the turn open");
+    let workflows = description
+        .find("It also returns early when a workflow run finishes (its notification follows), but it does not wait for workflow runs")
+        .expect("workflow sentence");
+    assert!(
+        terminals < end_turn && end_turn < agents && agents < workflows,
+        "{description}"
+    );
+    // Report A, 3.5: the parenthesis with the output watch reads as a sentence now.
+    assert!(
+        description.contains("for a terminal with only an output watch, until its first matching line (awaited a few minutes after your turn ends), then while matching lines keep coming"),
+        "{description}"
+    );
+}
+
+/// A catalog `wait_agent` text keeps the upstream wording without a notifying fork feature and
+/// gets the terminal sentence first, then the agent rule, with one.
+#[test]
+fn wait_agent_catalog_guidance_follows_notifying_features() {
+    assert_eq!(
+        wait_agent_catalog_guidance(WaitAgentForkOptions::default()),
+        ""
+    );
+    let wakes = wait_agent_catalog_guidance(WaitAgentForkOptions {
+        agent_results_wake: true,
+        ..Default::default()
+    });
+    assert_eq!(wakes, "");
+
+    let terminals = wait_agent_catalog_guidance(WaitAgentForkOptions {
+        exit_notifications: true,
+        ..Default::default()
+    });
+    assert!(
+        terminals.starts_with(" It also returns when a background terminal started with exec_command notify_on_exit or notify_on_output exits"),
+        "{terminals}"
+    );
+    assert!(terminals.contains("do not end your turn"), "{terminals}");
+
+    let workflows = wait_agent_catalog_guidance(WaitAgentForkOptions {
+        workflows: true,
+        ..Default::default()
+    });
+    assert!(workflows.contains("do not end your turn"), "{workflows}");
+    assert!(workflows.contains("workflow run finishes"), "{workflows}");
+}
+
+/// Fork tool guidance UC2, R2.1, R2.3: with a fork feature `spawn_agent` says what spawned
+/// agents lack and how to delegate; without one it stays as upstream composed it.
+#[test]
+fn spawn_agent_tool_v2_fork_guidance_follows_features() {
+    let upstream = spawn_agent_tool(SpawnAgentForkOptions::default(), None).description;
+    assert!(!upstream.contains("When you delegate"), "{upstream}");
+    assert!(upstream.contains(
+        "The spawned agent will have the same tools as you and the ability to spawn its own subagents."
+    ));
+
+    let explorer = spawn_agent_tool(
+        SpawnAgentForkOptions {
+            explorer_profile: true,
+            wait_agent: true,
+            ..Default::default()
+        },
+        None,
+    )
+    .description;
+    assert!(explorer.contains(
+        "The spawned agent will have the same tools as you and the ability to spawn its own subagents; an `explorer` gets only read-only tools and cannot spawn."
+    ), "{explorer}");
+    for fragment in [
+        "When you delegate: an agent costs a full model run and returns only its final answer",
+        "Start independent agents in the same response so they run in parallel",
+        "With `fork_turns=\"none\"` the message is the agent's only context",
+        "Collect their results with `wait_agent` before you end your turn.",
+    ] {
+        assert!(explorer.contains(fragment), "{fragment}: {explorer}");
+    }
+    assert!(!explorer.contains("workflow"), "{explorer}");
+
+    let workflows = spawn_agent_tool(
+        SpawnAgentForkOptions {
+            workflows: true,
+            wait_agent: true,
+            ..Default::default()
+        },
+        None,
+    )
+    .description;
+    assert!(workflows.contains(
+        "The spawned agent will have the same tools as you except `workflow`, and the ability to spawn its own subagents."
+    ), "{workflows}");
+    assert!(
+        workflows.contains("use the `workflow` tool instead"),
+        "{workflows}"
+    );
+    assert!(
+        !workflows.contains("Spawned agents cannot start workflows."),
+        "{workflows}"
+    );
+
+    // A catalog description has no tool sentence to correct, so the guidance names the gap.
+    let catalog = spawn_agent_tool(
+        SpawnAgentForkOptions {
+            workflows: true,
+            agent_results_wake: true,
+            wait_agent: true,
+            ..Default::default()
+        },
+        Some("Catalog spawn."),
+    )
+    .description;
+    assert!(catalog.contains("Catalog spawn."), "{catalog}");
+    assert!(catalog.contains("When you delegate"), "{catalog}");
+    assert!(
+        catalog.contains("Spawned agents cannot start workflows."),
+        "{catalog}"
+    );
+    // Results that wake the caller need no reminder to collect them before the turn ends.
+    assert!(!catalog.contains("before you end your turn"), "{catalog}");
+}
+
+/// Fork tool guidance UC2, R2.1 (report B, P1 #1): the explorer profile drops the upstream
+/// "Omit unless explicitly asked" that kept the model from choosing `explorer`.
+#[test]
+fn spawn_agent_tool_v2_agent_type_invites_a_role_with_the_explorer_profile() {
+    let agent_type = |explorer_profile| {
+        spawn_agent_tool(
+            SpawnAgentForkOptions {
+                explorer_profile,
+                ..Default::default()
+            },
+            None,
+        )
+        .parameters
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.get("agent_type"))
+        .and_then(|schema| schema.description.clone())
+        .expect("agent_type description")
+    };
+    let upstream = agent_type(false);
+    assert!(
+        upstream
+            .starts_with("Agent type override for the new agent. Omit unless explicitly asked.")
+    );
+
+    let profiled = agent_type(true);
+    assert!(
+        profiled.starts_with("Role of the new agent: pick the role below whose description fits the task, such as `explorer` for read-only questions about the code, or omit it for a `default` agent. The selected role applies"),
+        "{profiled}"
+    );
+    assert!(
+        !profiled.contains("Omit unless explicitly asked"),
+        "{profiled}"
+    );
+    assert!(profiled.contains("explorer: {"), "{profiled}");
+}
+
+/// Fork tool guidance UC2, R2.1 (report B, P2 #4): `isolation` says when a worktree pays off,
+/// what it costs and that its edits stay invisible until applied.
+#[test]
+fn spawn_agent_tool_v2_isolation_names_its_cost() {
+    let isolation = spawn_agent_tool(
+        SpawnAgentForkOptions {
+            worktree_isolation: true,
+            ..Default::default()
+        },
+        None,
+    )
+    .parameters
+    .properties
+    .as_ref()
+    .and_then(|properties| properties.get("isolation"))
+    .and_then(|schema| schema.description.clone())
+    .expect("isolation description");
+    for fragment in [
+        "ignored files such as build output and dependencies are not, so builds there start cold",
+        "its edits stay invisible to you and other agents until you apply them",
+        "Use `worktree` only for an agent that edits files while you or other agents edit the same checkout, never for `explorer` agents",
+        "Edits to the same file can still conflict on apply",
+    ] {
+        assert!(isolation.contains(fragment), "{fragment}: {isolation}");
+    }
+    assert!(!isolation.contains("without conflicts"), "{isolation}");
 }

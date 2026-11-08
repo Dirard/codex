@@ -1,6 +1,7 @@
 use super::*;
 use crate::session::InputQueueActivity;
 use crate::thread_input::subscribe_input_activity;
+use crate::tools::handlers::multi_agents_spec::WaitAgentForkOptions;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
 use codex_tools::ToolSpec;
@@ -12,15 +13,18 @@ use tokio::time::timeout_at;
 #[derive(Default)]
 pub(crate) struct Handler {
     options: WaitAgentTimeoutOptions,
-    /// Fork: describe and wait for background terminal exit notifications.
-    exit_notifications: bool,
+    /// Fork: what the description adds about terminals, agent results and workflow runs.
+    fork_options: WaitAgentForkOptions,
 }
 
 impl Handler {
-    pub(crate) fn new(options: WaitAgentTimeoutOptions, exit_notifications: bool) -> Self {
+    pub(crate) fn new(
+        options: WaitAgentTimeoutOptions,
+        fork_options: WaitAgentForkOptions,
+    ) -> Self {
         Self {
             options,
-            exit_notifications,
+            fork_options,
         }
     }
 }
@@ -31,7 +35,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
     }
 
     fn spec(&self) -> ToolSpec {
-        create_wait_agent_tool_v2(self.options, self.exit_notifications)
+        create_wait_agent_tool_v2(self.options, self.fork_options)
     }
 
     fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>

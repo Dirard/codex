@@ -224,6 +224,22 @@ fn default_mode_texts_keep_irreversible_actions_with_the_user() {
     );
 }
 
+// specs/fork-tool-guidance-2026-11-08.md UC4, R4.2: an irreversible action the user explicitly
+// asked for is not asked about again; the plain-text question is only for one they did not.
+#[test]
+fn default_mode_guidance_does_not_ask_again_about_a_requested_action() {
+    assert!(
+        DEFAULT_MODE_GUIDANCE.contains(
+            "when the user explicitly asked for such an action, do not ask about it again; otherwise ask in plain text and do not take such an action until the user answers"
+        ),
+        "{DEFAULT_MODE_GUIDANCE}"
+    );
+    assert!(
+        !DEFAULT_MODE_GUIDANCE.contains("ask the user in plain text"),
+        "{DEFAULT_MODE_GUIDANCE}"
+    );
+}
+
 // Tails review 2026-10-27, P3-11: the guidance is added whether or not the model catalog lists
 // the async question tool, so it names no such tool; it still steers Default-mode questions
 // to this one.

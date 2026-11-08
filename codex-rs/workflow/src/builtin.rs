@@ -42,11 +42,14 @@ pub const BUILTIN_WORKFLOWS: &[BuiltinWorkflow] = &[
 ];
 
 /// UC2, R2.1, R2.2: the built-in scripts as the `name` parameter of the `workflow` tool lists
-/// them; static text within 200 tokens, so the tool spec stays stable for prompt caching.
-pub const BUILTIN_LISTING: &str = "Built-in scripts (a project or $CODEX_HOME script of the same name replaces one; `builtin-<name>` always runs the built-in; wrong `args` return the usage, no run):
-- `review`: find bugs in changes, keep only findings independent skeptics fail to refute; args {effort: low|medium|high|xhigh|max, target, base, commit, uncommitted, paths, focus, max_findings}.
+/// them; static text within 200 tokens, so the tool spec stays stable for prompt caching. Since
+/// `specs/fork-tool-guidance-2026-11-08.md` UC3 (R3.3) it asks for a built-in over a script of
+/// the model's own and gives the most agents `review` starts at each effort, the worst case of
+/// its plan (`worstCase()` in `review.js`, checked by a test).
+pub const BUILTIN_LISTING: &str = "Built-in scripts (prefer them to a script of your own for these jobs; a project or $CODEX_HOME script of the same name replaces one; `builtin-<name>` always runs the built-in; wrong `args` return the usage, no run):
+- `review`: find bugs in changes, keep only findings independent skeptics fail to refute; args {effort: low|medium|high|xhigh|max (default medium; at most 10, 31, 74, 132, 373 agents), target, base, commit, uncommitted, paths, focus, max_findings (number or \"all\")}.
 - `understand`: map how code is organized and works; args {question, paths, effort}.
-- `research`: answer a question with evidence from code, tests, docs, history; args {question (required), paths, effort, web}.";
+- `research`: answer a question with evidence from code, tests, docs, history; args {question (required), paths, effort, web (used at xhigh and max)}.";
 
 /// The built-in script `name` (without the `builtin-` prefix).
 pub fn find_builtin(name: &str) -> Option<&'static BuiltinWorkflow> {

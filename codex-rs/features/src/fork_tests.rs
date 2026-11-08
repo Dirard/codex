@@ -69,6 +69,13 @@ fn background_workflow_and_worktree_features_are_experimental() {
             "applies their changes with apply_agent_worktree",
             "local git checkouts only, not on Windows",
         ),
+        // Fork-tool-guidance UC6: a subagent's answer wakes an idle root.
+        (
+            Feature::WakeOnAgentMessages,
+            "Wake on subagent results",
+            "when a subagent reports back after Codex ended its turn",
+            "Root threads only",
+        ),
     ] {
         let stage = feature.stage();
         assert_eq!(stage.experimental_menu_name(), Some(name), "{feature:?}");
@@ -115,7 +122,10 @@ fn output_styles_is_experimental() {
 /// by the owner's decision of 2026-11-07, and the features that landed later stay off.
 fn expected_default_enabled(feature: Feature) -> bool {
     match feature {
-        Feature::ExecExitNotifications | Feature::ExplorerProfile | Feature::Workflows => true,
+        Feature::ExecExitNotifications
+        | Feature::ExplorerProfile
+        | Feature::Workflows
+        | Feature::WakeOnAgentMessages => true,
         Feature::AgentWorktreeIsolation => !cfg!(windows),
         _ => false,
     }
@@ -134,6 +144,7 @@ fn fork_features_default_on() {
         (Feature::ExplorerProfile, "Read-only explorer subagents"),
         (Feature::AgentWorktreeIsolation, "Subagent worktrees"),
         (Feature::Workflows, "Dynamic workflows"),
+        (Feature::WakeOnAgentMessages, "Wake on subagent results"),
         (
             Feature::DefaultModeRequestUserInput,
             "Questions outside Plan mode",
@@ -174,6 +185,8 @@ fn fork_default_on_features_matches_registry() {
     if !cfg!(windows) {
         expected.push(Feature::AgentWorktreeIsolation);
     }
+    // Fork-tool-guidance UC6: the upstream flag is registered after the fork's own features.
+    expected.push(Feature::WakeOnAgentMessages);
     assert_eq!(crate::fork_default_on_features(), expected);
     for spec in crate::FEATURES {
         assert_eq!(

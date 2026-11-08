@@ -64,6 +64,8 @@ pub use meta::WorkflowMeta;
 pub use meta::check_args_size;
 pub use meta::is_valid_name;
 pub use meta::parse_script;
+pub use notification::IsolatedAgent;
+pub use notification::MAX_NOTIFIED_ISOLATED;
 pub use notification::NOTIFICATION_CLOSE_TAG;
 pub use notification::NOTIFICATION_OPEN_TAG;
 pub use notification::NotificationSummary;

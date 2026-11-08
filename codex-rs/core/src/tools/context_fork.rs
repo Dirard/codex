@@ -28,8 +28,12 @@ use crate::unified_exec::OUTPUT_WATCH_MAX_ACTIVE;
 use crate::unified_exec::OutputWatchRefusal;
 use crate::unified_exec::OutputWatchState;
 
-/// Header line telling the model that the exit will be reported without polling.
-pub(super) const EXIT_NOTIFICATION_ARMED_LINE: &str = "Exit notification: on (Codex will report when this process exits while this Codex session is running; do not poll for completion)";
+/// Header line telling the model that the exit will be reported without polling, and what to do
+/// instead (`specs/fork-tool-guidance-2026-11-08.md` UC1, R1.1).
+pub(super) const EXIT_NOTIFICATION_ARMED_LINE: &str = "Exit notification: on (Codex will report when this process exits while this Codex session is running, even after your turn ends; do not poll or sleep for completion: continue other work or end your turn)";
+/// Header line of a running process whose exit nothing reports: `write_stdin` can arm it instead
+/// of polling (`specs/fork-tool-guidance-2026-11-08.md` UC1, R1.1).
+pub(super) const EXIT_NOTIFICATION_NOT_REQUESTED_LINE: &str = "Exit notification: not requested (to be told when this process exits instead of polling it, call write_stdin with this session_id and notify_on_exit true)";
 /// Added to the output watch line when the watch replaced one that matched, so it is awaited
 /// as after a match (live recheck 2 R3, review of the fixes 2, N-2).
 pub(super) const OUTPUT_WATCH_AFTER_MATCH_NOTE: &str = ". This process already matched an output watch, so codex exec and wait_agent wait for this one only while matching lines keep coming, not for a first match; set notify_on_exit to wait for the process to exit.";
@@ -113,11 +117,14 @@ impl ExecCommandToolOutput {
     }
 
     /// The process outlived this call and will report its exit (R1.2) and matching output
-    /// (R6.3, R6.4, R6.8) to the thread.
+    /// (R6.3, R6.4, R6.8) to the thread, or could report its exit if the model armed it
+    /// (`specs/fork-tool-guidance-2026-11-08.md` UC1, R1.1).
     pub(super) fn fork_notification_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
         if self.armed_notifications.exit {
             lines.push(EXIT_NOTIFICATION_ARMED_LINE.to_string());
+        } else if self.armed_notifications.exit_available {
+            lines.push(EXIT_NOTIFICATION_NOT_REQUESTED_LINE.to_string());
         }
         // R6.15 (live recheck 2026-10-27, N1): `write_stdin` turned `notify_on_exit` off.
         match self.armed_notifications.exit_off {

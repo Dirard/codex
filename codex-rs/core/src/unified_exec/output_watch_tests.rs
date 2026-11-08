@@ -438,18 +438,22 @@ fn a_large_pattern_with_non_ascii_text_is_refused() {
     assert_eq!(quoted_lines(&text).len(), 2, "{text}");
 }
 
-/// Tails review 2026-10-27, P3-9 and P3-12: the description says how a large pattern is
-/// matched and gives no wait times, which `[features.exec_exit_notifications]` may change.
+/// Tails review 2026-10-27, P3-12: the description gives no wait times, which
+/// `[features.exec_exit_notifications]` may change. Tool guidance UC1
+/// (`specs/fork-tool-guidance-2026-11-08.md`, R1.1) replaces P3-9: a refused pattern and the ASCII
+/// fallback are explained by the tool result (`OUTPUT_PATTERN_TOO_COSTLY`,
+/// `OUTPUT_WATCH_ASCII_NOTE`) when they happen, so the description that every request carries
+/// leaves them out.
 #[test]
 fn the_notify_on_output_description_names_no_configurable_wait() {
     let description = crate::tools::handlers::shell_spec::NOTIFY_ON_OUTPUT_DESCRIPTION;
     for configurable in ["5 minutes", "a minute apart"] {
         assert!(!description.contains(configurable), "{description}");
     }
-    assert!(
-        description.contains("is matched with ASCII classes instead"),
-        "{description}"
-    );
+    for expected in ["at most 256 bytes", "start it with (?i) to ignore case"] {
+        assert!(description.contains(expected), "{expected}: {description}");
+    }
+    assert!(!description.contains("ASCII classes"), "{description}");
 }
 
 /// Live recheck 2026-10-27, N1 and N3: while the process runs, a notification says how to stop
@@ -502,6 +506,76 @@ fn a_running_process_notification_says_how_to_stop_it_and_what_waits_for_its_exi
     assert!(!text.contains("To stop it"), "{text}");
 }
 
+/// Wakeup trigger guidance R1.6 (`specs/wakeup-trigger-guidance-2026-11-08.md`) and tool
+/// guidance UC1 (`specs/fork-tool-guidance-2026-11-08.md`, R1.1): the descriptions say that a
+/// notification wakes the model, how to turn a checkable condition into an event with a loop
+/// that ends on success or after a limit (a check that never passes, such as a green CI run
+/// that fails, must still wake it), that rare events need an exit, not a watch alone, and that
+/// a running session is armed with `write_stdin` instead of polled.
+#[test]
+fn the_descriptions_teach_waking_on_an_event() {
+    use crate::tools::handlers::shell_spec::NOTIFY_ON_EXIT_DESCRIPTION;
+    use crate::tools::handlers::shell_spec::NOTIFY_ON_OUTPUT_DESCRIPTION;
+    use crate::tools::handlers::shell_spec::WRITE_STDIN_EXIT_NOTIFICATION_GUIDANCE;
+    use crate::tools::handlers::shell_spec::WRITE_STDIN_NOTIFY_ON_EXIT_DESCRIPTION;
+    use crate::tools::handlers::shell_spec::WRITE_STDIN_NOTIFY_ON_OUTPUT_DESCRIPTION;
+    for expected in [
+        "the notification starts a new turn",
+        "This is how you wake yourself up when something happens",
+        "with a loop that ends on success or after a limit",
+        "`for i in $(seq 60); do <check> && exit 0; sleep 30; done; exit 1`",
+        "a new PR comment or a finished CI run, pass or fail",
+        "poll remote services every 30 s or slower",
+        "run the check once first",
+    ] {
+        assert!(
+            NOTIFY_ON_EXIT_DESCRIPTION.contains(expected),
+            "{expected}: {NOTIFY_ON_EXIT_DESCRIPTION}"
+        );
+    }
+    for unbounded in ["until <check>", "green CI"] {
+        assert!(
+            !NOTIFY_ON_EXIT_DESCRIPTION.contains(unbounded),
+            "{unbounded}: {NOTIFY_ON_EXIT_DESCRIPTION}"
+        );
+    }
+    for expected in [
+        "turns a script into an event stream",
+        "re-arm the watch with write_stdin notify_on_output",
+        "for rare events, such as a new PR comment, prefer a notify_on_exit check loop that ends on the next event",
+    ] {
+        assert!(
+            NOTIFY_ON_OUTPUT_DESCRIPTION.contains(expected),
+            "{expected}: {NOTIFY_ON_OUTPUT_DESCRIPTION}"
+        );
+    }
+    assert!(
+        WRITE_STDIN_EXIT_NOTIFICATION_GUIDANCE
+            .contains("for any other, call write_stdin once with notify_on_exit true"),
+        "{WRITE_STDIN_EXIT_NOTIFICATION_GUIDANCE}"
+    );
+    assert!(
+        WRITE_STDIN_NOTIFY_ON_EXIT_DESCRIPTION.contains(
+            "use it on a command that runs longer than you expected instead of polling it"
+        ),
+        "{WRITE_STDIN_NOTIFY_ON_EXIT_DESCRIPTION}"
+    );
+    assert!(
+        WRITE_STDIN_NOTIFY_ON_OUTPUT_DESCRIPTION.contains(
+            "re-arm a watch after its 10 notifications, or watch a process started without one"
+        ),
+        "{WRITE_STDIN_NOTIFY_ON_OUTPUT_DESCRIPTION}"
+    );
+    // A V1 `wait_agent` does not wait for terminals; the V2 one says so in its own description.
+    for description in [
+        NOTIFY_ON_EXIT_DESCRIPTION,
+        NOTIFY_ON_OUTPUT_DESCRIPTION,
+        WRITE_STDIN_NOTIFY_ON_EXIT_DESCRIPTION,
+    ] {
+        assert!(!description.contains("wait_agent"), "{description}");
+    }
+}
+
 /// Live recheck 2026-10-27, N1 and N3: the parameter descriptions name how to stop a watched
 /// process (its session, never by name) and how to stop waiting for the exit of a server.
 #[test]
@@ -551,15 +625,6 @@ fn the_descriptions_say_how_to_stop_a_process_and_its_exit_wait() {
             "Stop it only when what it reports is no longer needed; to stop waiting for the exit, set notify_on_exit false and keep the watch"
         ),
         "{WRITE_STDIN_STOP_OUTPUT_WATCH_DESCRIPTION}"
-    );
-    // Review of the fixes 2, N-1: only an all-ASCII pattern falls back to ASCII classes.
-    assert!(
-        NOTIFY_ON_OUTPUT_DESCRIPTION
-            .contains("a pattern written only in ASCII that is too large with Unicode classes")
-            && NOTIFY_ON_OUTPUT_DESCRIPTION.contains(
-                "\\b, . and (?i) cover ASCII only, and one with non-ASCII text is refused"
-            ),
-        "{NOTIFY_ON_OUTPUT_DESCRIPTION}"
     );
 }
 

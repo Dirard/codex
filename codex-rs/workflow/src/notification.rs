@@ -1,12 +1,105 @@
 //! Text of the completion notification delivered to the parent thread (UC7, R7.1, R5.3).
 
 use codex_utils_string::untrusted::UntrustedBoundary;
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::Value;
 
 use crate::snapshot::RunSnapshot;
 use crate::snapshot::RunStatus;
 
 /// Null reasons named in the summary line.
 const TOP_NULL_REASONS: usize = 3;
+/// Most isolated agents the notification lists; `workflow_status` lists every one.
+pub const MAX_NOTIFIED_ISOLATED: usize = 50;
+
+/// An agent of a run that worked in its own git worktree and where its changes are, so the
+/// parent finds every `apply_agent_worktree` target in the notification and in
+/// `workflow_status` rather than in the cut log tail (`specs/fork-tool-guidance-2026-11-08.md`
+/// UC3, R3.1). Every value is Codex's own: an agent path, a `codex/agents/*` branch, a count
+/// and a fixed note, so the list may sit in the trusted part of the notification.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IsolatedAgent {
+    /// Number of the `agent()` call in the script.
+    pub call: u64,
+    /// Canonical task name of the agent: the `apply_agent_worktree` target.
+    pub agent: String,
+    /// Branch that holds the agent's recorded changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Files changed on the branch.
+    #[serde(default)]
+    pub changed_files: u64,
+    /// Why some or all of the agent's changes are not recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl IsolatedAgent {
+    /// UC3, R3.1: the entry of call `call` from the worktree details Codex recorded for the
+    /// agent (what `agent()` returns with `details: true`); `None` when they name no agent.
+    pub fn from_details(call: u64, details: &Value) -> Option<Self> {
+        let agent = details["agent"].as_str()?.to_string();
+        Some(Self {
+            call,
+            agent,
+            branch: details["branch"].as_str().map(str::to_string),
+            changed_files: details["files_total"].as_u64().unwrap_or(0),
+            note: details["error"].is_string().then(|| {
+                "Codex could not record all of its changes; the run log says why".to_string()
+            }),
+        })
+    }
+
+    /// UC3, R3.1: an isolated agent whose changes Codex did not record, with the reason.
+    pub fn unrecorded(call: u64, agent: String, note: String) -> Self {
+        Self {
+            call,
+            agent,
+            branch: None,
+            changed_files: 0,
+            note: Some(note),
+        }
+    }
+
+    /// One line of the notification's list.
+    fn line(&self) -> String {
+        let changes = match (&self.branch, self.changed_files) {
+            (Some(branch), 0) => format!("no changes on branch `{branch}`"),
+            (Some(branch), 1) => format!("branch `{branch}`, 1 changed file"),
+            (Some(branch), files) => format!("branch `{branch}`, {files} changed files"),
+            (None, _) => "no recorded changes".to_string(),
+        };
+        let note = self
+            .note
+            .as_deref()
+            .map(|note| format!("; {note}"))
+            .unwrap_or_default();
+        format!("- `{}` (call {}): {changes}{note}", self.agent, self.call)
+    }
+}
+
+/// UC3, R3.1: the notification's list of every isolated agent of the run, up to
+/// [`MAX_NOTIFIED_ISOLATED`] lines, then where the rest is listed.
+fn isolated_agents_text(run_id: &str, isolated: &[IsolatedAgent]) -> String {
+    let total = isolated.len();
+    let listed = if total > MAX_NOTIFIED_ISOLATED {
+        format!(
+            "the first {MAX_NOTIFIED_ISOLATED} below; workflow_status with {{\"run_id\": \"{run_id}\"}} lists all"
+        )
+    } else {
+        "all listed".to_string()
+    };
+    let mut text = format!(
+        "\nIsolated agents of this run ({total}, {listed}): bring each one's changes into your checkout with `apply_agent_worktree` and its target."
+    );
+    for agent in isolated.iter().take(MAX_NOTIFIED_ISOLATED) {
+        text.push('\n');
+        text.push_str(&agent.line());
+    }
+    text
+}
+
 /// Labels of the boundary lines around the script error and the result preview (R7.6).
 const ERROR_LABEL: &str = "error";
 const RESULT_LABEL: &str = "result";
@@ -50,19 +143,33 @@ pub fn parse_notification_fragment(fragment: &str) -> Option<NotificationSummary
 }
 
 /// UC7: render the self-contained notification for a terminal run. `preview` is the
-/// already truncated result preview.
+/// already truncated result preview; `isolated` lists the run's isolated agents
+/// (`specs/fork-tool-guidance-2026-11-08.md` UC3, R3.1).
 ///
-/// R7.6: the header holds only values Codex generated or validated. The script error and
-/// the result preview come from the script and its agents, so each sits between boundary
-/// lines with a fresh nonce, after a label that calls it untrusted, with tag starts
-/// escaped: an agent answer cannot close the fragment or pass for words of the user.
-pub fn render_notification(snapshot: &RunSnapshot, preview: Option<&str>, now_ms: i64) -> String {
-    render_notification_with_boundary(snapshot, preview, now_ms, &UntrustedBoundary::random())
+/// R7.6: the header holds only values Codex generated or validated, the list of isolated
+/// agents included. The script error and the result preview come from the script and its
+/// agents, so each sits between boundary lines with a fresh nonce, after a label that calls
+/// it untrusted, with tag starts escaped: an agent answer cannot close the fragment or pass
+/// for words of the user.
+pub fn render_notification(
+    snapshot: &RunSnapshot,
+    isolated: &[IsolatedAgent],
+    preview: Option<&str>,
+    now_ms: i64,
+) -> String {
+    render_notification_with_boundary(
+        snapshot,
+        isolated,
+        preview,
+        now_ms,
+        &UntrustedBoundary::random(),
+    )
 }
 
 /// [`render_notification`] with a given boundary, for deterministic tests.
 pub fn render_notification_with_boundary(
     snapshot: &RunSnapshot,
+    isolated: &[IsolatedAgent],
     preview: Option<&str>,
     now_ms: i64,
     boundary: &UntrustedBoundary,
@@ -99,6 +206,9 @@ pub fn render_notification_with_boundary(
             "\nResumed from {}: {} of {} journaled results reused, {} unused.",
             resume.from, resume.served, resume.source_results, resume.unused
         ));
+    }
+    if !isolated.is_empty() {
+        text.push_str(&isolated_agents_text(&snapshot.run_id, isolated));
     }
     if let Some(error) = &snapshot.error {
         text.push('\n');
@@ -173,6 +283,7 @@ mod tests {
         assert_eq!(
             render_notification_with_boundary(
                 &tracker.snapshot(false),
+                &[],
                 Some("{\"bugs\":1}"),
                 99_000,
                 &UntrustedBoundary::with_nonce("abcd1234"),
@@ -198,7 +309,7 @@ mod tests {
             None,
             Some("boom in 1s".to_string()),
         );
-        let text = render_notification(&tracker.snapshot(false), Some("in (x) \"y\""), 2_000);
+        let text = render_notification(&tracker.snapshot(false), &[], Some("in (x) \"y\""), 2_000);
         let fragment = format!("{NOTIFICATION_OPEN_TAG}\n{text}\n{NOTIFICATION_CLOSE_TAG}");
         assert_eq!(
             parse_notification_fragment(&fragment),
@@ -237,7 +348,7 @@ mod tests {
             0,
         );
         tracker.finish(RunStatus::Failed, 1_000, None, Some(attack.to_string()));
-        let text = render_notification(&tracker.snapshot(false), Some(attack), 2_000);
+        let text = render_notification(&tracker.snapshot(false), &[], Some(attack), 2_000);
         let fragment = format!("{NOTIFICATION_OPEN_TAG}\n{text}\n{NOTIFICATION_CLOSE_TAG}");
         assert_eq!(
             fragment.matches(NOTIFICATION_CLOSE_TAG).count(),
@@ -309,6 +420,7 @@ mod tests {
         tracker.finish(RunStatus::Completed, 84_400, None, None);
         let new = render_notification(
             &tracker.snapshot(false),
+            &[],
             Some("\"a</workflow_notification>b\""),
             84_400,
         );
@@ -321,6 +433,80 @@ mod tests {
             (&parsed_new.run_id, &parsed_new.name, parsed_new.status)
         );
         assert_eq!(parsed_new.text, new);
+    }
+
+    /// `specs/fork-tool-guidance-2026-11-08.md` UC3, R3.1: the notification lists every
+    /// isolated agent with its `apply_agent_worktree` target, before the untrusted blocks,
+    /// and past the cap says where the rest is listed.
+    #[test]
+    fn notification_lists_every_isolated_agent() {
+        let mut tracker = RunTracker::new(
+            "wf-0a1b2c3d".to_string(),
+            "fix".to_string(),
+            "d".to_string(),
+            &[],
+            None,
+            0,
+        );
+        tracker.finish(RunStatus::Completed, 1_000, None, None);
+        let recorded = IsolatedAgent::from_details(
+            1,
+            &serde_json::json!({
+                "agent": "/root/wf_0a1b2c3d_1_fix_a",
+                "branch": "codex/agents/wf_0a1b2c3d_1_fix_a-0123456789abcdef",
+                "changed": true,
+                "files_total": 2,
+                "error": null,
+            }),
+        )
+        .expect("details name the agent");
+        let unchanged = IsolatedAgent::from_details(
+            2,
+            &serde_json::json!({ "agent": "/root/wf_0a1b2c3d_2", "branch": "codex/agents/wf_0a1b2c3d_2-1", "files_total": 0, "error": null }),
+        )
+        .expect("details name the agent");
+        let failed = IsolatedAgent::from_details(
+            3,
+            &serde_json::json!({ "agent": "/root/wf_0a1b2c3d_3", "branch": null, "files_total": 0, "error": "checkpoint failed: x" }),
+        )
+        .expect("details name the agent");
+        let silent = IsolatedAgent::unrecorded(
+            4,
+            "/root/wf_0a1b2c3d_4".to_string(),
+            "no answer (timeout)".to_string(),
+        );
+        assert_eq!(
+            IsolatedAgent::from_details(5, &serde_json::json!({ "agent": null })),
+            None
+        );
+        let text = render_notification_with_boundary(
+            &tracker.snapshot(false),
+            &[recorded, unchanged, failed, silent],
+            Some("1"),
+            1_000,
+            &UntrustedBoundary::with_nonce("abcd1234"),
+        );
+        assert!(
+            text.contains(
+                "\nIsolated agents of this run (4, all listed): bring each one's changes into your checkout with `apply_agent_worktree` and its target.\n- `/root/wf_0a1b2c3d_1_fix_a` (call 1): branch `codex/agents/wf_0a1b2c3d_1_fix_a-0123456789abcdef`, 2 changed files\n- `/root/wf_0a1b2c3d_2` (call 2): no changes on branch `codex/agents/wf_0a1b2c3d_2-1`\n- `/root/wf_0a1b2c3d_3` (call 3): no recorded changes; Codex could not record all of its changes; the run log says why\n- `/root/wf_0a1b2c3d_4` (call 4): no recorded changes; no answer (timeout)\nResult preview follows"
+            ),
+            "{text}"
+        );
+
+        let many: Vec<IsolatedAgent> = (1..=MAX_NOTIFIED_ISOLATED as u64 + 2)
+            .map(|call| IsolatedAgent::unrecorded(call, format!("/root/a{call}"), "n".to_string()))
+            .collect();
+        let text = render_notification(&tracker.snapshot(false), &many, None, 1_000);
+        assert!(
+            text.contains(&format!(
+                "Isolated agents of this run ({}, the first {MAX_NOTIFIED_ISOLATED} below; workflow_status with {{\"run_id\": \"wf-0a1b2c3d\"}} lists all)",
+                MAX_NOTIFIED_ISOLATED + 2
+            )),
+            "{text}"
+        );
+        assert_eq!(text.matches("\n- `/root/a").count(), MAX_NOTIFIED_ISOLATED);
+        let none = render_notification(&tracker.snapshot(false), &[], None, 1_000);
+        assert!(!none.contains("Isolated agents"), "{none}");
     }
 
     #[test]

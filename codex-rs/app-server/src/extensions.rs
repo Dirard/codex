@@ -105,6 +105,14 @@ pub(crate) fn thread_extensions(
                 .features
                 .enabled(codex_features::Feature::ScheduledWakeups),
             limits: *config.scheduled_wakeups,
+            // Only with unified exec does `exec_command` offer `notify_on_*`, so only then may
+            // the wakeup tool point to them (specs/fork-tool-guidance-2026-11-08.md UC1, R1.3).
+            exit_notifications: config
+                .features
+                .enabled(codex_features::Feature::UnifiedExec)
+                && config
+                    .features
+                    .enabled(codex_features::Feature::ExecExitNotifications),
         }
     });
     codex_git_attribution::install(

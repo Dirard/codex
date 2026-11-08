@@ -549,6 +549,34 @@ Rules:
     )
 }
 
+/// The exception the explorer profile adds to the bundled "explicit request only" mode text.
+pub(crate) const EXPLICIT_MODE_EXPLORER_EXCEPTION: &str = "Exception: you may start read-only `explorer` agents on your own for independent questions about the codebase when that saves reading many files yourself; start other agents only on request.";
+
+/// The multi-agent mode a thread sees while the bundled mode text applies.
+///
+/// With the profile enabled, the bundled "explicit request only" text gains
+/// [`EXPLICIT_MODE_EXPLORER_EXCEPTION`]: the model may start explorers on its own, other agents
+/// still only on request (`specs/fork-tool-guidance-2026-11-08.md` UC2, Q1, owner's decision of
+/// 2026-11-08). The proactive mode, configured hints and catalog texts stay as they are, and a
+/// thread that cannot spawn (an explorer, a workflow agent) gets the upstream text.
+pub(crate) fn multi_agent_mode(
+    config: &Config,
+    source: &SessionSource,
+    mode: codex_protocol::config_types::MultiAgentMode,
+    bundled_text: &str,
+) -> codex_protocol::config_types::MultiAgentMode {
+    use codex_protocol::config_types::MultiAgentMode;
+    if mode == MultiAgentMode::ExplicitRequestOnly
+        && enabled(config)
+        && !applies_to_source(config, source)
+        && !config.multi_agent_v2.disable_native_tools
+    {
+        MultiAgentMode::Custom(format!("{bundled_text} {EXPLICIT_MODE_EXPLORER_EXCEPTION}"))
+    } else {
+        mode
+    }
+}
+
 /// Summary appended to a user-defined `explorer` role while the profile is enabled.
 pub(crate) fn role_profile_summary(profile: &ExplorerProfileConfig) -> String {
     format!(

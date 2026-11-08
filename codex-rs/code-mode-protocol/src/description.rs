@@ -31,7 +31,7 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - `yield_time_ms` asks `exec` to yield early if the script is still running. Defaults to {{ default_exec_yield_time_ms }} ms.
 - `max_output_tokens` sets the token budget for direct `exec` results. Defaults to 10000 tokens.
 - When the JS code is fully evaluated, the isolate's lifetime ends and unawaited promises are silently discarded.
-- Batch only known independent calls in the smallest group; prefer `Promise.allSettled` (`Promise.all` fails fast without cancelling started calls). Keep discovery→follow-up chains, approvals, waits/resumes and conflicting writes sequential.
+- Run known independent calls together in one `Promise.allSettled` group (`Promise.all` fails fast without cancelling started calls). Keep discovery→follow-up chains, approvals, waits/resumes and conflicting writes sequential.
 - Only values passed to `text`, `image`, `audio`, `generatedImage`, `notify`, or `store` survive the module; request narrow fields and ranges.
 
 - Global helpers:
@@ -799,8 +799,7 @@ bar"
         );
 
         for expected in [
-            "Batch only known independent calls in the smallest group",
-            "prefer `Promise.allSettled`",
+            "Run known independent calls together in one `Promise.allSettled` group",
             "`Promise.all` fails fast without cancelling started calls",
             "Keep discovery→follow-up chains, approvals, waits/resumes and conflicting writes sequential",
             "Only values passed to `text`, `image`, `audio`, `generatedImage`, `notify`, or `store` survive the module",
@@ -814,7 +813,9 @@ bar"
         }
         // Every Code Mode request carries the whole fork addition to the upstream template:
         // both guidance lines and the longer `EXEC_TOOLS` line. It was 776 bytes before the
-        // guidance was condensed; keep it at the measured 409 bytes.
+        // guidance was condensed; keep it at the measured 394 bytes. The batching line asks for
+        // one group that covers the known independent calls, not for the smallest groups
+        // (specs/fork-tool-guidance-2026-11-08.md UC4, R4.3).
         const UPSTREAM_TOOL_LIST_LINE: &str = "- `ALL_TOOLS`: metadata for the enabled nested tools as `{ name, description }` entries.";
         let line_bytes = |prefix: &str| {
             let lines = description
@@ -828,12 +829,12 @@ bar"
             );
             lines[0].len() + "\n".len()
         };
-        let fork_addition = line_bytes("- Batch only")
+        let fork_addition = line_bytes("- Run known independent")
             + line_bytes("- Only values")
             + line_bytes("- `EXEC_TOOLS`:")
             - (UPSTREAM_TOOL_LIST_LINE.len() + "\n".len());
         assert!(
-            fork_addition <= 409,
+            fork_addition <= 394,
             "the fork addition to the exec description grew to {fork_addition} bytes"
         );
     }

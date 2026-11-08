@@ -143,9 +143,9 @@ pub fn create_spawn_agent_tool_v2(
     // Fork: `fork_turns` for explorers and `isolation` (multi_agents_spec_fork.rs).
     fork::extend_spawn_agent_properties(&mut properties, &options.fork);
 
-    ToolSpec::Function(ResponsesApiTool {
-        name: "spawn_agent".to_string(),
-        description: spawn_agent_tool_description_v2(
+    // Fork: what spawned agents lack and how to delegate (multi_agents_spec_fork.rs).
+    let description = fork::extend_spawn_agent_description(
+        spawn_agent_tool_description_v2(
             available_models_description.as_deref(),
             options.model_catalog_in_context,
             options
@@ -155,6 +155,12 @@ pub fn create_spawn_agent_tool_v2(
             options.usage_hint_text,
             description_override,
         ),
+        &options.fork,
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "spawn_agent".to_string(),
+        description,
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(
@@ -305,15 +311,17 @@ pub fn create_wait_agent_tool_v1(options: WaitAgentTimeoutOptions) -> ToolSpec {
     })
 }
 
-pub fn create_wait_agent_tool_v2(
+/// Fork: the bundled description and the fork's additions (terminals, agent results, workflow
+/// runs) come from `multi_agents_spec_fork.rs` (`specs/fork-tool-guidance-2026-11-08.md` UC2).
+pub(crate) fn create_wait_agent_tool_v2(
     options: WaitAgentTimeoutOptions,
-    exit_notifications: bool,
+    fork_options: WaitAgentForkOptions,
 ) -> ToolSpec {
-    let mut description = "Wait for a mailbox update from any active descendant, including queued messages and completion or error notifications. For normal background work, omit `timeout_ms`. Passing `0` performs one immediate check. A positive value sets one absolute deadline; mailbox activity or steered user input can return earlier. Does not return the content; returns either a summary of which agents have updates (if any), an interruption summary for steered input, a no-active-agents summary, or one bounded timeout snapshot."
-        .to_string();
-    if exit_notifications {
-        description.push_str(WAIT_AGENT_EXIT_NOTIFICATION_GUIDANCE);
-    }
+    let description = format!(
+        "{}{}",
+        fork::WAIT_AGENT_DESCRIPTION,
+        fork::wait_agent_guidance(fork_options)
+    );
     ToolSpec::Function(ResponsesApiTool {
         name: "wait_agent".to_string(),
         description,
@@ -942,7 +950,8 @@ fn wait_agent_tool_parameters_v2(options: WaitAgentTimeoutOptions) -> JsonSchema
 #[path = "multi_agents_spec_fork.rs"]
 mod fork;
 pub use fork::SpawnAgentForkOptions;
-pub(crate) use fork::WAIT_AGENT_EXIT_NOTIFICATION_GUIDANCE;
+pub(crate) use fork::WaitAgentForkOptions;
+pub(crate) use fork::wait_agent_catalog_guidance;
 
 #[cfg(test)]
 #[path = "multi_agents_spec_tests.rs"]

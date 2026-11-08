@@ -1473,7 +1473,10 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
             }
         }
     {
-        registry.add(SleepHandler);
+        // Fork: background terminal notifications also end a sleep (fork tool guidance UC1).
+        registry.add(SleepHandler::new(fork::exec_exit_notifications_enabled(
+            turn_context,
+        )));
     }
 
     if tool_suggest_enabled(turn_context)
@@ -1571,7 +1574,10 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                                 .multi_agent_v2
                                 .usage_hint_text
                                 .clone(),
-                            fork: fork::spawn_agent_options(&turn_context.config),
+                            fork: fork::spawn_agent_options(
+                                turn_context,
+                                context.workflows_available,
+                            ),
                         },
                         spawn_agent_description.map(str::to_owned),
                     ),
@@ -1610,13 +1616,14 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 );
             }
             if turn_context.config.multi_agent_v2.wait_agent_enabled {
-                // Fork: background terminals with exit notifications (R4.6).
-                let exit_notifications = fork::exec_exit_notifications_enabled(turn_context);
+                // Fork: terminals, agent results and workflow runs (fork tool guidance UC2).
+                let wait_options =
+                    fork::wait_agent_options(turn_context, context.workflows_available);
                 registry.register_trusted_with_exposure(
                     multi_agent_v2_handler(
-                        WaitAgentHandlerV2::new(context.wait_agent_timeouts, exit_notifications),
+                        WaitAgentHandlerV2::new(context.wait_agent_timeouts, wait_options),
                         tool_namespace,
-                        fork::wait_agent_description(model_messages, exit_notifications).as_deref(),
+                        fork::wait_agent_description(model_messages, wait_options).as_deref(),
                         model_messages.multi_agent_tool_parameters_override("wait_agent"),
                         message_delivery,
                     ),

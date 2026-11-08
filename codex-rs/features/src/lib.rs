@@ -1797,11 +1797,17 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
+    // Fork: experimental and on by default, so a subagent's answer wakes an idle root
+    // (specs/fork-tool-guidance-2026-11-08.md, UC6).
     FeatureSpec {
         id: Feature::WakeOnAgentMessages,
         key: "wake_on_agent_messages",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Experimental {
+            name: "Wake on subagent results",
+            menu_description: "Start a new turn when a subagent reports back after Codex ended its turn, instead of waiting for your next message. Root threads only, not in Plan mode or after you interrupt.",
+            announcement: "",
+        },
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::AgentMessageBoard,

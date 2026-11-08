@@ -56,6 +56,10 @@ const SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct WakeupExtensionConfig {
     pub enabled: bool,
     pub limits: ScheduledWakeupsConfig,
+    /// `unified_exec` and `exec_exit_notifications` are both on, so `exec_command` offers
+    /// `notify_on_*` and the wakeup tool points to them for events
+    /// (`specs/fork-tool-guidance-2026-11-08.md` UC1, R1.3).
+    pub exit_notifications: bool,
 }
 
 pub struct WakeupExtension<C> {
@@ -114,6 +118,7 @@ where
                 }),
                 Arc::new(Utc::now),
             );
+            state.set_exit_notifications(config.exit_notifications);
             input.thread_store.insert_arc(state);
         })
     }
@@ -184,6 +189,7 @@ where
         let config = (self.config)(new_config);
         if let Some(state) = thread_state(thread_store) {
             state.set_config(config.enabled, config.limits);
+            state.set_exit_notifications(config.exit_notifications);
         }
     }
 }

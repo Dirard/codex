@@ -25,6 +25,7 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use codex_workflow::CachedAnswer;
 use codex_workflow::HOST_TOOLS;
+use codex_workflow::IsolatedAgent;
 use codex_workflow::Journal;
 use codex_workflow::JournalCache;
 use codex_workflow::JournalEvent;
@@ -205,6 +206,17 @@ impl WorkflowRun {
     /// UC8: the run snapshot; the per-call list only with `include_agents`.
     pub(crate) fn snapshot(&self, include_agents: bool) -> RunSnapshot {
         self.tracker().snapshot(include_agents)
+    }
+
+    /// `specs/fork-tool-guidance-2026-11-08.md` UC3, R3.1: record where the isolated agent
+    /// of a call left its changes, for the notification and `workflow_status`.
+    pub(crate) fn record_isolated_agent(&self, entry: IsolatedAgent) {
+        self.tracker().isolated_agent(entry);
+    }
+
+    /// UC3, R3.1: every isolated agent of the run, in call order.
+    pub(crate) fn isolated_agents(&self) -> Vec<IsolatedAgent> {
+        self.tracker().isolated_agents()
     }
 
     pub(crate) fn subscribe_revision(&self) -> watch::Receiver<u64> {
@@ -1018,7 +1030,13 @@ async fn finish_run(
             &tags,
         );
     }
-    let text = render_notification(&snapshot, preview.as_deref(), finished_at);
+    // `specs/fork-tool-guidance-2026-11-08.md` UC3, R3.1: every isolated agent and its target.
+    let text = render_notification(
+        &snapshot,
+        &run.isolated_agents(),
+        preview.as_deref(),
+        finished_at,
+    );
     session.deliver_workflow_notification(text).await;
     run.finished.send_replace(true);
 }

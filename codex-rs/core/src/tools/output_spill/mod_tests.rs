@@ -140,11 +140,11 @@ fn the_notice_follows_the_template() {
     let notice = notice::spill_notice(&record, "exec_command");
     assert_eq!(
         notice,
-        "Full output saved to: /home/user/.codex/tool_outputs/t/0123456789abcdef.txt (5000 lines, 38893 bytes, ~9724 tokens). Read the omitted part with exec_command, e.g. sed -n 'A,Bp' or rg -n 'PATTERN' on that file."
+        "Full output saved to: /home/user/.codex/tool_outputs/t/0123456789abcdef.txt (5000 lines, 38893 bytes, ~9724 tokens). Read only the part you need with exec_command: rg -n 'PATTERN' to find it, then sed -n 'A,Bp' for a range no larger than the preview above; a larger read is cut again."
     );
     assert_eq!(
         notice::spill_notice(&record, "tools.exec_command"),
-        "Full output saved to: /home/user/.codex/tool_outputs/t/0123456789abcdef.txt (5000 lines, 38893 bytes, ~9724 tokens). Read the omitted part with tools.exec_command, e.g. sed -n 'A,Bp' or rg -n 'PATTERN' on that file."
+        "Full output saved to: /home/user/.codex/tool_outputs/t/0123456789abcdef.txt (5000 lines, 38893 bytes, ~9724 tokens). Read only the part you need with tools.exec_command: rg -n 'PATTERN' to find it, then sed -n 'A,Bp' for a range no larger than the preview above; a larger read is cut again."
     );
     let capped = SpillRecord {
         capped: Some(store::CappedSpill {
@@ -155,7 +155,7 @@ fn the_notice_follows_the_template() {
     };
     assert_eq!(
         notice::spill_notice(&capped, "exec_command"),
-        "Full output saved to: /home/user/.codex/tool_outputs/t/0123456789abcdef.txt (5000 lines, 38893 bytes, ~9724 tokens; the file keeps the first and last 4194304 bytes of 9000000). Read the omitted part with exec_command, e.g. sed -n 'A,Bp' or rg -n 'PATTERN' on that file."
+        "Full output saved to: /home/user/.codex/tool_outputs/t/0123456789abcdef.txt (5000 lines, 38893 bytes, ~9724 tokens; the file keeps the first and last 4194304 bytes of 9000000). Read only the part you need with exec_command: rg -n 'PATTERN' to find it, then sed -n 'A,Bp' for a range no larger than the preview above; a larger read is cut again."
     );
 
     let mut text = FunctionCallOutputPayload::from_text("head".to_string());
@@ -191,6 +191,43 @@ fn the_notice_follows_the_template() {
                 text: "NOTICE".to_string(),
             },
         ])
+    );
+}
+
+/// `specs/fork-tool-guidance-2026-11-08.md` UC4, R4.1: a file of very long lines, such as the
+/// compact JSON of an MCP `structuredContent`, gets byte- and match-oriented reads instead of
+/// line ranges, which would return the whole line again; up to 2048 bytes per line on average
+/// the notice keeps line ranges.
+#[test]
+fn a_file_of_long_lines_gets_reads_that_do_not_return_whole_lines() {
+    let path = "/home/user/.codex/tool_outputs/t/0123456789abcdef.txt";
+    let one_line = SpillRecord {
+        lines: 1,
+        bytes: 200_000,
+        tokens: 50_000,
+        ..test_record(path)
+    };
+    assert_eq!(
+        notice::spill_notice(&one_line, "exec_command"),
+        "Full output saved to: /home/user/.codex/tool_outputs/t/0123456789abcdef.txt (1 lines, 200000 bytes, ~50000 tokens). The lines are very long: read only the part you need with exec_command, e.g. jq for JSON, rg -o '.{0,200}PATTERN.{0,200}' or head -c N; a larger read is cut again."
+    );
+    let at_the_limit = SpillRecord {
+        lines: 10,
+        bytes: 20_480,
+        ..test_record(path)
+    };
+    assert!(
+        notice::spill_notice(&at_the_limit, "tools.exec_command").ends_with(
+            "Read only the part you need with tools.exec_command: rg -n 'PATTERN' to find it, then sed -n 'A,Bp' for a range no larger than the preview above; a larger read is cut again."
+        )
+    );
+    let above_the_limit = SpillRecord {
+        bytes: 20_491,
+        ..at_the_limit
+    };
+    assert!(
+        notice::spill_notice(&above_the_limit, "tools.exec_command")
+            .contains("The lines are very long: read only the part you need with tools.exec_command,")
     );
 }
 
@@ -498,7 +535,7 @@ async fn truncated_output_is_spilled_and_the_preview_is_unchanged() -> anyhow::R
     assert_eq!(
         notice,
         format!(
-            "Full output saved to: {} (5000 lines, {} bytes, ~{} tokens). Read the omitted part with exec_command, e.g. sed -n 'A,Bp' or rg -n 'PATTERN' on that file.",
+            "Full output saved to: {} (5000 lines, {} bytes, ~{} tokens). Read only the part you need with exec_command: rg -n 'PATTERN' to find it, then sed -n 'A,Bp' for a range no larger than the preview above; a larger read is cut again.",
             canonical.display(),
             full.len(),
             approx_token_count(&full)
@@ -586,7 +623,7 @@ async fn a_cut_nested_exec_result_is_spilled_for_the_script() -> anyhow::Result<
         .ok_or_else(|| anyhow::anyhow!("no output in {expected}"))?;
     assert!(cut.contains("truncated"), "{cut}");
     expected[SCRIPT_TEXT_FIELD] = JsonValue::String(format!(
-        "{cut}\n\nFull output saved to: {} (5000 lines, {} bytes, ~{} tokens). Read the omitted part with tools.exec_command, e.g. sed -n 'A,Bp' or rg -n 'PATTERN' on that file.",
+        "{cut}\n\nFull output saved to: {} (5000 lines, {} bytes, ~{} tokens). Read only the part you need with tools.exec_command: rg -n 'PATTERN' to find it, then sed -n 'A,Bp' for a range no larger than the preview above; a larger read is cut again.",
         file.canonicalize()?.display(),
         full.len(),
         approx_token_count(&full)
