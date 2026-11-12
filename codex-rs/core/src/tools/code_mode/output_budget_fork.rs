@@ -8,10 +8,12 @@
 //! the upstream builders keep their signatures; a catalog override without the bundled sentence
 //! stays as it is.
 
+use codex_features::Feature;
 use codex_protocol::openai_models::ModelInfo;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::TruncationPolicy;
 
+use crate::config::Config;
 use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::CodeModeWaitHandler;
 use crate::unified_exec::DEFAULT_MAX_OUTPUT_TOKENS;
@@ -31,6 +33,34 @@ pub(super) fn default_cell_policy(
         return TruncationPolicy::Tokens(DEFAULT_MAX_OUTPUT_TOKENS);
     }
     turn_context.output_truncation_for_model(model_info).policy
+}
+
+/// Fork: the budget that a Code Mode `exec`, `wait` or `terminate` request sends to its session
+/// (specs/upstream-sync-2026-11-12.md UC3, R3.1). A host that truncates output itself
+/// (`CodeModeOutputTruncation::Server`, upstream's default) cuts a request without a budget to
+/// 10 000 tokens, so without the pragma the request carries the budget of [`default_cell_policy`]
+/// when the user configured output truncation. Otherwise it stays `None`: the same 10 000 tokens.
+/// A session that leaves truncation to core ignores the request budget.
+pub(super) fn request_budget(
+    turn_context: &TurnContext,
+    model_info: &ModelInfo,
+    pragma: Option<usize>,
+) -> Option<usize> {
+    pragma.or_else(|| {
+        let config = &turn_context.config;
+        (config.tool_output_token_limit.is_some() || config.output_truncation.max_bytes.is_some())
+            .then(|| default_cell_policy(turn_context, model_info).token_budget())
+    })
+}
+
+/// Fork: whether the built-in Code Mode sessions leave output truncation to the host
+/// (specs/upstream-sync-2026-11-12.md UC3, R3.2): upstream's `code_mode_host_output_truncation`,
+/// except while `tool_output_spill` is on, because the spill file needs a cell's whole output.
+pub(crate) fn host_truncates_output(config: &Config) -> bool {
+    config
+        .features
+        .enabled(Feature::CodeModeHostOutputTruncation)
+        && !config.features.enabled(Feature::ToolOutputSpill)
 }
 
 /// The bundled default budget of every sentence below.

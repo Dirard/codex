@@ -95,7 +95,12 @@ impl CodeModeExecuteHandler {
                     enabled_tools,
                     source: args.code.clone(),
                     yield_time_ms: args.yield_time_ms,
-                    max_output_tokens: args.max_output_tokens,
+                    // Fork: a host that truncates needs the configured budget (UC3, R3.1).
+                    max_output_tokens: super::output_budget_fork::request_budget(
+                        &step_context.turn,
+                        &step_context.settings.model_info,
+                        args.max_output_tokens,
+                    ),
                 },
                 Arc::clone(&step_context),
             )

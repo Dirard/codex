@@ -808,10 +808,8 @@ impl ThreadManager {
                     host_program,
                 ))
             };
-        if config
-            .features
-            .enabled(Feature::CodeModeHostOutputTruncation)
-        {
+        // Fork: `tool_output_spill` keeps truncation in core (specs/upstream-sync-2026-11-12.md UC3).
+        if crate::tools::code_mode::host_truncates_output(config) {
             Arc::new(crate::code_mode_host::LocalServerOutputProvider { inner: provider })
         } else {
             provider

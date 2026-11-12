@@ -4,6 +4,7 @@ pub(crate) mod execute_spec;
 mod output;
 // Fork: the default cell output budget follows the configured output truncation.
 mod output_budget_fork;
+pub(crate) use output_budget_fork::host_truncates_output;
 mod response_adapter;
 mod telemetry;
 mod tool_definitions;

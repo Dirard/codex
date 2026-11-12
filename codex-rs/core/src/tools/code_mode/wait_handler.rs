@@ -122,6 +122,12 @@ impl CodeModeWaitHandler {
                 let args: ExecWaitArgs = parse_arguments(&arguments).inspect_err(|_error| {
                     telemetry.finish(/*success*/ false);
                 })?;
+                // Fork: a host that truncates needs the configured budget (UC3, R3.1).
+                let max_output_tokens = super::output_budget_fork::request_budget(
+                    &step_context.turn,
+                    &step_context.settings.model_info,
+                    args.max_tokens,
+                );
                 let exec = ExecContext { session, turn };
                 let started_at = std::time::Instant::now();
                 telemetry.cell_id = Some(args.cell_id.clone());
@@ -132,7 +138,7 @@ impl CodeModeWaitHandler {
                         .code_mode_service
                         .terminate(codex_code_mode::TerminateRequest {
                             cell_id: cell_id.clone(),
-                            max_output_tokens: args.max_tokens,
+                            max_output_tokens,
                         })
                         .await
                 } else {
@@ -143,7 +149,7 @@ impl CodeModeWaitHandler {
                             codex_code_mode::WaitRequest {
                                 cell_id: cell_id.clone(),
                                 yield_time_ms: args.yield_time_ms,
-                                max_output_tokens: args.max_tokens,
+                                max_output_tokens,
                             },
                             step_context.preempt.clone(),
                         )

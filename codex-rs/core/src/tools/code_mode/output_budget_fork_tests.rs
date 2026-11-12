@@ -311,3 +311,79 @@ async fn default_cell_policy_needs_configured_truncation() {
         );
     }
 }
+
+/// specs/upstream-sync-2026-11-12.md UC3, R3.1: a request without the pragma carries the
+/// configured budget to a host that truncates, and `None`, the host's own 10 000 tokens, without
+/// configured truncation; the pragma always wins.
+#[tokio::test]
+async fn request_budget_carries_the_configured_budget() {
+    use codex_models_manager::ModelsManagerConfig;
+    use codex_models_manager::model_info::with_config_overrides;
+
+    let bundled = codex_models_manager::bundled_models_response()
+        .expect("bundled model catalog should load")
+        .models
+        .into_iter()
+        .find(|model| model.slug == "gpt-5.5")
+        .expect("bundled catalog should list gpt-5.5");
+    for (pragma, tool_output_token_limit, max_bytes, expected) in [
+        (None, None, None, None),
+        (None, Some(400_000), None, Some(400_000)),
+        // A byte limit counts about four bytes per token.
+        (None, None, Some(8_000), Some(2_000)),
+        (Some(5), Some(400_000), None, Some(5)),
+        (Some(5), None, None, Some(5)),
+    ] {
+        let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
+        let mut config = (*turn.config).clone();
+        config.tool_output_token_limit = tool_output_token_limit;
+        config.output_truncation.max_bytes = max_bytes;
+        turn.config = std::sync::Arc::new(config);
+        let model_info = with_config_overrides(
+            bundled.clone(),
+            &ModelsManagerConfig {
+                tool_output_token_limit,
+                ..ModelsManagerConfig::default()
+            },
+        );
+
+        assert_eq!(
+            request_budget(&turn, &model_info, pragma),
+            expected,
+            "{pragma:?} {tool_output_token_limit:?} {max_bytes:?}"
+        );
+    }
+}
+
+/// specs/upstream-sync-2026-11-12.md UC3, R3.2: the host truncates only while upstream's feature
+/// is on and `tool_output_spill`, which needs a cell's whole output in core, is off.
+#[tokio::test]
+async fn host_truncation_yields_to_output_spill() {
+    use codex_features::Feature;
+
+    let (_session, turn) = crate::session::tests::make_session_and_context().await;
+    for (host_truncation, spill, expected) in [
+        (true, false, true),
+        (true, true, false),
+        (false, false, false),
+        (false, true, false),
+    ] {
+        let mut config = (*turn.config).clone();
+        for (feature, enabled) in [
+            (Feature::CodeModeHostOutputTruncation, host_truncation),
+            (Feature::ToolOutputSpill, spill),
+        ] {
+            if enabled {
+                config.features.enable(feature).expect("enable feature");
+            } else {
+                config.features.disable(feature).expect("disable feature");
+            }
+        }
+
+        assert_eq!(
+            host_truncates_output(&config),
+            expected,
+            "host truncation {host_truncation}, spill {spill}"
+        );
+    }
+}
