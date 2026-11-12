@@ -135,7 +135,9 @@ mod config_update;
 mod copy_input_guard;
 pub(crate) mod custom_terminal;
 mod daybreak;
+mod device_login;
 mod experimental_features;
+mod image_decode;
 mod markdown_copy;
 mod permission_discovery;
 mod pets;
@@ -143,6 +145,7 @@ mod security_setup;
 mod worktree_browser;
 pub use custom_terminal::Terminal;
 mod assistant_directives;
+mod attachment_files;
 mod auto_review_denials;
 mod cwd_prompt;
 mod debug_config;
@@ -938,6 +941,7 @@ fn latest_session_lookup_params(
     lookup_mode: LatestSessionLookupMode,
 ) -> ThreadListParams {
     ThreadListParams {
+        include_attached_threads: false,
         current_account_only: true,
         excluded_thread_ids: None,
         attached_to_thread_id: None,
@@ -1310,22 +1314,34 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
+    let connect = async |target: &mut AppServerTarget,
+                         config: &Config,
+                         bundle: &CloudConfigBundleLoader,
+                         state_db: &mut Option<StateDbHandle>| {
+        start_app_server(
+            target,
+            arg0_paths.clone(),
+            config.clone(),
+            cli_kv_overrides.clone(),
+            loader_overrides.clone(),
+            strict_config,
+            bundle.clone(),
+            feedback.clone(),
+            log_db.clone(),
+            state_db,
+            environment_manager.clone(),
+            embedded_network_policy.clone(),
+        )
+        .await
+    };
     let startup_app_server = startup_draft
         .run_until(
             &mut tui,
-            start_app_server(
+            connect(
                 &mut app_server_target,
-                arg0_paths.clone(),
-                initial_config.clone(),
-                cli_kv_overrides.clone(),
-                loader_overrides.clone(),
-                strict_config,
-                cloud_config_bundle.clone(),
-                feedback.clone(),
-                log_db.clone(),
+                &initial_config,
+                &cloud_config_bundle,
                 &mut state_db,
-                environment_manager.clone(),
-                embedded_network_policy.clone(),
             ),
         )
         .await;
@@ -1388,7 +1404,7 @@ async fn run_ratatui_app(
     let should_show_trust_screen_flag = false;
     #[cfg(target_os = "windows")]
     let mut trust_decision_was_made = false;
-    let startup_model_provider = initial_config.model_provider_id.clone();
+    let mut startup_model_provider = initial_config.model_provider_id.clone();
     let Some(active_app_server) = app_server.as_mut() else {
         unreachable!("app server should exist when auth is required");
     };
@@ -1423,25 +1439,26 @@ async fn run_ratatui_app(
         // Authentication can change while any interactive onboarding screen is open.
         startup_account = None;
         let show_login_screen = should_show_login_screen(login_status, requires_openai_auth);
-        let bedrock_setup_enabled = should_show_provider_setup_wizard(
-            login_status,
-            requires_openai_auth,
-            &initial_config,
-            &app_server_target,
-            Feature::BedrockSetupWizard,
-        );
-        let gcp_setup_enabled = should_show_provider_setup_wizard(
-            login_status,
-            requires_openai_auth,
-            &initial_config,
-            &app_server_target,
-            Feature::GcpSetupWizard,
-        );
+        let show_wizard = |feature| {
+            should_show_provider_setup_wizard(
+                login_status,
+                requires_openai_auth,
+                &initial_config,
+                &app_server_target,
+                feature,
+            )
+        };
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
                 show_login_screen,
-                bedrock_setup_enabled,
-                gcp_setup_enabled,
+                bedrock_setup_enabled: show_wizard(Feature::BedrockSetupWizard),
+                gcp_setup_enabled: show_wizard(Feature::GcpSetupWizard),
+                gateway_setup_enabled: show_wizard(Feature::GatewaySetupWizard)
+                    && app_server.as_ref().is_some_and(|server| {
+                        server
+                            .client_provider_override_for_new_chats(&initial_config)
+                            .is_none()
+                    }),
                 show_trust_screen: should_show_trust_screen_flag,
                 remote_project_trust: None,
                 login_status,
@@ -1482,6 +1499,57 @@ async fn run_ratatui_app(
         {
             trust_decision_was_made =
                 !uses_remote_workspace && onboarding_result.directory_trust_persisted;
+        }
+        if let Some(selected_id) = onboarding_result.selected_gateway {
+            // Account state belongs to the provider captured by the embedded server at startup.
+            let mut selected = startup_draft
+                .run_until(
+                    &mut tui,
+                    load_config_or_exit_with_fallback_cwd(
+                        cli_kv_overrides.clone(),
+                        overrides.clone(),
+                        loader_overrides.clone(),
+                        cloud_config_bundle.clone(),
+                        strict_config,
+                        /*fallback_cwd*/ None,
+                        managed_worktree.as_ref(),
+                    ),
+                )
+                .await?;
+            color_eyre::eyre::ensure!(
+                selected.model_provider_id == selected_id,
+                "The current configuration selects {} instead of {selected_id}.",
+                selected.model_provider_id
+            );
+            embedded_network_policy.bind_config(&mut selected);
+            shutdown_app_server_if_present(app_server.take()).await;
+            let client = startup_draft
+                .run_until(
+                    &mut tui,
+                    connect(
+                        &mut app_server_target,
+                        &selected,
+                        &cloud_config_bundle,
+                        &mut state_db,
+                    ),
+                )
+                .await??;
+            let mut server =
+                AppServerSession::new(backend_id, client, app_server_target.thread_params_mode())
+                    .with_local_codex_home(&selected.codex_home)
+                    .with_remote_cwd_override(remote_cwd_override.clone());
+            if let Err(err) = boxed_future!(onboarding::authenticate_gateway(
+                &mut tui,
+                &mut server,
+                &selected
+            ))
+            .await
+            {
+                shutdown_startup_session(Some(server), &mut terminal_restore_guard).await;
+                return Err(err);
+            }
+            startup_model_provider = selected_id;
+            app_server = Some(server);
         }
         let reloaded_config = startup_draft
             .run_until(&mut tui, async {
@@ -1915,19 +1983,11 @@ async fn run_ratatui_app(
         None => match startup_draft
             .run_until(
                 &mut tui,
-                start_app_server(
+                connect(
                     &mut app_server_target,
-                    arg0_paths.clone(),
-                    config.clone(),
-                    cli_kv_overrides.clone(),
-                    loader_overrides.clone(),
-                    strict_config,
-                    cloud_config_bundle.clone(),
-                    feedback.clone(),
-                    log_db.clone(),
+                    &config,
+                    &cloud_config_bundle,
                     &mut state_db,
-                    environment_manager.clone(),
-                    embedded_network_policy.clone(),
                 ),
             )
             .await
@@ -2163,6 +2223,35 @@ async fn run_ratatui_app(
         && (config.model_provider.is_amazon_bedrock()
             || !matches!(app_server_target, AppServerTarget::Embedded));
     let guidance_request_handle = app_server.request_handle();
+    let gateway_sign_in = async {
+        if !uses_remote_workspace
+            && let Some(prompt) = startup_draft
+                .run_until(
+                    &mut tui,
+                    device_login::start_if_needed(
+                        &mut app_server,
+                        &session_selection,
+                        &config,
+                        device_login::prefer_device_login(),
+                    ),
+                )
+                .await??
+        {
+            startup_draft.flush_pending_events(&mut tui).await?;
+            onboarding::onboarding_screen::run_gateway_device_login(
+                &mut tui,
+                &mut app_server,
+                prompt,
+            )
+            .await?;
+        }
+        Ok::<_, color_eyre::Report>(())
+    }
+    .await;
+    if let Err(err) = gateway_sign_in {
+        shutdown_startup_session(Some(app_server), &mut terminal_restore_guard).await;
+        return Err(err);
+    }
     let startup_prefetch_started_at = Instant::now();
     // Fetch the catalog alongside hooks/list. Fresh starts choose the model after config/read.
     app_server.prefetch_model_list();
@@ -2562,6 +2651,11 @@ fn should_show_provider_setup_wizard(
     supported_target
         && should_show_login_screen(login_status, requires_openai_auth)
         && config.features.enabled(feature)
+        && (feature != Feature::GatewaySetupWizard
+            || config
+                .config_layer_stack
+                .required_model_provider()
+                .is_none())
         && config.model_provider_id == "openai"
         && config
             .auth_config()

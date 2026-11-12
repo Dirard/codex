@@ -575,13 +575,17 @@ pub(super) async fn run_main_inner(
         && !app_server_target.uses_remote_workspace();
     if auto_start_daemon
         && daemon_exclusion.is_none()
-        && should_show_provider_setup_wizard(
-            LoginStatus::NotAuthenticated,
-            config.model_provider.requires_openai_auth,
-            &config,
-            &AppServerTarget::Embedded,
-            Feature::GcpSetupWizard,
-        )
+        && [Feature::GcpSetupWizard, Feature::GatewaySetupWizard]
+            .into_iter()
+            .any(|feature| {
+                should_show_provider_setup_wizard(
+                    LoginStatus::NotAuthenticated,
+                    config.model_provider.requires_openai_auth,
+                    &config,
+                    &AppServerTarget::Embedded,
+                    feature,
+                )
+            })
         && startup_draft
             .run_until(
                 config
@@ -593,8 +597,13 @@ pub(super) async fn run_main_inner(
             .flatten()
             .is_none()
     {
-        // GCP setup resolves credential paths and runs gcloud in the launch environment.
-        daemon_exclusion = Some("GCP sign-in");
+        // These wizards use credentials from the launch environment and rebuild the
+        // embedded server with the selected provider after onboarding.
+        daemon_exclusion = Some(if config.features.enabled(Feature::GcpSetupWizard) {
+            "GCP sign-in"
+        } else {
+            daemon_startup::GATEWAY_SIGN_IN_EXCLUSION
+        });
         app_server_target = AppServerTarget::Embedded;
     }
     if auto_start_daemon
@@ -813,6 +822,7 @@ pub(super) async fn run_main_inner(
                     }
                 }
                 Some("GCP sign-in") => "gcp_sign_in",
+                Some(daemon_startup::GATEWAY_SIGN_IN_EXCLUSION) => "gateway_sign_in",
                 Some(daemon_startup::WSL_DRVFS_EXCLUSION) => "wsl_drvfs",
                 Some("this Windows launcher") => "windows_detach_restricted",
                 Some("daemon feature settings") => "daemon_compatibility",
@@ -978,6 +988,13 @@ pub(super) async fn run_main_inner(
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();
+    if let Some(error) = state_db.as_ref().and_then(|db| db.diagnostic_logs_error()) {
+        tracing::warn!(
+            event.name = "diagnostic_database_unavailable",
+            error,
+            "diagnostic database unavailable"
+        );
+    }
 
     if let Err(err) = screen_reader_result {
         tracing::warn!("Could not save screen-reader detection: {err}");

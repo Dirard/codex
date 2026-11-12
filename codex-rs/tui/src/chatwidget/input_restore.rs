@@ -35,6 +35,15 @@ impl ChatWidget {
         draft
     }
 
+    /// Continue an active Cloud-switch draft without undoing an accepted Vim Escape.
+    pub(crate) fn restore_cloud_switch_draft(&mut self, draft: ComposerDraftSnapshot) {
+        let continue_vim_normal_mode = draft.vim_normal_mode;
+        self.restore_startup_draft(draft);
+        if continue_vim_normal_mode {
+            self.bottom_pane.set_vim_enabled(/*enabled*/ true);
+        }
+    }
+
     /// Restore the exact draft entered before the fully initialized composer became available.
     pub(crate) fn restore_startup_draft(&mut self, draft: ComposerDraftSnapshot) {
         self.bottom_pane
@@ -444,12 +453,7 @@ impl ChatWidget {
                     TurnAbortReason::BudgetLimited => history_cell::new_error_event(
                         "Goal budget reached - the turn was stopped.".to_string(),
                     ),
-                    TurnAbortReason::Interrupted => PlainHistoryCell::new(vec![
-                        Line::from(
-                            "■ Conversation interrupted - use /feedback if something went wrong",
-                        )
-                        .style(crate::style::secondary_text_style()),
-                    ]),
+                    TurnAbortReason::Interrupted => history_cell::new_interruption_notice(),
                 });
             }
         }
@@ -730,6 +734,24 @@ impl ChatWidget {
             task_running: self.bottom_pane.is_task_running(),
             agent_turn_running: self.turn_lifecycle.agent_turn_running,
         })
+    }
+
+    /// Keep the current session's collaboration settings when restoring a saved draft.
+    pub(crate) fn update_input_collaboration_mode(
+        &self,
+        input: &mut ThreadInputState,
+        has_resumed_mode: bool,
+    ) {
+        input.current_collaboration_mode = self.current_collaboration_mode.clone();
+        if has_resumed_mode {
+            input
+                .active_collaboration_mask
+                .clone_from(&self.active_collaboration_mask);
+        } else if let Some(mask) = input.active_collaboration_mask.as_mut() {
+            // Keep the local selection for older servers. Replay reapplies a supplied mode.
+            mask.model = Some(self.current_model().to_string());
+            mask.reasoning_effort = Some(self.effective_reasoning_effort());
+        }
     }
 
     pub(crate) fn restore_thread_input_state(
