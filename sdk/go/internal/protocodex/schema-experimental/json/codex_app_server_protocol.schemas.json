@@ -2114,6 +2114,30 @@
             },
             "method": {
               "enum": [
+                "thread/prepareApprovedPlan"
+              ],
+              "title": "Thread/prepareApprovedPlanRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadPrepareApprovedPlanParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/prepareApprovedPlanRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "skills/list"
               ],
               "title": "Skills/listRequestMethod",
@@ -4145,6 +4169,29 @@
             "method"
           ],
           "title": "Account/logoutRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/securitySetup/read"
+              ],
+              "title": "Account/securitySetup/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Account/securitySetup/readRequest",
           "type": "object"
         },
         {
@@ -9269,6 +9316,48 @@
         ],
         "type": "string"
       },
+      "AccountSecuritySetupAction": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "url"
+        ],
+        "type": "object"
+      },
+      "AccountSecuritySetupNotice": {
+        "properties": {
+          "accountId": {
+            "type": "string"
+          },
+          "action": {
+            "$ref": "#/definitions/v2/AccountSecuritySetupAction"
+          },
+          "description": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "accountId",
+          "action",
+          "description",
+          "title",
+          "userId"
+        ],
+        "type": "object"
+      },
       "AccountSession": {
         "properties": {
           "displayName": {
@@ -9694,6 +9783,102 @@
         "title": "AgentMessageDeltaNotification",
         "type": "object"
       },
+      "AgentMessageDisplay": {
+        "description": "How Chat should present a recovered answer.",
+        "oneOf": [
+          {
+            "properties": {
+              "annotation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/AnswerAnnotation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "mode": {
+                "enum": [
+                  "show"
+                ],
+                "type": "string"
+              },
+              "trustedContacts": {
+                "$ref": "#/definitions/v2/TrustedContacts"
+              },
+              "version": {
+                "enum": [
+                  1
+                ],
+                "format": "uint8",
+                "minimum": 0.0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "mode",
+              "trustedContacts",
+              "version"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "mode": {
+                "enum": [
+                  "hide"
+                ],
+                "type": "string"
+              },
+              "replacement": {
+                "$ref": "#/definitions/v2/AnswerReplacement"
+              },
+              "version": {
+                "enum": [
+                  1
+                ],
+                "format": "uint8",
+                "minimum": 0.0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "mode",
+              "replacement",
+              "version"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "mode": {
+                "enum": [
+                  "block"
+                ],
+                "type": "string"
+              },
+              "reason": {
+                "$ref": "#/definitions/v2/BlockReason"
+              },
+              "version": {
+                "enum": [
+                  1
+                ],
+                "format": "uint8",
+                "minimum": 0.0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "mode",
+              "reason",
+              "version"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "AgentMessageInputContent": {
         "oneOf": [
           {
@@ -9740,6 +9925,16 @@
       },
       "AgentMessageModeration": {
         "properties": {
+          "display": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AgentMessageDisplay"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "moderated": {
             "type": "boolean"
           }
@@ -9770,6 +9965,47 @@
           }
         },
         "type": "object"
+      },
+      "AnswerAnnotation": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "wellbeingHelpline"
+                ],
+                "type": "string"
+              },
+              "subject": {
+                "$ref": "#/definitions/v2/HelplineSubject"
+              }
+            },
+            "required": [
+              "kind",
+              "subject"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AnswerReplacement": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "wellbeingPromptHelpline"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "WellbeingPromptHelplineAnswerReplacement",
+            "type": "object"
+          }
+        ]
       },
       "AppBranding": {
         "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
@@ -10978,6 +11214,50 @@
         "title": "BedrockSetupResponse",
         "type": "object"
       },
+      "BlockReason": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "protection"
+                ],
+                "type": "string"
+              },
+              "protectionType": {
+                "description": "Identifies the same moderation row that Chat writes on the live path.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "protectionType"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "cyber"
+                ],
+                "type": "string"
+              },
+              "trustedAccess": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "KindBlockReason",
+            "type": "object"
+          }
+        ]
+      },
       "BrowserUseAccessApprovalLifetime": {
         "enum": [
           "turn",
@@ -11316,6 +11596,13 @@
               "threadRollbackFailed",
               "sandboxError",
               "other"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The workspace's inference hook explicitly denied this request.",
+            "enum": [
+              "inferenceHookDenied"
             ],
             "type": "string"
           },
@@ -15829,10 +16116,34 @@
             "type": "object"
           },
           {
-            "properties": {
-              "audio_url": {
-                "type": "string"
+            "anyOf": [
+              {
+                "properties": {
+                  "audio_url": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "audio_url"
+                ],
+                "title": "AudioUrlFunctionCallOutputContentItem",
+                "type": "object"
               },
+              {
+                "properties": {
+                  "file_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_id"
+                ],
+                "title": "FileIdFunctionCallOutputContentItem",
+                "type": "object"
+              }
+            ],
+            "description": "Inline audio data or an uploaded file loaded by the Responses API.",
+            "properties": {
               "type": {
                 "enum": [
                   "input_audio"
@@ -15842,7 +16153,6 @@
               }
             },
             "required": [
-              "audio_url",
               "type"
             ],
             "title": "InputAudioFunctionCallOutputContentItem",
@@ -15952,6 +16262,13 @@
               "null"
             ]
           },
+          "loginId": {
+            "description": "Identifies the completed device login attempt.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "providerId": {
             "type": "string"
           },
@@ -15969,6 +16286,10 @@
       "GatewayOAuthLoginParams": {
         "description": "Authorize a configured provider without changing the default or any thread's provider.",
         "properties": {
+          "deviceAuth": {
+            "description": "Select device authorization when the server advertises support for it.",
+            "type": "boolean"
+          },
           "modelProvider": {
             "description": "Defaults to the current provider when omitted.",
             "type": [
@@ -15981,7 +16302,38 @@
       },
       "GatewayOAuthLoginResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/GatewayOAuthPrompt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
         "title": "GatewayOAuthLoginResponse",
+        "type": "object"
+      },
+      "GatewayOAuthPrompt": {
+        "properties": {
+          "loginId": {
+            "type": "string"
+          },
+          "userCode": {
+            "type": "string"
+          },
+          "verificationUrl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "loginId",
+          "userCode",
+          "verificationUrl"
+        ],
         "type": "object"
       },
       "GatewayOAuthReadParams": {
@@ -16027,6 +16379,11 @@
               }
             ],
             "description": "Null when the effective provider does not use gateway OAuth."
+          },
+          "supportsDeviceAuth": {
+            "default": false,
+            "description": "Whether the administrator configured a device authorization endpoint.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -16180,6 +16537,14 @@
           "requiresOpenaiAuth": {
             "type": "boolean"
           },
+          "userId": {
+            "default": null,
+            "description": "ChatGPT user ID belonging to this account response, when available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "workspaceRouting": {
             "anyOf": [
               {
@@ -16195,6 +16560,24 @@
           "requiresOpenaiAuth"
         ],
         "title": "GetAccountResponse",
+        "type": "object"
+      },
+      "GetAccountSecuritySetupResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Optional security reminder bound to the account that fetched it. Unavailable or ineligible accounts return no notice; this read never changes account security.",
+        "properties": {
+          "notice": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AccountSecuritySetupNotice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "GetAccountSecuritySetupResponse",
         "type": "object"
       },
       "GetAccountTokenUsageParams": {
@@ -16619,6 +17002,13 @@
         ],
         "title": "GuardianWarningNotification",
         "type": "object"
+      },
+      "HelplineSubject": {
+        "enum": [
+          "answer",
+          "prompt"
+        ],
+        "type": "string"
       },
       "HookCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -20805,7 +21195,7 @@
             ]
           },
           "defaultPrompt": {
-            "description": "Starter prompts for the plugin. Capped at 3 entries with a maximum of 128 characters per entry.",
+            "description": "Starter prompts for the plugin. Capped at 3 entries with a maximum of 512 characters per entry.",
             "items": {
               "type": "string"
             },
@@ -26192,6 +26582,13 @@
               "null"
             ]
           },
+          "attachedToThreadId": {
+            "description": "Parent that owns this persisted attached thread, independent of fork or spawn lineage.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "canAcceptDirectInput": {
             "description": "Whether the app server accepts direct turn input for this loaded thread. `None` means the capability is unavailable, such as for an unloaded stored thread.",
             "type": [
@@ -28780,7 +29177,7 @@
             "$ref": "#/definitions/v2/ThreadItem"
           },
           "outputDeferred": {
-            "description": "The saved command output was omitted. Fetch the complete item with `thread/items/read`.",
+            "description": "The saved output was omitted. Fetch the complete item with `thread/items/read`.",
             "type": "boolean"
           },
           "startedAtMs": {
@@ -28806,6 +29203,10 @@
         "properties": {
           "commandExecution": {
             "description": "Defer nonempty output from successful commands.",
+            "type": "boolean"
+          },
+          "mcpToolCall": {
+            "description": "Defer nonempty plain-text results from successful MCP tool calls.",
             "type": "boolean"
           }
         },
@@ -29050,6 +29451,10 @@
               "array",
               "null"
             ]
+          },
+          "includeAttachedThreads": {
+            "description": "Include persistent threads attached to a parent when searching by title.",
+            "type": "boolean"
           },
           "limit": {
             "description": "Optional page size; defaults to a reasonable server-side value.",
@@ -29649,6 +30054,45 @@
           "threadId"
         ],
         "title": "ThreadPredictionUpdatedNotification",
+        "type": "object"
+      },
+      "ThreadPrepareApprovedPlanParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Prepare an approved plan for the first turn of a fresh thread.",
+        "properties": {
+          "attachmentPath": {
+            "description": "Absolute path to the optional app-server copy of the plan.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "markdown": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "markdown",
+          "threadId"
+        ],
+        "title": "ThreadPrepareApprovedPlanParams",
+        "type": "object"
+      },
+      "ThreadPrepareApprovedPlanResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "prompt": {
+            "description": "Initial user prompt. If no attachment is readable, the plan is already in the thread's context.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "title": "ThreadPrepareApprovedPlanResponse",
         "type": "object"
       },
       "ThreadProjectUpdatedNotification": {
@@ -31312,6 +31756,10 @@
       "ThreadSampleParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "allowInProgressTurn": {
+            "description": "Allow sampling the latest turn before it finishes.",
+            "type": "boolean"
+          },
           "disableMcp": {
             "description": "Disable MCP servers when the inherited window uses incremental tools on Responses Lite.",
             "type": "boolean"
@@ -31328,7 +31776,7 @@
             "description": "Applied only when the provider and model support cache-preserving reasoning-effort updates."
           },
           "expectedTurnId": {
-            "description": "The loaded source's latest completed, failed, or interrupted turn. Stale or active sources are rejected.",
+            "description": "The loaded source's latest turn, which must be finished (completed, failed, or interrupted) unless `allowInProgressTurn` is true.",
             "type": "string"
           },
           "interruptOnCancel": {
@@ -31537,6 +31985,10 @@
               "string",
               "null"
             ]
+          },
+          "includeAttachedThreads": {
+            "description": "Include persistent threads attached to a parent in search results.",
+            "type": "boolean"
           },
           "limit": {
             "description": "Optional page size; defaults to a reasonable server-side value.",
@@ -31988,6 +32440,17 @@
               }
             ]
           },
+          "environments": {
+            "default": null,
+            "description": "Environments configured for future turns, in priority order, primary first. `null` means the server does not expose the selection; [] means none are selected.",
+            "items": {
+              "$ref": "#/definitions/v2/ThreadEnvironment"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "model": {
             "type": "string"
           },
@@ -32108,6 +32571,16 @@
               }
             ],
             "description": "Override the reasoning effort for subsequent turns."
+          },
+          "environments": {
+            "description": "Replace the environments for future turns without changing the running turn. Omitted/null preserves the selection unless `cwd` is also provided, which selects the default environments for that directory. [] clears the selection.",
+            "items": {
+              "$ref": "#/definitions/v2/TurnEnvironmentParams"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "model": {
             "description": "Override the model for subsequent turns.",
@@ -33763,6 +34236,13 @@
         },
         "type": "object"
       },
+      "TrustedContacts": {
+        "enum": [
+          "check",
+          "skip"
+        ],
+        "type": "string"
+      },
       "Turn": {
         "properties": {
           "completedAt": {
@@ -34087,6 +34567,16 @@
               }
             ],
             "description": "Omission or `null` leaves the effort unchanged."
+          },
+          "environments": {
+            "description": "Replace the environments for subsequent steps of this turn, not future turns. Omitted/null preserves the selection; [] clears it. An already-started step is unchanged.",
+            "items": {
+              "$ref": "#/definitions/v2/TurnEnvironmentParams"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "model": {
             "description": "Omission or `null` leaves the model unchanged.",
@@ -34802,6 +35292,12 @@
           }
         ]
       },
+      "UserVerificationBiometricType": {
+        "enum": [
+          "fingerprint"
+        ],
+        "type": "string"
+      },
       "UserVerificationCancelParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "additionalProperties": false,
@@ -35093,6 +35589,17 @@
       "UserVerificationVerifyResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "biometricType": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/UserVerificationBiometricType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Native-reported authentication method for this signature. Older servers omit it. This is approval context, not part of the signed proof."
+          },
           "proof": {
             "$ref": "#/definitions/v2/UserVerificationProof"
           }

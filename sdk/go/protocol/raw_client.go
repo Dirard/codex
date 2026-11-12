@@ -478,6 +478,12 @@ func (c RawClient) ThreadInjectItems(ctx context.Context, params ThreadInjectIte
 	return result, err
 }
 
+func (c RawClient) ThreadPrepareApprovedPlan(ctx context.Context, params ThreadPrepareApprovedPlanParams) (ThreadPrepareApprovedPlanResponse, error) {
+	var result ThreadPrepareApprovedPlanResponse
+	err := c.sender.Call(ctx, "thread/prepareApprovedPlan", params, &result, MethodMetadataByMethod["thread/prepareApprovedPlan"])
+	return result, err
+}
+
 func (c RawClient) SkillsList(ctx context.Context, params SkillsListParams) (SkillsListResponse, error) {
 	var result SkillsListResponse
 	err := c.sender.Call(ctx, "skills/list", params, &result, MethodMetadataByMethod["skills/list"])
@@ -989,6 +995,12 @@ func (c RawClient) AccountSessionSwitch(ctx context.Context, params AccountSessi
 func (c RawClient) AccountLogout(ctx context.Context) (LogoutAccountResponse, error) {
 	var result LogoutAccountResponse
 	err := c.sender.Call(ctx, "account/logout", nil, &result, MethodMetadataByMethod["account/logout"])
+	return result, err
+}
+
+func (c RawClient) AccountSecuritySetupRead(ctx context.Context) (GetAccountSecuritySetupResponse, error) {
+	var result GetAccountSecuritySetupResponse
+	err := c.sender.Call(ctx, "account/securitySetup/read", nil, &result, MethodMetadataByMethod["account/securitySetup/read"])
 	return result, err
 }
 

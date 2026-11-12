@@ -1281,6 +1281,20 @@ func (v ClientRequest) ThreadInjectItemsParams() (ThreadInjectItemsParams, bool,
 	return params, true, nil
 }
 
+func (v ClientRequest) ThreadPrepareApprovedPlanParams() (ThreadPrepareApprovedPlanParams, bool, error) {
+	if v.Method != "thread/prepareApprovedPlan" {
+		return ThreadPrepareApprovedPlanParams{}, false, nil
+	}
+	var params ThreadPrepareApprovedPlanParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
 func (v ClientRequest) SkillsListParams() (SkillsListParams, bool, error) {
 	if v.Method != "skills/list" {
 		return SkillsListParams{}, false, nil
@@ -7008,6 +7022,56 @@ const (
 	AccountRoutingOverrideUsCr         AccountRoutingOverride = "us_cr"
 )
 
+type AccountSecuritySetupAction struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
+var accountSecuritySetupActionSpec = objectSpec{
+	fields: []objectField{
+		{name: "label", flags: fieldRequired | fieldRejectNull},
+		{name: "url", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v AccountSecuritySetupAction) MarshalJSON() ([]byte, error) {
+	type wire AccountSecuritySetupAction
+	return json.Marshal(wire(v))
+}
+
+func (v *AccountSecuritySetupAction) UnmarshalJSON(data []byte) error {
+	type wire AccountSecuritySetupAction
+	return decodeObject(data, &accountSecuritySetupActionSpec, (*wire)(v))
+}
+
+type AccountSecuritySetupNotice struct {
+	AccountID   string                     `json:"accountId"`
+	Action      AccountSecuritySetupAction `json:"action"`
+	Description string                     `json:"description"`
+	Title       string                     `json:"title"`
+	UserID      string                     `json:"userId"`
+}
+
+var accountSecuritySetupNoticeSpec = objectSpec{
+	fields: []objectField{
+		{name: "accountId", flags: fieldRequired | fieldRejectNull},
+		{name: "action", flags: fieldRequired | fieldRejectNull},
+		{name: "description", flags: fieldRequired | fieldRejectNull},
+		{name: "title", flags: fieldRequired | fieldRejectNull},
+		{name: "userId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v AccountSecuritySetupNotice) MarshalJSON() ([]byte, error) {
+	type wire AccountSecuritySetupNotice
+	return json.Marshal(wire(v))
+}
+
+func (v *AccountSecuritySetupNotice) UnmarshalJSON(data []byte) error {
+	type wire AccountSecuritySetupNotice
+	return decodeObject(data, &accountSecuritySetupNoticeSpec, (*wire)(v))
+}
+
 type AccountSession struct {
 	DisplayName                Optional[string]          `json:"displayName,omitzero"`
 	Email                      Optional[string]          `json:"email,omitzero"`
@@ -7377,6 +7441,184 @@ func (v *AgentMessageDeltaNotification) UnmarshalJSON(data []byte) error {
 	return decodeObject(data, &agentMessageDeltaNotificationSpec, (*wire)(v))
 }
 
+type AgentMessageDisplay struct {
+	Annotation      Optional[AnswerAnnotation]         `json:"annotation,omitzero"`
+	Mode            OptionalNonNull[string]            `json:"mode,omitzero"`
+	Reason          OptionalNonNull[BlockReason]       `json:"reason,omitzero"`
+	Replacement     OptionalNonNull[AnswerReplacement] `json:"replacement,omitzero"`
+	TrustedContacts OptionalNonNull[TrustedContacts]   `json:"trustedContacts,omitzero"`
+	Version         OptionalNonNull[uint8]             `json:"version,omitzero"`
+	RawJSON         json.RawMessage                    `json:"-"`
+}
+
+var agentMessageDisplaySpec = objectSpec{
+	fields: []objectField{
+		{name: "annotation"},
+		{name: "mode", flags: fieldNonNullOptional},
+		{name: "reason", flags: fieldNonNullOptional},
+		{name: "replacement", flags: fieldNonNullOptional},
+		{name: "trustedContacts", flags: fieldNonNullOptional},
+		{name: "version", flags: fieldNonNullOptional},
+	},
+}
+
+func (v AgentMessageDisplay) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if v.Annotation.IsSet() {
+		out["annotation"] = v.Annotation
+	}
+	if v.Mode.IsSet() {
+		out["mode"] = v.Mode
+	}
+	if v.Reason.IsSet() {
+		out["reason"] = v.Reason
+	}
+	if v.Replacement.IsSet() {
+		out["replacement"] = v.Replacement
+	}
+	if v.TrustedContacts.IsSet() {
+		out["trustedContacts"] = v.TrustedContacts
+	}
+	if v.Version.IsSet() {
+		out["version"] = v.Version
+	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	untaggedOneOfVariant0Matches := true
+	untaggedOneOfVariant0ConstMatches := true
+	if _, ok := out["mode"]; !ok {
+		untaggedOneOfVariant0Matches = false
+	}
+	if _, ok := out["trustedContacts"]; !ok {
+		untaggedOneOfVariant0Matches = false
+	}
+	if _, ok := out["version"]; !ok {
+		untaggedOneOfVariant0Matches = false
+	}
+	if rawValue, ok := out["mode"]; !ok {
+		untaggedOneOfVariant0Matches = false
+		untaggedOneOfVariant0ConstMatches = false
+	} else if rawJSON, err := json.Marshal(rawValue); err != nil || !bytes.Equal(bytes.TrimSpace(rawJSON), []byte("\"show\"")) {
+		untaggedOneOfVariant0Matches = false
+		untaggedOneOfVariant0ConstMatches = false
+	}
+	if untaggedOneOfVariant0ConstMatches {
+		untaggedOneOfKnownVariantMatches = true
+	}
+	if untaggedOneOfVariant0Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant1Matches := true
+	untaggedOneOfVariant1ConstMatches := true
+	if _, ok := out["mode"]; !ok {
+		untaggedOneOfVariant1Matches = false
+	}
+	if _, ok := out["replacement"]; !ok {
+		untaggedOneOfVariant1Matches = false
+	}
+	if _, ok := out["version"]; !ok {
+		untaggedOneOfVariant1Matches = false
+	}
+	if rawValue, ok := out["mode"]; !ok {
+		untaggedOneOfVariant1Matches = false
+		untaggedOneOfVariant1ConstMatches = false
+	} else if rawJSON, err := json.Marshal(rawValue); err != nil || !bytes.Equal(bytes.TrimSpace(rawJSON), []byte("\"hide\"")) {
+		untaggedOneOfVariant1Matches = false
+		untaggedOneOfVariant1ConstMatches = false
+	}
+	if untaggedOneOfVariant1ConstMatches {
+		untaggedOneOfKnownVariantMatches = true
+	}
+	if untaggedOneOfVariant1Matches {
+		untaggedOneOfMatches++
+	}
+	untaggedOneOfVariant2Matches := true
+	untaggedOneOfVariant2ConstMatches := true
+	if _, ok := out["mode"]; !ok {
+		untaggedOneOfVariant2Matches = false
+	}
+	if _, ok := out["reason"]; !ok {
+		untaggedOneOfVariant2Matches = false
+	}
+	if _, ok := out["version"]; !ok {
+		untaggedOneOfVariant2Matches = false
+	}
+	if rawValue, ok := out["mode"]; !ok {
+		untaggedOneOfVariant2Matches = false
+		untaggedOneOfVariant2ConstMatches = false
+	} else if rawJSON, err := json.Marshal(rawValue); err != nil || !bytes.Equal(bytes.TrimSpace(rawJSON), []byte("\"block\"")) {
+		untaggedOneOfVariant2Matches = false
+		untaggedOneOfVariant2ConstMatches = false
+	}
+	if untaggedOneOfVariant2ConstMatches {
+		untaggedOneOfKnownVariantMatches = true
+	}
+	if untaggedOneOfVariant2Matches {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches && len(bytes.TrimSpace(v.RawJSON)) > 0 {
+			if !json.Valid(v.RawJSON) {
+				return nil, fmt.Errorf("invalid AgentMessageDisplay raw fallback")
+			}
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
+	return json.Marshal(out)
+}
+
+func (v *AgentMessageDisplay) UnmarshalJSON(data []byte) error {
+	type wire AgentMessageDisplay
+	var s objectScan
+	if _, err := s.begin(data, &agentMessageDisplaySpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if valueVersion, ok := v.Version.Value(); ok {
+		if valueVersion < 0 {
+			return DecodeError{Field: "version", Reason: "below minimum 0"}
+		}
+	}
+	untaggedOneOfMatches := 0
+	untaggedOneOfKnownVariantMatches := false
+	if s.rawEquals("mode", "\"show\"") {
+		untaggedOneOfKnownVariantMatches = true
+	}
+	if s.nonNull("mode") && s.nonNull("trustedContacts") && s.nonNull("version") && s.rawEquals("mode", "\"show\"") {
+		untaggedOneOfMatches++
+	}
+	if s.rawEquals("mode", "\"hide\"") {
+		untaggedOneOfKnownVariantMatches = true
+	}
+	if s.nonNull("mode") && s.nonNull("replacement") && s.nonNull("version") && s.rawEquals("mode", "\"hide\"") {
+		untaggedOneOfMatches++
+	}
+	if s.rawEquals("mode", "\"block\"") {
+		untaggedOneOfKnownVariantMatches = true
+	}
+	if s.nonNull("mode") && s.nonNull("reason") && s.nonNull("version") && s.rawEquals("mode", "\"block\"") {
+		untaggedOneOfMatches++
+	}
+	if untaggedOneOfMatches == 0 {
+		if !untaggedOneOfKnownVariantMatches {
+			v.RawJSON = append(v.RawJSON[:0], data...)
+			return nil
+		}
+		return DecodeError{Field: "", Reason: "does not match any oneOf variant"}
+	}
+	if untaggedOneOfMatches > 1 {
+		return DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
+	}
+	v.RawJSON = nil
+	return nil
+}
+
 type AgentMessageInputContent struct {
 	EncryptedContent OptionalNonNull[string] `json:"encrypted_content,omitzero"`
 	Text             OptionalNonNull[string] `json:"text,omitzero"`
@@ -7452,11 +7694,13 @@ func (v *AgentMessageInputContent) UnmarshalJSON(data []byte) error {
 }
 
 type AgentMessageModeration struct {
-	Moderated bool `json:"moderated"`
+	Display   Optional[AgentMessageDisplay] `json:"display,omitzero"`
+	Moderated bool                          `json:"moderated"`
 }
 
 var agentMessageModerationSpec = objectSpec{
 	fields: []objectField{
+		{name: "display"},
 		{name: "moderated", flags: fieldRequired | fieldRejectNull},
 	},
 }
@@ -7516,6 +7760,117 @@ func (v *AnalyticsConfig) UnmarshalJSON(data []byte) error {
 		if err := json.Unmarshal([]byte("{}"), &v.Additional); err != nil {
 			return fmt.Errorf("field *: %w", err)
 		}
+	}
+	return nil
+}
+
+type AnswerAnnotation struct {
+	Kind    string                           `json:"kind"`
+	Subject OptionalNonNull[HelplineSubject] `json:"subject,omitzero"`
+	RawJSON json.RawMessage                  `json:"-"`
+}
+
+var answerAnnotationSpec = objectSpec{
+	fields: []objectField{
+		{name: "kind", flags: fieldRequired | fieldRejectNull},
+		{name: "subject", flags: fieldNonNullOptional},
+	},
+	tag:  0,
+	tags: []string{"wellbeingHelpline"},
+}
+
+func (v AnswerAnnotation) MarshalJSON() ([]byte, error) {
+	switch v.Kind {
+	case "wellbeingHelpline":
+		if !v.Subject.IsSet() {
+			return nil, DecodeError{Field: "subject", Reason: "missing required field for kind wellbeingHelpline"}
+		}
+	default:
+		if len(v.RawJSON) > 0 {
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "kind", Reason: fmt.Sprintf("unsupported discriminator value %q", v.Kind)}
+	}
+	type wire AnswerAnnotation
+	return json.Marshal(wire(v))
+}
+
+func (v *AnswerAnnotation) UnmarshalJSON(data []byte) error {
+	type wire AnswerAnnotation
+	var s objectScan
+	known, err := s.begin(data, &answerAnnotationSpec)
+	if err != nil {
+		return err
+	}
+	if !known {
+		v.Kind = s.tag
+		v.RawJSON = append(v.RawJSON[:0], data...)
+		return nil
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	v.RawJSON = nil
+	switch v.Kind {
+	case "wellbeingHelpline":
+		if !s.has("subject") {
+			return DecodeError{Field: "subject", Reason: "missing required field for kind wellbeingHelpline"}
+		}
+		if s.isNull("subject") {
+			return DecodeError{Field: "subject", Reason: "cannot be null"}
+		}
+	default:
+		v.RawJSON = append(v.RawJSON[:0], data...)
+	}
+	return nil
+}
+
+type AnswerReplacement struct {
+	Kind    string          `json:"kind"`
+	RawJSON json.RawMessage `json:"-"`
+}
+
+var answerReplacementSpec = objectSpec{
+	fields: []objectField{
+		{name: "kind", flags: fieldRequired | fieldRejectNull},
+	},
+	tag:  0,
+	tags: []string{"wellbeingPromptHelpline"},
+}
+
+func (v AnswerReplacement) MarshalJSON() ([]byte, error) {
+	switch v.Kind {
+	case "wellbeingPromptHelpline":
+	default:
+		if len(v.RawJSON) > 0 {
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "kind", Reason: fmt.Sprintf("unsupported discriminator value %q", v.Kind)}
+	}
+	type wire AnswerReplacement
+	return json.Marshal(wire(v))
+}
+
+func (v *AnswerReplacement) UnmarshalJSON(data []byte) error {
+	type wire AnswerReplacement
+	var s objectScan
+	known, err := s.begin(data, &answerReplacementSpec)
+	if err != nil {
+		return err
+	}
+	if !known {
+		v.Kind = s.tag
+		v.RawJSON = append(v.RawJSON[:0], data...)
+		return nil
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	v.RawJSON = nil
+	switch v.Kind {
+	case "wellbeingPromptHelpline":
+	default:
+		v.RawJSON = append(v.RawJSON[:0], data...)
 	}
 	return nil
 }
@@ -8699,6 +9054,71 @@ func (v *BedrockSetupResponse) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type BlockReason struct {
+	Kind           string                  `json:"kind"`
+	ProtectionType OptionalNonNull[string] `json:"protectionType,omitzero"`
+	TrustedAccess  Optional[bool]          `json:"trustedAccess,omitzero"`
+	RawJSON        json.RawMessage         `json:"-"`
+}
+
+var blockReasonSpec = objectSpec{
+	fields: []objectField{
+		{name: "kind", flags: fieldRequired | fieldRejectNull},
+		{name: "protectionType", flags: fieldNonNullOptional},
+		{name: "trustedAccess"},
+	},
+	tag:  0,
+	tags: []string{"protection", "cyber"},
+}
+
+func (v BlockReason) MarshalJSON() ([]byte, error) {
+	switch v.Kind {
+	case "protection":
+		if !v.ProtectionType.IsSet() {
+			return nil, DecodeError{Field: "protectionType", Reason: "missing required field for kind protection"}
+		}
+	case "cyber":
+	default:
+		if len(v.RawJSON) > 0 {
+			return append([]byte(nil), v.RawJSON...), nil
+		}
+		return nil, DecodeError{Field: "kind", Reason: fmt.Sprintf("unsupported discriminator value %q", v.Kind)}
+	}
+	type wire BlockReason
+	return json.Marshal(wire(v))
+}
+
+func (v *BlockReason) UnmarshalJSON(data []byte) error {
+	type wire BlockReason
+	var s objectScan
+	known, err := s.begin(data, &blockReasonSpec)
+	if err != nil {
+		return err
+	}
+	if !known {
+		v.Kind = s.tag
+		v.RawJSON = append(v.RawJSON[:0], data...)
+		return nil
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	v.RawJSON = nil
+	switch v.Kind {
+	case "protection":
+		if !s.has("protectionType") {
+			return DecodeError{Field: "protectionType", Reason: "missing required field for kind protection"}
+		}
+		if s.isNull("protectionType") {
+			return DecodeError{Field: "protectionType", Reason: "cannot be null"}
+		}
+	case "cyber":
+	default:
+		v.RawJSON = append(v.RawJSON[:0], data...)
+	}
+	return nil
+}
+
 type BrowserUseAccessApprovalLifetime string
 
 const (
@@ -9031,6 +9451,7 @@ var (
 	CodexErrorInfoThreadRollbackFailed        = CodexErrorInfo{StringValue: "threadRollbackFailed"}
 	CodexErrorInfoSandboxError                = CodexErrorInfo{StringValue: "sandboxError"}
 	CodexErrorInfoOther                       = CodexErrorInfo{StringValue: "other"}
+	CodexErrorInfoInferenceHookDenied         = CodexErrorInfo{StringValue: "inferenceHookDenied"}
 )
 
 func (v CodexErrorInfo) IsSet() bool {
@@ -9070,7 +9491,7 @@ func (v CodexErrorInfo) MarshalJSON() ([]byte, error) {
 			return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
 		}
 		switch v.StringValue {
-		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "rateLimitExceeded", "flexUnavailable", "serverOverloaded", "modelNotFound", "policyCapacityUnavailable", "cyberPolicy", "misalignmentPolicyViolation", "tooManyDenials", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other":
+		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "rateLimitExceeded", "flexUnavailable", "serverOverloaded", "modelNotFound", "policyCapacityUnavailable", "cyberPolicy", "misalignmentPolicyViolation", "tooManyDenials", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other", "inferenceHookDenied":
 			return json.Marshal(v.StringValue)
 		default:
 			return nil, DecodeError{Field: "", Reason: fmt.Sprintf("unsupported CodexErrorInfo string value %q", v.StringValue)}
@@ -9136,7 +9557,7 @@ func (v *CodexErrorInfo) UnmarshalJSON(data []byte) error {
 	var stringValue string
 	if err := json.Unmarshal(trimmed, &stringValue); err == nil {
 		switch stringValue {
-		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "rateLimitExceeded", "flexUnavailable", "serverOverloaded", "modelNotFound", "policyCapacityUnavailable", "cyberPolicy", "misalignmentPolicyViolation", "tooManyDenials", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other":
+		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "rateLimitExceeded", "flexUnavailable", "serverOverloaded", "modelNotFound", "policyCapacityUnavailable", "cyberPolicy", "misalignmentPolicyViolation", "tooManyDenials", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other", "inferenceHookDenied":
 			*v = CodexErrorInfo{StringValue: stringValue}
 		default:
 			*v = CodexErrorInfo{RawJSON: append(json.RawMessage(nil), data...)}
@@ -13169,10 +13590,10 @@ type FunctionCallOutputContentItem struct {
 
 var functionCallOutputContentItemSpec = objectSpec{
 	fields: []objectField{
-		{name: "audio_url", flags: fieldNonNullOptional},
+		{name: "audio_url", flags: fieldNonNullOptional, anyOfTags: []string{"\"input_audio\""}},
 		{name: "detail"},
 		{name: "encrypted_content", flags: fieldNonNullOptional},
-		{name: "file_id", flags: fieldNonNullOptional, anyOfTags: []string{"\"input_image\""}},
+		{name: "file_id", flags: fieldNonNullOptional, anyOfTags: []string{"\"input_image\"", "\"input_audio\""}},
 		{name: "image_url", flags: fieldNonNullOptional, anyOfTags: []string{"\"input_image\""}},
 		{name: "text", flags: fieldNonNullOptional},
 		{name: "type", flags: fieldRequired | fieldRejectNull},
@@ -13195,8 +13616,9 @@ func (v FunctionCallOutputContentItem) MarshalJSON() ([]byte, error) {
 			return nil, DecodeError{Field: "", Reason: "does not match any anyOf variant for type input_image"}
 		}
 	case "input_audio":
-		if !v.AudioURL.IsSet() {
-			return nil, DecodeError{Field: "audio_url", Reason: "missing required field for type input_audio"}
+		taggedAnyOfVariant2Matches := (w.AudioURL.IsSet() && marshalsNonNull(w.AudioURL)) || (w.FileID.IsSet() && marshalsNonNull(w.FileID))
+		if !taggedAnyOfVariant2Matches {
+			return nil, DecodeError{Field: "", Reason: "does not match any anyOf variant for type input_audio"}
 		}
 	case "encrypted_content":
 		if !v.EncryptedContent.IsSet() {
@@ -13241,11 +13663,9 @@ func (v *FunctionCallOutputContentItem) UnmarshalJSON(data []byte) error {
 			return DecodeError{Field: "", Reason: "does not match any anyOf variant for type input_image"}
 		}
 	case "input_audio":
-		if !s.has("audio_url") {
-			return DecodeError{Field: "audio_url", Reason: "missing required field for type input_audio"}
-		}
-		if s.isNull("audio_url") {
-			return DecodeError{Field: "audio_url", Reason: "cannot be null"}
+		taggedAnyOfVariant2Matches := (v.AudioURL.IsSet()) || (v.FileID.IsSet())
+		if !taggedAnyOfVariant2Matches {
+			return DecodeError{Field: "", Reason: "does not match any anyOf variant for type input_audio"}
 		}
 	case "encrypted_content":
 		if !s.has("encrypted_content") {
@@ -13427,6 +13847,7 @@ func (v *GatewayOAuthCancelResponse) UnmarshalJSON(data []byte) error {
 type GatewayOAuthChangedNotification struct {
 	AuthURL    Optional[string]   `json:"authUrl,omitzero"`
 	Error      Optional[string]   `json:"error,omitzero"`
+	LoginID    Optional[string]   `json:"loginId,omitzero"`
 	ProviderID string             `json:"providerId"`
 	Status     GatewayOAuthStatus `json:"status"`
 }
@@ -13435,6 +13856,7 @@ var gatewayOAuthChangedNotificationSpec = objectSpec{
 	fields: []objectField{
 		{name: "authUrl"},
 		{name: "error"},
+		{name: "loginId"},
 		{name: "providerId", flags: fieldRequired | fieldRejectNull},
 		{name: "status", flags: fieldRequired | fieldRejectNull},
 	},
@@ -13451,11 +13873,13 @@ func (v *GatewayOAuthChangedNotification) UnmarshalJSON(data []byte) error {
 }
 
 type GatewayOAuthLoginParams struct {
-	ModelProvider Optional[string] `json:"modelProvider,omitzero"`
+	DeviceAuth    OptionalNonNull[bool] `json:"deviceAuth,omitzero"`
+	ModelProvider Optional[string]      `json:"modelProvider,omitzero"`
 }
 
 var gatewayOAuthLoginParamsSpec = objectSpec{
 	fields: []objectField{
+		{name: "deviceAuth", flags: fieldNonNullOptional},
 		{name: "modelProvider"},
 	},
 }
@@ -13470,25 +13894,48 @@ func (v *GatewayOAuthLoginParams) UnmarshalJSON(data []byte) error {
 	return decodeObject(data, &gatewayOAuthLoginParamsSpec, (*wire)(v))
 }
 
-type GatewayOAuthLoginResponse map[string]json.RawMessage
+type GatewayOAuthLoginResponse struct {
+	Prompt Optional[GatewayOAuthPrompt] `json:"prompt,omitzero"`
+}
+
+var gatewayOAuthLoginResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "prompt"},
+	},
+}
 
 func (v GatewayOAuthLoginResponse) MarshalJSON() ([]byte, error) {
-	if v == nil {
-		return []byte("{}"), nil
-	}
-	return json.Marshal(map[string]json.RawMessage(v))
+	type wire GatewayOAuthLoginResponse
+	return json.Marshal(wire(v))
 }
 
 func (v *GatewayOAuthLoginResponse) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
-		return DecodeError{Field: "", Reason: "cannot be null"}
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	*v = GatewayOAuthLoginResponse(raw)
-	return nil
+	type wire GatewayOAuthLoginResponse
+	return decodeObject(data, &gatewayOAuthLoginResponseSpec, (*wire)(v))
+}
+
+type GatewayOAuthPrompt struct {
+	LoginID         string `json:"loginId"`
+	UserCode        string `json:"userCode"`
+	VerificationURL string `json:"verificationUrl"`
+}
+
+var gatewayOAuthPromptSpec = objectSpec{
+	fields: []objectField{
+		{name: "loginId", flags: fieldRequired | fieldRejectNull},
+		{name: "userCode", flags: fieldRequired | fieldRejectNull},
+		{name: "verificationUrl", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v GatewayOAuthPrompt) MarshalJSON() ([]byte, error) {
+	type wire GatewayOAuthPrompt
+	return json.Marshal(wire(v))
+}
+
+func (v *GatewayOAuthPrompt) UnmarshalJSON(data []byte) error {
+	type wire GatewayOAuthPrompt
+	return decodeObject(data, &gatewayOAuthPromptSpec, (*wire)(v))
 }
 
 type GatewayOAuthReadParams struct {
@@ -13512,11 +13959,12 @@ func (v *GatewayOAuthReadParams) UnmarshalJSON(data []byte) error {
 }
 
 type GatewayOAuthReadResponse struct {
-	Error        Optional[string]             `json:"error,omitzero"`
-	ProviderID   string                       `json:"providerId"`
-	ProviderName string                       `json:"providerName"`
-	Required     bool                         `json:"required"`
-	Status       Optional[GatewayOAuthStatus] `json:"status,omitzero"`
+	Error              Optional[string]             `json:"error,omitzero"`
+	ProviderID         string                       `json:"providerId"`
+	ProviderName       string                       `json:"providerName"`
+	Required           bool                         `json:"required"`
+	Status             Optional[GatewayOAuthStatus] `json:"status,omitzero"`
+	SupportsDeviceAuth OptionalNonNull[bool]        `json:"supportsDeviceAuth,omitzero"`
 }
 
 var gatewayOAuthReadResponseSpec = objectSpec{
@@ -13526,6 +13974,7 @@ var gatewayOAuthReadResponseSpec = objectSpec{
 		{name: "providerName", flags: fieldRequired | fieldRejectNull},
 		{name: "required", flags: fieldRequired | fieldRejectNull},
 		{name: "status"},
+		{name: "supportsDeviceAuth", flags: fieldNonNullOptional},
 	},
 }
 
@@ -13679,6 +14128,7 @@ func (v *GetAccountRateLimitsResponse) UnmarshalJSON(data []byte) error {
 type GetAccountResponse struct {
 	Account            Optional[Account]          `json:"account,omitzero"`
 	RequiresOpenaiAuth bool                       `json:"requiresOpenaiAuth"`
+	UserID             Optional[string]           `json:"userId,omitzero"`
 	WorkspaceRouting   Optional[WorkspaceRouting] `json:"workspaceRouting,omitzero"`
 }
 
@@ -13686,6 +14136,7 @@ var getAccountResponseSpec = objectSpec{
 	fields: []objectField{
 		{name: "account"},
 		{name: "requiresOpenaiAuth", flags: fieldRequired | fieldRejectNull},
+		{name: "userId"},
 		{name: "workspaceRouting"},
 	},
 }
@@ -13698,6 +14149,26 @@ func (v GetAccountResponse) MarshalJSON() ([]byte, error) {
 func (v *GetAccountResponse) UnmarshalJSON(data []byte) error {
 	type wire GetAccountResponse
 	return decodeObject(data, &getAccountResponseSpec, (*wire)(v))
+}
+
+type GetAccountSecuritySetupResponse struct {
+	Notice Optional[AccountSecuritySetupNotice] `json:"notice,omitzero"`
+}
+
+var getAccountSecuritySetupResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "notice"},
+	},
+}
+
+func (v GetAccountSecuritySetupResponse) MarshalJSON() ([]byte, error) {
+	type wire GetAccountSecuritySetupResponse
+	return json.Marshal(wire(v))
+}
+
+func (v *GetAccountSecuritySetupResponse) UnmarshalJSON(data []byte) error {
+	type wire GetAccountSecuritySetupResponse
+	return decodeObject(data, &getAccountSecuritySetupResponseSpec, (*wire)(v))
 }
 
 type GetAccountTokenUsageParams struct {
@@ -14166,6 +14637,13 @@ func (v *GuardianWarningNotification) UnmarshalJSON(data []byte) error {
 	type wire GuardianWarningNotification
 	return decodeObject(data, &guardianWarningNotificationSpec, (*wire)(v))
 }
+
+type HelplineSubject string
+
+const (
+	HelplineSubjectAnswer HelplineSubject = "answer"
+	HelplineSubjectPrompt HelplineSubject = "prompt"
+)
 
 type HookCompletedNotification struct {
 	Run      HookRunSummary   `json:"run"`
@@ -23122,6 +23600,7 @@ func (v *TextRange) UnmarshalJSON(data []byte) error {
 type Thread struct {
 	AgentNickname        Optional[string]                   `json:"agentNickname,omitzero"`
 	AgentRole            Optional[string]                   `json:"agentRole,omitzero"`
+	AttachedToThreadID   Optional[string]                   `json:"attachedToThreadId,omitzero"`
 	CanAcceptDirectInput Optional[bool]                     `json:"canAcceptDirectInput,omitzero"`
 	CliVersion           string                             `json:"cliVersion"`
 	CreatedAt            int64                              `json:"createdAt"`
@@ -23158,6 +23637,7 @@ var threadSpec = objectSpec{
 	fields: []objectField{
 		{name: "agentNickname"},
 		{name: "agentRole"},
+		{name: "attachedToThreadId"},
 		{name: "canAcceptDirectInput"},
 		{name: "cliVersion", flags: fieldRequired | fieldRejectNull},
 		{name: "createdAt", flags: fieldRequired | fieldRejectNull},
@@ -25352,11 +25832,13 @@ func (v *ThreadItemEntry) UnmarshalJSON(data []byte) error {
 
 type ThreadItemOutputDeferral struct {
 	CommandExecution OptionalNonNull[bool] `json:"commandExecution,omitzero"`
+	McpToolCall      OptionalNonNull[bool] `json:"mcpToolCall,omitzero"`
 }
 
 var threadItemOutputDeferralSpec = objectSpec{
 	fields: []objectField{
 		{name: "commandExecution", flags: fieldNonNullOptional},
+		{name: "mcpToolCall", flags: fieldNonNullOptional},
 	},
 }
 
@@ -25609,24 +26091,25 @@ func (v *ThreadItemsReadResponse) UnmarshalJSON(data []byte) error {
 type ThreadListCwdFilter = json.RawMessage
 
 type ThreadListParams struct {
-	AncestorThreadID   Optional[string]              `json:"ancestorThreadId,omitzero"`
-	Archived           Optional[bool]                `json:"archived,omitzero"`
-	AttachedToThreadID Optional[string]              `json:"attachedToThreadId,omitzero"`
-	CurrentAccountOnly OptionalNonNull[bool]         `json:"currentAccountOnly,omitzero"`
-	Cursor             Optional[string]              `json:"cursor,omitzero"`
-	Cwd                Optional[ThreadListCwdFilter] `json:"cwd,omitzero"`
-	ExcludedThreadIDs  Optional[[]string]            `json:"excludedThreadIds,omitzero"`
-	Limit              Optional[uint32]              `json:"limit,omitzero"`
-	ModelProviders     Optional[[]string]            `json:"modelProviders,omitzero"`
-	Originators        Optional[[]string]            `json:"originators,omitzero"`
-	ParentThreadID     Optional[string]              `json:"parentThreadId,omitzero"`
-	ProjectID          Optional[string]              `json:"projectId,omitzero"`
-	SearchTerm         Optional[string]              `json:"searchTerm,omitzero"`
-	SectionID          Optional[string]              `json:"sectionId,omitzero"`
-	SortDirection      Optional[SortDirection]       `json:"sortDirection,omitzero"`
-	SortKey            Optional[ThreadSortKey]       `json:"sortKey,omitzero"`
-	SourceKinds        Optional[[]ThreadSourceKind]  `json:"sourceKinds,omitzero"`
-	UseStateDbOnly     OptionalNonNull[bool]         `json:"useStateDbOnly,omitzero"`
+	AncestorThreadID       Optional[string]              `json:"ancestorThreadId,omitzero"`
+	Archived               Optional[bool]                `json:"archived,omitzero"`
+	AttachedToThreadID     Optional[string]              `json:"attachedToThreadId,omitzero"`
+	CurrentAccountOnly     OptionalNonNull[bool]         `json:"currentAccountOnly,omitzero"`
+	Cursor                 Optional[string]              `json:"cursor,omitzero"`
+	Cwd                    Optional[ThreadListCwdFilter] `json:"cwd,omitzero"`
+	ExcludedThreadIDs      Optional[[]string]            `json:"excludedThreadIds,omitzero"`
+	IncludeAttachedThreads OptionalNonNull[bool]         `json:"includeAttachedThreads,omitzero"`
+	Limit                  Optional[uint32]              `json:"limit,omitzero"`
+	ModelProviders         Optional[[]string]            `json:"modelProviders,omitzero"`
+	Originators            Optional[[]string]            `json:"originators,omitzero"`
+	ParentThreadID         Optional[string]              `json:"parentThreadId,omitzero"`
+	ProjectID              Optional[string]              `json:"projectId,omitzero"`
+	SearchTerm             Optional[string]              `json:"searchTerm,omitzero"`
+	SectionID              Optional[string]              `json:"sectionId,omitzero"`
+	SortDirection          Optional[SortDirection]       `json:"sortDirection,omitzero"`
+	SortKey                Optional[ThreadSortKey]       `json:"sortKey,omitzero"`
+	SourceKinds            Optional[[]ThreadSourceKind]  `json:"sourceKinds,omitzero"`
+	UseStateDbOnly         OptionalNonNull[bool]         `json:"useStateDbOnly,omitzero"`
 }
 
 var threadListParamsSpec = objectSpec{
@@ -25638,6 +26121,7 @@ var threadListParamsSpec = objectSpec{
 		{name: "cursor"},
 		{name: "cwd"},
 		{name: "excludedThreadIds"},
+		{name: "includeAttachedThreads", flags: fieldNonNullOptional},
 		{name: "limit"},
 		{name: "modelProviders"},
 		{name: "originators"},
@@ -26260,6 +26744,50 @@ func (v ThreadPredictionUpdatedNotification) MarshalJSON() ([]byte, error) {
 func (v *ThreadPredictionUpdatedNotification) UnmarshalJSON(data []byte) error {
 	type wire ThreadPredictionUpdatedNotification
 	return decodeObject(data, &threadPredictionUpdatedNotificationSpec, (*wire)(v))
+}
+
+type ThreadPrepareApprovedPlanParams struct {
+	AttachmentPath Optional[string] `json:"attachmentPath,omitzero"`
+	Markdown       string           `json:"markdown"`
+	ThreadID       string           `json:"threadId"`
+}
+
+var threadPrepareApprovedPlanParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "attachmentPath"},
+		{name: "markdown", flags: fieldRequired | fieldRejectNull},
+		{name: "threadId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadPrepareApprovedPlanParams) MarshalJSON() ([]byte, error) {
+	type wire ThreadPrepareApprovedPlanParams
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadPrepareApprovedPlanParams) UnmarshalJSON(data []byte) error {
+	type wire ThreadPrepareApprovedPlanParams
+	return decodeObject(data, &threadPrepareApprovedPlanParamsSpec, (*wire)(v))
+}
+
+type ThreadPrepareApprovedPlanResponse struct {
+	Prompt string `json:"prompt"`
+}
+
+var threadPrepareApprovedPlanResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "prompt", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadPrepareApprovedPlanResponse) MarshalJSON() ([]byte, error) {
+	type wire ThreadPrepareApprovedPlanResponse
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadPrepareApprovedPlanResponse) UnmarshalJSON(data []byte) error {
+	type wire ThreadPrepareApprovedPlanResponse
+	return decodeObject(data, &threadPrepareApprovedPlanResponseSpec, (*wire)(v))
 }
 
 type ThreadProjectUpdatedNotification struct {
@@ -27941,6 +28469,7 @@ func (v *ThreadSampleCancelResponse) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadSampleParams struct {
+	AllowInProgressTurn        OptionalNonNull[bool]       `json:"allowInProgressTurn,omitzero"`
 	DisableMcp                 OptionalNonNull[bool]       `json:"disableMcp,omitzero"`
 	Effort                     Optional[ReasoningEffort]   `json:"effort,omitzero"`
 	ExpectedTurnID             string                      `json:"expectedTurnId"`
@@ -27954,6 +28483,7 @@ type ThreadSampleParams struct {
 
 var threadSampleParamsSpec = objectSpec{
 	fields: []objectField{
+		{name: "allowInProgressTurn", flags: fieldNonNullOptional},
 		{name: "disableMcp", flags: fieldNonNullOptional},
 		{name: "effort"},
 		{name: "expectedTurnId", flags: fieldRequired | fieldRejectNull},
@@ -28095,14 +28625,15 @@ func (v *ThreadSearchOccurrencesResponse) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadSearchParams struct {
-	Archived           Optional[bool]                `json:"archived,omitzero"`
-	CurrentAccountOnly OptionalNonNull[bool]         `json:"currentAccountOnly,omitzero"`
-	Cursor             Optional[string]              `json:"cursor,omitzero"`
-	Limit              Optional[uint32]              `json:"limit,omitzero"`
-	SearchTerm         string                        `json:"searchTerm"`
-	SortDirection      Optional[SortDirection]       `json:"sortDirection,omitzero"`
-	SortKey            Optional[ThreadSearchSortKey] `json:"sortKey,omitzero"`
-	SourceKinds        Optional[[]ThreadSourceKind]  `json:"sourceKinds,omitzero"`
+	Archived               Optional[bool]                `json:"archived,omitzero"`
+	CurrentAccountOnly     OptionalNonNull[bool]         `json:"currentAccountOnly,omitzero"`
+	Cursor                 Optional[string]              `json:"cursor,omitzero"`
+	IncludeAttachedThreads OptionalNonNull[bool]         `json:"includeAttachedThreads,omitzero"`
+	Limit                  Optional[uint32]              `json:"limit,omitzero"`
+	SearchTerm             string                        `json:"searchTerm"`
+	SortDirection          Optional[SortDirection]       `json:"sortDirection,omitzero"`
+	SortKey                Optional[ThreadSearchSortKey] `json:"sortKey,omitzero"`
+	SourceKinds            Optional[[]ThreadSourceKind]  `json:"sourceKinds,omitzero"`
 }
 
 var threadSearchParamsSpec = objectSpec{
@@ -28110,6 +28641,7 @@ var threadSearchParamsSpec = objectSpec{
 		{name: "archived"},
 		{name: "currentAccountOnly", flags: fieldNonNullOptional},
 		{name: "cursor"},
+		{name: "includeAttachedThreads", flags: fieldNonNullOptional},
 		{name: "limit"},
 		{name: "searchTerm", flags: fieldRequired | fieldRejectNull},
 		{name: "sortDirection"},
@@ -28576,6 +29108,7 @@ type ThreadSettings struct {
 	Cwd                     AbsolutePathBuf                   `json:"cwd"`
 	DisabledPluginIDs       OptionalNonNull[[]string]         `json:"disabledPluginIds,omitzero"`
 	Effort                  Optional[ReasoningEffort]         `json:"effort,omitzero"`
+	Environments            Optional[[]ThreadEnvironment]     `json:"environments,omitzero"`
 	Model                   string                            `json:"model"`
 	ModelProvider           string                            `json:"modelProvider"`
 	MultiAgentMode          OptionalNonNull[MultiAgentMode]   `json:"multiAgentMode,omitzero"`
@@ -28594,6 +29127,7 @@ var threadSettingsSpec = objectSpec{
 		{name: "cwd", flags: fieldRequired | fieldRejectNull},
 		{name: "disabledPluginIds", flags: fieldNonNullOptional, defaultJSON: "[]"},
 		{name: "effort"},
+		{name: "environments"},
 		{name: "model", flags: fieldRequired | fieldRejectNull},
 		{name: "modelProvider", flags: fieldRequired | fieldRejectNull},
 		{name: "multiAgentMode", flags: fieldNonNullOptional, defaultJSON: "\"auto\""},
@@ -28615,20 +29149,21 @@ func (v *ThreadSettings) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadSettingsUpdateParams struct {
-	ApprovalPolicy    Optional[AskForApproval]    `json:"approvalPolicy,omitzero"`
-	ApprovalsReviewer Optional[ApprovalsReviewer] `json:"approvalsReviewer,omitzero"`
-	CollaborationMode Optional[CollaborationMode] `json:"collaborationMode,omitzero"`
-	Cwd               Optional[string]            `json:"cwd,omitzero"`
-	DisabledPluginIDs Optional[[]string]          `json:"disabledPluginIds,omitzero"`
-	Effort            Optional[ReasoningEffort]   `json:"effort,omitzero"`
-	Model             Optional[string]            `json:"model,omitzero"`
-	MultiAgentMode    Optional[MultiAgentMode]    `json:"multiAgentMode,omitzero"`
-	Permissions       Optional[string]            `json:"permissions,omitzero"`
-	Personality       Optional[Personality]       `json:"personality,omitzero"`
-	SandboxPolicy     Optional[SandboxPolicy]     `json:"sandboxPolicy,omitzero"`
-	ServiceTier       Optional[string]            `json:"serviceTier,omitzero"`
-	Summary           Optional[ReasoningSummary]  `json:"summary,omitzero"`
-	ThreadID          string                      `json:"threadId"`
+	ApprovalPolicy    Optional[AskForApproval]          `json:"approvalPolicy,omitzero"`
+	ApprovalsReviewer Optional[ApprovalsReviewer]       `json:"approvalsReviewer,omitzero"`
+	CollaborationMode Optional[CollaborationMode]       `json:"collaborationMode,omitzero"`
+	Cwd               Optional[string]                  `json:"cwd,omitzero"`
+	DisabledPluginIDs Optional[[]string]                `json:"disabledPluginIds,omitzero"`
+	Effort            Optional[ReasoningEffort]         `json:"effort,omitzero"`
+	Environments      Optional[[]TurnEnvironmentParams] `json:"environments,omitzero"`
+	Model             Optional[string]                  `json:"model,omitzero"`
+	MultiAgentMode    Optional[MultiAgentMode]          `json:"multiAgentMode,omitzero"`
+	Permissions       Optional[string]                  `json:"permissions,omitzero"`
+	Personality       Optional[Personality]             `json:"personality,omitzero"`
+	SandboxPolicy     Optional[SandboxPolicy]           `json:"sandboxPolicy,omitzero"`
+	ServiceTier       Optional[string]                  `json:"serviceTier,omitzero"`
+	Summary           Optional[ReasoningSummary]        `json:"summary,omitzero"`
+	ThreadID          string                            `json:"threadId"`
 }
 
 var threadSettingsUpdateParamsSpec = objectSpec{
@@ -28639,6 +29174,7 @@ var threadSettingsUpdateParamsSpec = objectSpec{
 		{name: "cwd"},
 		{name: "disabledPluginIds"},
 		{name: "effort"},
+		{name: "environments"},
 		{name: "model"},
 		{name: "multiAgentMode"},
 		{name: "permissions"},
@@ -30107,6 +30643,13 @@ func (v *ToolsV2) UnmarshalJSON(data []byte) error {
 	return decodeObject(data, &toolsV2Spec, (*wire)(v))
 }
 
+type TrustedContacts string
+
+const (
+	TrustedContactsCheck TrustedContacts = "check"
+	TrustedContactsSkip  TrustedContacts = "skip"
+)
+
 type Turn struct {
 	CompletedAt Optional[int64]                `json:"completedAt,omitzero"`
 	DurationMs  Optional[int64]                `json:"durationMs,omitzero"`
@@ -30371,19 +30914,21 @@ func (v *TurnPlanUpdatedNotification) UnmarshalJSON(data []byte) error {
 }
 
 type TurnSettingsUpdateParams struct {
-	ApprovalsReviewer Optional[ApprovalsReviewer] `json:"approvalsReviewer,omitzero"`
-	Effort            Optional[ReasoningEffort]   `json:"effort,omitzero"`
-	Model             Optional[string]            `json:"model,omitzero"`
-	ServiceTier       Optional[string]            `json:"serviceTier,omitzero"`
-	Summary           Optional[ReasoningSummary]  `json:"summary,omitzero"`
-	ThreadID          string                      `json:"threadId"`
-	TurnID            string                      `json:"turnId"`
+	ApprovalsReviewer Optional[ApprovalsReviewer]       `json:"approvalsReviewer,omitzero"`
+	Effort            Optional[ReasoningEffort]         `json:"effort,omitzero"`
+	Environments      Optional[[]TurnEnvironmentParams] `json:"environments,omitzero"`
+	Model             Optional[string]                  `json:"model,omitzero"`
+	ServiceTier       Optional[string]                  `json:"serviceTier,omitzero"`
+	Summary           Optional[ReasoningSummary]        `json:"summary,omitzero"`
+	ThreadID          string                            `json:"threadId"`
+	TurnID            string                            `json:"turnId"`
 }
 
 var turnSettingsUpdateParamsSpec = objectSpec{
 	fields: []objectField{
 		{name: "approvalsReviewer"},
 		{name: "effort"},
+		{name: "environments"},
 		{name: "model"},
 		{name: "serviceTier"},
 		{name: "summary"},
@@ -30812,6 +31357,12 @@ func (v *UserInput) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type UserVerificationBiometricType string
+
+const (
+	UserVerificationBiometricTypeFingerprint UserVerificationBiometricType = "fingerprint"
+)
+
 type UserVerificationCancelParams struct {
 	RequestID RequestID `json:"requestId"`
 }
@@ -31168,11 +31719,13 @@ func (v *UserVerificationVerifyParams) UnmarshalJSON(data []byte) error {
 }
 
 type UserVerificationVerifyResponse struct {
-	Proof UserVerificationProof `json:"proof"`
+	BiometricType Optional[UserVerificationBiometricType] `json:"biometricType,omitzero"`
+	Proof         UserVerificationProof                   `json:"proof"`
 }
 
 var userVerificationVerifyResponseSpec = objectSpec{
 	fields: []objectField{
+		{name: "biometricType"},
 		{name: "proof", flags: fieldRequired | fieldRejectNull},
 	},
 }

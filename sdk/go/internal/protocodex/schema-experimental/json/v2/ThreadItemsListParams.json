@@ -13,6 +13,10 @@
         "commandExecution": {
           "description": "Defer nonempty output from successful commands.",
           "type": "boolean"
+        },
+        "mcpToolCall": {
+          "description": "Defer nonempty plain-text results from successful MCP tool calls.",
+          "type": "boolean"
         }
       },
       "type": "object"

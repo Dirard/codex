@@ -51,6 +51,10 @@
         "null"
       ]
     },
+    "includeAttachedThreads": {
+      "description": "Include persistent threads attached to a parent in search results.",
+      "type": "boolean"
+    },
     "limit": {
       "description": "Optional page size; defaults to a reasonable server-side value.",
       "format": "uint32",

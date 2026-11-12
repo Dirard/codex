@@ -1416,6 +1416,8 @@ func integerGoType(format string) string {
 		return "uint32"
 	case "uint16":
 		return "uint16"
+	case "uint8":
+		return "uint8"
 	case "int32":
 		return "int32"
 	case "", "int64":

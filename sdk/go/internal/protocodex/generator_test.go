@@ -1200,3 +1200,14 @@ func readGeneratedFile(t *testing.T, root, name string) string {
 	}
 	return string(data)
 }
+
+// Upstream's AgentMessageDisplay declares a `uint8` field: it is a known format and maps to the
+// Go type of the same width.
+func TestUint8IntegerFormatMapsToUint8(t *testing.T) {
+	if !knownIntegerFormat("uint8") {
+		t.Fatal(`integer format "uint8" should be known`)
+	}
+	if got := integerGoType("uint8"); got != "uint8" {
+		t.Fatalf(`integerGoType("uint8") = %q, want "uint8"`, got)
+	}
+}

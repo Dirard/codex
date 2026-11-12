@@ -171,7 +171,7 @@ func validateSchemaIntegerFormat(path string, schema Schema) error {
 
 func knownIntegerFormat(format string) bool {
 	switch format {
-	case "", "int32", "int64", "uint", "uint16", "uint32", "uint64":
+	case "", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64":
 		return true
 	default:
 		return false
