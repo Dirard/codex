@@ -6,15 +6,15 @@ Scenario: A side chat receives the parent turn as reference, adds its own turn, 
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=e019c949fc483f83):
-        - namespace/functions; hash=03340277aa23936f
+00:additional_tools/developer (3; hash=2234e3763ca62113):
+        - namespace/functions; hash=279cf5d33f9490ea
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=00a897e32979d598
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
@@ -108,15 +108,15 @@ Scenario: A side chat receives the parent turn as reference, adds its own turn, 
 
 ## Window 2 (after request 1: settings changed (prompt_cache_key))
 -- request 2 (turn) --
-00:additional_tools/developer (3; hash=e019c949fc483f83):
-        - namespace/functions; hash=03340277aa23936f
+00:additional_tools/developer (3; hash=2234e3763ca62113):
+        - namespace/functions; hash=279cf5d33f9490ea
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=00a897e32979d598
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents

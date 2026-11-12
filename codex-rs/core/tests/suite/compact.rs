@@ -3706,7 +3706,9 @@ async fn manual_local_compaction_retries_only_when_the_error_allows_it() -> Resu
         .set_body_json(json!({ "error": { "code": "server_is_overloaded" } }));
     for (failure, expected_requests) in [
         (invalid_request_response("invalid compact input"), 1),
-        (overload.clone(), 1),
+        // Fork: a headerless overload backs off within the overload budget, here
+        // `stream_max_retries` = 1 (docs/fork/02-compaction-context.md F6).
+        (overload.clone(), 2),
         (overload.insert_header("Retry-After", "0"), 2),
     ] {
         let server = start_mock_server().await;

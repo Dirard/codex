@@ -73,8 +73,8 @@ Settings: relative to window 1
   text: {"format":{"name":"codex_output_schema","schema":{"additionalProperties":false,"properties":{"outcome":{"enum":["allow","deny"],"type":"string"},"rationale":{"type":"string"},"risk_level":{"enum":["low","medium","high","critical"],"type":"string"},"user_authorization":{"enum":["unknown","low","medium","high"],"type":"string"}},"required":["outcome"],"type":"object"},"strict":false,"type":"json_schema"},"verbosity":"low"}
   tools: <removed>
 -- request 4 (turn) --
-00:additional_tools/developer (1; hash=b0d5e6f2501e34fb):
-        - namespace/functions; hash=490741caad88112f
+00:additional_tools/developer (1; hash=f2f15a9aa85b68ea):
+        - namespace/functions; hash=758f7cd77fc561ac
           - custom/exec
           - function/wait
 01:message/developer:

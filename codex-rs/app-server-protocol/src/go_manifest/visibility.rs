@@ -270,6 +270,10 @@ fn request_param_experimental_fields(method: &'static str) -> Vec<ExperimentalFi
                 ("multi_agent_mode", "turn/start.multiAgentMode"),
             ],
         ),
+        "turn/settings/update" => experimental_fields(
+            "TurnSettingsUpdateParams",
+            &[("environments", "turn/settings/update.environments")],
+        ),
         "turn/steer" => experimental_fields(
             "TurnSteerParams",
             &[

@@ -3916,7 +3916,15 @@
           "fieldPaths": [],
           "reason": "turn/settings/update"
         },
-        "experimentalFields": [],
+        "experimentalFields": [
+          {
+            "containingType": "TurnSettingsUpdateParams",
+            "discriminator": null,
+            "fieldPath": "environments",
+            "inspectParams": true,
+            "reason": "turn/settings/update.environments"
+          }
+        ],
         "inspectParams": true,
         "manualPayloadConversion": null,
         "method": "turn/settings/update",
@@ -6488,8 +6496,8 @@
       }
     ],
     "digests": {
-      "manifestDigest": "6377811527b3b0ebfca5977b30024bef4f064a1cf9fa9a61d00b6fa31ba27108",
-      "protocolDigest": "c24c0a98f64f8dabf7267b7bb1e57403c542ad42c0fae6dd301303aafc2ffa7a",
+      "manifestDigest": "742c116a74e591209cc3c98d92cf9e5b0a72eeda4ea6ec19eff74a0546a82625",
+      "protocolDigest": "a7389c272eee1155277aafe6b06888633724b8ba9963e062f045897f30c4e78c",
       "schemaDigest": "a90c95b1ca4f3838ed7188b14f451176e3606f6fd267d024e289894033f3e057"
     },
     "protocolMode": "experimental",
