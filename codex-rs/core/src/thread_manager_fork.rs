@@ -53,7 +53,9 @@ impl ThreadManagerState {
         &self,
         request: ThreadSpawnRequest,
     ) -> impl std::future::Future<Output = CodexResult<NewThread>> + Send + '_ {
-        futures::FutureExt::map(self.spawn_thread_outcome(request), |outcome| {
+        // The boxed spawn keeps `Map`'s frame small: in debug builds it otherwise copies the whole
+        // spawn future onto the stack, which overflowed the 8 MiB stacks of the TUI tests.
+        futures::FutureExt::map(Box::pin(self.spawn_thread_outcome(request)), |outcome| {
             outcome.map(ThreadSpawnOutcome::into_new_thread)
         })
     }

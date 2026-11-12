@@ -15,20 +15,23 @@ use crate::config::Config;
 /// reload, cold resume). A root session also sweeps forgotten agent worktrees of its
 /// repository in the background (agent-worktree-isolation, R10.1); every session starts the
 /// hourly sweep of saved tool outputs, with `tool_output_spill` on or off (R5.2).
+///
+/// Takes `config` by reference: moving the 15 KB `Config` in and out left several copies in
+/// `spawn_internal`'s debug frame and overflowed the 8 MiB stacks of the TUI tests.
 pub(super) fn on_session_start(
-    mut config: Config,
+    config: &mut Config,
     session_source: &SessionSource,
     environment_selections: &mut [TurnEnvironmentSelection],
-) -> CodexResult<Config> {
-    crate::agent::worktree_isolation::sweep_on_session_start(&config, session_source);
-    let _ = crate::tools::output_spill::sweep_on_session_start(&config);
-    if explorer_profile::applies_to_source(&config, session_source) {
-        explorer_profile::enforce_read_only_session_config(&mut config)?;
+) -> CodexResult<()> {
+    crate::agent::worktree_isolation::sweep_on_session_start(config, session_source);
+    let _ = crate::tools::output_spill::sweep_on_session_start(config);
+    if explorer_profile::applies_to_source(config, session_source) {
+        explorer_profile::enforce_read_only_session_config(config)?;
         environment_selections
             .iter_mut()
             .for_each(explorer_profile::clamp_environment_selection);
     }
-    Ok(config)
+    Ok(())
 }
 
 /// Fork: an owner's ready environment config cannot widen an explorer (R2.5).

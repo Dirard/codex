@@ -714,7 +714,7 @@ impl Session {
         let SessionSpawnArgs {
             attached_thread,
             startup,
-            config,
+            mut config, // Fork: fork_explorer::on_session_start adjusts it in place.
             prompt_cache_key,
             allow_provider_model_fallback,
             instructions,
@@ -794,8 +794,7 @@ impl Session {
             .into_iter()
             .map(|request| TurnEnvironmentSelection::new(request, &selected_capability_roots))
             .collect::<Vec<_>>();
-        let config =
-            fork_explorer::on_session_start(config, &session_source, &mut environment_selections)?;
+        fork_explorer::on_session_start(&mut config, &session_source, &mut environment_selections)?;
         // Enforce snapshot-only instructions for both managed and inline isolated sessions.
         let instructions = if isolation == codex_extension_api::SessionIsolation::Isolated {
             SessionInstructions {

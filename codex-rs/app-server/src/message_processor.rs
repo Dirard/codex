@@ -1523,12 +1523,13 @@ impl MessageProcessor {
             | ClientRequest::ThreadWakeupRead { .. }
             | ClientRequest::ThreadWakeupCancel { .. }
             | ClientRequest::ThreadLoopStart { .. }) => {
-                self.thread_workflow_processor.handle(request).await
+                // Fork: in its own frame, out of every other RPC's debug stack frame.
+                Box::pin(async { self.thread_workflow_processor.handle(request).await }).await
             }
             // Fork: output style of a loaded thread (specs/output-styles-2026-11-07.md).
             request @ (ClientRequest::ThreadOutputStyleList { .. }
             | ClientRequest::ThreadOutputStyleSet { .. }) => {
-                self.thread_output_style_processor.handle(request).await
+                Box::pin(async { self.thread_output_style_processor.handle(request).await }).await
             }
             ClientRequest::ThreadMetadataUpdate { params, .. } => {
                 self.thread_processor.thread_metadata_update(params).await
