@@ -1552,8 +1552,8 @@ async fn remote_compact_v2_rebuilds_candidate_until_headroom_is_available() -> R
         .first_window_id
         .expect("compacted metadata should include the first window id");
     assert_eq!(
-        compacted.previous_window_id.as_deref(),
-        Some(first_window_id.as_str())
+        compacted.previous_window_id.as_ref(),
+        Some(&first_window_id)
     );
     let window_id = compacted
         .window_id

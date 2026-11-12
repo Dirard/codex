@@ -237,6 +237,7 @@ async fn thread_read_reports_the_isolated_child_worktree() -> Result<()> {
             params: ThreadListParams {
                 excluded_thread_ids: None,
                 attached_to_thread_id: None,
+                include_attached_threads: false,
                 originators: None,
                 cursor: None,
                 limit: None,

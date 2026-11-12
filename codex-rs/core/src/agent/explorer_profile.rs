@@ -333,7 +333,8 @@ pub(crate) fn hide_unavailable_tools<'a>(
     config: &Config,
     source: &SessionSource,
     mcp_tools: impl IntoIterator<Item = &'a codex_mcp::ToolInfo>,
-    cached_read_only_tools: impl FnOnce() -> std::collections::HashSet<(String, String)>,
+    cached_read_only_tools: impl FnOnce()
+        -> std::collections::HashSet<(codex_mcp::McpServerKey, String)>,
     registry: &mut crate::tools::registry::ToolRegistry,
 ) {
     if !applies_to_source(config, source) {
@@ -351,7 +352,7 @@ pub(crate) fn hide_unavailable_tools<'a>(
             {
                 Some(read_only) => read_only,
                 None => cached_read_only_tools
-                    .contains(&(tool.server_name.clone(), tool.tool.name.to_string())),
+                    .contains(&(tool.server_key().clone(), tool.tool.name.to_string())),
             }
         })
         .map(codex_mcp::ToolInfo::canonical_tool_name)

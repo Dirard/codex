@@ -24,7 +24,7 @@ fn tool(name: &str, read_only_hint: Option<bool>) -> ToolInfo {
     );
     tool.annotations = read_only_hint.map(|read_only| ToolAnnotations::new().read_only(read_only));
     ToolInfo {
-        server_name: "docs".to_string(),
+        server_key: crate::McpServerKey::unscoped("docs"),
         supports_parallel_tool_calls: false,
         server_origin: None,
         callable_name: name.to_string(),

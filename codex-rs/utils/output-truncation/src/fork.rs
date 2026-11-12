@@ -1,6 +1,7 @@
 //! Fork: line limits on top of the upstream byte/token truncation, configured by
 //! `[output_truncation]` (docs/fork/03-tools-mcp-code-mode.md F1).
 
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -123,7 +124,7 @@ fn truncate_middle_lines(content: &str, max_lines: usize) -> String {
 pub fn truncate_function_output_items_with_config(
     items: &[FunctionCallOutputContentItem],
     config: OutputTruncation,
-    estimate_audio_token_count: impl Fn(&str) -> usize,
+    estimate_audio_token_count: impl Fn(&AudioReference) -> usize,
 ) -> Vec<FunctionCallOutputContentItem> {
     let line_limited_items = match config.max_lines {
         Some(max_lines) => truncate_function_output_item_lines(items, max_lines),
@@ -230,7 +231,7 @@ pub fn truncate_function_output_payload_lines(
 pub fn apply_output_truncation(
     output: &mut FunctionCallOutputPayload,
     truncation: OutputTruncation,
-    estimate_audio_token_count: impl Fn(&str) -> usize,
+    estimate_audio_token_count: impl Fn(&AudioReference) -> usize,
 ) {
     truncate_function_output_payload_lines(output, truncation.max_lines);
     crate::truncate_function_output_payload(output, truncation.policy, estimate_audio_token_count);

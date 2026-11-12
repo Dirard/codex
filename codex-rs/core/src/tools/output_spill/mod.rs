@@ -26,7 +26,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use codex_utils_audio::estimate_audio_token_count;
+use codex_utils_audio::estimate_tool_audio_tokens;
 use codex_utils_output_truncation::OutputTruncation;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::apply_output_truncation;
@@ -126,7 +126,7 @@ fn model_item_is_cut(result: &AnyToolResult, truncation: OutputTruncation, full:
     else {
         return false;
     };
-    apply_output_truncation(&mut output, truncation, estimate_audio_token_count);
+    apply_output_truncation(&mut output, truncation, estimate_tool_audio_tokens);
     !visible_text(&output).contains(full)
 }
 
@@ -300,8 +300,8 @@ fn recording_policy(
                         bytes.saturating_add(text.len()),
                         tokens.saturating_add(approx_token_count(text)),
                     ),
-                    FunctionCallOutputContentItem::InputAudio { audio_url } => {
-                        let audio_tokens = estimate_audio_token_count(audio_url);
+                    FunctionCallOutputContentItem::InputAudio { audio } => {
+                        let audio_tokens = estimate_tool_audio_tokens(audio);
                         (
                             bytes.saturating_add(approx_bytes_for_tokens(audio_tokens)),
                             tokens.saturating_add(audio_tokens),
@@ -382,7 +382,7 @@ impl SpilledToolOutput {
             && let ResponseInputItem::FunctionCallOutput { output, .. }
             | ResponseInputItem::CustomToolCallOutput { output, .. } = &mut item
         {
-            apply_output_truncation(output, *truncation, estimate_audio_token_count);
+            apply_output_truncation(output, *truncation, estimate_tool_audio_tokens);
             append_notice(output, &self.notice);
         }
         item
@@ -444,7 +444,7 @@ impl ToolOutput for SpilledToolOutput {
             apply_output_truncation(
                 &mut recorded,
                 Self::recording_truncation(*truncation, &item),
-                estimate_audio_token_count,
+                estimate_tool_audio_tokens,
             );
             debug_assert_eq!(
                 &recorded, output,

@@ -118,7 +118,9 @@ fn cell_with_media_follows_configured_policy() {
     let items = vec![
         FunctionCallOutputContentItem::InputText { text: large_text() },
         FunctionCallOutputContentItem::InputAudio {
-            audio_url: "data:audio/wav;base64,AAAA".to_string(),
+            audio: codex_protocol::models::AudioReference::Inline {
+                audio_url: "data:audio/wav;base64,AAAA".to_string(),
+            },
         },
     ];
 
@@ -133,7 +135,7 @@ fn cell_with_media_follows_configured_policy() {
 }
 
 fn bundled_exec_description() -> String {
-    codex_code_mode::build_exec_tool_description(
+    codex_code_mode::build_exec_tool_description_and_definitions(
         &[],
         &[],
         &BTreeMap::new(),
@@ -141,8 +143,10 @@ fn bundled_exec_description() -> String {
         /*code_mode_only*/ false,
         codex_code_mode::ImageDetailVisibility::Visible,
         codex_code_mode::DeferredToolDiscovery::Catalog,
+        /*incremental_exec_enabled*/ false,
         /*messages*/ None,
     )
+    .0
 }
 
 /// The description and the `max_tokens` parameter description of a `wait` spec.

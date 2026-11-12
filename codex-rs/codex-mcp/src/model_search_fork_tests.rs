@@ -14,6 +14,7 @@ use tokio::io::DuplexStream;
 
 use crate::CODEX_APPS_MCP_SERVER_NAME;
 use crate::McpBinding;
+use crate::McpServerKey;
 use crate::McpServerPermissions;
 use crate::McpServerRegistration;
 use crate::PreparedMcpCall;
@@ -51,7 +52,7 @@ async fn apps_transport() -> Arc<RmcpClient> {
 
 fn search_tool(description: &str) -> ToolInfo {
     ToolInfo {
-        server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        server_key: McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
         supports_parallel_tool_calls: false,
         server_origin: None,
         callable_name: "_web_run".to_string(),
@@ -84,7 +85,7 @@ fn listed_search_tool() -> ToolInfo {
 
 fn docs_tool() -> ToolInfo {
     ToolInfo {
-        server_name: "docs".to_string(),
+        server_key: McpServerKey::unscoped("docs"),
         callable_name: "search".to_string(),
         callable_namespace: "mcp__docs".to_string(),
         connector_id: None,
@@ -102,7 +103,7 @@ fn docs_tool() -> ToolInfo {
 async fn step_binding(transport: &Arc<RmcpClient>, tools: Vec<ToolInfo>) -> Arc<McpBinding> {
     let apps_tools: Vec<_> = tools
         .iter()
-        .filter(|tool| tool.server_name == CODEX_APPS_MCP_SERVER_NAME)
+        .filter(|tool| tool.server_name() == CODEX_APPS_MCP_SERVER_NAME)
         .cloned()
         .collect();
     let tool_catalog = Arc::new(ClientToolCatalog::new(
@@ -141,7 +142,7 @@ async fn step_binding(transport: &Arc<RmcpClient>, tools: Vec<ToolInfo>) -> Arc<
     ));
     config.mcp_server_catalog = catalog.build();
     config.server_permissions.insert(
-        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
         McpServerPermissions::Thread,
     );
     let config = Arc::new(config);
@@ -157,6 +158,7 @@ async fn step_binding(transport: &Arc<RmcpClient>, tools: Vec<ToolInfo>) -> Arc<
                 Arc::clone(&snapshot),
                 tool.clone(),
                 McpServerMetadata {
+                    server_key: tool.server_key().clone(),
                     environment_id: String::new(),
                     pollutes_memory: false,
                     origin: None,
@@ -169,13 +171,19 @@ async fn step_binding(transport: &Arc<RmcpClient>, tools: Vec<ToolInfo>) -> Arc<
             )
             .expect("Apps call should have a permission source");
             assert!(call.is_host_owned_apps());
-            ((tool.server_name, tool.tool.name.to_string()), call)
+            (
+                (tool.server_key().clone(), tool.tool.name.to_string()),
+                call,
+            )
         })
         .collect();
-    let clients = Arc::new(McpBindingClients::new(HashMap::from([(
-        CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        managed_client,
-    )])));
+    let clients = Arc::new(McpBindingClients::new(
+        HashMap::from([(
+            McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
+            managed_client,
+        )]),
+        Vec::new(),
+    ));
     Arc::new(McpBinding::new(
         connections,
         clients,
@@ -210,11 +218,17 @@ async fn later_step_keeps_the_turn_discovery_on_the_same_apps_connection() {
     };
     assert_eq!(rebased.tools(), [projected.clone(), docs_tool()].as_slice());
     let call = rebased
-        .prepare_call(CODEX_APPS_MCP_SERVER_NAME, SEARCH_TOOL)
+        .prepare_call(
+            &McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
+            SEARCH_TOOL,
+        )
         .expect("projected Search call");
     assert_eq!(call.tool_info(), &projected);
     let live = later
-        .prepare_call(CODEX_APPS_MCP_SERVER_NAME, SEARCH_TOOL)
+        .prepare_call(
+            &McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
+            SEARCH_TOOL,
+        )
         .expect("live Search call");
     assert_eq!(
         rebased.search_invocation_context(&live),

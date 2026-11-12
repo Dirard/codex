@@ -826,7 +826,7 @@ bar"
 
     #[test]
     fn exec_description_documents_bounded_nested_tool_batching() {
-        let description = build_exec_tool_description(
+        let (description, _) = build_exec_tool_description_and_definitions(
             &[],
             &[],
             &BTreeMap::new(),

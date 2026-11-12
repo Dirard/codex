@@ -43,7 +43,7 @@ impl McpToolCatalogCacheContext {
         state
             .snapshot
             .as_ref()
-            .filter(|snapshot| self.accepts_snapshot(snapshot))
+            .filter(|snapshot| self.accepts_snapshot(&state, snapshot))
             .map(|snapshot| Arc::clone(&snapshot.read_only_tools))
     }
 }

@@ -28,7 +28,10 @@ impl McpBinding {
             .iter()
             .enumerate()
             .find(|(_, tool)| is_model_search_tool(tool))?;
-        let key = (original.server_name.clone(), original.tool.name.to_string());
+        let key = (
+            original.server_key().clone(),
+            original.tool.name.to_string(),
+        );
         let call = self
             .calls
             .get(&key)

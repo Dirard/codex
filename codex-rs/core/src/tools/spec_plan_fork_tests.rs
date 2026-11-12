@@ -104,7 +104,7 @@ async fn explorer_plan_with(
     role: &str,
     code_mode: bool,
     extra_mcp_tools: &[ToolInfo],
-    cached_read_only_tools: std::collections::HashSet<(String, String)>,
+    cached_read_only_tools: std::collections::HashSet<(codex_mcp::McpServerKey, String)>,
 ) -> ToolPlanProbe {
     let (_session, mut turn) = make_session_and_context().await;
     set_feature(&mut turn, Feature::ExplorerProfile, explorer_profile);
@@ -236,8 +236,14 @@ async fn explorer_hides_tools_it_cannot_call() {
 #[tokio::test]
 async fn explorer_shows_cached_read_only_tools() {
     let cached = std::collections::HashSet::from([
-        ("probe".to_string(), "cached_peek".to_string()),
-        ("probe".to_string(), "poke".to_string()),
+        (
+            codex_mcp::McpServerKey::unscoped("probe"),
+            "cached_peek".to_string(),
+        ),
+        (
+            codex_mcp::McpServerKey::unscoped("probe"),
+            "poke".to_string(),
+        ),
     ]);
     let plan = explorer_plan_with(
         /*explorer_profile*/ true,

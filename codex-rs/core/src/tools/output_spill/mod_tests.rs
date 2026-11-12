@@ -287,7 +287,9 @@ async fn recording_leaves_the_spilled_item_unchanged() {
         detail: None,
     };
     let audio = FunctionCallOutputContentItem::InputAudio {
-        audio_url: "data:audio/wav;base64,UklGRg==".to_string(),
+        audio: codex_protocol::models::AudioReference::Inline {
+            audio_url: "data:audio/wav;base64,UklGRg==".to_string(),
+        },
     };
     let bodies = vec![
         vec![FunctionCallOutputContentItem::InputText { text: long.clone() }],
@@ -461,6 +463,7 @@ fn step_with_exec_command(turn: &Arc<TurnContext>, direct: bool, nested: bool) -
         if direct { vec![spec] } else { Vec::new() },
         tool_mode,
         code_mode_tool_names,
+        /*exec_definitions*/ None,
         /*tool_namespaces_info*/ None,
         &[],
     );
