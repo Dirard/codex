@@ -2,7 +2,7 @@
 #   filename:  codex_app_server_protocol.v2.schemas.json
 
 from __future__ import annotations
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import ValidationError, model_validator, BaseModel, ConfigDict, Field, RootModel
 from typing import Annotated, Any, Literal
 from enum import Enum
 
@@ -50,6 +50,25 @@ class AccountRoutingOverride(Enum):
     no_constraint = "NO_CONSTRAINT"
     us = "us"
     us_cr = "us_cr"
+
+
+class AccountSecuritySetupAction(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    label: str
+    url: str
+
+
+class AccountSecuritySetupNotice(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account_id: Annotated[str, Field(alias="accountId")]
+    action: AccountSecuritySetupAction
+    description: str
+    title: str
+    user_id: Annotated[str, Field(alias="userId")]
 
 
 class AccountSessionWorkspaceKind(Enum):
@@ -154,13 +173,6 @@ class AgentMessageInputContent(
     root: InputTextAgentMessageInputContent | EncryptedContentAgentMessageInputContent
 
 
-class AgentMessageModeration(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    moderated: bool
-
-
 class AgentPath(RootModel[str]):
     root: str
 
@@ -176,6 +188,17 @@ class AnalyticsConfig(BaseModel):
         populate_by_name=True,
     )
     enabled: bool | None = None
+
+
+class WellbeingPromptHelplineAnswerReplacement(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    kind: Literal["wellbeingPromptHelpline"]
+
+
+class AnswerReplacement(RootModel[WellbeingPromptHelplineAnswerReplacement]):
+    root: WellbeingPromptHelplineAnswerReplacement
 
 
 class AppBranding(BaseModel):
@@ -436,6 +459,32 @@ class AutoReviewRequirements(BaseModel):
 class BedrockProviderId(Enum):
     amazon_bedrock = "amazon-bedrock"
     amazon_bedrock_runtime = "amazon-bedrock-runtime"
+
+
+class BlockReason1(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    kind: Literal["protection"]
+    protection_type: Annotated[
+        str,
+        Field(
+            alias="protectionType",
+            description="Identifies the same moderation row that Chat writes on the live path.",
+        ),
+    ]
+
+
+class KindBlockReason(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    kind: Literal["cyber"]
+    trusted_access: Annotated[bool | None, Field(alias="trustedAccess")] = None
+
+
+class BlockReason(RootModel[BlockReason1 | KindBlockReason]):
+    root: BlockReason1 | KindBlockReason
 
 
 class BrowserUseAccessApprovalLifetime(Enum):
@@ -1749,10 +1798,20 @@ class InputAudioFunctionCallOutputContentItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    audio_url: str
     type: Annotated[
         Literal["input_audio"], Field(title="InputAudioFunctionCallOutputContentItemType")
     ]
+    audio_url: str
+
+
+class FileIdFunctionCallOutputContentItem1(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    type: Annotated[
+        Literal["input_audio"], Field(title="InputAudioFunctionCallOutputContentItemType")
+    ]
+    file_id: str
 
 
 class EncryptedContentFunctionCallOutputContentItem(BaseModel):
@@ -1853,16 +1912,26 @@ class GatewayOAuthLoginParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    device_auth: Annotated[
+        bool | None,
+        Field(
+            alias="deviceAuth",
+            description="Select device authorization when the server advertises support for it.",
+        ),
+    ] = None
     model_provider: Annotated[
         str | None,
         Field(alias="modelProvider", description="Defaults to the current provider when omitted."),
     ] = None
 
 
-class GatewayOAuthLoginResponse(BaseModel):
+class GatewayOAuthPrompt(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    login_id: Annotated[str, Field(alias="loginId")]
+    user_code: Annotated[str, Field(alias="userCode")]
+    verification_url: Annotated[str, Field(alias="verificationUrl")]
 
 
 class GatewayOAuthReadParams(BaseModel):
@@ -1917,6 +1986,13 @@ class GetAccountRateLimitsParams(BaseModel):
             description="The client supports automatic Luna Reserve fallback. For eligible ChatGPT CLI users, allow the backend to record experiment exposure after ordinary usage is blocked.",
         ),
     ] = None
+
+
+class GetAccountSecuritySetupResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    notice: AccountSecuritySetupNotice | None = None
 
 
 class GetAccountTokenUsageParams(BaseModel):
@@ -2001,6 +2077,11 @@ class GuardianWarningNotification(BaseModel):
     thread_id: Annotated[
         str, Field(alias="threadId", description="Thread target for the guardian warning.")
     ]
+
+
+class HelplineSubject(Enum):
+    answer = "answer"
+    prompt = "prompt"
 
 
 class HookErrorInfo(BaseModel):
@@ -3416,7 +3497,7 @@ class PluginInterface(BaseModel):
         list[str] | None,
         Field(
             alias="defaultPrompt",
-            description="Starter prompts for the plugin. Capped at 3 entries with a maximum of 128 characters per entry.",
+            description="Starter prompts for the plugin. Capped at 3 entries with a maximum of 512 characters per entry.",
         ),
     ] = None
     developer_name: Annotated[str | None, Field(alias="developerName")] = None
@@ -6966,6 +7047,11 @@ class ToolExposureSurface(Enum):
     direct = "direct"
 
 
+class TrustedContacts(Enum):
+    check = "check"
+    skip = "skip"
+
+
 class TurnDiffUpdatedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -7445,6 +7531,36 @@ class AdditionalContextEntry(BaseModel):
         Field(description="Optional name for untrusted context, used to label its tool output."),
     ] = None
     value: str
+
+
+class HideAgentMessageDisplay(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    mode: Annotated[Literal["hide"], Field(title="HideAgentMessageDisplayMode")]
+    replacement: AnswerReplacement
+    version: Literal[1]
+
+
+class BlockAgentMessageDisplay(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    mode: Annotated[Literal["block"], Field(title="BlockAgentMessageDisplayMode")]
+    reason: BlockReason
+    version: Literal[1]
+
+
+class AnswerAnnotation1(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    kind: Literal["wellbeingHelpline"]
+    subject: HelplineSubject
+
+
+class AnswerAnnotation(RootModel[AnswerAnnotation1]):
+    root: AnswerAnnotation1
 
 
 class AppConfig(BaseModel):
@@ -8312,6 +8428,18 @@ class AccountLogoutRequest(BaseModel):
     params: Annotated[None, Field(None)] = None
 
 
+class AccountSecuritySetupReadRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["account/securitySetup/read"],
+        Field(title="Account/securitySetup/readRequestMethod"),
+    ]
+    params: Annotated[None, Field(None)] = None
+
+
 class AccountRateLimitsReadRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -8479,6 +8607,7 @@ class ActiveTurnNotSteerableCodexErrorInfo(BaseModel):
 class CodexErrorInfo(
     RootModel[
         CodexErrorInfoValue
+        | Literal["inferenceHookDenied"]
         | HttpConnectionFailedCodexErrorInfo
         | ResponseStreamConnectionFailedCodexErrorInfo
         | ResponseStreamDisconnectedCodexErrorInfo
@@ -8489,6 +8618,7 @@ class CodexErrorInfo(
 ):
     root: Annotated[
         CodexErrorInfoValue
+        | Literal["inferenceHookDenied"]
         | HttpConnectionFailedCodexErrorInfo
         | ResponseStreamConnectionFailedCodexErrorInfo
         | ResponseStreamDisconnectedCodexErrorInfo
@@ -9031,6 +9161,7 @@ class FunctionCallOutputContentItem(
         | InputImageFunctionCallOutputContentItem
         | FileIdFunctionCallOutputContentItem
         | InputAudioFunctionCallOutputContentItem
+        | FileIdFunctionCallOutputContentItem1
         | EncryptedContentFunctionCallOutputContentItem
     ]
 ):
@@ -9039,6 +9170,7 @@ class FunctionCallOutputContentItem(
         | InputImageFunctionCallOutputContentItem
         | FileIdFunctionCallOutputContentItem
         | InputAudioFunctionCallOutputContentItem
+        | FileIdFunctionCallOutputContentItem1
         | EncryptedContentFunctionCallOutputContentItem,
         Field(
             description="Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs."
@@ -9058,8 +9190,19 @@ class GatewayOAuthChangedNotification(BaseModel):
         ),
     ] = None
     error: str | None = None
+    login_id: Annotated[
+        str | None,
+        Field(alias="loginId", description="Identifies the completed device login attempt."),
+    ] = None
     provider_id: Annotated[str, Field(alias="providerId")]
     status: GatewayOAuthStatus
+
+
+class GatewayOAuthLoginResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    prompt: GatewayOAuthPrompt | None = None
 
 
 class GatewayOAuthReadResponse(BaseModel):
@@ -9079,6 +9222,13 @@ class GatewayOAuthReadResponse(BaseModel):
         GatewayOAuthStatus | None,
         Field(description="Null when the effective provider does not use gateway OAuth."),
     ] = None
+    supports_device_auth: Annotated[
+        bool | None,
+        Field(
+            alias="supportsDeviceAuth",
+            description="Whether the administrator configured a device authorization endpoint.",
+        ),
+    ] = False
 
 
 class GetAccountResponse(BaseModel):
@@ -9087,6 +9237,13 @@ class GetAccountResponse(BaseModel):
     )
     account: Account | None = None
     requires_openai_auth: Annotated[bool, Field(alias="requiresOpenaiAuth")]
+    user_id: Annotated[
+        str | None,
+        Field(
+            alias="userId",
+            description="ChatGPT user ID belonging to this account response, when available.",
+        ),
+    ] = None
 
 
 class GuardianApprovalReview(BaseModel):
@@ -10886,34 +11043,6 @@ class UserMessageThreadItem(BaseModel):
     type: Annotated[Literal["userMessage"], Field(title="UserMessageThreadItemType")]
 
 
-class AgentMessageThreadItem(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    completed_at_ms: Annotated[
-        int | None,
-        Field(
-            alias="completedAtMs",
-            description="Unix timestamp in milliseconds when the item completed, if recorded.",
-        ),
-    ] = None
-    delivery: AgentMessageDelivery | None = None
-    id: str
-    memory_citation: Annotated[MemoryCitation | None, Field(alias="memoryCitation")] = None
-    moderation: AgentMessageModeration | None = None
-    phase: MessagePhase | None = None
-    questions: list[AsyncUserInputQuestion] | None = None
-    started_at_ms: Annotated[
-        int | None,
-        Field(
-            alias="startedAtMs",
-            description="Unix timestamp in milliseconds when the item started, if recorded.",
-        ),
-    ] = None
-    text: str
-    type: Annotated[Literal["agentMessage"], Field(title="AgentMessageThreadItemType")]
-
-
 class CommandExecutionThreadItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -11752,6 +11881,44 @@ class AccountSession(BaseModel):
     session_id: Annotated[str, Field(alias="sessionId")]
     user_id: Annotated[str | None, Field(alias="userId")] = None
     workspaces: list[AccountSessionWorkspace]
+
+
+class ShowAgentMessageDisplay(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    annotation: AnswerAnnotation | None = None
+    mode: Annotated[Literal["show"], Field(title="ShowAgentMessageDisplayMode")]
+    trusted_contacts: Annotated[TrustedContacts, Field(alias="trustedContacts")]
+    version: Literal[1]
+
+
+class AgentMessageDisplay(
+    RootModel[ShowAgentMessageDisplay | HideAgentMessageDisplay | BlockAgentMessageDisplay]
+):
+    root: Annotated[
+        ShowAgentMessageDisplay | HideAgentMessageDisplay | BlockAgentMessageDisplay,
+        Field(description="How Chat should present a recovered answer."),
+    ]
+
+
+class AgentMessageModeration(BaseModel):
+
+    @model_validator(mode="before")
+    @classmethod
+    def _read_display(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or "moderated" not in data or data.get("display") is None:
+            return data
+        try:
+            return {**data, "display": AgentMessageDisplay.model_validate(data["display"])}
+        except ValidationError:
+            return {**data, "moderated": True, "display": None}
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    display: AgentMessageDisplay | None = None
+    moderated: bool
 
 
 class AppInfo(BaseModel):
@@ -12762,6 +12929,34 @@ class SubAgentSessionSource(BaseModel):
 
 class SessionSource(RootModel[SessionSourceValue | CustomSessionSource | SubAgentSessionSource]):
     root: SessionSourceValue | CustomSessionSource | SubAgentSessionSource
+
+
+class AgentMessageThreadItem(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
+    delivery: AgentMessageDelivery | None = None
+    id: str
+    memory_citation: Annotated[MemoryCitation | None, Field(alias="memoryCitation")] = None
+    moderation: AgentMessageModeration | None = None
+    phase: MessagePhase | None = None
+    questions: list[AsyncUserInputQuestion] | None = None
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
+    text: str
+    type: Annotated[Literal["agentMessage"], Field(title="AgentMessageThreadItemType")]
 
 
 class FunctionCallOutputThreadItem(BaseModel):
@@ -14066,6 +14261,7 @@ class ClientRequest(
         | AccountLoginStartRequest
         | AccountLoginCancelRequest
         | AccountLogoutRequest
+        | AccountSecuritySetupReadRequest
         | AccountRateLimitsReadRequest
         | AccountRateLimitResetCreditConsumeRequest
         | AccountUsageReadRequest
@@ -14177,6 +14373,7 @@ class ClientRequest(
         | AccountLoginStartRequest
         | AccountLoginCancelRequest
         | AccountLogoutRequest
+        | AccountSecuritySetupReadRequest
         | AccountRateLimitsReadRequest
         | AccountRateLimitResetCreditConsumeRequest
         | AccountUsageReadRequest

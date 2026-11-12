@@ -46,7 +46,7 @@ use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use codex_protocol::openai_models::ToolMode;
 use codex_tools::ToolName;
-use codex_utils_audio::estimate_audio_token_count;
+use codex_utils_audio::estimate_tool_audio_tokens_without_cache;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_function_output_items_with_policy;
 
@@ -349,7 +349,11 @@ fn truncate_code_mode_result(
     default_policy: TruncationPolicy,
 ) -> Vec<FunctionCallOutputContentItem> {
     let policy = max_output_tokens.map_or(default_policy, TruncationPolicy::Tokens);
-    formatted_truncate_function_output_items_with_policy(items, policy, estimate_audio_token_count)
+    formatted_truncate_function_output_items_with_policy(
+        items,
+        policy,
+        estimate_tool_audio_tokens_without_cache,
+    )
 }
 
 // Submit synchronously so the recorder sees the call before the cell's dispatch gate closes.
@@ -516,6 +520,7 @@ mod tests {
             Vec::new(),
             ToolMode::CodeModeOnly,
             BTreeMap::new(),
+            /*exec_definitions*/ None,
             /*tool_namespaces_info*/ None,
             &[],
         ));
@@ -586,9 +591,10 @@ mod tests {
 
     #[test]
     fn over_budget_audio_output_is_omitted() {
-        let items = vec![FunctionCallOutputContentItem::InputAudio {
-            audio_url: format!("data:audio/wav;base64,{}", "A".repeat(100)),
-        }];
+        let items = vec![FunctionCallOutputContentItem::inline_audio(format!(
+            "data:audio/wav;base64,{}",
+            "A".repeat(100)
+        ))];
 
         assert_eq!(
             truncate_code_mode_result(items, Some(5), TruncationPolicy::Tokens(10_000)),

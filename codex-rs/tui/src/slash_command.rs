@@ -101,7 +101,7 @@ impl SlashCommand {
     pub fn description(self) -> &'static str {
         match self {
             SlashCommand::Config => "configure Codex preferences",
-            SlashCommand::Feedback => "send logs to maintainers",
+            SlashCommand::Feedback => "send logs to maintainers or save a ZIP",
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
@@ -157,9 +157,7 @@ impl SlashCommand {
             }
             SlashCommand::OutputStyle => "choose how Codex communicates", // Fork
             SlashCommand::Loop => "repeat a prompt on an interval or at the model's pace", // Fork
-            SlashCommand::Side | SlashCommand::Btw => {
-                "start a side conversation in an ephemeral fork"
-            }
+            SlashCommand::Side | SlashCommand::Btw => "start a side conversation",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::Keymap => "remap TUI shortcuts",
             SlashCommand::Vim => "toggle Vim mode for the composer",
@@ -232,6 +230,7 @@ impl SlashCommand {
                 | SlashCommand::Pwd
                 | SlashCommand::Usage
                 | SlashCommand::Ide
+                | SlashCommand::Rename
         )
     }
 

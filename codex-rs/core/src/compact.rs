@@ -366,24 +366,6 @@ async fn run_compact_task_inner_impl(
                 }
                 break response;
             }
-            Err(err)
-                if matches!(
-                    err.details(),
-                    CodexErrorDetails::Interrupted | CodexErrorDetails::TurnAborted
-                ) =>
-            {
-                return Err(err);
-            }
-            Err(e)
-                if matches!(
-                    e.details(),
-                    CodexErrorDetails::SessionBudgetExceeded
-                        | CodexErrorDetails::ResponseIncomplete(_)
-                        | CodexErrorDetails::Fatal(_)
-                ) =>
-            {
-                return Err(e);
-            }
             Err(e) if matches!(e.details(), CodexErrorDetails::ContextWindowExceeded) => {
                 if turn_input_len > 1 {
                     // Trim from the beginning to preserve cache (prefix-based) and keep recent messages intact.

@@ -16,6 +16,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 pub use codex_core::test_support::TestCodexResponsesRequestKind;
 pub use codex_core::test_support::responses_metadata;
+use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 pub use codex_utils_absolute_path::test_support::PathBufExt;
 pub use codex_utils_absolute_path::test_support::PathExt;
@@ -31,6 +32,7 @@ pub mod exec_server;
 // Fork: upstream tests keep upstream feature defaults (fork-features-default-on UC6).
 pub mod fork_defaults;
 pub mod hooks;
+pub mod network_policy_mcp;
 pub mod oauth;
 pub mod process;
 pub mod responses;
@@ -213,7 +215,7 @@ pub async fn load_default_config_for_test_with_cloud_config_bundle(
     codex_home: &TempDir,
     cloud_config_bundle: CloudConfigBundleLoader,
 ) -> Config {
-    ConfigBuilder::default()
+    let mut config = ConfigBuilder::default()
         // Fork: upstream tests keep upstream feature defaults (fork-features-default-on UC6).
         .loader_overrides(fork_defaults::upstream_test_loader_overrides(
             codex_home.path(),
@@ -223,7 +225,14 @@ pub async fn load_default_config_for_test_with_cloud_config_bundle(
         .cloud_config_bundle(cloud_config_bundle)
         .build()
         .await
-        .expect("defaults for test should always succeed")
+        .expect("defaults for test should always succeed");
+    for feature in [Feature::ToolSuggest, Feature::RecommendedPlugins] {
+        config
+            .features
+            .disable(feature)
+            .expect("test config should allow disabling plugin recommendations");
+    }
+    config
 }
 
 pub fn managed_network_requirements_loader() -> CloudConfigBundleLoader {

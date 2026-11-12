@@ -134,15 +134,18 @@ pub(crate) async fn handle_response_stream_error(
         return Ok(());
     }
 
+    let requires_http_fallback = err.requires_http_fallback();
     // Fork: unadvised overloads retry with backoff within the overload budget, where upstream
     // treats them as terminal; once exhausted they are terminal and must not switch transport.
-    if *retries >= max_retries
-        && !(matches!(err.details(), CodexErrorDetails::ServerOverloaded) && retry_after.is_none())
+    let switched = (requires_http_fallback
+        || (*retries >= max_retries
+            && !(matches!(err.details(), CodexErrorDetails::ServerOverloaded)
+                && retry_after.is_none())))
         && client_session.try_switch_fallback_transport(
             &turn_context.session_telemetry,
             turn_context.model_info(),
-        )
-    {
+        );
+    if switched {
         // Changing transport must not bypass the server's retry deadline.
         if let Some(retry_after) = retry_after {
             tokio::time::sleep_until(retry_after.deadline()).await;
@@ -154,6 +157,9 @@ pub(crate) async fn handle_response_stream_error(
             }),
         )
         .await;
+    }
+    // Another request can already have switched this session to HTTP.
+    if switched || requires_http_fallback {
         *retries = 0;
         return Ok(());
     }

@@ -7,6 +7,7 @@ use super::send_runtime_event;
 use super::timers;
 use super::value::json_to_v8;
 use super::value::normalize_output_audio;
+use super::value::normalize_output_content;
 use super::value::normalize_output_image;
 use super::value::serialize_output_text;
 use super::value::throw_type_error;
@@ -94,24 +95,23 @@ pub(super) fn text_callback(
             return;
         }
     };
-    let result = scope.get_slot_mut::<RuntimeState>().map(|state| {
-        if state.exit_requested {
-            return Ok(());
-        }
-        let result = send_runtime_event(
-            &state.event_tx,
-            RuntimeEvent::ContentItem(OutputItem::InputText { text }),
-        );
-        if result.is_ok() {
-            state.clear_settled_tool_outcomes();
-        }
-        result
-    });
-    if let Some(Err(error_text)) = result {
-        throw_type_error(scope, &error_text);
+    if !emit_output_item(scope, OutputItem::InputText { text }) {
         return;
     }
     retval.set(v8::undefined(scope).into());
+}
+
+pub(super) fn content_block_callback(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    _retval: v8::ReturnValue<v8::Value>,
+) {
+    match normalize_output_content(scope, args.get(0)) {
+        Ok(item) => {
+            emit_output_item(scope, item);
+        }
+        Err(message) => throw_type_error(scope, &message),
+    }
 }
 
 pub(super) fn audio_callback(
@@ -128,18 +128,7 @@ pub(super) fn audio_callback(
         Ok(audio_item) => audio_item,
         Err(()) => return,
     };
-    let result = scope.get_slot_mut::<RuntimeState>().map(|state| {
-        if state.exit_requested {
-            return Ok(());
-        }
-        let result = send_runtime_event(&state.event_tx, RuntimeEvent::ContentItem(audio_item));
-        if result.is_ok() {
-            state.clear_settled_tool_outcomes();
-        }
-        result
-    });
-    if let Some(Err(error_text)) = result {
-        throw_type_error(scope, &error_text);
+    if !emit_output_item(scope, audio_item) {
         return;
     }
     retval.set(v8::undefined(scope).into());
@@ -155,28 +144,25 @@ pub(super) fn image_callback(
     } else {
         args.get(0)
     };
-    let detail_override = if args.length() < 2 {
-        None
-    } else {
-        let detail = args.get(1);
-        if detail.is_string() {
-            Some(detail.to_rust_string_lossy(scope))
-        } else if detail.is_null() || detail.is_undefined() {
-            None
-        } else {
-            throw_type_error(scope, "image detail must be a string when provided");
-            return;
-        }
-    };
+    let detail_override = (args.length() > 1).then(|| args.get(1));
     let image_item = match normalize_output_image(scope, value, detail_override) {
         Ok(image_item) => image_item,
         Err(()) => return,
     };
+    if !emit_output_item(scope, image_item) {
+        return;
+    }
+    retval.set(v8::undefined(scope).into());
+}
+
+/// Fork: an output item settles the tool outcomes counted since the last sink, and a closed
+/// event queue throws a `TypeError` to the script. Returns whether the script may continue.
+fn emit_output_item(scope: &mut v8::PinScope<'_, '_>, item: OutputItem) -> bool {
     let result = scope.get_slot_mut::<RuntimeState>().map(|state| {
         if state.exit_requested {
             return Ok(());
         }
-        let result = send_runtime_event(&state.event_tx, RuntimeEvent::ContentItem(image_item));
+        let result = send_runtime_event(&state.event_tx, RuntimeEvent::ContentItem(item));
         if result.is_ok() {
             state.clear_settled_tool_outcomes();
         }
@@ -184,9 +170,9 @@ pub(super) fn image_callback(
     });
     if let Some(Err(error_text)) = result {
         throw_type_error(scope, &error_text);
-        return;
+        return false;
     }
-    retval.set(v8::undefined(scope).into());
+    true
 }
 
 pub(super) fn generated_image_callback(

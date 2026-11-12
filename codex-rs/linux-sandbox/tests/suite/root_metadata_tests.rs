@@ -33,28 +33,30 @@ async fn root_metadata_symlinks_cannot_reopen_approved_denials() {
     fs::write(work.join("public/secret"), "outside").unwrap();
     fs::write(private.join("reopened/secret"), "private").unwrap();
     fs::write(private.join("sibling"), "sibling").unwrap();
-    codex_utils_cargo_bin::copy_executable(&codex_linux_sandbox_exe(), &work.join("sandbox"))
-        .unwrap();
-    // Fork: the approved command may replace `/usr` on the fixture's writable tmpfs root, so
-    // the launcher rightly rejects its system bwrap. Bundle one next to the copied launcher:
-    // Bazel's pinned build, or a link to the system bwrap, which keeps the AppArmor profile
-    // that some hosts require for user namespaces.
-    fs::create_dir(work.join("codex-resources")).unwrap();
-    let bundled_bwrap = work.join("codex-resources/bwrap");
-    match (
-        option_env!("BAZEL_PACKAGE"),
-        std::env::var("CARGO_BIN_EXE_bwrap"),
-        std::env::var_os("TEST_SRCDIR"),
-    ) {
-        (Some(_), Ok(runfile), Some(runfiles_dir)) => codex_utils_cargo_bin::copy_executable(
-            &std::path::PathBuf::from(runfiles_dir).join(runfile),
-            &bundled_bwrap,
-        )
-        .unwrap(),
-        _ if bwrap.starts_with("/usr") => {
-            std::os::unix::fs::symlink(&bwrap, &bundled_bwrap).unwrap();
-        }
-        _ => codex_utils_cargo_bin::copy_executable(&bwrap, &bundled_bwrap).unwrap(),
+    let sandbox_exe = codex_linux_sandbox_exe();
+    codex_utils_cargo_bin::copy_executable(&sandbox_exe, &work.join("sandbox")).unwrap();
+    // Carry the bundled fallback into the isolated root. Cargo builds without
+    // an embedded digest can use the system binary when no bundle is available.
+    let fixture_bwrap = codex_linux_sandbox::find_bundled_bwrap_for_exe(
+        &sandbox_exe,
+        &std::env::current_dir().expect("current directory"),
+        |key| std::env::var_os(key),
+    )
+    .map(AbsolutePathBuf::into_path_buf)
+    .or_else(|| {
+        option_env!("CODEX_BWRAP_SHA256")
+            .is_none_or(|digest| digest.chars().all(|character| character == '0'))
+            .then(|| bwrap.clone())
+    })
+    .expect("digest-verified builds require the matching bundled bubblewrap");
+    let resources = work.join("codex-resources");
+    fs::create_dir(&resources).unwrap();
+    // Fork: a system bwrap is linked, not copied: some hosts attach the AppArmor profile that
+    // allows its user namespaces to its path.
+    if fixture_bwrap.starts_with("/usr") {
+        std::os::unix::fs::symlink(&fixture_bwrap, resources.join("bwrap")).unwrap();
+    } else {
+        codex_utils_cargo_bin::copy_executable(&fixture_bwrap, &resources.join("bwrap")).unwrap();
     }
 
     let path_entry = |path: &str, access| {

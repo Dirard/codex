@@ -7,12 +7,14 @@ use crate::agent::api::SpawnRequest;
 use crate::agent::child_config::SpawnConfigOptions;
 use crate::agent::child_config::SpawnConfigVersion;
 use crate::agent::child_config::prepare_agent_spawn_config;
+use crate::agent::helper_daybreak::turn::explicit_program_for_spawn;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::types::AgentMessage;
 use crate::agent::types::LiveAgent;
 use crate::agent::types::MessageDeliveryMode;
 use crate::agent::types::SpawnAgentForkMode;
 use crate::agent::types::SpawnAgentOptions;
+use crate::agent::types::SpawnProgramSource;
 use crate::agent::types::WorkflowChildSpawn;
 use crate::agent::worktree_isolation::AgentWorktreeBinding;
 use crate::agent::worktree_isolation::PreparedAgentWorktree;
@@ -343,7 +345,8 @@ async fn prepare_with(
                 environments: Some(environments),
                 disabled_plugin_ids: Some(turn.disabled_plugin_ids.clone()),
                 multi_agent_v2_usage_hints,
-                cyber_access_program: turn.cyber_access_program,
+                cyber_access_program: explicit_program_for_spawn(turn),
+                cyber_access_program_source: SpawnProgramSource::ParentTurn,
                 worktree: prepared_worktree
                     .as_ref()
                     .map(PreparedAgentWorktree::spawn_worktree),

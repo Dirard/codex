@@ -4,6 +4,7 @@ use crate::ModelProvider;
 use crate::ProviderAuthScope;
 use crate::ResolvedProviderAuth;
 use crate::WorkspaceRoutingContext;
+use crate::auth::bearer_auth_for_provider;
 use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
 use codex_api::AgentIdentityTelemetry;
@@ -45,12 +46,18 @@ pub(crate) async fn resolve_request_auth(
                     let runtime =
                         crate::select_runtime_provider(&info, manager.as_ref(), &runtime)?;
                     let headers = info.build_header_map()?;
-                    let selected = crate::runtime_auth::select_runtime_auth(&runtime, &headers)
-                        .await
-                        .map_err(|error| codex_api::map_api_error(error.into()))?;
+                    let selected =
+                        crate::runtime_auth::select_runtime_auth(&runtime, &headers).await?;
                     let resolved = ResolvedProviderAuth::for_runtime(selected, mode);
                     resolved.validate_headers(&headers)?;
                     tracing::debug!(runtime_auth_mode = ?mode, "selected runtime authentication");
+                    return Ok(resolved);
+                }
+
+                if let Some(bearer) = bearer_auth_for_provider(&info)? {
+                    let credential = bearer.token.as_deref().map(CodexAuth::from_api_key);
+                    let mut resolved = ResolvedProviderAuth::new(Arc::new(bearer));
+                    resolved.credential = credential;
                     return Ok(resolved);
                 }
 

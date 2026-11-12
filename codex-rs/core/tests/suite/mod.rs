@@ -51,6 +51,7 @@ mod agent_websocket;
 #[cfg(unix)]
 mod agent_worktree_isolation;
 mod agents_md;
+mod analytics_runtime_auth;
 mod app_tool_exposure;
 mod apply_patch_cli;
 mod apply_patch_serialization;
@@ -107,6 +108,7 @@ mod guardian_authorization_refresh;
 mod guardian_cached_score;
 #[path = "guardian_checkpoint_migration_tests.rs"]
 mod guardian_checkpoint_migration;
+mod reasoning_replay_metrics;
 // Uses the same command-approval harness as guardian_review below.
 mod builtin_model_catalog;
 mod canonical_plugin_connectors;
@@ -221,6 +223,7 @@ mod rollout_budget;
 mod rollout_compression;
 mod rollout_list_find;
 mod runtime_auth;
+mod runtime_auth_denials;
 mod safety_buffering;
 mod safety_check_downgrade;
 mod scenarios;
