@@ -6,8 +6,8 @@ Scenario: Code Mode appends complete changed tool entries and namespace instruct
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (1; hash=ebe8da72443f764e):
-        - namespace/functions; hash=21ab6fa72d590f2c
+00:additional_tools/developer (1; hash=995322dd372c829f):
+        - namespace/functions; hash=6d43aeb7b406586f
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -129,8 +129,8 @@ Scenario: Code Mode appends complete changed tool entries and namespace instruct
 
 ## Window 2 (after request 10: settings changed (model))
 -- request 11 (turn) --
-00:additional_tools/developer (1; hash=ebe8da72443f764e):
-        - namespace/functions; hash=21ab6fa72d590f2c
+00:additional_tools/developer (1; hash=995322dd372c829f):
+        - namespace/functions; hash=6d43aeb7b406586f
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -260,8 +260,8 @@ Scenario: Code Mode appends complete changed tool entries and namespace instruct
 
 ## Window 3 (after request 11: settings changed (model))
 -- request 12 (turn) --
-00:additional_tools/developer (1; hash=ebe8da72443f764e):
-        - namespace/functions; hash=21ab6fa72d590f2c
+00:additional_tools/developer (1; hash=995322dd372c829f):
+        - namespace/functions; hash=6d43aeb7b406586f
           - custom/exec
           - function/wait
           - function/request_user_input

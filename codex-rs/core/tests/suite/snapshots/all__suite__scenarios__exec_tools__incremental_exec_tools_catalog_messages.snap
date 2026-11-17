@@ -6,8 +6,8 @@ Scenario: Configured exec updates and removals use the catalog wording. Empty ov
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (1; hash=ebe8da72443f764e):
-        - namespace/functions; hash=21ab6fa72d590f2c
+00:additional_tools/developer (1; hash=995322dd372c829f):
+        - namespace/functions; hash=6d43aeb7b406586f
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -55,8 +55,8 @@ Scenario: Configured exec updates and removals use the catalog wording. Empty ov
 
 ## Window 2 (after request 4: settings changed (model))
 -- request 5 (turn) --
-00:additional_tools/developer (1; hash=ebe8da72443f764e):
-        - namespace/functions; hash=21ab6fa72d590f2c
+00:additional_tools/developer (1; hash=995322dd372c829f):
+        - namespace/functions; hash=6d43aeb7b406586f
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -171,8 +171,8 @@ Scenario: Configured exec updates and removals use the catalog wording. Empty ov
 
 ## Window 3 (after request 10: settings changed (model))
 -- request 11 (turn) --
-00:additional_tools/developer (1; hash=ebe8da72443f764e):
-        - namespace/functions; hash=21ab6fa72d590f2c
+00:additional_tools/developer (1; hash=995322dd372c829f):
+        - namespace/functions; hash=6d43aeb7b406586f
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -297,8 +297,8 @@ Scenario: Configured exec updates and removals use the catalog wording. Empty ov
 
 ## Window 4 (after request 11: settings changed (model))
 -- request 12 (turn) --
-00:additional_tools/developer (1; hash=ebe8da72443f764e):
-        - namespace/functions; hash=21ab6fa72d590f2c
+00:additional_tools/developer (1; hash=995322dd372c829f):
+        - namespace/functions; hash=6d43aeb7b406586f
           - custom/exec
           - function/wait
           - function/request_user_input

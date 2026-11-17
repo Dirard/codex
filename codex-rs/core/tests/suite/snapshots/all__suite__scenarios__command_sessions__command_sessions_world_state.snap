@@ -6,15 +6,15 @@ Scenario: A Code Mode script drops its command handle. WorldState retains it whi
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=a4fdf355eb986849):
-        - namespace/functions; hash=81846de5bc4e7474
+00:additional_tools/developer (3; hash=ad818e7fdb937507):
+        - namespace/functions; hash=f1daf6a631e1fdfb
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=299e38db0471a16a
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=0e644a6d315a166f
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
@@ -58,15 +58,15 @@ Scenario: A Code Mode script drops its command handle. WorldState retains it whi
 
 ## Window 2 (after request 3: settings changed (model))
 -- request 4 (turn) --
-00:additional_tools/developer (3; hash=a4fdf355eb986849):
-        - namespace/functions; hash=81846de5bc4e7474
+00:additional_tools/developer (3; hash=ad818e7fdb937507):
+        - namespace/functions; hash=f1daf6a631e1fdfb
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=299e38db0471a16a
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=0e644a6d315a166f
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
@@ -113,8 +113,8 @@ Scenario: A Code Mode script drops its command handle. WorldState retains it whi
     </command_sessions>
 13:message/developer:
     This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
-14:additional_tools/developer (1; hash=2a7a524a5c95d741):
-        - namespace/functions; hash=429e5891e0f9c86b
+14:additional_tools/developer (1; hash=ed57d116771a8656):
+        - namespace/functions; hash=83e2b7ac6c6e479e
           - custom/exec
 15:message/developer:
     <model_instructions>
@@ -130,15 +130,15 @@ Scenario: A Code Mode script drops its command handle. WorldState retains it whi
 
 ## Window 3 (after request 5: input diverged at item 00, settings changed (model))
 -- request 6 (turn) --
-00:additional_tools/developer (3; hash=190749c3ef070118):
-        - namespace/functions; hash=f6f779209c4af0f3
+00:additional_tools/developer (3; hash=d0ac67958de7e2d6):
+        - namespace/functions; hash=6071b308604af43c
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=299e38db0471a16a
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=0e644a6d315a166f
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
@@ -175,8 +175,8 @@ Scenario: A Code Mode script drops its command handle. WorldState retains it whi
     </command_sessions>
 11:message/developer:
     This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
-12:additional_tools/developer (1; hash=fd836d9e37127de2):
-        - namespace/functions; hash=04341bdad1d8e6f6
+12:additional_tools/developer (1; hash=bac0d6be12821bbd):
+        - namespace/functions; hash=fd695678d394f793
           - custom/exec
 13:message/developer:
     <model_instructions>

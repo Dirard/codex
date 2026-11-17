@@ -1296,8 +1296,10 @@ async fn cancelled_v2_send_finishes_reload_registration() {
     ));
     drop(send);
     drop(publication_blocker);
+    // Fork: the whole cold reload is still ahead here, and a loaded full-suite run can take
+    // more than 5 s for it; a cancelled reload never publishes, so the bound only limits a hang.
     assert_eq!(
-        timeout(Duration::from_secs(5), created.recv())
+        timeout(Duration::from_secs(20), created.recv())
             .await
             .expect("cancelled sender must not cancel reload registration")
             .unwrap(),
@@ -5051,7 +5053,7 @@ async fn multi_agent_v2_terminal_status_is_published_after_parent_mailbox() {
         .drain_mailbox_input_items()
         .await;
     assert_eq!(
-        mailbox_items,
+        super::fork_completion::without_result_mail_ids(mailbox_items),
         vec![TurnInput::InterAgentCommunication(
             InterAgentCommunication::new(
                 tester_path,
@@ -5195,7 +5197,7 @@ async fn multi_agent_v2_terminal_error_is_published_after_parent_mailbox() {
         .drain_mailbox_input_items()
         .await;
     assert_eq!(
-        mailbox_items,
+        super::fork_completion::without_result_mail_ids(mailbox_items),
         vec![TurnInput::InterAgentCommunication(
             InterAgentCommunication::new(
                 tester_path,

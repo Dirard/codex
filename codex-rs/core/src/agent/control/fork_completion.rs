@@ -223,3 +223,27 @@ impl Drop for WatcherRecord {
         }
     }
 }
+
+/// Result mail gets an `amsg_` item ID when it is delivered (#61198). Tests check the prefix
+/// and drop the generated ID so they can compare the rest of the message.
+#[cfg(test)]
+pub(crate) fn without_result_mail_ids(
+    items: Vec<crate::session::TurnInput>,
+) -> Vec<crate::session::TurnInput> {
+    use crate::session::TurnInput;
+    items
+        .into_iter()
+        .map(|item| match item {
+            TurnInput::InterAgentCommunication(message) => {
+                let mut communication = (*message).clone();
+                let id = communication
+                    .id
+                    .take()
+                    .expect("result mail should carry an item ID");
+                assert!(id.as_str().starts_with("amsg_"), "result mail ID = {id}");
+                TurnInput::InterAgentCommunication(communication.into())
+            }
+            other => other,
+        })
+        .collect()
+}

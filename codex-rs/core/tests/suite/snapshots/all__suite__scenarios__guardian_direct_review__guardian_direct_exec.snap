@@ -1,14 +1,13 @@
 ---
 source: core/tests/suite/scenarios_guardian_direct_review.rs
-assertion_line: 256
 expression: snapshot
 ---
 Scenario: Sequential direct Guardian reviews of recorded exec calls on the same thread.
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (1; hash=bbdbc99401a1afb0):
-        - namespace/functions; hash=42a1e6648ccef1f0
+00:additional_tools/developer (1; hash=8ea8886350853bab):
+        - namespace/functions; hash=4a232dbed0a49e35
           - custom/exec
           - function/wait
 01:message/developer:

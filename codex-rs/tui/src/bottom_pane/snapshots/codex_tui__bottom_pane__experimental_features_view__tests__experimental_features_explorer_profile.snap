@@ -14,4 +14,4 @@ expression: buffer_text(&buffer)
                                     file:line references.
 
 
-  space toggle · enter save · esc save/close
+  space toggle · enter save · esc cancel

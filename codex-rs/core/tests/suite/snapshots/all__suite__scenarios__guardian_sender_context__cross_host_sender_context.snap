@@ -92,8 +92,8 @@ Settings: relative to window 3
   text: {"format":{"name":"codex_output_schema","schema":{"additionalProperties":false,"properties":{"outcome":{"enum":["allow","deny"],"type":"string"},"rationale":{"type":"string"},"risk_level":{"enum":["low","medium","high","critical"],"type":"string"},"user_authorization":{"enum":["unknown","low","medium","high"],"type":"string"}},"required":["outcome"],"type":"object"},"strict":false,"type":"json_schema"},"verbosity":"low"}
   tools: <removed>
 -- request 6 (turn) --
-00:additional_tools/developer (1; hash=bbdbc99401a1afb0):
-        - namespace/functions; hash=42a1e6648ccef1f0
+00:additional_tools/developer (1; hash=8ea8886350853bab):
+        - namespace/functions; hash=4a232dbed0a49e35
           - custom/exec
           - function/wait
 01:message/developer:

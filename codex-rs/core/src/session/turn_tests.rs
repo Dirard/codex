@@ -91,8 +91,8 @@ async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
     )
     .await;
 
-    // Fork: the visible assistant text is the response's terminal answer.
-    assert_eq!(handled, Some(true));
+    // Fork: the contributor turns the text into commentary, so it is not the terminal answer.
+    assert_eq!(handled, Some(false));
     assert_eq!(
         last_agent_message.trailing_commentary.as_deref(),
         Some("plan contributed assistant text")

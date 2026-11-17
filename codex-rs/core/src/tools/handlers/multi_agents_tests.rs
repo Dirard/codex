@@ -2072,7 +2072,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         .drain_mailbox_input_items()
         .await;
     assert_eq!(
-        mailbox_items,
+        crate::agent::control::fork_completion::without_result_mail_ids(mailbox_items),
         vec![
             TurnInput::InterAgentCommunication(
                 InterAgentCommunication::new(

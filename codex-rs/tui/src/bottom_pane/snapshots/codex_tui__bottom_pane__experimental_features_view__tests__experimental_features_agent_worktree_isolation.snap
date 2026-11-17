@@ -14,4 +14,4 @@ expression: buffer_text(&buffer)
                           Windows.
 
 
-  space toggle · enter save · esc save/close
+  space toggle · enter save · esc cancel
