@@ -67,7 +67,6 @@ impl SideParentStatus {
             | ServerRequest::ExecCommandApproval { .. } => Some(SideParentStatus::NeedsApproval),
             ServerRequest::DynamicToolCall { .. }
             | ServerRequest::AttestationGenerate { .. }
-            | ServerRequest::CurrentTimeRead { .. }
             | ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
         }
     }
@@ -304,7 +303,7 @@ impl App {
             && (self.chat_widget.no_modal_or_popup_active()
                 // Replaying the parent may reopen a completion for its parked draft.
                 // The focused chooser hides it and owns the keystrokes.
-                || (self.chooser_focus() == Some(sidebar::PaneFocus::Sidebar)
+                || (self.panel_focus() == Some(sidebar::PaneFocus::Sidebar)
                     && self.sidebar_chooser_available()
                     && self.chat_widget.completion_can_yield_focus()))
     }
@@ -316,6 +315,14 @@ impl App {
     /// Zoom follows the displayed conversation even when its peer cannot be selected offline.
     pub(super) fn open_pane_focus(&self) -> Option<ThreadId> {
         let focused = self.current_displayed_thread_id()?;
+        if self.panel_focus() == Some(sidebar::PaneFocus::Sidebar)
+            && matches!(
+                self.sidebar()?.visible_content(),
+                Some(sidebar::SidebarContent::Document(_))
+            )
+        {
+            return Some(focused);
+        }
         let child = self.side_pair_key(focused)?;
         (self.sidebar()?.visible_content() == Some(sidebar::SidebarContent::Chat(child)))
             .then_some(focused)
@@ -585,6 +592,7 @@ impl App {
                         response: crate::dynamic_tools::failure_response(
                             "Source task was closed while handling a dynamic tool call",
                         ),
+                        reply: None,
                     });
                     task.abort();
                     false
@@ -594,6 +602,9 @@ impl App {
             });
         self.abort_thread_event_listener(thread_id);
         self.thread_event_channels.remove(&thread_id);
+        self.agents_overview
+            .draft_cloud_environments
+            .remove(&thread_id);
         self.pending_server_profiles.remove(&thread_id);
         self.agents_overview.activity.remove(&thread_id);
         self.sidebars.remove(&Some(thread_id));

@@ -1747,12 +1747,14 @@ async fn multi_agent_v2_spawn_omitted_fork_turns_keeps_full_history(
         struct FailFirstClockRead(std::sync::atomic::AtomicBool);
 
         impl codex_core::TimeProvider for FailFirstClockRead {
-            fn current_time(&self, _thread_id: ThreadId) -> codex_core::TimeFuture<'_> {
+            fn current_time(
+                &self,
+                _thread_id: ThreadId,
+            ) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
                 let already_read = self.0.swap(true, std::sync::atomic::Ordering::Relaxed);
-                Box::pin(async move {
-                    anyhow::ensure!(already_read, "parent clock unavailable");
-                    Ok(chrono::Utc::now())
-                })
+
+                anyhow::ensure!(already_read, "parent clock unavailable");
+                Ok(chrono::Utc::now())
             }
 
             fn sleep(

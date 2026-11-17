@@ -58,7 +58,8 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
-use super::footer_content::FooterContent;
+use super::StatusLine;
+use super::StatusLineFocus;
 use super::picker_rows;
 use super::picker_style;
 use super::selection_popup_common::ColumnWidthConfig;
@@ -71,6 +72,7 @@ use crate::bottom_pane::popup_consts::MAX_POPUP_ROWS;
 use crate::bottom_pane::scroll_state::ScrollState;
 use crate::bottom_pane::selection_popup_common::render_rows_single_line_with_col_width_mode;
 use crate::key_hint;
+use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::is_plain_text_key_event;
 use crate::keymap::ListAction;
@@ -108,9 +110,12 @@ pub type ConfirmCallback = Box<dyn Fn(&[String], &AppEventSender) + Send + Sync>
 /// Callback invoked when the user cancels the picker (presses Escape).
 pub type CancelCallback = Box<dyn Fn(&AppEventSender) + Send + Sync>;
 
+/// Action dispatched from a picker row with the key that activated it.
+type ActionCallback = Box<dyn Fn(&AppEventSender, KeyBinding) + Send + Sync>;
+
 /// Callback to generate an optional preview line based on current item states.
 /// Returns `None` to hide the preview area.
-type PreviewCallback = Box<dyn Fn(&[MultiSelectItem]) -> Option<FooterContent> + Send + Sync>;
+type PreviewCallback = Box<dyn Fn(&[MultiSelectItem]) -> Option<StatusLine> + Send + Sync>;
 
 /// A single selectable item in the multi-select picker.
 ///
@@ -134,6 +139,8 @@ pub(crate) struct MultiSelectItem {
 
     /// Whether to draw a divider after this item when another visible item follows.
     pub section_break_after: bool,
+    /// An action row opens its child on Enter and has no checkbox.
+    pub on_activate: Option<ActionCallback>,
 }
 
 impl Default for MultiSelectItem {
@@ -145,6 +152,7 @@ impl Default for MultiSelectItem {
             enabled: false,
             orderable: true,
             section_break_after: false,
+            on_activate: None,
         }
     }
 }
@@ -183,6 +191,7 @@ pub(crate) struct MultiSelectPicker {
 
     /// Footer line showing keyboard hints.
     footer_hint: Line<'static>,
+    action_footer_hint: Line<'static>,
 
     /// Current search/filter query entered by the user.
     search_query: String,
@@ -201,7 +210,7 @@ pub(crate) struct MultiSelectPicker {
     preview_builder: Option<PreviewCallback>,
 
     /// Cached preview line (updated on item changes).
-    preview_line: Option<FooterContent>,
+    preview_line: Option<StatusLine>,
 
     /// Callback invoked when items change (toggle or reorder).
     on_change: Option<ChangeCallBack>,
@@ -289,7 +298,17 @@ impl MultiSelectPicker {
     }
 
     fn footer_lines(&self, width: u16) -> Vec<Line<'_>> {
-        wrap_styled_line(&self.footer_hint, width.saturating_sub(/*rhs*/ 2))
+        let action = self
+            .state
+            .selected_idx
+            .and_then(|index| self.filtered_indices.get(index))
+            .is_some_and(|index| self.items[*index].on_activate.is_some());
+        let hint = if action {
+            &self.action_footer_hint
+        } else {
+            &self.footer_hint
+        };
+        wrap_styled_line(hint, width.saturating_sub(/*rhs*/ 2))
     }
 
     /// Calculates the height needed for the row list area.
@@ -317,9 +336,13 @@ impl MultiSelectPicker {
             visible_to_row.push(rows.len());
             let is_selected = self.state.selected_idx == Some(visible_idx);
             let prefix = if is_selected { '›' } else { ' ' };
-            let marker = if item.enabled { 'x' } else { ' ' };
-            let item_name = truncate_text(&item.name, ITEM_NAME_TRUNCATE_LEN);
-            let name = format!("{prefix} [{marker}] {item_name}");
+            let name = if item.on_activate.is_some() {
+                format!("{prefix} {}", item.name)
+            } else {
+                let marker = if item.enabled { 'x' } else { ' ' };
+                let item_name = truncate_text(&item.name, ITEM_NAME_TRUNCATE_LEN);
+                format!("{prefix} [{marker}] {item_name}")
+            };
             rows.push(GenericDisplayRow {
                 name,
                 description: item.description.clone(),
@@ -367,6 +390,9 @@ impl MultiSelectPicker {
             return;
         };
 
+        if item.on_activate.is_some() {
+            return;
+        }
         item.enabled = !item.enabled;
         self.update_preview_line();
         if let Some(on_change) = &self.on_change {
@@ -378,7 +404,17 @@ impl MultiSelectPicker {
     ///
     /// Collects the IDs of all enabled items and passes them to the
     /// `on_confirm` callback. Does nothing if already complete.
-    fn confirm_selection(&mut self) {
+    fn confirm_selection(&mut self, activation_key: KeyBinding) {
+        if let Some(action) = self
+            .state
+            .selected_idx
+            .and_then(|index| self.filtered_indices.get(index))
+            .and_then(|index| self.items[*index].on_activate.as_deref())
+        {
+            action(&self.app_event_tx, activation_key);
+            return;
+        }
+
         if self.complete || (self.require_selection && !self.items.iter().any(|item| item.enabled))
         {
             return;
@@ -499,6 +535,14 @@ impl BottomPaneView for MultiSelectPicker {
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        self.handle_key_event_with_activation_key(key_event, /*activation_key*/ None);
+    }
+
+    fn handle_key_event_with_activation_key(
+        &mut self,
+        key_event: KeyEvent,
+        activation_key: Option<KeyBinding>,
+    ) {
         // Printable characters always feed search. Movement aliases such as
         // plain j/k only apply through non-text events or modified bindings.
         let allow_plain_char_navigation = !is_plain_text_key_event(key_event);
@@ -539,7 +583,9 @@ impl BottomPaneView for MultiSelectPicker {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => self.toggle_selected(),
-            _ if self.keymap.accept.is_pressed(key_event) => self.confirm_selection(),
+            _ if self.keymap.accept.is_pressed(key_event) => self.confirm_selection(
+                activation_key.unwrap_or_else(|| KeyBinding::from_event(key_event)),
+            ),
             _ if self.keymap.cancel.is_pressed(key_event) => self.close(),
             KeyEvent {
                 code: KeyCode::Char(c),
@@ -621,7 +667,7 @@ impl Renderable for MultiSelectPicker {
                 Layout::vertical([Constraint::Length(1), Constraint::Length(hint_height)])
                     .areas(footer_area);
             let preview_area = preview_area.inset(Insets::vh(/*v*/ 0, /*h*/ 2));
-            preview_line.clone().render(preview_area, buf);
+            preview_line.render(preview_area, buf, StatusLineFocus::Focused);
             hint_area
         } else {
             footer_area
@@ -711,14 +757,12 @@ impl MultiSelectPickerBuilder {
     where
         F: Fn(&[MultiSelectItem]) -> Option<Line<'static>> + Send + Sync + 'static,
     {
-        self.on_preview_content(move |items| {
-            callback(items).map(|line| FooterContent::HyperlinkLine(line.into()))
-        })
+        self.on_preview_content(move |items| callback(items).map(StatusLine::from))
     }
 
     pub(crate) fn on_preview_content(
         mut self,
-        callback: impl Fn(&[MultiSelectItem]) -> Option<FooterContent> + Send + Sync + 'static,
+        callback: impl Fn(&[MultiSelectItem]) -> Option<StatusLine> + Send + Sync + 'static,
     ) -> Self {
         self.preview_builder = Some(Box::new(callback));
         self
@@ -808,6 +852,7 @@ impl MultiSelectPickerBuilder {
             app_event_tx: self.app_event_tx,
             header: Box::new(header),
             footer_hint: Line::from(instructions),
+            action_footer_hint: super::popup_consts::picker_hint_line_for_keymap(&self.keymap),
             ordering_enabled: self.ordering_enabled,
             require_selection: self.require_selection,
             keymap: self.keymap,

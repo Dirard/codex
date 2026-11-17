@@ -31,6 +31,7 @@ pub mod context_snapshot;
 pub mod exec_server;
 // Fork: upstream tests keep upstream feature defaults (fork-features-default-on UC6).
 pub mod fork_defaults;
+pub mod guardian;
 pub mod hooks;
 pub mod network_policy_mcp;
 pub mod oauth;

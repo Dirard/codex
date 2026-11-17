@@ -1,1 +1,23 @@
+# Core crate ownership.
+/codex-rs/arg0/ @openai/codex-core-agent-team
+/codex-rs/codex-mcp/ @openai/codex-core-agent-team
+/codex-rs/core/ @openai/codex-core-agent-team
+/codex-rs/exec-server/ @openai/codex-core-agent-team
+/codex-rs/exec-server-protocol/ @openai/codex-core-agent-team
+/codex-rs/ext/extension-api/ @openai/codex-core-agent-team
+/codex-rs/prompts/ @openai/codex-core-agent-team
+/codex-rs/user-input/ @openai/codex-core-agent-team
+/codex-rs/utils/path-uri/ @openai/codex-core-agent-team
+
+# Keep macOS AKV signing changes reviewed by Codex maintainers.
+/.github/actions/setup-akv-pkcs11-codesigning/ @openai/codex-core-agent-team
+/.github/scripts/macos-signing/ @openai/codex-core-agent-team
+/.github/workflows/rust-release.yml @openai/codex-core-agent-team
+
+# Keep ownership changes reviewed by the same team.
+/.github/CODEOWNERS @openai/codex-core-agent-team
+
+# Fork (Dirard/codex): every path needs Dirard's review. The last matching rule wins, so this
+# line overrides the rules above; keeping upstream's rules unchanged lets "Sync fork" merge
+# upstream's edits to them without conflicts.
 * @Dirard

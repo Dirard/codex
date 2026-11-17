@@ -11,6 +11,7 @@ use crate::compact::build_compaction_context_for_window;
 use crate::context::world_state::split_prefix_updates;
 use crate::context_manager::updates::merge_world_state_updates;
 use crate::session::CompactedHistoryInstallation;
+use crate::session::PrefixCompactionInstallation;
 use codex_protocol::protocol::WarningEvent;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
 use tracing::warn;
@@ -32,6 +33,7 @@ pub(super) async fn run_compaction(
     candidate: Option<BackgroundCompactionCandidate>,
     fallback: CompactionFallback,
 ) -> CodexResult<bool> {
+    let mut installed_prefix = false;
     if let Some(candidate) = candidate {
         let installed = build_and_install_compaction(
             sess,
@@ -46,7 +48,8 @@ pub(super) async fn run_compaction(
         )
         .await?;
         if installed {
-            // Count the installed history once, as validation under the state lock did.
+            installed_prefix = true;
+            // Fork: count the installed history once, as validation under the state lock did.
             // Session usage was just recomputed from this history and would add the live
             // suffix a second time.
             let turn = &replacement_step_context.turn;
@@ -80,7 +83,7 @@ pub(super) async fn run_compaction(
             return Ok(false);
         }
     }
-    build_and_install_compaction(
+    let foreground = build_and_install_compaction(
         sess,
         step_context,
         replacement_step_context,
@@ -91,7 +94,11 @@ pub(super) async fn run_compaction(
         started_item,
         /*candidate*/ None,
     )
-    .await
+    .await;
+    match foreground {
+        Ok(installed) => Ok(installed_prefix || installed),
+        Err(err) => Err(err),
+    }
 }
 
 /// Builds the replacement candidate and installs it. Foreground candidates shrink retained
@@ -131,7 +138,8 @@ async fn build_and_install_compaction(
             }),
         turn_context.provider.info().name.as_str(),
     );
-    if needs_start && candidate.is_none() {
+    let defer_start = sess.defer_compaction_start(turn_context, compaction_metadata.phase());
+    if needs_start && candidate.is_none() && !defer_start {
         sess.emit_turn_item_started(turn_context, &compaction_item)
             .await;
     }
@@ -151,7 +159,7 @@ async fn build_and_install_compaction(
             )),
         )
     } else {
-        // A prepared candidate that was declined falls back here after its hooks ran.
+        // Fork: a prepared candidate that was declined falls back here after its hooks ran.
         reject_hopeless_auto_compaction(
             sess,
             turn_context,
@@ -159,7 +167,11 @@ async fn build_and_install_compaction(
             compaction_metadata.trigger(),
         )
         .await?;
+        let mut request = crate::hook_runtime::sampling::SamplingRequest::new(
+            codex_hooks::SamplingKind::ForegroundCompaction,
+        );
         let attempt = run_remote_compact_v2_attempt(
+            &mut request,
             sess,
             step_context,
             &compaction_trace,
@@ -185,6 +197,7 @@ async fn build_and_install_compaction(
                         fallback_turn_context.provider.info().name.as_str(),
                     );
                 let fallback_result = run_remote_compact_v2_attempt(
+                    &mut request,
                     sess,
                     replacement_step_context,
                     &fallback_compaction_trace,
@@ -203,6 +216,13 @@ async fn build_and_install_compaction(
                 );
                 match fallback_result {
                     Ok(attempt) => (attempt, fallback_turn_context),
+                    Err(fallback_error)
+                        if crate::responses_retry::is_terminal_sampling_outcome(
+                            &fallback_error,
+                        ) =>
+                    {
+                        return Err(fallback_error);
+                    }
                     Err(_) => return Err(error),
                 }
             }
@@ -221,11 +241,9 @@ async fn build_and_install_compaction(
         owned_client_session: _owned_client_session,
     } = attempt;
     if prefix.is_none()
-        && let Some(token_usage) = token_usage.as_ref()
+        && let Some(usage) = &token_usage
     {
-        sess.record_rollout_budget_usage(&compaction_turn_context.sub_id, token_usage)
-            .await?;
-        analytics_details.active_context_tokens_before = Some(token_usage.input_tokens);
+        analytics_details.active_context_tokens_before = Some(usage.input_tokens);
     }
     let retained_image_budget = if sess.enabled(Feature::CompactionImageBudget) {
         RetainedImageBudget::Enabled
@@ -352,7 +370,7 @@ async fn build_and_install_compaction(
             replacement_step_context.to_turn_context_item(),
             world_state_baseline,
             rejected_audio_file_ids,
-            CompactedHistoryInstallation::Prefix {
+            CompactedHistoryInstallation::Prefix(PrefixCompactionInstallation {
                 prefix,
                 prefix_context,
                 initial_context,
@@ -365,8 +383,10 @@ async fn build_and_install_compaction(
                 reviewer_compaction_hash,
                 turn_context,
                 started_item: needs_start.then_some(&compaction_item),
+                // Fork: the prepared-prefix headroom check counts tool declarations
+                // (docs/fork/02 F3, R3).
                 tool_declaration_tokens: tool_declaration_tokens(replacement_step_context),
-            },
+            }),
         )
         .await
     } else {
@@ -395,6 +415,10 @@ async fn build_and_install_compaction(
             compaction_model_hash: compaction_turn_context.model_info().comp_hash.clone(),
             reviewer_compaction_hash,
         };
+        if needs_start && defer_start {
+            sess.emit_turn_item_started(turn_context, &compaction_item)
+                .await;
+        }
         sess.replace_compacted_history(
             new_history,
             replacement_step_context.to_turn_context_item(),

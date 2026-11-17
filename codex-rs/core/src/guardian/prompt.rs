@@ -118,6 +118,7 @@ pub(super) async fn collect_guardian_prompt_items_with_parent_turn(
     let mut planned_action = codex_guardian_reviewer::build_guardian_planned_action(
         &request,
         reasons.retry.or(reasons.approval),
+        parent_context.and_then(|context| context.enclosing_invocation_id.as_deref()),
     )?;
     // Fork: the isolated worktree of the reviewed agent (agent-worktree-isolation R3.8).
     crate::agent::worktree_isolation::fork_annotate_guardian_action(session, &mut planned_action);

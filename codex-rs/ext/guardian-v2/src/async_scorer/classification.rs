@@ -81,7 +81,7 @@ pub(super) struct Classification {
     pub(super) mcp_tool: Option<McpToolContext>,
     pub(super) planned_action: String,
     pub(super) sync_reviews: Vec<Arc<GuardianReviewEvidenceRecord>>,
-    pub(super) trusted_user_inputs: Vec<String>,
+    pub(super) trusted_user_inputs: Vec<codex_guardian_context::TrustedUserAnswer>,
     pub(super) authorization_version: GuardianAuthorizationVersion,
     pub(super) history: Arc<dyn ConversationHistorySnapshot>,
     pub(super) local_trusted_skill_paths: Vec<String>,
@@ -145,6 +145,7 @@ impl Classification {
             score_authorization,
         } = self;
         let generation = reservation.generation.clone();
+        let active = Arc::clone(&reservation.active);
         let pending_score = PendingScore {
             progress: Arc::clone(&score_progress),
             index: tool_call_index,
@@ -200,7 +201,7 @@ impl Classification {
         let root_review_context_revision = root_snapshot
             .as_ref()
             .map(|snapshot| snapshot.review_context_revision);
-        let root_conversation = root_snapshot.map(|snapshot| snapshot.messages);
+
         let score_authorization = ScoreAuthorization {
             local: authorization_version,
             review_context_revision,
@@ -246,7 +247,13 @@ impl Classification {
                 let context_input = ContextInput {
                     target: ContextTarget::Async,
                     history: history.as_ref(),
-                    root_conversation: root_conversation.as_deref().unwrap_or_default(),
+                    root_conversation: root_snapshot
+                        .as_ref()
+                        .map(|snapshot| snapshot.messages.as_slice())
+                        .unwrap_or_default(),
+                    root_conversation_candidates: root_snapshot
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.request_candidates.as_ref()),
                     trusted_user_answers: &trusted_user_inputs,
                     planned_action: Some(&action_section),
                     permissions: Some(&score_authorization.permissions),
@@ -260,7 +267,7 @@ impl Classification {
         let evidence = match transcript {
             Ok(transcript) => transcript,
             Err(error) => {
-                score_progress.fail_closed(sampled_at);
+                score_progress.fail_closed(sampled_at, tool_call_index);
                 record_classification(
                     metrics.as_deref(),
                     context_mode,
@@ -387,6 +394,7 @@ impl Classification {
                 sampled_at: Some(sampled_at.into()),
             };
             if !score_authorization.is_current(&thread).await
+                || !active.load(std::sync::atomic::Ordering::Acquire)
                 || generation.strong_count() == 0
             {
                 return Ok(ClassificationOutcome::Superseded);
@@ -427,7 +435,7 @@ impl Classification {
         }
         .await;
         if result.is_err() {
-            score_progress.fail_closed(sampled_at);
+            score_progress.fail_closed(sampled_at, tool_call_index);
         }
         let duration = classification_finished_at
             .map(|finished_at: Instant| finished_at.duration_since(classification_started_at))

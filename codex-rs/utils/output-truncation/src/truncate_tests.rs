@@ -10,6 +10,7 @@ use crate::mixed_output_at_token_boundaries;
 use crate::truncate_function_output_items_with_config;
 use crate::truncate_function_output_items_with_policy;
 use crate::truncate_mcp_tool_result;
+use crate::truncate_measured_tool_output;
 use crate::truncate_text;
 use crate::truncate_text_with_config;
 use codex_protocol::mcp::CallToolResult;
@@ -676,4 +677,27 @@ fn apply_output_truncation_cuts_lines_then_the_policy() {
             "{truncation:?}"
         );
     }
+}
+
+#[test]
+fn measured_tool_output_keeps_charges_paired_with_retained_clips() {
+    let clip = FunctionCallOutputContentItem::inline_audio("clip".into());
+    let text = FunctionCallOutputContentItem::InputText {
+        text: "keep".into(),
+    };
+    let omitted = FunctionCallOutputContentItem::InputText {
+        text: "[omitted 1 audio items ...]".into(),
+    };
+    assert_eq!(
+        truncate_measured_tool_output(
+            vec![
+                (clip.clone(), 9),
+                (text.clone(), 0),
+                (clip.clone(), 2),
+                (clip.clone(), 1)
+            ],
+            TruncationPolicy::Tokens(4)
+        ),
+        vec![(text, 0), (clip.clone(), 2), (clip, 1), (omitted, 0)]
+    );
 }

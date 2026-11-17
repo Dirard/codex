@@ -8,7 +8,7 @@ use codex_history::ResponseItemEnvelope;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::turn_input::TurnStartOptions;
-use codex_protocol::user_input::UserInput;
+use codex_user_input::ResolvedUserInput;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -35,6 +35,8 @@ pub struct UserInputMetadata {
     /// Optional host-assigned UUID for this particular Responses user item.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_item_uuid: Option<uuid::Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_dictation: Option<bool>,
     #[serde(
         default,
         skip_serializing_if = "codex_history::UserInputOrigin::is_user"
@@ -46,7 +48,7 @@ pub struct UserInputMetadata {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TurnInput {
     UserInput {
-        content: Vec<UserInput>,
+        content: Vec<ResolvedUserInput>,
         client_id: Option<String>,
         #[serde(flatten)]
         metadata: UserInputMetadata,
@@ -284,19 +286,25 @@ impl InputQueue {
         pending.drain(..).collect()
     }
 
-    /// Fork: `drain_mailbox_input_items` (input_queue_fork.rs) drains background notifications too.
-    pub(crate) async fn drain_mailbox_input_items_for_task(
-        &self,
-        take_background_notifications: bool,
-    ) -> (Vec<TurnInput>, TurnStartOptions) {
-        let pending_mails = self.drain_mailbox().await;
+    pub(crate) async fn pending_wake_options(&self) -> Option<TurnStartOptions> {
+        let mut mails = self.mailbox_pending_mails.lock().await;
+        self.read_mailbox(&mut mails);
+        let mut options = Self::trigger_turn_options(&mails)?;
+        if let Some(mail) = mails.iter().find(|mail| mail.communication.trigger_turn) {
+            options.initiating_agent_path = Some(mail.communication.author.clone());
+        }
+        Some(options)
+    }
+
+    fn trigger_turn_options(
+        pending_mails: &VecDeque<PendingMailboxCommunication>,
+    ) -> Option<TurnStartOptions> {
         // A later follow-up supersedes the earlier choice, including an omitted choice.
         let mut start_options = pending_mails
             .iter()
             .rev()
             .find(|mail| mail.communication.trigger_turn)
-            .map(|mail| mail.start_options.clone())
-            .unwrap_or_default();
+            .map(|mail| mail.start_options.clone())?;
         start_options.parent_turn_id = pending_mails
             .iter()
             .filter(|mail| mail.communication.trigger_turn)
@@ -315,10 +323,22 @@ impl InputQueue {
                     .filter(|id| !id.trim().is_empty())
             })
             .map(str::to_string);
+        Some(start_options)
+    }
+
+    /// Fork: `drain_mailbox_input_items` (input_queue_fork.rs) drains background notifications too.
+    pub(crate) async fn drain_mailbox_input_items_for_task(
+        &self,
+        take_background_notifications: bool,
+    ) -> (Vec<TurnInput>, TurnStartOptions) {
+        let mut pending_mails = self.mailbox_pending_mails.lock().await;
+        self.read_mailbox(&mut pending_mails);
+        let start_options = Self::trigger_turn_options(&pending_mails).unwrap_or_default();
         let mut items = pending_mails
-            .into_iter()
+            .drain(..)
             .map(|mail| TurnInput::InterAgentCommunication(mail.communication))
             .collect();
+        drop(pending_mails); // Fork: release the mailbox before the notification queue lock
         self.fork_take_background_notifications(take_background_notifications, &mut items)
             .await;
         (items, start_options)
@@ -364,16 +384,42 @@ impl InputQueue {
 
     /// Clear any pending waiters and input buffered for the current turn.
     pub(crate) async fn clear_pending(&self, active_turn: &ActiveTurn) {
-        // Fork: the guard ends with this block, so the requeue below may await.
-        let pending_input = {
+        // Pending mail can own extension attachments whose destructors need the lock released.
+        let mut pending_input = {
             let mut turn_state = active_turn.turn_state.lock().await;
             turn_state.clear_pending_waiters();
-            // Pending mail can own extension attachments whose destructors need the lock released.
             std::mem::take(&mut turn_state.pending_input)
         };
+        // A terminal result still in the queue has no writer yet. Keep it available
+        // to the next turn or to the source writer during a graceful drain.
+        let mut rest = Vec::new(); // Fork: the other input, see below
+        let results: Vec<_> = pending_input
+            .items
+            .into_iter()
+            .filter_map(|input| match input {
+                TurnInput::InterAgentCommunication(message) if message.is_terminal_result() => {
+                    Some(message)
+                }
+                input => {
+                    rest.push(input);
+                    None
+                }
+            })
+            .collect();
         // Fork: drops the rest of the input, then requeues its background notifications.
+        pending_input.items = rest;
         self.fork_requeue_background_notifications(pending_input)
             .await;
+        if !results.is_empty() {
+            let mut pending = self.mailbox_pending_mails.lock().await;
+            for communication in results.into_iter().rev() {
+                pending.push_front(PendingMailboxCommunication {
+                    communication,
+                    start_options: TurnStartOptions::default(),
+                    _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
+                });
+            }
+        }
     }
 
     pub(crate) async fn defer_mailbox_delivery_to_next_turn(
@@ -524,7 +570,7 @@ impl InputQueue {
 }
 
 impl TurnInputQueue {
-    fn has_user_input(&self) -> bool {
+    pub(crate) fn has_user_input(&self) -> bool {
         self.items
             .iter()
             .any(|input| matches!(input, TurnInput::UserInput { .. }))
@@ -554,7 +600,7 @@ mod tests {
     use codex_history::CodexHarnessMetadata;
     use codex_protocol::AgentPath;
     use codex_protocol::protocol::InterAgentCommunication;
-    use codex_protocol::user_input::UserInput;
+    use codex_user_input::ResolvedUserInput;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -682,10 +728,7 @@ mod tests {
                 &turn_state,
                 vec![TurnInput::UserInput {
                     metadata: Default::default(),
-                    content: vec![UserInput::Text {
-                        text: "steer".to_string(),
-                        text_elements: Vec::new(),
-                    }],
+                    content: vec![ResolvedUserInput::text("steer".to_string())],
                     client_id: None,
                 }],
             )
@@ -774,10 +817,7 @@ mod tests {
                 &turn_state,
                 vec![TurnInput::UserInput {
                     metadata: Default::default(),
-                    content: vec![UserInput::Text {
-                        text: "already pending".to_string(),
-                        text_elements: Vec::new(),
-                    }],
+                    content: vec![ResolvedUserInput::text("already pending".to_string())],
                     client_id: None,
                 }],
             )

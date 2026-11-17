@@ -6,25 +6,6 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
-    "AgentIsolation": {
-      "description": "Where a MultiAgentV2 child runs relative to its parent's checkout.",
-      "oneOf": [
-        {
-          "description": "The child shares its parent's checkout.",
-          "enum": [
-            "none"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "The child works in its own managed git worktree.",
-          "enum": [
-            "worktree"
-          ],
-          "type": "string"
-        }
-      ]
-    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -46,67 +27,6 @@
             "type": "string"
           },
           "type": "array"
-        }
-      },
-      "type": "object"
-    },
-    "AgentWorktreeBase": {
-      "description": "The commit an isolated child's worktree starts from.",
-      "oneOf": [
-        {
-          "description": "The parent's HEAD plus tracked modifications and untracked, non-ignored files. Those files are written to the repository's object store and become part of the agent branch's history, as with `git stash --include-untracked`; keep secrets in ignored files or use `head`, and do not push `codex/agents/*` branches. It applies only to a child spawned with `isolation: \"worktree\"`, which subagent worktrees, on by default, never pick on their own.",
-          "enum": [
-            "working_tree"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "The parent's HEAD commit.",
-          "enum": [
-            "head"
-          ],
-          "type": "string"
-        }
-      ]
-    },
-    "AgentWorktreeIsolationConfigToml": {
-      "additionalProperties": false,
-      "description": "`[features.agent_worktree_isolation]` settings for isolated MultiAgentV2 children. The feature is on by default except on Windows, where isolated children are not supported; a child works in a worktree only when `spawn_agent` asks for `isolation: \"worktree\"` or `default_isolation` says so. While the feature is enabled, MultiAgentV2 tools use the namespace `agents` unless `features.multi_agent_v2.tool_namespace` is set. The reserved namespace `collaboration` turns the feature off for the session: silently while the feature is on only by default, with a startup warning when a config layer turns it on. Set `[features] agent_worktree_isolation = false` to keep the upstream namespace and tools. Agent worktrees share the managed root with Codex Desktop, whose automatic cleanup removes them like the worktrees of inactive threads once the root holds more than `[desktop] worktree-keep-count`. Codex restores such a worktree before the agent's next turn from what it recorded on the agent's branch at the end of each turn; edits made after the agent's last turn ended survive only in Desktop's own snapshot ref, and ignored files such as build output are lost. Raise `worktree-keep-count` or set `worktree-auto-cleanup-enabled = false` to keep them.",
-      "properties": {
-        "base": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/AgentWorktreeBase"
-            }
-          ],
-          "description": "Commit an isolated child's worktree starts from."
-        },
-        "cleanup": {
-          "description": "Remove forgotten unchanged agent worktrees of the repository when a session starts and when an agent tree stops (default `true`). Changed worktrees and agent branches are never removed.",
-          "type": "boolean"
-        },
-        "cleanup_keep_count": {
-          "description": "Unchanged agent worktrees of a repository kept among the most recently active ones (default 15); older ones beyond the count are removed after an hour without activity.",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "cleanup_max_idle_hours": {
-          "description": "Hours without activity after which an unchanged agent worktree is removed (default 24, at least 1).",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "default_isolation": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/AgentIsolation"
-            }
-          ],
-          "description": "Isolation used when `spawn_agent` omits `isolation`. Role config files may set it."
-        },
-        "enabled": {
-          "type": "boolean"
         }
       },
       "type": "object"
@@ -138,7 +58,7 @@
           "description": "Default reasoning effort for spawned subagents when the spawn call does not select one."
         },
         "enabled": {
-          "description": "Whether multi-agent tools are enabled. Defaults to true. Setting this to false is an absolute runtime gate for all multi-agent tools.",
+          "description": "Whether multi-agent tools are enabled. Defaults to true. An enabled `features.multi_agent_v2` setting takes precedence.",
           "type": "boolean"
         },
         "interrupt_message": {
@@ -689,6 +609,12 @@
       },
       "type": "object"
     },
+    "BuiltinStatusLine": {
+      "enum": [
+        "default"
+      ],
+      "type": "string"
+    },
     "BundledSkillsConfig": {
       "additionalProperties": false,
       "properties": {
@@ -780,6 +706,18 @@
         },
         "enabled": {
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "CodeModeToml": {
+      "additionalProperties": false,
+      "properties": {
+        "heartbeat_interval_s": {
+          "description": "Idle seconds between gRPC stream heartbeats. Zero (the default) disables them.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
         }
       },
       "type": "object"
@@ -885,9 +823,6 @@
             "agent_message_board_mcp": {
               "type": "boolean"
             },
-            "agent_worktree_isolation": {
-              "$ref": "#/definitions/FeatureToml_for_AgentWorktreeIsolationConfigToml"
-            },
             "analytics_plan_history": {
               "type": "boolean"
             },
@@ -961,7 +896,7 @@
             "browser_use_full_cdp_access": {
               "type": "boolean"
             },
-            "builtin_workflows": {
+            "catalog_apps_instructions": {
               "type": "boolean"
             },
             "chronicle": {
@@ -1087,9 +1022,6 @@
             "enable_request_compression": {
               "type": "boolean"
             },
-            "exec_exit_notifications": {
-              "$ref": "#/definitions/FeatureToml_for_ExecExitNotificationsConfigToml"
-            },
             "exec_permission_approvals": {
               "type": "boolean"
             },
@@ -1108,9 +1040,6 @@
             "experimental_windows_sandbox": {
               "type": "boolean"
             },
-            "explorer_profile": {
-              "$ref": "#/definitions/FeatureToml_for_ExplorerProfileConfigToml"
-            },
             "external_agent_memory_import": {
               "type": "boolean"
             },
@@ -1118,6 +1047,9 @@
               "type": "boolean"
             },
             "fast_mode": {
+              "type": "boolean"
+            },
+            "file_backed_tool_audio": {
               "type": "boolean"
             },
             "gateway_setup_wizard": {
@@ -1148,6 +1080,9 @@
               "type": "boolean"
             },
             "guardian_native_multi_agent_history": {
+              "type": "boolean"
+            },
+            "guardian_nested_approval_context": {
               "type": "boolean"
             },
             "guardian_node_repl_transcript_images": {
@@ -1261,6 +1196,9 @@
             "mcp_oauth_refresh_coordination": {
               "type": "boolean"
             },
+            "mcp_shared_repl_cwd": {
+              "type": "boolean"
+            },
             "mcp_tool_list_changed": {
               "type": "boolean"
             },
@@ -1309,10 +1247,10 @@
             "omit_skill_descriptions": {
               "type": "boolean"
             },
-            "output_styles": {
+            "output_token_replay": {
               "type": "boolean"
             },
-            "output_token_replay": {
+            "per_environment_context": {
               "type": "boolean"
             },
             "personality": {
@@ -1387,6 +1325,9 @@
             "responses_websockets_v2": {
               "type": "boolean"
             },
+            "restored_history_prewarm": {
+              "type": "boolean"
+            },
             "retain_client_developer_messages": {
               "type": "boolean"
             },
@@ -1402,8 +1343,8 @@
             "runtime_metrics": {
               "type": "boolean"
             },
-            "scheduled_wakeups": {
-              "$ref": "#/definitions/FeatureToml_for_ScheduledWakeupsConfigToml"
+            "safe_image_decoder": {
+              "type": "boolean"
             },
             "search_tool": {
               "type": "boolean"
@@ -1492,9 +1433,6 @@
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
-            "tool_output_spill": {
-              "$ref": "#/definitions/FeatureToml_for_ToolOutputSpillConfigToml"
-            },
             "tool_registry": {
               "$ref": "#/definitions/ToolRegistryConfigToml"
             },
@@ -1561,6 +1499,9 @@
             "use_xaa": {
               "type": "boolean"
             },
+            "utc_environment_date": {
+              "type": "boolean"
+            },
             "view_image": {
               "type": "boolean"
             },
@@ -1577,9 +1518,6 @@
               "type": "boolean"
             },
             "windows_sandbox_service": {
-              "type": "boolean"
-            },
-            "workflows": {
               "type": "boolean"
             },
             "workspace_dependencies": {
@@ -1862,68 +1800,12 @@
       ],
       "type": "string"
     },
-    "ExecExitNotificationsConfigToml": {
-      "additionalProperties": false,
-      "description": "Fork: settings of background exec notifications (`specs/background-exec-notifications-2026-10-25.md`, UC7).",
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "exec_wait_timeout_ms": {
-          "description": "How long `codex exec` waits for background terminals whose exit or matching output is still owed to the model before it stops them and exits with code 1, in milliseconds. Defaults to 1800000 (30 minutes).",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "output_watch_first_match_ms": {
-          "description": "How long an output watch alone keeps `codex exec`, `wait_agent` and agent residency waiting for its first matching line, such as a server's \"ready\", counted from the end of the turn that started the watch, in milliseconds. Defaults to 300000 (5 minutes).",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "output_watch_quiet_ms": {
-          "description": "How long an output watch alone keeps `codex exec`, `wait_agent` and agent residency waiting after its process last printed a matching line, in milliseconds; `notify_on_exit` waits for the exit instead. Defaults to 60000.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        }
-      },
-      "type": "object"
-    },
     "ExperimentalRequestUserInput": {
       "additionalProperties": false,
       "properties": {
         "enabled": {
           "default": true,
           "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "ExplorerProfileConfigToml": {
-      "additionalProperties": false,
-      "description": "Fork: settings for `explorer` children (read-only, cheaper, capped result).",
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "max_result_tokens": {
-          "description": "Largest explorer final answer, in tokens, delivered to the parent. Defaults to 2000.",
-          "format": "uint",
-          "minimum": 200.0,
-          "type": "integer"
-        },
-        "model": {
-          "description": "Model for explorer children. Defaults to the parent's model.",
-          "type": "string"
-        },
-        "reasoning_effort": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
-            }
-          ],
-          "description": "Reasoning effort for explorer children. Defaults to the cheapest effort, not below `low`, that the selected model supports."
         }
       },
       "type": "object"
@@ -1970,16 +1852,6 @@
         }
       },
       "type": "object"
-    },
-    "FeatureToml_for_AgentWorktreeIsolationConfigToml": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "$ref": "#/definitions/AgentWorktreeIsolationConfigToml"
-        }
-      ]
     },
     "FeatureToml_for_AsyncCompactionConfigToml": {
       "anyOf": [
@@ -2028,26 +1900,6 @@
         },
         {
           "$ref": "#/definitions/CurrentTimeReminderConfigToml"
-        }
-      ]
-    },
-    "FeatureToml_for_ExecExitNotificationsConfigToml": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "$ref": "#/definitions/ExecExitNotificationsConfigToml"
-        }
-      ]
-    },
-    "FeatureToml_for_ExplorerProfileConfigToml": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "$ref": "#/definitions/ExplorerProfileConfigToml"
         }
       ]
     },
@@ -2121,16 +1973,6 @@
         }
       ]
     },
-    "FeatureToml_for_ScheduledWakeupsConfigToml": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "$ref": "#/definitions/ScheduledWakeupsConfigToml"
-        }
-      ]
-    },
     "FeatureToml_for_SleepToolConfigToml": {
       "anyOf": [
         {
@@ -2148,16 +1990,6 @@
         },
         {
           "$ref": "#/definitions/TokenBudgetConfigToml"
-        }
-      ]
-    },
-    "FeatureToml_for_ToolOutputSpillConfigToml": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "$ref": "#/definitions/ToolOutputSpillConfigToml"
         }
       ]
     },
@@ -2491,6 +2323,17 @@
             }
           ],
           "description": "Deprecated and ignored; asynchronous classification always uses conversations."
+        },
+        "async_elastic_budgeting": {
+          "description": "Enable elastic allocation for asynchronous Guardian requests. Defaults to false.",
+          "type": "boolean"
+        },
+        "async_elastic_sections": {
+          "additionalProperties": {
+            "$ref": "#/definitions/GuardianElasticSectionConfigToml"
+          },
+          "description": "Section limits validated when asynchronous elastic budgeting is enabled.",
+          "type": "object"
         },
         "classifier_instructions": {
           "type": "string"
@@ -2949,6 +2792,11 @@
     "MarketplaceConfig": {
       "additionalProperties": false,
       "properties": {
+        "auto_update": {
+          "default": false,
+          "description": "Check for updates to installed Git plugins from this marketplace when plugins are listed.",
+          "type": "boolean"
+        },
         "last_revision": {
           "default": null,
           "description": "Git revision Codex last successfully activated for this marketplace.",
@@ -3308,25 +3156,6 @@
       },
       "type": "object"
     },
-    "ModelInstructionsPlacement": {
-      "description": "Fork: where a standard (non-Lite) Responses request carries the base instructions (`model_instructions_placement`). Responses Lite requests always carry them in `input`.",
-      "oneOf": [
-        {
-          "description": "The first `developer` message of `input`, as upstream sends it.",
-          "enum": [
-            "input"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "The top-level `instructions` field, as Codex sent it before 0.162 (upstream #51156).",
-          "enum": [
-            "instructions"
-          ],
-          "type": "string"
-        }
-      ]
-    },
     "ModelProviderAuthInfo": {
       "additionalProperties": false,
       "description": "Configuration for obtaining a provider bearer token from a command.",
@@ -3570,25 +3399,6 @@
       },
       "type": "object"
     },
-    "MultiAgentMessageDelivery": {
-      "description": "How multi-agent V2 task and message arguments are delivered to child agents.",
-      "oneOf": [
-        {
-          "description": "Keep OpenAI's encrypted collaboration arguments.",
-          "enum": [
-            "encrypted"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Deliver provider-neutral plain text for cross-provider agents.",
-          "enum": [
-            "plaintext"
-          ],
-          "type": "string"
-        }
-      ]
-    },
     "MultiAgentV2ConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -3616,6 +3426,10 @@
         "hide_spawn_agent_metadata": {
           "type": "boolean"
         },
+        "interrupt_at_item_boundary": {
+          "description": "Let a subagent finish its current output item while cancelling tools immediately.",
+          "type": "boolean"
+        },
         "max_concurrent_threads_per_session": {
           "format": "uint",
           "minimum": 1.0,
@@ -3638,14 +3452,6 @@
             }
           ],
           "description": "Use a session-scoped remote board instead of local storage."
-        },
-        "message_delivery": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/MultiAgentMessageDelivery"
-            }
-          ],
-          "description": "Plaintext delivery requires a non-reserved tool namespace such as `agents`."
         },
         "min_wait_timeout_ms": {
           "format": "int64",
@@ -3916,6 +3722,10 @@
         "socks_url": {
           "type": "string"
         },
+        "transparent_tcp": {
+          "description": "Route outbound TCP from managed Linux sandbox commands through the managed SOCKS5 proxy.",
+          "type": "boolean"
+        },
         "unix_sockets": {
           "additionalProperties": {
             "$ref": "#/definitions/NetworkProxyUnixSocketPermissionToml"
@@ -3985,6 +3795,10 @@
         },
         "socks_url": {
           "type": "string"
+        },
+        "transparent_tcp": {
+          "description": "Route outbound TCP from managed Linux sandbox commands through the managed SOCKS5 proxy.",
+          "type": "boolean"
         },
         "unix_sockets": {
           "$ref": "#/definitions/NetworkUnixSocketPermissionsToml"
@@ -4379,31 +4193,6 @@
         },
         "client-private-key": {
           "$ref": "#/definitions/AbsolutePathBuf"
-        }
-      },
-      "type": "object"
-    },
-    "OutputTruncationToml": {
-      "additionalProperties": false,
-      "description": "Limits applied when formatting tool and command output for model and UI consumption.",
-      "properties": {
-        "max_bytes": {
-          "description": "Maximum bytes retained in formatted output.",
-          "format": "uint",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "max_lines": {
-          "description": "Maximum lines retained in formatted output.",
-          "format": "uint",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "mcp_max_lines": {
-          "description": "Overrides max_lines for MCP tool output and entire emitted Code Mode cells.",
-          "format": "uint",
-          "minimum": 0.0,
-          "type": "integer"
         }
       },
       "type": "object"
@@ -4941,7 +4730,7 @@
     },
     "RemoteMessageBoardConfigToml": {
       "additionalProperties": false,
-      "description": "Connection to a board provisioned by the research host.",
+      "description": "Connection settings for a remote message board.",
       "properties": {
         "bearer_token": {
           "description": "Board credential supplied directly by a runtime config override.",
@@ -4958,6 +4747,38 @@
       "required": [
         "url"
       ],
+      "type": "object"
+    },
+    "ResponseProcessMode": {
+      "oneOf": [
+        {
+          "description": "Process items as they arrive. A tool can start before its response is complete.",
+          "enum": [
+            "streaming"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Process buffered items in order after the response completes, synchronous post-hooks finish, and any budget charges are posted.",
+          "enum": [
+            "after_complete_response"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ResponsesToml": {
+      "additionalProperties": false,
+      "properties": {
+        "process_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResponseProcessMode"
+            }
+          ],
+          "description": "When to process response items, including text and tool calls. Defaults to `streaming`."
+        }
+      },
       "type": "object"
     },
     "ResumeCwdMode": {
@@ -5015,7 +4836,14 @@
           "description": "Stop when the shared budget is exhausted. Defaults to true.",
           "type": "boolean"
         },
+        "limit_budget": {
+          "description": "Positive, finite allowance in budget units. Set either limit_tokens or limit_budget. Spending exactly this amount is allowed.",
+          "exclusiveMinimum": 0.0,
+          "format": "double",
+          "type": "number"
+        },
         "limit_tokens": {
+          "description": "Positive whole-token allowance. Set either limit_tokens or limit_budget.",
           "format": "int64",
           "minimum": 1.0,
           "type": "integer"
@@ -5024,6 +4852,10 @@
           "format": "double",
           "minimum": 0.0,
           "type": "number"
+        },
+        "reminder_at_context_start": {
+          "description": "Restate the balance when a thread starts or its context is compacted. Defaults to true. Set false with an empty threshold list for no budget reminders.",
+          "type": "boolean"
         },
         "reminder_at_remaining_tokens": {
           "description": "Remaining weighted-token values that trigger reminders when crossed.",
@@ -5037,6 +4869,25 @@
           "format": "double",
           "minimum": 0.0,
           "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "RolloutTraceToml": {
+      "additionalProperties": false,
+      "description": "Storage budgets for one native rollout trace, shared by the root and its children.",
+      "properties": {
+        "max_bytes": {
+          "description": "Maximum bytes for the manifest, event log, and compressed payload shards. Defaults to 256 MiB.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_payload_bytes": {
+          "description": "Maximum uncompressed bytes retained per new body or separated value. Defaults to 64 MiB.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
         }
       },
       "type": "object"
@@ -5100,46 +4951,6 @@
             "$ref": "#/definitions/AbsolutePathBuf"
           },
           "type": "array"
-        }
-      },
-      "type": "object"
-    },
-    "ScheduledWakeupsConfigToml": {
-      "additionalProperties": false,
-      "description": "Fork: settings of scheduled wakeups and `/loop` (`specs/scheduled-wakeups-2026-11-07.md`, R1.1, R1.5). Wakeups last only while Codex runs.",
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "exec_wait_timeout_ms": {
-          "description": "How long `codex exec` waits for scheduled wakeups before it cancels them and exits with code 1, in milliseconds. Defaults to 3600000 (1 hour); at least 1000.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "max_delay_seconds": {
-          "description": "Longest delay of a wakeup or `/loop` interval, in seconds; longer requests are lowered to it. Defaults to 3600; from `min_delay_seconds` to 86400.",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "max_duration_minutes": {
-          "description": "How long a chain of wakeups since the user's last message, or one `/loop`, may last, in minutes. Defaults to 720; from 1 to 10080.",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "max_wakeups": {
-          "description": "Wakeups the model may run since the user's last message, and iterations of one `/loop`. Defaults to 50; from 1 to 1000.",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "min_delay_seconds": {
-          "description": "Shortest delay of a wakeup or `/loop` interval, in seconds; shorter requests are raised to it. Defaults to 60; from 1 to `max_delay_seconds`.",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
         }
       },
       "type": "object"
@@ -5326,6 +5137,34 @@
         }
       ]
     },
+    "StatusLineProviderId": {
+      "additionalProperties": false,
+      "description": "The configured MCP server and advertised tool name identify a status line provider.",
+      "properties": {
+        "server": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "server",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "StatusLineSelection": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/BuiltinStatusLine"
+        },
+        {
+          "$ref": "#/definitions/StatusLineProviderId"
+        }
+      ],
+      "description": "An explicit default overrides an MCP provider from a lower configuration layer."
+    },
     "ThreadStoreToml": {
       "oneOf": [
         {
@@ -5357,6 +5196,10 @@
           "description": "Developer message sampled before an automatic context-window rollover.",
           "maxLength": 2000,
           "type": "string"
+        },
+        "context_window_as_tool_output": {
+          "description": "Render the context window and its hints as an agent.thread_hint tool output.",
+          "type": "boolean"
         },
         "enabled": {
           "type": "boolean"
@@ -5410,40 +5253,6 @@
           "type": "string"
         }
       ]
-    },
-    "ToolOutputSpillConfigToml": {
-      "additionalProperties": false,
-      "description": "Fork: `[features.tool_output_spill]` settings (`specs/tool-output-spill-2026-11-07.md`, UC6). When a tool result is cut to fit the context, Codex saves its full text to `$CODEX_HOME/tool_outputs/<thread_id>/` and tells the model the path. The files hold the complete tool output, secrets included, readable by the user only (directories `0700`, files `0600`). They are removed with their thread (`thread/delete`) or ephemeral session, and by the limits below; `thread/archive` keeps them.",
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "max_age_days": {
-          "description": "Days after which a saved output is removed, checked when a session starts and at most hourly while Codex saves outputs, with the feature on or off. Defaults to 7, at least 1.",
-          "format": "uint64",
-          "minimum": 1.0,
-          "type": "integer"
-        },
-        "max_file_bytes": {
-          "description": "Largest saved file, in bytes; a larger output keeps its first and last halves. Defaults to 8388608 (8 MiB), at least 65536.",
-          "format": "uint64",
-          "minimum": 65536.0,
-          "type": "integer"
-        },
-        "max_thread_bytes": {
-          "description": "Largest size of one thread's saved outputs, in bytes; the oldest files go first. Defaults to 268435456 (256 MiB), at least `max_file_bytes`.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "max_total_bytes": {
-          "description": "Largest size of the saved outputs of all threads, in bytes, checked when a session starts and at most hourly while Codex saves outputs; the oldest files go first. Defaults to 2147483648 (2 GiB), at least `max_thread_bytes`.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        }
-      },
-      "type": "object"
     },
     "ToolRegistryConfigToml": {
       "additionalProperties": false,
@@ -5721,8 +5530,10 @@
               "history_search_next": null,
               "history_search_previous": null,
               "queue": null,
+              "redo": null,
               "submit": null,
-              "toggle_shortcuts": null
+              "toggle_shortcuts": null,
+              "undo": null
             },
             "editor": {
               "delete_backward": null,
@@ -5745,6 +5556,7 @@
             },
             "global": {
               "change_host": null,
+              "choose_cloud_environment": null,
               "clear_terminal": null,
               "close_sidebar_tab": null,
               "copy": null,
@@ -5798,6 +5610,7 @@
               "half_page_up": null,
               "jump_bottom": null,
               "jump_top": null,
+              "mark_markdown": null,
               "page_down": null,
               "page_up": null,
               "scroll_down": null,
@@ -6028,6 +5841,14 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "status_line_provider": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/StatusLineSelection"
+            }
+          ],
+          "description": "Local status line selection. Set to \"default\" for built-in items or specify an MCP server and tool."
         },
         "status_line_use_colors": {
           "default": true,
@@ -6359,6 +6180,14 @@
           ],
           "description": "Queue the current composer draft while a task is running."
         },
+        "redo": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Redo an undone composer edit."
+        },
         "submit": {
           "allOf": [
             {
@@ -6374,6 +6203,14 @@
             }
           ],
           "description": "Toggle the composer shortcut overlay."
+        },
+        "undo": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Undo the last edit to the composer draft."
         }
       },
       "type": "object"
@@ -6569,6 +6406,14 @@
             }
           ],
           "description": "Change where a new conversation runs."
+        },
+        "choose_cloud_environment": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Choose a saved environment for a new Cloud conversation."
         },
         "clear_terminal": {
           "allOf": [
@@ -6901,8 +6746,10 @@
             "history_search_next": null,
             "history_search_previous": null,
             "queue": null,
+            "redo": null,
             "submit": null,
-            "toggle_shortcuts": null
+            "toggle_shortcuts": null,
+            "undo": null
           }
         },
         "editor": {
@@ -6939,6 +6786,7 @@
           ],
           "default": {
             "change_host": null,
+            "choose_cloud_environment": null,
             "clear_terminal": null,
             "close_sidebar_tab": null,
             "copy": null,
@@ -7006,6 +6854,7 @@
             "half_page_up": null,
             "jump_bottom": null,
             "jump_top": null,
+            "mark_markdown": null,
             "page_down": null,
             "page_up": null,
             "scroll_down": null,
@@ -7266,6 +7115,14 @@
             }
           ],
           "description": "Jump to the beginning."
+        },
+        "mark_markdown": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Mark Markdown structure under the caret in transcript selection mode."
         },
         "page_down": {
           "allOf": [
@@ -8060,159 +7917,6 @@
         }
       ]
     },
-    "WorkflowApprovalToml": {
-      "description": "Approval of a workflow run before it starts.",
-      "oneOf": [
-        {
-          "enum": [
-            "always",
-            "never"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Ask unless the approval policy is `never`.",
-          "enum": [
-            "auto"
-          ],
-          "type": "string"
-        }
-      ]
-    },
-    "WorkflowBudgetModeToml": {
-      "description": "What a workflow run does when its agents spend the token budget.",
-      "oneOf": [
-        {
-          "description": "Calls that have not started resolve to null; running agents finish their turn.",
-          "enum": [
-            "soft"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "As `soft`, and running agents are interrupted once the run spends more than its budget times `budget_hard_overshoot`.",
-          "enum": [
-            "hard"
-          ],
-          "type": "string"
-        }
-      ]
-    },
-    "WorkflowStructuredOutputToml": {
-      "description": "How workflow agents are asked for answers that match a JSON schema.",
-      "oneOf": [
-        {
-          "description": "Native structured output until the provider rejects it, then the schema in the task.",
-          "enum": [
-            "auto"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Native structured output (`text.format` with a JSON schema).",
-          "enum": [
-            "native"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "The schema in the agent's task, for providers without JSON schema output.",
-          "enum": [
-            "prompt"
-          ],
-          "type": "string"
-        }
-      ]
-    },
-    "WorkflowsToml": {
-      "additionalProperties": false,
-      "description": "Fork: limits and defaults of background workflow runs (`features.workflows`).",
-      "properties": {
-        "budget_hard_overshoot": {
-          "description": "In `hard` budget mode, the multiple of the budget at which running agents are interrupted, at most 100; values below 1.0 count as 1.0, larger values are a configuration error. Default: 1.0.",
-          "format": "double",
-          "maximum": 100.0,
-          "type": "number"
-        },
-        "budget_mode": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/WorkflowBudgetModeToml"
-            }
-          ],
-          "description": "What happens when a run spends its token budget. Default: `soft`."
-        },
-        "capacity_wait_ms": {
-          "description": "How long a call waits for agent capacity before resolving to null, in milliseconds. Default: 600000.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "default_budget_tokens": {
-          "description": "Token budget of a run without `budget_tokens`, as non-cached input plus output.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "exec_wait_timeout_ms": {
-          "description": "How long `codex exec` waits for active runs before cancelling them, in milliseconds. Default: 7200000.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "max_active_runs": {
-          "description": "Non-terminal runs allowed per thread. Default: 3.",
-          "format": "uint",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "max_agents_per_run": {
-          "description": "Agents one run may start. Default: 1000.",
-          "format": "uint",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "max_concurrent_agents": {
-          "description": "Agents of one run that work at the same time. Default: min(16, CPUs - 2).",
-          "format": "uint",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "max_heap_bytes": {
-          "description": "V8 heap limit of a run's script cell, in bytes. Default: 268435456.",
-          "format": "uint",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "notification_max_tokens": {
-          "description": "Token limit of the result preview in the completion notification. Default: 2000.",
-          "format": "uint",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "require_approval": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/WorkflowApprovalToml"
-            }
-          ],
-          "description": "Whether the user approves a run before it starts. Default: `auto`."
-        },
-        "structured_output": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/WorkflowStructuredOutputToml"
-            }
-          ],
-          "description": "How agents are asked for answers that match a JSON schema. Default: `auto`."
-        },
-        "ultra_mode": {
-          "description": "Whether reasoning effort `ultra` turns on workflow ultra mode, which tells the model to run a workflow for every substantive task. Approvals, budgets and limits are unchanged. Default: true.",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
     "WorkspaceRootsToml": {
       "type": "object"
     }
@@ -8324,6 +8028,14 @@
       ],
       "description": "Cloud-owned feature settings."
     },
+    "code_mode": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/CodeModeToml"
+        }
+      ],
+      "description": "Code Mode session settings."
+    },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
       "type": "string"
@@ -8403,9 +8115,6 @@
         "agent_message_board_mcp": {
           "type": "boolean"
         },
-        "agent_worktree_isolation": {
-          "$ref": "#/definitions/FeatureToml_for_AgentWorktreeIsolationConfigToml"
-        },
         "analytics_plan_history": {
           "type": "boolean"
         },
@@ -8479,7 +8188,7 @@
         "browser_use_full_cdp_access": {
           "type": "boolean"
         },
-        "builtin_workflows": {
+        "catalog_apps_instructions": {
           "type": "boolean"
         },
         "chronicle": {
@@ -8605,9 +8314,6 @@
         "enable_request_compression": {
           "type": "boolean"
         },
-        "exec_exit_notifications": {
-          "$ref": "#/definitions/FeatureToml_for_ExecExitNotificationsConfigToml"
-        },
         "exec_permission_approvals": {
           "type": "boolean"
         },
@@ -8626,9 +8332,6 @@
         "experimental_windows_sandbox": {
           "type": "boolean"
         },
-        "explorer_profile": {
-          "$ref": "#/definitions/FeatureToml_for_ExplorerProfileConfigToml"
-        },
         "external_agent_memory_import": {
           "type": "boolean"
         },
@@ -8636,6 +8339,9 @@
           "type": "boolean"
         },
         "fast_mode": {
+          "type": "boolean"
+        },
+        "file_backed_tool_audio": {
           "type": "boolean"
         },
         "gateway_setup_wizard": {
@@ -8666,6 +8372,9 @@
           "type": "boolean"
         },
         "guardian_native_multi_agent_history": {
+          "type": "boolean"
+        },
+        "guardian_nested_approval_context": {
           "type": "boolean"
         },
         "guardian_node_repl_transcript_images": {
@@ -8779,6 +8488,9 @@
         "mcp_oauth_refresh_coordination": {
           "type": "boolean"
         },
+        "mcp_shared_repl_cwd": {
+          "type": "boolean"
+        },
         "mcp_tool_list_changed": {
           "type": "boolean"
         },
@@ -8827,10 +8539,10 @@
         "omit_skill_descriptions": {
           "type": "boolean"
         },
-        "output_styles": {
+        "output_token_replay": {
           "type": "boolean"
         },
-        "output_token_replay": {
+        "per_environment_context": {
           "type": "boolean"
         },
         "personality": {
@@ -8905,6 +8617,9 @@
         "responses_websockets_v2": {
           "type": "boolean"
         },
+        "restored_history_prewarm": {
+          "type": "boolean"
+        },
         "retain_client_developer_messages": {
           "type": "boolean"
         },
@@ -8920,8 +8635,8 @@
         "runtime_metrics": {
           "type": "boolean"
         },
-        "scheduled_wakeups": {
-          "$ref": "#/definitions/FeatureToml_for_ScheduledWakeupsConfigToml"
+        "safe_image_decoder": {
+          "type": "boolean"
         },
         "search_tool": {
           "type": "boolean"
@@ -9010,9 +8725,6 @@
         "tool_call_mcp_elicitation": {
           "type": "boolean"
         },
-        "tool_output_spill": {
-          "$ref": "#/definitions/FeatureToml_for_ToolOutputSpillConfigToml"
-        },
         "tool_registry": {
           "$ref": "#/definitions/ToolRegistryConfigToml"
         },
@@ -9079,6 +8791,9 @@
         "use_xaa": {
           "type": "boolean"
         },
+        "utc_environment_date": {
+          "type": "boolean"
+        },
         "view_image": {
           "type": "boolean"
         },
@@ -9095,9 +8810,6 @@
           "type": "boolean"
         },
         "windows_sandbox_service": {
-          "type": "boolean"
-        },
-        "workflows": {
           "type": "boolean"
         },
         "workspace_dependencies": {
@@ -9298,12 +9010,6 @@
       ],
       "description": "Controls whether the auto-compaction limit applies to the full context or only to tokens after the carried prefix in the current compaction window."
     },
-    "model_auto_compact_turn_token_limit": {
-      "description": "Fork: context tokens the auto-compactions of one turn may replace in total; once they did, the turn stops with an error instead of compacting again. Default: the larger of 8000000 and 32 context windows of the model. 0 turns the limit off.",
-      "format": "uint64",
-      "minimum": 0.0,
-      "type": "integer"
-    },
     "model_catalog_json": {
       "allOf": [
         {
@@ -9324,14 +9030,6 @@
         }
       ],
       "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Codex will likely degrade model performance."
-    },
-    "model_instructions_placement": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/ModelInstructionsPlacement"
-        }
-      ],
-      "description": "Fork: where standard Responses requests carry the base instructions: `input` (default, the first developer message) or `instructions` (the top-level field). Responses Lite requests always use `input`."
     },
     "model_post_turn_compact_threshold_percent": {
       "description": "Percentage of the usable context window that triggers compaction after a final response. Existing auto-compaction limits still apply. Omitted or zero disables turn-end compaction; valid values are 0–100.",
@@ -9405,18 +9103,6 @@
         }
       ],
       "description": "OTEL configuration."
-    },
-    "output_style": {
-      "description": "Fork: output style of root threads: how Codex communicates with you. Built-in styles: `default`, `outcome-first`, `explanatory`, `learning`; custom styles are Markdown files with `name` and `description` frontmatter in `$CODEX_HOME/output-styles/` or the `.codex/output-styles/` folder of a trusted project. Takes effect only while `features.output_styles` is enabled.",
-      "type": "string"
-    },
-    "output_truncation": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/OutputTruncationToml"
-        }
-      ],
-      "description": "Limits applied when formatting tool and command output for model and UI consumption."
     },
     "permissions": {
       "allOf": [
@@ -9497,6 +9183,14 @@
       "default": null,
       "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
     },
+    "responses": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ResponsesToml"
+        }
+      ],
+      "description": "Controls how Codex processes model responses."
+    },
     "responses_api_metadata": {
       "additionalProperties": {
         "type": "string"
@@ -9507,6 +9201,14 @@
     "review_model": {
       "description": "Review model override used by the `/review` feature.",
       "type": "string"
+    },
+    "rollout_trace": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RolloutTraceToml"
+        }
+      ],
+      "description": "Capture limits for local rollout traces when recording is enabled."
     },
     "sandbox_mode": {
       "allOf": [
@@ -9620,14 +9322,6 @@
       ],
       "default": null,
       "description": "Windows-specific configuration."
-    },
-    "workflows": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/WorkflowsToml"
-        }
-      ],
-      "description": "Fork: limits of background workflow runs."
     }
   },
   "title": "ConfigToml",
