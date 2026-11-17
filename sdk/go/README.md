@@ -293,11 +293,10 @@ See `examples/codextest` for a complete test, including `InterruptOnCancel`.
 
 ## Server Handlers
 
-Use `ClientConfig.Handlers` to answer app-server requests. Public handler examples cover approval requests, dynamic tools, user input, permissions, ChatGPT token refresh, MCP elicitation, attestation, and `currentTime/read`.
+Use `ClientConfig.Handlers` to answer app-server requests. Public handler examples cover approval requests, dynamic tools, user input, permissions, ChatGPT token refresh, MCP elicitation, and attestation.
 
 <!-- codex-go-sdk-handler-docs:account/chatgptAuthTokens/refresh chatgpt-token-refresh -->
 <!-- codex-go-sdk-handler-docs:attestation/generate attestation-generate -->
-<!-- codex-go-sdk-handler-docs:currentTime/read current-time-read -->
 
 ```go
 handlers := codex.ServerHandlers{
@@ -306,9 +305,6 @@ handlers := codex.ServerHandlers{
     }),
     Attestation: codex.AttestationAttestationGenerateFunc(func(context.Context, protocol.AttestationGenerateParams) (protocol.AttestationGenerateResponse, error) {
         return protocol.AttestationGenerateResponse{}, nil
-    }),
-    CurrentTime: codex.CurrentTimeCurrentTimeReadFunc(func(context.Context, protocol.CurrentTimeReadParams) (protocol.CurrentTimeReadResponse, error) {
-        return protocol.CurrentTimeReadResponse{}, nil
     }),
 }
 client, err := codex.NewClient(ctx, codex.ClientConfig{

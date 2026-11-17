@@ -390,8 +390,8 @@ func TestGenerateWritesProtocol(t *testing.T) {
 	serverRequests := readGeneratedFile(t, out, "server_request_metadata.go")
 	for _, required := range []string{
 		"type ServerRequestMetadata struct",
-		"\"currentTime/read\"",
-		"Experimental: true",
+		"\"attestation/generate\"",
+		"Experimental: false",
 	} {
 		if !strings.Contains(serverRequests, required) {
 			t.Fatalf("server_request_metadata.go missing %q", required)
@@ -399,8 +399,8 @@ func TestGenerateWritesProtocol(t *testing.T) {
 	}
 
 	handlers := readGeneratedFile(t, rootOut, "handlers_generated.go")
-	if !strings.Contains(handlers, "CurrentTime") {
-		t.Fatal("handlers_generated.go missing current time handler metadata")
+	if !strings.Contains(handlers, "HandleAttestationGenerate") {
+		t.Fatal("handlers_generated.go missing attestation handler metadata")
 	}
 	for _, required := range []string{
 		"type generatedServerHandlerMetadataRow struct",
@@ -445,7 +445,7 @@ func TestStableModeRejectsExperimentalMethodsAndFields(t *testing.T) {
 	mutated = *manifest
 	mutated.Stable.ServerRequests = append(mutated.Stable.ServerRequests, ServerRequestEntry{
 		Direction:     "serverToClient",
-		Method:        "currentTime/read",
+		Method:        "synthetic/experimentalServerRequest",
 		SDKVisibility: "public",
 		Experimental:  []byte(`{"reason":"synthetic"}`),
 	})

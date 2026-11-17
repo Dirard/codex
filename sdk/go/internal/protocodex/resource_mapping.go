@@ -11,5 +11,4 @@ var serverHandlerMappings = []ServerHandlerMapping{
 	{Method: "item/permissions/requestApproval", HandlerOwner: "ServerHandlers.Permissions", Visibility: "sdk-public", Capability: "permission-approval"},
 	{Method: "item/tool/call", HandlerOwner: "ServerHandlers.DynamicTools", Visibility: "sdk-public", Capability: "dynamic-tool-call"},
 	{Method: "mcpServer/elicitation/request", HandlerOwner: "ServerHandlers.MCPElicitation", Visibility: "sdk-public", Capability: "mcp-elicitation"},
-	{Method: "currentTime/read", HandlerOwner: "ServerHandlers.CurrentTime", Visibility: "experimental-public", Capability: "current-time-read"},
 }

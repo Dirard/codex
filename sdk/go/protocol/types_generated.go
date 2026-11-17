@@ -1883,6 +1883,20 @@ func (v ClientRequest) ThreadTimelineListParams() (ThreadTimelineListParams, boo
 	return params, true, nil
 }
 
+func (v ClientRequest) ThreadRealtimeListParams() (ThreadRealtimeListParams, bool, error) {
+	if v.Method != "thread/realtime/list" {
+		return ThreadRealtimeListParams{}, false, nil
+	}
+	var params ThreadRealtimeListParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
 func (v ClientRequest) ThreadRealtimeListVoicesParams() (ThreadRealtimeListVoicesParams, bool, error) {
 	if v.Method != "thread/realtime/listVoices" {
 		return ThreadRealtimeListVoicesParams{}, false, nil
@@ -1972,6 +1986,20 @@ func (v ClientRequest) ModelProviderConfigWriteParams() (ModelProviderConfigWrit
 		return ModelProviderConfigWriteParams{}, false, nil
 	}
 	var params ModelProviderConfigWriteParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) ModelProviderDefaultSetParams() (ModelProviderDefaultSetParams, bool, error) {
+	if v.Method != "modelProvider/default/set" {
+		return ModelProviderDefaultSetParams{}, false, nil
+	}
+	var params ModelProviderDefaultSetParams
 	if len(bytes.TrimSpace(v.Params)) == 0 {
 		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
 	}
@@ -2935,46 +2963,6 @@ func (v CommandExecutionRequestApprovalResponse) MarshalJSON() ([]byte, error) {
 func (v *CommandExecutionRequestApprovalResponse) UnmarshalJSON(data []byte) error {
 	type wire CommandExecutionRequestApprovalResponse
 	return decodeObject(data, &commandExecutionRequestApprovalResponseSpec, (*wire)(v))
-}
-
-type CurrentTimeReadParams struct {
-	ThreadID string `json:"threadId"`
-}
-
-var currentTimeReadParamsSpec = objectSpec{
-	fields: []objectField{
-		{name: "threadId", flags: fieldRequired | fieldRejectNull},
-	},
-}
-
-func (v CurrentTimeReadParams) MarshalJSON() ([]byte, error) {
-	type wire CurrentTimeReadParams
-	return json.Marshal(wire(v))
-}
-
-func (v *CurrentTimeReadParams) UnmarshalJSON(data []byte) error {
-	type wire CurrentTimeReadParams
-	return decodeObject(data, &currentTimeReadParamsSpec, (*wire)(v))
-}
-
-type CurrentTimeReadResponse struct {
-	CurrentTimeAt int64 `json:"currentTimeAt"`
-}
-
-var currentTimeReadResponseSpec = objectSpec{
-	fields: []objectField{
-		{name: "currentTimeAt", flags: fieldRequired | fieldRejectNull},
-	},
-}
-
-func (v CurrentTimeReadResponse) MarshalJSON() ([]byte, error) {
-	type wire CurrentTimeReadResponse
-	return json.Marshal(wire(v))
-}
-
-func (v *CurrentTimeReadResponse) UnmarshalJSON(data []byte) error {
-	type wire CurrentTimeReadResponse
-	return decodeObject(data, &currentTimeReadResponseSpec, (*wire)(v))
 }
 
 type DynamicToolCallParams struct {
@@ -4623,6 +4611,7 @@ type McpServerElicitationRequestParams struct {
 	Challenge       OptionalNonNull[string]    `json:"challenge,omitzero"`
 	Description     OptionalNonNull[string]    `json:"description,omitzero"`
 	ElicitationID   OptionalNonNull[string]    `json:"elicitationId,omitzero"`
+	EnvironmentID   Optional[string]           `json:"environmentId,omitzero"`
 	Message         OptionalNonNull[string]    `json:"message,omitzero"`
 	Mode            OptionalNonNull[string]    `json:"mode,omitzero"`
 	RequestedSchema json.RawMessage            `json:"requestedSchema,omitempty"`
@@ -4641,6 +4630,7 @@ var mcpServerElicitationRequestParamsSpec = objectSpec{
 		{name: "challenge", flags: fieldNonNullOptional},
 		{name: "description", flags: fieldNonNullOptional},
 		{name: "elicitationId", flags: fieldNonNullOptional},
+		{name: "environmentId"},
 		{name: "message", flags: fieldNonNullOptional},
 		{name: "mode", flags: fieldNonNullOptional},
 		{name: "requestedSchema"},
@@ -4668,6 +4658,9 @@ func (v McpServerElicitationRequestParams) MarshalJSON() ([]byte, error) {
 	}
 	if v.ElicitationID.IsSet() {
 		out["elicitationId"] = v.ElicitationID
+	}
+	if v.EnvironmentID.IsSet() {
+		out["environmentId"] = v.EnvironmentID
 	}
 	if v.Message.IsSet() {
 		out["message"] = v.Message
@@ -6708,20 +6701,6 @@ func (v ServerRequest) AttestationGenerateParams() (AttestationGenerateParams, b
 		return AttestationGenerateParams{}, false, nil
 	}
 	var params AttestationGenerateParams
-	if len(bytes.TrimSpace(v.Params)) == 0 {
-		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
-	}
-	if err := json.Unmarshal(v.Params, &params); err != nil {
-		return params, true, err
-	}
-	return params, true, nil
-}
-
-func (v ServerRequest) CurrentTimeReadParams() (CurrentTimeReadParams, bool, error) {
-	if v.Method != "currentTime/read" {
-		return CurrentTimeReadParams{}, false, nil
-	}
-	var params CurrentTimeReadParams
 	if len(bytes.TrimSpace(v.Params)) == 0 {
 		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
 	}
@@ -15533,17 +15512,19 @@ func (v *ItemStartedNotification) UnmarshalJSON(data []byte) error {
 type LegacyAppPathString string
 
 type ListMcpServerStatusParams struct {
-	Cursor     Optional[string]                `json:"cursor,omitzero"`
-	Detail     Optional[McpServerStatusDetail] `json:"detail,omitzero"`
-	Limit      Optional[uint32]                `json:"limit,omitzero"`
-	ServerName Optional[string]                `json:"serverName,omitzero"`
-	ThreadID   Optional[string]                `json:"threadId,omitzero"`
+	Cursor        Optional[string]                `json:"cursor,omitzero"`
+	Detail        Optional[McpServerStatusDetail] `json:"detail,omitzero"`
+	EnvironmentID Optional[string]                `json:"environmentId,omitzero"`
+	Limit         Optional[uint32]                `json:"limit,omitzero"`
+	ServerName    Optional[string]                `json:"serverName,omitzero"`
+	ThreadID      Optional[string]                `json:"threadId,omitzero"`
 }
 
 var listMcpServerStatusParamsSpec = objectSpec{
 	fields: []objectField{
 		{name: "cursor"},
 		{name: "detail"},
+		{name: "environmentId"},
 		{name: "limit"},
 		{name: "serverName"},
 		{name: "threadId"},
@@ -16259,19 +16240,21 @@ const (
 )
 
 type McpResourceReadParams struct {
-	Meta         Optional[map[string]json.RawMessage] `json:"_meta,omitzero"`
-	ConnectorID  Optional[string]                     `json:"connectorId,omitzero"`
-	OriginCallID Optional[string]                     `json:"originCallId,omitzero"`
-	Server       string                               `json:"server"`
-	Target       Optional[McpResourceReadTarget]      `json:"target,omitzero"`
-	ThreadID     Optional[string]                     `json:"threadId,omitzero"`
-	Uri          string                               `json:"uri"`
+	Meta          Optional[map[string]json.RawMessage] `json:"_meta,omitzero"`
+	ConnectorID   Optional[string]                     `json:"connectorId,omitzero"`
+	EnvironmentID Optional[string]                     `json:"environmentId,omitzero"`
+	OriginCallID  Optional[string]                     `json:"originCallId,omitzero"`
+	Server        string                               `json:"server"`
+	Target        Optional[McpResourceReadTarget]      `json:"target,omitzero"`
+	ThreadID      Optional[string]                     `json:"threadId,omitzero"`
+	Uri           string                               `json:"uri"`
 }
 
 var mcpResourceReadParamsSpec = objectSpec{
 	fields: []objectField{
 		{name: "_meta"},
 		{name: "connectorId"},
+		{name: "environmentId"},
 		{name: "originCallId"},
 		{name: "server", flags: fieldRequired | fieldRejectNull},
 		{name: "target"},
@@ -16572,6 +16555,7 @@ func (v *McpServerOauthLoginCompletedNotification) UnmarshalJSON(data []byte) er
 
 type McpServerOauthLoginParams struct {
 	ClientRegistration Optional[McpServerOauthClientRegistration] `json:"clientRegistration,omitzero"`
+	EnvironmentID      Optional[string]                           `json:"environmentId,omitzero"`
 	Name               string                                     `json:"name"`
 	Scopes             Optional[[]string]                         `json:"scopes,omitzero"`
 	ThreadID           Optional[string]                           `json:"threadId,omitzero"`
@@ -16581,6 +16565,7 @@ type McpServerOauthLoginParams struct {
 var mcpServerOauthLoginParamsSpec = objectSpec{
 	fields: []objectField{
 		{name: "clientRegistration"},
+		{name: "environmentId"},
 		{name: "name", flags: fieldRequired | fieldRejectNull},
 		{name: "scopes"},
 		{name: "threadId"},
@@ -16661,6 +16646,7 @@ const (
 
 type McpServerStatus struct {
 	AuthStatus         McpAuthStatus                       `json:"authStatus"`
+	EnvironmentID      Optional[string]                    `json:"environmentId,omitzero"`
 	HttpOrigin         Optional[string]                    `json:"httpOrigin,omitzero"`
 	Name               string                              `json:"name"`
 	PluginID           Optional[string]                    `json:"pluginId,omitzero"`
@@ -16677,6 +16663,7 @@ type McpServerStatus struct {
 var mcpServerStatusSpec = objectSpec{
 	fields: []objectField{
 		{name: "authStatus", flags: fieldRequired | fieldRejectNull},
+		{name: "environmentId"},
 		{name: "httpOrigin"},
 		{name: "name", flags: fieldRequired | fieldRejectNull},
 		{name: "pluginId"},
@@ -16709,6 +16696,7 @@ const (
 )
 
 type McpServerStatusUpdatedNotification struct {
+	EnvironmentID Optional[string]                        `json:"environmentId,omitzero"`
 	Error         Optional[string]                        `json:"error,omitzero"`
 	FailureReason Optional[McpServerStartupFailureReason] `json:"failureReason,omitzero"`
 	Name          string                                  `json:"name"`
@@ -16718,6 +16706,7 @@ type McpServerStatusUpdatedNotification struct {
 
 var mcpServerStatusUpdatedNotificationSpec = objectSpec{
 	fields: []objectField{
+		{name: "environmentId"},
 		{name: "error"},
 		{name: "failureReason"},
 		{name: "name", flags: fieldRequired | fieldRejectNull},
@@ -16737,17 +16726,19 @@ func (v *McpServerStatusUpdatedNotification) UnmarshalJSON(data []byte) error {
 }
 
 type McpServerToolCallParams struct {
-	Meta      json.RawMessage `json:"_meta,omitempty"`
-	Arguments json.RawMessage `json:"arguments,omitempty"`
-	Server    string          `json:"server"`
-	ThreadID  string          `json:"threadId"`
-	Tool      string          `json:"tool"`
+	Meta          json.RawMessage  `json:"_meta,omitempty"`
+	Arguments     json.RawMessage  `json:"arguments,omitempty"`
+	EnvironmentID Optional[string] `json:"environmentId,omitzero"`
+	Server        string           `json:"server"`
+	ThreadID      string           `json:"threadId"`
+	Tool          string           `json:"tool"`
 }
 
 var mcpServerToolCallParamsSpec = objectSpec{
 	fields: []objectField{
 		{name: "_meta"},
 		{name: "arguments"},
+		{name: "environmentId"},
 		{name: "server", flags: fieldRequired | fieldRejectNull},
 		{name: "threadId", flags: fieldRequired | fieldRejectNull},
 		{name: "tool", flags: fieldRequired | fieldRejectNull},
@@ -17383,6 +17374,26 @@ func (v ModelProviderConfigWriteResponse) MarshalJSON() ([]byte, error) {
 func (v *ModelProviderConfigWriteResponse) UnmarshalJSON(data []byte) error {
 	type wire ModelProviderConfigWriteResponse
 	return decodeObject(data, &modelProviderConfigWriteResponseSpec, (*wire)(v))
+}
+
+type ModelProviderDefaultSetParams struct {
+	ProviderID string `json:"providerId"`
+}
+
+var modelProviderDefaultSetParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "providerId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ModelProviderDefaultSetParams) MarshalJSON() ([]byte, error) {
+	type wire ModelProviderDefaultSetParams
+	return json.Marshal(wire(v))
+}
+
+func (v *ModelProviderDefaultSetParams) UnmarshalJSON(data []byte) error {
+	type wire ModelProviderDefaultSetParams
+	return decodeObject(data, &modelProviderDefaultSetParamsSpec, (*wire)(v))
 }
 
 type ModelProviderError struct {
@@ -20017,7 +20028,6 @@ type Project struct {
 	ID        string            `json:"id"`
 	Metadata  map[string]string `json:"metadata"`
 	Name      string            `json:"name"`
-	Position  int64             `json:"position"`
 	RecencyAt Optional[int64]   `json:"recencyAt,omitzero"`
 	Roots     []ProjectRoot     `json:"roots"`
 	UpdatedAt int64             `json:"updatedAt"`
@@ -20029,7 +20039,6 @@ var projectSpec = objectSpec{
 		{name: "id", flags: fieldRequired | fieldRejectNull},
 		{name: "metadata", flags: fieldRequired | fieldRejectNull},
 		{name: "name", flags: fieldRequired | fieldRejectNull},
-		{name: "position", flags: fieldRequired | fieldRejectNull},
 		{name: "recencyAt"},
 		{name: "roots", flags: fieldRequired | fieldRejectNull},
 		{name: "updatedAt", flags: fieldRequired | fieldRejectNull},
@@ -25092,6 +25101,7 @@ type ThreadItem struct {
 	Cwd                   OptionalNonNull[LegacyAppPathString]         `json:"cwd,omitzero"`
 	Delivery              Optional[AgentMessageDelivery]               `json:"delivery,omitzero"`
 	DurationMs            json.RawMessage                              `json:"durationMs,omitempty"`
+	EnvironmentID         Optional[string]                             `json:"environmentId,omitzero"`
 	Error                 Optional[McpToolCallError]                   `json:"error,omitzero"`
 	ExitCode              Optional[int32]                              `json:"exitCode,omitzero"`
 	Failure               Optional[ImageGenerationFailure]             `json:"failure,omitzero"`
@@ -25160,6 +25170,7 @@ var threadItemSpec = objectSpec{
 		{name: "cwd", flags: fieldNonNullOptional},
 		{name: "delivery"},
 		{name: "durationMs"},
+		{name: "environmentId"},
 		{name: "error"},
 		{name: "exitCode"},
 		{name: "failure"},
@@ -25207,7 +25218,7 @@ var threadItemSpec = objectSpec{
 		{name: "transparentBackground"},
 		{name: "type", flags: fieldRequired | fieldRejectNull},
 	},
-	tag:  62,
+	tag:  63,
 	tags: []string{"userMessage", "hookPrompt", "agentMessage", "functionCallOutput", "plan", "reasoning", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "subAgentActivity", "webSearch", "imageView", "sleep", "imageGeneration", "workflow", "enteredReviewMode", "exitedReviewMode", "contextCompaction"},
 }
 
@@ -26099,6 +26110,7 @@ type ThreadListParams struct {
 	Cwd                    Optional[ThreadListCwdFilter] `json:"cwd,omitzero"`
 	ExcludedThreadIDs      Optional[[]string]            `json:"excludedThreadIds,omitzero"`
 	IncludeAttachedThreads OptionalNonNull[bool]         `json:"includeAttachedThreads,omitzero"`
+	IncludedThreadIDs      Optional[[]string]            `json:"includedThreadIds,omitzero"`
 	Limit                  Optional[uint32]              `json:"limit,omitzero"`
 	ModelProviders         Optional[[]string]            `json:"modelProviders,omitzero"`
 	Originators            Optional[[]string]            `json:"originators,omitzero"`
@@ -26122,6 +26134,7 @@ var threadListParamsSpec = objectSpec{
 		{name: "cwd"},
 		{name: "excludedThreadIds"},
 		{name: "includeAttachedThreads", flags: fieldNonNullOptional},
+		{name: "includedThreadIds"},
 		{name: "limit"},
 		{name: "modelProviders"},
 		{name: "originators"},
@@ -27564,6 +27577,46 @@ func (v *ThreadRealtimeClosedNotification) UnmarshalJSON(data []byte) error {
 	return decodeObject(data, &threadRealtimeClosedNotificationSpec, (*wire)(v))
 }
 
+type ThreadRealtimeCoverage string
+
+const (
+	ThreadRealtimeCoverageUnsupported ThreadRealtimeCoverage = "unsupported"
+	ThreadRealtimeCoveragePending     ThreadRealtimeCoverage = "pending"
+	ThreadRealtimeCoverageReady       ThreadRealtimeCoverage = "ready"
+)
+
+type ThreadRealtimeEntry struct {
+	Item     ThreadRealtimeItem `json:"item"`
+	Position uint64             `json:"position"`
+}
+
+var threadRealtimeEntrySpec = objectSpec{
+	fields: []objectField{
+		{name: "item", flags: fieldRequired | fieldRejectNull},
+		{name: "position", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadRealtimeEntry) MarshalJSON() ([]byte, error) {
+	type wire ThreadRealtimeEntry
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadRealtimeEntry) UnmarshalJSON(data []byte) error {
+	type wire ThreadRealtimeEntry
+	var s objectScan
+	if _, err := s.begin(data, &threadRealtimeEntrySpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if v.Position < 0 {
+		return DecodeError{Field: "position", Reason: "below minimum 0"}
+	}
+	return nil
+}
+
 type ThreadRealtimeErrorNotification struct {
 	Message  string `json:"message"`
 	ThreadID string `json:"threadId"`
@@ -27585,6 +27638,33 @@ func (v *ThreadRealtimeErrorNotification) UnmarshalJSON(data []byte) error {
 	type wire ThreadRealtimeErrorNotification
 	return decodeObject(data, &threadRealtimeErrorNotificationSpec, (*wire)(v))
 }
+
+type ThreadRealtimeFrameChannels struct {
+	VoiceTranscript ThreadRealtimeVoiceTranscript `json:"voice_transcript"`
+}
+
+var threadRealtimeFrameChannelsSpec = objectSpec{
+	fields: []objectField{
+		{name: "voice_transcript", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadRealtimeFrameChannels) MarshalJSON() ([]byte, error) {
+	type wire ThreadRealtimeFrameChannels
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadRealtimeFrameChannels) UnmarshalJSON(data []byte) error {
+	type wire ThreadRealtimeFrameChannels
+	return decodeObject(data, &threadRealtimeFrameChannelsSpec, (*wire)(v))
+}
+
+type ThreadRealtimeHandoffMode string
+
+const (
+	ThreadRealtimeHandoffModeStart ThreadRealtimeHandoffMode = "start"
+	ThreadRealtimeHandoffModeSteer ThreadRealtimeHandoffMode = "steer"
+)
 
 type ThreadRealtimeInitialItem struct {
 	Role ConversationTextRole `json:"role"`
@@ -27609,12 +27689,19 @@ func (v *ThreadRealtimeInitialItem) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadRealtimeItem struct {
+	Channels          OptionalNonNull[ThreadRealtimeFrameChannels]       `json:"channels,omitzero"`
+	HandoffID         OptionalNonNull[string]                            `json:"handoff_id,omitzero"`
 	ID                string                                             `json:"id"`
+	Input             OptionalNonNull[string]                            `json:"input,omitzero"`
+	InputItemID       OptionalNonNull[string]                            `json:"input_item_id,omitzero"`
 	ItemID            OptionalNonNull[string]                            `json:"item_id,omitzero"`
+	Mode              OptionalNonNull[ThreadRealtimeHandoffMode]         `json:"mode,omitzero"`
+	ObservedAtMs      Optional[int64]                                    `json:"observedAtMs,omitzero"`
 	Outcome           OptionalNonNull[ThreadRealtimeSessionOutcome]      `json:"outcome,omitzero"`
 	Presentation      OptionalNonNull[ThreadRealtimeBemItemPresentation] `json:"presentation,omitzero"`
 	RealtimeSessionID string                                             `json:"realtimeSessionId"`
 	Role              OptionalNonNull[ThreadRealtimeTranscriptRole]      `json:"role,omitzero"`
+	SourceEventIDs    OptionalNonNull[[]string]                          `json:"source_event_ids,omitzero"`
 	Text              OptionalNonNull[string]                            `json:"text,omitzero"`
 	TurnID            OptionalNonNull[string]                            `json:"turn_id,omitzero"`
 	TypeValue         string                                             `json:"type"`
@@ -27623,23 +27710,34 @@ type ThreadRealtimeItem struct {
 
 var threadRealtimeItemSpec = objectSpec{
 	fields: []objectField{
+		{name: "channels", flags: fieldNonNullOptional},
+		{name: "handoff_id", flags: fieldNonNullOptional},
 		{name: "id", flags: fieldRequired | fieldRejectNull},
+		{name: "input", flags: fieldNonNullOptional},
+		{name: "input_item_id", flags: fieldNonNullOptional},
 		{name: "item_id", flags: fieldNonNullOptional},
+		{name: "mode", flags: fieldNonNullOptional},
+		{name: "observedAtMs"},
 		{name: "outcome", flags: fieldNonNullOptional},
 		{name: "presentation", flags: fieldNonNullOptional},
 		{name: "realtimeSessionId", flags: fieldRequired | fieldRejectNull},
 		{name: "role", flags: fieldNonNullOptional},
+		{name: "source_event_ids", flags: fieldNonNullOptional},
 		{name: "text", flags: fieldNonNullOptional},
 		{name: "turn_id", flags: fieldNonNullOptional},
 		{name: "type", flags: fieldRequired | fieldRejectNull},
 	},
-	tag:  8,
-	tags: []string{"realtimeSessionStarted", "transcriptSegment", "bemItemPromoted", "realtimeSessionClosed"},
+	tag:  15,
+	tags: []string{"realtimeSessionStarted", "frame", "transcriptSegment", "bemItemPromoted", "realtimeSessionClosed", "turnInputAccepted", "sessionEndInputSaved"},
 }
 
 func (v ThreadRealtimeItem) MarshalJSON() ([]byte, error) {
 	switch v.TypeValue {
 	case "realtimeSessionStarted":
+	case "frame":
+		if !v.Channels.IsSet() {
+			return nil, DecodeError{Field: "channels", Reason: "missing required field for type frame"}
+		}
 	case "transcriptSegment":
 		if !v.Role.IsSet() {
 			return nil, DecodeError{Field: "role", Reason: "missing required field for type transcriptSegment"}
@@ -27660,6 +27758,35 @@ func (v ThreadRealtimeItem) MarshalJSON() ([]byte, error) {
 	case "realtimeSessionClosed":
 		if !v.Outcome.IsSet() {
 			return nil, DecodeError{Field: "outcome", Reason: "missing required field for type realtimeSessionClosed"}
+		}
+	case "turnInputAccepted":
+		if !v.HandoffID.IsSet() {
+			return nil, DecodeError{Field: "handoff_id", Reason: "missing required field for type turnInputAccepted"}
+		}
+		if !v.Input.IsSet() {
+			return nil, DecodeError{Field: "input", Reason: "missing required field for type turnInputAccepted"}
+		}
+		if !v.InputItemID.IsSet() {
+			return nil, DecodeError{Field: "input_item_id", Reason: "missing required field for type turnInputAccepted"}
+		}
+		if !v.Mode.IsSet() {
+			return nil, DecodeError{Field: "mode", Reason: "missing required field for type turnInputAccepted"}
+		}
+		if !v.SourceEventIDs.IsSet() {
+			return nil, DecodeError{Field: "source_event_ids", Reason: "missing required field for type turnInputAccepted"}
+		}
+		if !v.TurnID.IsSet() {
+			return nil, DecodeError{Field: "turn_id", Reason: "missing required field for type turnInputAccepted"}
+		}
+	case "sessionEndInputSaved":
+		if !v.Input.IsSet() {
+			return nil, DecodeError{Field: "input", Reason: "missing required field for type sessionEndInputSaved"}
+		}
+		if !v.InputItemID.IsSet() {
+			return nil, DecodeError{Field: "input_item_id", Reason: "missing required field for type sessionEndInputSaved"}
+		}
+		if !v.SourceEventIDs.IsSet() {
+			return nil, DecodeError{Field: "source_event_ids", Reason: "missing required field for type sessionEndInputSaved"}
 		}
 	default:
 		if len(v.RawJSON) > 0 {
@@ -27689,6 +27816,13 @@ func (v *ThreadRealtimeItem) UnmarshalJSON(data []byte) error {
 	v.RawJSON = nil
 	switch v.TypeValue {
 	case "realtimeSessionStarted":
+	case "frame":
+		if !s.has("channels") {
+			return DecodeError{Field: "channels", Reason: "missing required field for type frame"}
+		}
+		if s.isNull("channels") {
+			return DecodeError{Field: "channels", Reason: "cannot be null"}
+		}
 	case "transcriptSegment":
 		if !s.has("role") {
 			return DecodeError{Field: "role", Reason: "missing required field for type transcriptSegment"}
@@ -27727,6 +27861,62 @@ func (v *ThreadRealtimeItem) UnmarshalJSON(data []byte) error {
 		}
 		if s.isNull("outcome") {
 			return DecodeError{Field: "outcome", Reason: "cannot be null"}
+		}
+	case "turnInputAccepted":
+		if !s.has("handoff_id") {
+			return DecodeError{Field: "handoff_id", Reason: "missing required field for type turnInputAccepted"}
+		}
+		if s.isNull("handoff_id") {
+			return DecodeError{Field: "handoff_id", Reason: "cannot be null"}
+		}
+		if !s.has("input") {
+			return DecodeError{Field: "input", Reason: "missing required field for type turnInputAccepted"}
+		}
+		if s.isNull("input") {
+			return DecodeError{Field: "input", Reason: "cannot be null"}
+		}
+		if !s.has("input_item_id") {
+			return DecodeError{Field: "input_item_id", Reason: "missing required field for type turnInputAccepted"}
+		}
+		if s.isNull("input_item_id") {
+			return DecodeError{Field: "input_item_id", Reason: "cannot be null"}
+		}
+		if !s.has("mode") {
+			return DecodeError{Field: "mode", Reason: "missing required field for type turnInputAccepted"}
+		}
+		if s.isNull("mode") {
+			return DecodeError{Field: "mode", Reason: "cannot be null"}
+		}
+		if !s.has("source_event_ids") {
+			return DecodeError{Field: "source_event_ids", Reason: "missing required field for type turnInputAccepted"}
+		}
+		if s.isNull("source_event_ids") {
+			return DecodeError{Field: "source_event_ids", Reason: "cannot be null"}
+		}
+		if !s.has("turn_id") {
+			return DecodeError{Field: "turn_id", Reason: "missing required field for type turnInputAccepted"}
+		}
+		if s.isNull("turn_id") {
+			return DecodeError{Field: "turn_id", Reason: "cannot be null"}
+		}
+	case "sessionEndInputSaved":
+		if !s.has("input") {
+			return DecodeError{Field: "input", Reason: "missing required field for type sessionEndInputSaved"}
+		}
+		if s.isNull("input") {
+			return DecodeError{Field: "input", Reason: "cannot be null"}
+		}
+		if !s.has("input_item_id") {
+			return DecodeError{Field: "input_item_id", Reason: "missing required field for type sessionEndInputSaved"}
+		}
+		if s.isNull("input_item_id") {
+			return DecodeError{Field: "input_item_id", Reason: "cannot be null"}
+		}
+		if !s.has("source_event_ids") {
+			return DecodeError{Field: "source_event_ids", Reason: "missing required field for type sessionEndInputSaved"}
+		}
+		if s.isNull("source_event_ids") {
+			return DecodeError{Field: "source_event_ids", Reason: "cannot be null"}
 		}
 	default:
 		v.RawJSON = append(v.RawJSON[:0], data...)
@@ -27824,6 +28014,114 @@ func (v *ThreadRealtimeItemTranscriptDeltaNotification) UnmarshalJSON(data []byt
 	return decodeObject(data, &threadRealtimeItemTranscriptDeltaNotificationSpec, (*wire)(v))
 }
 
+type ThreadRealtimeListParams struct {
+	AfterPosition           Optional[uint64]              `json:"afterPosition,omitzero"`
+	Cursor                  Optional[string]              `json:"cursor,omitzero"`
+	EventID                 Optional[string]              `json:"eventId,omitzero"`
+	FromObservedAtMs        Optional[int64]               `json:"fromObservedAtMs,omitzero"`
+	Limit                   Optional[uint32]              `json:"limit,omitzero"`
+	Order                   Optional[ThreadRealtimeOrder] `json:"order,omitzero"`
+	RequiredThroughPosition Optional[uint64]              `json:"requiredThroughPosition,omitzero"`
+	SessionID               Optional[string]              `json:"sessionId,omitzero"`
+	SnapshotEnd             Optional[uint64]              `json:"snapshotEnd,omitzero"`
+	ThreadID                string                        `json:"threadId"`
+	ToObservedAtMs          Optional[int64]               `json:"toObservedAtMs,omitzero"`
+}
+
+var threadRealtimeListParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "afterPosition"},
+		{name: "cursor"},
+		{name: "eventId"},
+		{name: "fromObservedAtMs"},
+		{name: "limit"},
+		{name: "order"},
+		{name: "requiredThroughPosition"},
+		{name: "sessionId"},
+		{name: "snapshotEnd"},
+		{name: "threadId", flags: fieldRequired | fieldRejectNull},
+		{name: "toObservedAtMs"},
+	},
+}
+
+func (v ThreadRealtimeListParams) MarshalJSON() ([]byte, error) {
+	type wire ThreadRealtimeListParams
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadRealtimeListParams) UnmarshalJSON(data []byte) error {
+	type wire ThreadRealtimeListParams
+	var s objectScan
+	if _, err := s.begin(data, &threadRealtimeListParamsSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if valueAfterPosition, ok := v.AfterPosition.Value(); ok {
+		if valueAfterPosition < 0 {
+			return DecodeError{Field: "afterPosition", Reason: "below minimum 0"}
+		}
+	}
+	if valueLimit, ok := v.Limit.Value(); ok {
+		if valueLimit < 0 {
+			return DecodeError{Field: "limit", Reason: "below minimum 0"}
+		}
+	}
+	if valueRequiredThroughPosition, ok := v.RequiredThroughPosition.Value(); ok {
+		if valueRequiredThroughPosition < 0 {
+			return DecodeError{Field: "requiredThroughPosition", Reason: "below minimum 0"}
+		}
+	}
+	if valueSnapshotEnd, ok := v.SnapshotEnd.Value(); ok {
+		if valueSnapshotEnd < 0 {
+			return DecodeError{Field: "snapshotEnd", Reason: "below minimum 0"}
+		}
+	}
+	return nil
+}
+
+type ThreadRealtimeListResponse struct {
+	Coverage                  ThreadRealtimeCoverage `json:"coverage"`
+	Data                      []ThreadRealtimeEntry  `json:"data"`
+	NextCursor                Optional[string]       `json:"nextCursor,omitzero"`
+	ProjectedThroughItemIndex uint64                 `json:"projectedThroughItemIndex"`
+	SnapshotEnd               uint64                 `json:"snapshotEnd"`
+}
+
+var threadRealtimeListResponseSpec = objectSpec{
+	fields: []objectField{
+		{name: "coverage", flags: fieldRequired | fieldRejectNull},
+		{name: "data", flags: fieldRequired | fieldRejectNull},
+		{name: "nextCursor"},
+		{name: "projectedThroughItemIndex", flags: fieldRequired | fieldRejectNull},
+		{name: "snapshotEnd", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadRealtimeListResponse) MarshalJSON() ([]byte, error) {
+	type wire ThreadRealtimeListResponse
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadRealtimeListResponse) UnmarshalJSON(data []byte) error {
+	type wire ThreadRealtimeListResponse
+	var s objectScan
+	if _, err := s.begin(data, &threadRealtimeListResponseSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if v.ProjectedThroughItemIndex < 0 {
+		return DecodeError{Field: "projectedThroughItemIndex", Reason: "below minimum 0"}
+	}
+	if v.SnapshotEnd < 0 {
+		return DecodeError{Field: "snapshotEnd", Reason: "below minimum 0"}
+	}
+	return nil
+}
+
 type ThreadRealtimeListVoicesParams map[string]json.RawMessage
 
 func (v ThreadRealtimeListVoicesParams) MarshalJSON() ([]byte, error) {
@@ -27864,6 +28162,13 @@ func (v *ThreadRealtimeListVoicesResponse) UnmarshalJSON(data []byte) error {
 	type wire ThreadRealtimeListVoicesResponse
 	return decodeObject(data, &threadRealtimeListVoicesResponseSpec, (*wire)(v))
 }
+
+type ThreadRealtimeOrder string
+
+const (
+	ThreadRealtimeOrderObservedAt ThreadRealtimeOrder = "observedAt"
+	ThreadRealtimeOrderPosition   ThreadRealtimeOrder = "position"
+)
 
 type ThreadRealtimeOutputAudioDeltaNotification struct {
 	Audio    ThreadRealtimeAudioChunk `json:"audio"`
@@ -28194,6 +28499,28 @@ const (
 	ThreadRealtimeTranscriptRoleUser      ThreadRealtimeTranscriptRole = "user"
 	ThreadRealtimeTranscriptRoleAssistant ThreadRealtimeTranscriptRole = "assistant"
 )
+
+type ThreadRealtimeVoiceTranscript struct {
+	Role ThreadRealtimeTranscriptRole `json:"role"`
+	Text string                       `json:"text"`
+}
+
+var threadRealtimeVoiceTranscriptSpec = objectSpec{
+	fields: []objectField{
+		{name: "role", flags: fieldRequired | fieldRejectNull},
+		{name: "text", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadRealtimeVoiceTranscript) MarshalJSON() ([]byte, error) {
+	type wire ThreadRealtimeVoiceTranscript
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadRealtimeVoiceTranscript) UnmarshalJSON(data []byte) error {
+	type wire ThreadRealtimeVoiceTranscript
+	return decodeObject(data, &threadRealtimeVoiceTranscriptSpec, (*wire)(v))
+}
 
 type ThreadResumeInitialTurnsPageParams struct {
 	ItemsView     Optional[TurnItemsView] `json:"itemsView,omitzero"`

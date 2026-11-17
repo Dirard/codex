@@ -206,26 +206,26 @@ func TestServerRequestReachesClientHandler(t *testing.T) {
 	srv := codextest.NewServer()
 	defer srv.Close()
 	newClient(t, srv, codex.ClientConfig{Handlers: codex.ServerHandlers{
-		CurrentTime: codex.CurrentTimeCurrentTimeReadFunc(func(_ context.Context, params protocol.CurrentTimeReadParams) (protocol.CurrentTimeReadResponse, error) {
-			if params.ThreadID != "thread-1" {
-				return protocol.CurrentTimeReadResponse{}, errors.New("wrong thread")
+		Attestation: codex.AttestationAttestationGenerateFunc(func(_ context.Context, params protocol.AttestationGenerateParams) (protocol.AttestationGenerateResponse, error) {
+			if len(params) != 0 {
+				return protocol.AttestationGenerateResponse{}, errors.New("unexpected params")
 			}
-			return protocol.CurrentTimeReadResponse{CurrentTimeAt: 42}, nil
+			return protocol.AttestationGenerateResponse{Token: "token-42"}, nil
 		}),
 	}})
 	ctx := testContext(t)
 	if err := srv.WaitInitialized(ctx); err != nil {
 		t.Fatal(err)
 	}
-	result, err := srv.SendRequest(ctx, "currentTime/read", protocol.CurrentTimeReadParams{ThreadID: "thread-1"})
+	result, err := srv.SendRequest(ctx, "attestation/generate", protocol.AttestationGenerateParams{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var response protocol.CurrentTimeReadResponse
-	if err := json.Unmarshal(result, &response); err != nil || response.CurrentTimeAt != 42 {
+	var response protocol.AttestationGenerateResponse
+	if err := json.Unmarshal(result, &response); err != nil || response.Token != "token-42" {
 		t.Fatalf("response = %s, %v", result, err)
 	}
-	_, err = srv.SendRequest(ctx, "currentTime/read", protocol.CurrentTimeReadParams{ThreadID: "other"})
+	_, err = srv.SendRequest(ctx, "attestation/generate", protocol.AttestationGenerateParams{"unexpected": json.RawMessage(`true`)})
 	var rpcErr *codextest.Error
 	if !errors.As(err, &rpcErr) {
 		t.Fatalf("err = %T %v, want *codextest.Error", err, err)

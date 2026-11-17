@@ -15,7 +15,6 @@ import (
 // codex-go-sdk-handler-docs:item/permissions/requestApproval permission-approval
 // codex-go-sdk-handler-docs:item/tool/call dynamic-tool-call
 // codex-go-sdk-handler-docs:mcpServer/elicitation/request mcp-elicitation
-// codex-go-sdk-handler-docs:currentTime/read current-time-read
 func handlers() codex.ServerHandlers {
 	return codex.ServerHandlers{
 		Approvals: codex.ApprovalsHandlerFuncs{
@@ -31,9 +30,6 @@ func handlers() codex.ServerHandlers {
 		}),
 		ChatGPTTokenRefresh: codex.ChatGPTTokenRefreshAccountChatgptAuthTokensRefreshFunc(func(context.Context, protocol.ChatgptAuthTokensRefreshParams) (protocol.ChatgptAuthTokensRefreshResponse, error) {
 			return protocol.ChatgptAuthTokensRefreshResponse{}, nil
-		}),
-		CurrentTime: codex.CurrentTimeCurrentTimeReadFunc(func(context.Context, protocol.CurrentTimeReadParams) (protocol.CurrentTimeReadResponse, error) {
-			return protocol.CurrentTimeReadResponse{}, nil
 		}),
 		DynamicTools: codex.DynamicToolsItemToolCallFunc(func(context.Context, protocol.DynamicToolCallParams) (protocol.DynamicToolCallResponse, error) {
 			return protocol.DynamicToolCallResponse{}, nil

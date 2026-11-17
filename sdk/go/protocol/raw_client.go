@@ -736,6 +736,12 @@ func (c RawClient) ThreadTimelineList(ctx context.Context, params ThreadTimeline
 	return result, err
 }
 
+func (c RawClient) ThreadRealtimeList(ctx context.Context, params ThreadRealtimeListParams) (ThreadRealtimeListResponse, error) {
+	var result ThreadRealtimeListResponse
+	err := c.sender.Call(ctx, "thread/realtime/list", params, &result, MethodMetadataByMethod["thread/realtime/list"])
+	return result, err
+}
+
 func (c RawClient) ThreadRealtimeListVoices(ctx context.Context, params ThreadRealtimeListVoicesParams) (ThreadRealtimeListVoicesResponse, error) {
 	var result ThreadRealtimeListVoicesResponse
 	err := c.sender.Call(ctx, "thread/realtime/listVoices", params, &result, MethodMetadataByMethod["thread/realtime/listVoices"])
@@ -789,6 +795,12 @@ func (c RawClient) ModelProviderList(ctx context.Context, params ModelProviderLi
 func (c RawClient) ModelProviderConfigWrite(ctx context.Context, params ModelProviderConfigWriteParams) (ModelProviderConfigWriteResponse, error) {
 	var result ModelProviderConfigWriteResponse
 	err := c.sender.Call(ctx, "modelProvider/config/write", params, &result, MethodMetadataByMethod["modelProvider/config/write"])
+	return result, err
+}
+
+func (c RawClient) ModelProviderDefaultSet(ctx context.Context, params ModelProviderDefaultSetParams) (ConfigWriteResponse, error) {
+	var result ConfigWriteResponse
+	err := c.sender.Call(ctx, "modelProvider/default/set", params, &result, MethodMetadataByMethod["modelProvider/default/set"])
 	return result, err
 }
 

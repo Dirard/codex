@@ -49,13 +49,13 @@ func TestInboundTraceVisibleToServerHandler(t *testing.T) {
 	client, err := NewClient(context.Background(), ClientConfig{
 		Transport: transport,
 		Handlers: ServerHandlers{
-			CurrentTime: CurrentTimeCurrentTimeReadFunc(func(ctx context.Context, params protocol.CurrentTimeReadParams) (protocol.CurrentTimeReadResponse, error) {
+			Attestation: AttestationAttestationGenerateFunc(func(ctx context.Context, params protocol.AttestationGenerateParams) (protocol.AttestationGenerateResponse, error) {
 				trace, ok := TraceFromContext(ctx)
 				if !ok {
 					t.Fatal("trace missing")
 				}
 				traceSeen <- trace
-				return protocol.CurrentTimeReadResponse{}, nil
+				return protocol.AttestationGenerateResponse{}, nil
 			}),
 		},
 	})
@@ -63,7 +63,7 @@ func TestInboundTraceVisibleToServerHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	transport.deliverServerRequest("currentTime/read", json.RawMessage(`{"threadId":"thread-1"}`), json.RawMessage(`{"traceparent":"00-def"}`))
+	transport.deliverServerRequest("attestation/generate", json.RawMessage(`{}`), json.RawMessage(`{"traceparent":"00-def"}`))
 	trace := <-traceSeen
 	if trace.TraceParent != "00-def" {
 		t.Fatalf("trace parent = %s", trace.TraceParent)

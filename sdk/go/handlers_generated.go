@@ -12,7 +12,6 @@ type ServerHandlers struct {
 	Approvals           ApprovalsHandler
 	Attestation         AttestationHandler
 	ChatGPTTokenRefresh ChatGPTTokenRefreshHandler
-	CurrentTime         CurrentTimeHandler
 	DynamicTools        DynamicToolsHandler
 	MCPElicitation      MCPElicitationHandler
 	Permissions         PermissionsHandler
@@ -75,16 +74,6 @@ type ChatGPTTokenRefreshHandler interface {
 type ChatGPTTokenRefreshAccountChatgptAuthTokensRefreshFunc func(ctx context.Context, params protocol.ChatgptAuthTokensRefreshParams) (protocol.ChatgptAuthTokensRefreshResponse, error)
 
 func (f ChatGPTTokenRefreshAccountChatgptAuthTokensRefreshFunc) HandleAccountChatgptAuthTokensRefresh(ctx context.Context, params protocol.ChatgptAuthTokensRefreshParams) (protocol.ChatgptAuthTokensRefreshResponse, error) {
-	return f(ctx, params)
-}
-
-type CurrentTimeHandler interface {
-	HandleCurrentTimeRead(ctx context.Context, params protocol.CurrentTimeReadParams) (protocol.CurrentTimeReadResponse, error)
-}
-
-type CurrentTimeCurrentTimeReadFunc func(ctx context.Context, params protocol.CurrentTimeReadParams) (protocol.CurrentTimeReadResponse, error)
-
-func (f CurrentTimeCurrentTimeReadFunc) HandleCurrentTimeRead(ctx context.Context, params protocol.CurrentTimeReadParams) (protocol.CurrentTimeReadResponse, error) {
 	return f(ctx, params)
 }
 
@@ -212,15 +201,6 @@ func (h ServerHandlers) DispatchServerRequest(ctx context.Context, method string
 			return nil, &UnsupportedError{Reason: fmt.Sprintf("server handler %q is not configured", method)}
 		}
 		return h.MCPElicitation.HandleMcpServerElicitationRequest(ctx, decoded)
-	case "currentTime/read":
-		decoded, err := decodeCurrentTimeReadServerRequest(params)
-		if err != nil {
-			return nil, err
-		}
-		if h.CurrentTime == nil {
-			return nil, &UnsupportedError{Reason: fmt.Sprintf("server handler %q is not configured", method)}
-		}
-		return h.CurrentTime.HandleCurrentTimeRead(ctx, decoded)
 	default:
 		if h.Unknown != nil {
 			return h.Unknown.HandleUnknownServerRequest(ctx, UnknownServerRequest{Method: method, Params: append(json.RawMessage(nil), params...)})
@@ -307,14 +287,6 @@ func decodeMcpServerElicitationRequestServerRequest(params json.RawMessage) (pro
 	return decoded, nil
 }
 
-func decodeCurrentTimeReadServerRequest(params json.RawMessage) (protocol.CurrentTimeReadParams, error) {
-	var decoded protocol.CurrentTimeReadParams
-	if err := json.Unmarshal(params, &decoded); err != nil {
-		return decoded, err
-	}
-	return decoded, nil
-}
-
 type generatedServerHandlerMetadataRow struct {
 	Method       string
 	Visibility   string
@@ -333,5 +305,4 @@ var generatedServerHandlerMetadata = []generatedServerHandlerMetadataRow{
 	{Method: "item/permissions/requestApproval", Visibility: "sdk-public", Capability: "permission-approval", HandlerOwner: "ServerHandlers.Permissions"},
 	{Method: "item/tool/call", Visibility: "sdk-public", Capability: "dynamic-tool-call", HandlerOwner: "ServerHandlers.DynamicTools"},
 	{Method: "mcpServer/elicitation/request", Visibility: "sdk-public", Capability: "mcp-elicitation", HandlerOwner: "ServerHandlers.MCPElicitation"},
-	{Method: "currentTime/read", Visibility: "experimental-public", Capability: "current-time-read", HandlerOwner: "ServerHandlers.CurrentTime"},
 }
