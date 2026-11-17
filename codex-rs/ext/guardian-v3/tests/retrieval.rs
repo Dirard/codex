@@ -1,6 +1,8 @@
 //! Reviewer tools search routed posts from their capture, including unsubscribed channels.
 
 #![allow(clippy::expect_used)]
+// Fork: the fork's session futures nest deeper; their layout needs more query depth.
+#![recursion_limit = "256"]
 
 use codex_guardian_v3::RetrievalBinding;
 use codex_guardian_v3::local_board;
