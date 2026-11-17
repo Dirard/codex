@@ -49,7 +49,10 @@ case "$1" in
       fi
     done
     ;;
-  test) ;;
+  test)
+    printf 'cargo-test-env wrapper=%s crates=%s lock=%s\n' \
+      "${RUSTC_WRAPPER:-}" "${FORK_HEAVY_TEST_CRATES:-}" "${FORK_HEAVY_TEST_LOCK:-}" >>"${state}/calls"
+    ;;
   nextest)
     if [[ "${2:-}" == --version ]]; then
       printf 'cargo-nextest %s (stub)\nrelease: %s\n' "$(cat "${state}/nextest-version")" "$(cat "${state}/nextest-version")"
@@ -244,6 +247,39 @@ expect nextest-gets-tool-config calls_contain '^cargo nextest run .*--tool-confi
 # nextest would write the report under <workspace>/target and the guard would
 # not find it.
 expect nextest-store-follows-target-dir calls_contain "^nextest-store ${STUB_STATE}/target/nextest\$"
+expect test-build-serializes-heavy-crates calls_contain \
+  "^cargo-test-env wrapper=${repo_root}/scripts/fork/rustc-heavy-lock\.sh crates=codex_tui codex_core all lock=.+/heavy\.lock\$"
+
+STUB_STATE="$(new_state)"
+check rust-test-keeps-caller-wrapper ok 'heavy test crates build side by side' \
+  env RUSTC_WRAPPER=/opt/sccache "${ci_local}" rust-test -p codex-core
+expect caller-wrapper-unchanged calls_contain '^cargo-test-env wrapper=/opt/sccache crates= lock=$'
+
+# rustc-heavy-lock.sh: only a test harness build of a listed crate waits for the lock.
+heavy_lock="${repo_root}/scripts/fork/rustc-heavy-lock.sh"
+mkdir -p "${work}/heavy"
+printf '#!/bin/sh\necho "rustc $*" >>"%s/heavy/calls"\n' "${work}" >"${work}/heavy/rustc"
+chmod 0755 "${work}/heavy/rustc"
+export FORK_HEAVY_TEST_CRATES="codex_tui all" FORK_HEAVY_TEST_LOCK="${work}/heavy/lock"
+# The holder becomes the sleep itself, so killing it releases the lock.
+(
+  exec 9>"${FORK_HEAVY_TEST_LOCK}"
+  flock 9
+  exec sleep 30
+) &
+holder=$!
+while flock -n "${FORK_HEAVY_TEST_LOCK}" true; do sleep 0.05; done
+heavy_run() { timeout 2 "${heavy_lock}" "${work}/heavy/rustc" "$@"; }
+expect heavy-lock-waits-for-heavy-harness test "$(heavy_run --crate-name all --edition=2024 --test >/dev/null 2>&1; echo $?)" -eq 124
+expect heavy-lock-skips-other-harness heavy_run --crate-name codex_exec --test
+expect heavy-lock-skips-heavy-library heavy_run --crate-name codex_tui --crate-type lib
+kill "${holder}" 2>/dev/null || true
+wait "${holder}" 2>/dev/null || true
+expect heavy-lock-runs-after-release heavy_run --crate-name codex_tui --test
+expect heavy-lock-passes-arguments test "$(cat "${work}/heavy/calls")" = "rustc --crate-name codex_exec --test
+rustc --crate-name codex_tui --crate-type lib
+rustc --crate-name codex_tui --test"
+unset FORK_HEAVY_TEST_CRATES FORK_HEAVY_TEST_LOCK
 
 STUB_STATE="$(new_state)"
 junit "${STUB_STATE}" suite::rmcp_client::streamable_http_with_oauth_round_trip \

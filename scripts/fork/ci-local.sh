@@ -176,6 +176,14 @@ untested_fork_packages=(
 # rejects the skip messages below. Inventory: specs/fork-ci-2026-10-25.md, UC3.
 test_helper_bins=(codex codex-code-mode-host codex-message-board-mcp test_stdio_server test_streamable_http_server)
 
+# Test harness crates whose rustc needs 7-9 GB. A cold build of default_test_packages
+# with -j4 on four cores (2026-11-18, Rust 1.99.1) peaked at 8.9 GB for codex_tui, 7.0 GB
+# for codex_core and 6.8 GB for codex-core's `all` (the name of other packages'
+# integration suites too). Built side by side at the end of the build they took 21 GB,
+# and the 16 GB fork-ci runners swapped until they lost contact (run 44178621362).
+# rust-test builds them one at a time through scripts/fork/rustc-heavy-lock.sh.
+heavy_test_crates=(codex_tui codex_core all)
+
 # A passed test whose output matches this extended regular expression ran
 # without a helper binary: the skip text the tests print, or an error of
 # codex_utils_cargo_bin::cargo_bin.
@@ -381,6 +389,28 @@ check_junit_skips() {
   fi
 }
 
+# build_test_binaries CARGO_ARGS...: `cargo test --no-run` with the heavy_test_crates
+# harnesses compiled one at a time. RUSTC_WRAPPER is not part of cargo's fingerprints,
+# so the later nextest build finds every artifact fresh. A wrapper the caller already
+# set (sccache, for example) is kept, and then the crates are not serialized.
+build_test_binaries() {
+  if [[ -n "${RUSTC_WRAPPER:-}" ]]; then
+    log "RUSTC_WRAPPER=${RUSTC_WRAPPER} is set: heavy test crates build side by side"
+    cargo_rs test --locked --no-run "$@"
+    return
+  fi
+  local lock_dir
+  lock_dir="$(mktemp -d "${TMPDIR:-/tmp}/fork-ci-rustc.XXXXXX")"
+  cleanup_paths+=("${lock_dir}")
+  log "one at a time: ${heavy_test_crates[*]}"
+  (
+    export RUSTC_WRAPPER="${repo_root}/scripts/fork/rustc-heavy-lock.sh"
+    export FORK_HEAVY_TEST_CRATES="${heavy_test_crates[*]}"
+    export FORK_HEAVY_TEST_LOCK="${lock_dir}/heavy.lock"
+    cargo_rs test --locked --no-run "$@"
+  )
+}
+
 cmd_rust_test() {
   local partition="" packages=() extra=()
   while [[ $# -gt 0 ]]; do
@@ -427,7 +457,7 @@ cmd_rust_test() {
   cmd_rust_helpers
   check_nextest_version
   log "build test binaries: ${packages[*]}"
-  cargo_rs test --locked --no-run "${package_args[@]}"
+  build_test_binaries "${package_args[@]}"
 
   # Keep the output of passed tests in the JUnit report, so skip messages are
   # visible. A tool config sits below .config/nextest.toml, which stays as
