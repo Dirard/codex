@@ -8,7 +8,6 @@ use std::sync::atomic::AtomicBool;
 use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
-use crate::current_time::app_server_time_provider;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_params;
 use crate::error_code::invalid_request;
@@ -52,6 +51,7 @@ use crate::request_processors::TurnRequestProcessor;
 use crate::request_processors::WindowsSandboxRequestProcessor;
 use crate::request_processors::account_processor::handle_gcp_setup;
 use crate::request_processors::read_server_diagnostics;
+use crate::request_processors::thread_list_state::ThreadListState;
 use crate::request_serialization::QueuedInitializedRequest;
 use crate::request_serialization::RequestSerializationQueueKey;
 use crate::request_serialization::RequestSerializationQueues;
@@ -104,7 +104,6 @@ use codex_thread_store::LocalQueueStore;
 use codex_thread_store::QueueStore;
 use codex_thread_store::ThreadStoreError;
 use tokio::sync::Mutex;
-use tokio::sync::Semaphore;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
@@ -417,11 +416,7 @@ impl MessageProcessor {
                     outgoing.clone(),
                     thread_state_manager.clone(),
                 )),
-                {
-                    let time_provider =
-                        app_server_time_provider(outgoing.clone(), thread_state_manager.clone());
-                    Some(time_provider)
-                },
+                None,
             );
             match code_mode_session_provider {
                 Some(provider) => manager.with_code_mode_session_provider(provider),
@@ -457,7 +452,7 @@ impl MessageProcessor {
         let pending_thread_unloads = Arc::new(Mutex::new(HashMap::new()));
         let thread_watch_manager =
             crate::thread_status::ThreadWatchManager::new_with_outgoing(outgoing.clone());
-        let thread_list_state_permit = Arc::new(Semaphore::new(/*permits*/ 1));
+        let thread_list_state_permit = Arc::new(ThreadListState::default());
         let app_list_shutdown_token = CancellationToken::new();
         let request_serialization_queues = RequestSerializationQueues::default();
         let config_processor = ConfigRequestProcessor::new(
@@ -1289,7 +1284,7 @@ impl MessageProcessor {
                 .clients_revoke(params)
                 .await
                 .map(|response| Some(response.into())),
-            ClientRequest::ConfigRequirementsRead { params: _, .. } => self
+            ClientRequest::ConfigRequirementsRead { .. } => self
                 .config_processor
                 .config_requirements_read()
                 .await
@@ -1358,7 +1353,12 @@ impl MessageProcessor {
                 .model_provider_config_write(params)
                 .await
                 .map(|r| Some(r.into())),
-            ClientRequest::ModelProviderCapabilitiesRead { params: _, .. } => self
+            ClientRequest::ModelProviderDefaultSet { params, .. } => self
+                .config_processor
+                .model_provider_default_set(params)
+                .await
+                .map(Some),
+            ClientRequest::ModelProviderCapabilitiesRead { .. } => self
                 .config_processor
                 .model_provider_capabilities_read()
                 .await
@@ -1820,7 +1820,10 @@ impl MessageProcessor {
             ClientRequest::ThreadTimelineList { params, .. } => {
                 self.thread_processor.thread_timeline_list(params).await
             }
-            ClientRequest::ThreadRealtimeListVoices { params: _, .. } => {
+            ClientRequest::ThreadRealtimeList { params, .. } => {
+                self.thread_processor.thread_realtime_list(params).await
+            }
+            ClientRequest::ThreadRealtimeListVoices { .. } => {
                 self.turn_processor.thread_realtime_list_voices().await
             }
             ClientRequest::ReviewStart { params, .. } => {

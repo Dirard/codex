@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use codex_install_context::InstallContext;
 use codex_rollout::RolloutConfig;
-use codex_rollout::first_rollout_content_match_snippet;
+use codex_rollout::RolloutSnippetMatcher;
 use codex_rollout::parse_cursor;
 use codex_rollout::search_rollout_matches;
 use codex_utils_absolute_path::normalize_windows_device_path;
@@ -95,6 +95,7 @@ pub(super) async fn search_threads(
     let mut page_cursor = cursor;
     let scan_page_size = params.page_size.saturating_mul(8).clamp(256, 2048);
     let scan_params = ListThreadsParams {
+        included_thread_ids: None,
         page_size: scan_page_size,
         cursor: None,
         sort_key: params.sort_key,
@@ -116,6 +117,7 @@ pub(super) async fn search_threads(
         .map(|(path, snippet)| (rollout_search_path(&path), snippet))
         .collect::<HashMap<_, _>>();
 
+    let mut snippet_matcher = RolloutSnippetMatcher::new(search_term);
     loop {
         let page = list_rollout_threads(
             state_db.clone(),
@@ -127,6 +129,7 @@ pub(super) async fn search_threads(
             sort_direction,
         )
         .await?;
+        let page = codex_rollout::ThreadsPage::from(page);
         let page_thread_ids: Vec<_> = page
             .items
             .iter()
@@ -156,7 +159,8 @@ pub(super) async fn search_threads(
                 }
             }
             if snippet.is_none() {
-                snippet = first_rollout_content_match_snippet(item.path.as_path(), search_term)
+                snippet = snippet_matcher
+                    .first_match(&item.path)
                     .await
                     .map_err(|err| ThreadStoreError::Internal {
                         message: format!("failed to read rollout search match: {err}"),
@@ -273,13 +277,7 @@ async fn set_thread_search_result_names(
         .iter()
         .map(|item| (item.thread.thread_id, item.thread.history_mode))
         .collect::<HashMap<_, _>>();
-    let names = resolve_thread_names(
-        store,
-        &thread_history_modes,
-        /*use_state_db_only*/ false,
-    )
-    .await
-    .unwrap_or_default();
+    let names = resolve_thread_names(store, &thread_history_modes).await;
     for item in items {
         if let Some(name) = names.get(&item.thread.thread_id).cloned() {
             set_thread_name(&mut item.thread, name);
