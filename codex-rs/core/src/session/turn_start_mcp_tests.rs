@@ -348,7 +348,7 @@ async fn mcp_budget_stop_at_handoff(phase: McpPause) -> anyhow::Result<()> {
     let (count, outcome) = match phase {
         McpPause::Start => {
             assert_eq!(
-                reply.item,
+                reply.response.item,
                 ResponseInputItem::FunctionCallOutput {
                     call_id: "handoff-probe".into(),
                     output: FunctionCallOutputPayload::from_text(

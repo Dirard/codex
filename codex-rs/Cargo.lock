@@ -5412,7 +5412,7 @@ dependencies = [
 
 [[package]]
 name = "codex-user-input"
-version = "0.0.0"
+version = "0.167.2"
 dependencies = [
  "anyhow",
  "codex-protocol",

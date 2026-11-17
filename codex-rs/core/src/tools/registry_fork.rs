@@ -30,21 +30,22 @@ pub(super) fn truncation_metadata(truncation: OutputTruncation) -> CodexHarnessM
 
 impl ToolRegistry {
     /// Rejects a Code Mode call of a direct-only tool before hooks and execution, so the
-    /// model calls it directly instead of looping through `exec` or `tools.*`.
+    /// model calls it directly instead of looping through `exec` or `tools.*`. A rejection
+    /// closes the dispatch trace as failed; otherwise the trace is handed back to the caller.
     pub(super) fn fork_reject_direct_only(
         &self,
         invocation: &ToolInvocation,
         otel: &SessionTelemetry,
         sandbox_tags: SandboxTags,
-        dispatch_trace: &ToolDispatchTrace,
-    ) -> Result<(), FunctionCallError> {
+        dispatch_trace: ToolDispatchTrace,
+    ) -> Result<ToolDispatchTrace, FunctionCallError> {
         let tool_name = &invocation.tool_name;
         if !matches!(&invocation.source, ToolCallSource::CodeMode { .. })
             || self
                 .registered_tool(tool_name)
                 .is_none_or(|tool| tool.exposure != ToolExposure::DirectModelOnly)
         {
-            return Ok(());
+            return Ok(dispatch_trace);
         }
         let code_mode_name = codex_tools::code_mode_name_for_tool_name(tool_name);
         let message = serde_json::json!({

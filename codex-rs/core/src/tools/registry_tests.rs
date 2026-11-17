@@ -685,7 +685,10 @@ fn mcp_audio_producer_limit_is_transient_until_history_admission(file_backed_too
             result_metadata_capture_allowed: false,
             wall_time: Duration::ZERO,
             original_image_detail_supported: false,
-            truncation_policy: TruncationPolicy::Tokens(100),
+            truncation: OutputTruncation::new(
+                TruncationPolicy::Tokens(100),
+                /*max_lines*/ None,
+            ),
         }),
         post_tool_use_payload: None,
     };

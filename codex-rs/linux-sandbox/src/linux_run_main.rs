@@ -200,9 +200,12 @@ pub fn run_main() -> ! {
     // established the filesystem view.
     if apply_seccomp_then_exec {
         // Fork: Ubuntu's AppArmor `bwrap` profile transition clears the parent-death signal
-        // that `--die-with-parent` armed before exec. With `--as-pid-1` this process is the
-        // namespace init, so re-arm it or the whole sandbox tree outlives a killed monitor.
-        // A monitor that dies between bwrap's exec and this call is not detected.
+        // that `--die-with-parent` armed before exec, so re-arm it for this supervisor. In a
+        // fresh PID namespace (`--as-pid-1`) this process is the namespace init, and its death
+        // takes the whole sandbox tree with it. In an inherited PID namespace only this process
+        // dies; the command outlives a killed monitor unless it has its own parent-death signal,
+        // as with transparent TCP. A monitor that dies between bwrap's exec and this call is not
+        // detected.
         // SAFETY: PR_SET_PDEATHSIG takes a signal number and has no memory arguments.
         if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) } < 0 {
             panic!(

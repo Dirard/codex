@@ -115,7 +115,10 @@ async fn sample(
     sess.record_token_usage_info(
         &step.turn,
         &step.settings,
-        usage.as_ref(),
+        crate::client_common::SamplingUsage {
+            provider: usage.clone(),
+            charge: Default::default(),
+        },
         TokenUsageContext::Sampling {
             includes_reasoning: false,
             input_item_count,

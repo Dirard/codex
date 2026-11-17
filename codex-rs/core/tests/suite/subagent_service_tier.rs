@@ -5,7 +5,6 @@ use anyhow::Result;
 use chrono::Utc;
 use codex_core::AgentRuntimeOwnership;
 use codex_core::SleepFuture;
-use codex_core::TimeFuture;
 use codex_core::TimeProvider;
 use codex_core::TurnInputRequest;
 use codex_core::config::AgentRoleConfig;
@@ -60,8 +59,8 @@ struct PausedSleepTimeProvider {
 }
 
 impl TimeProvider for PausedSleepTimeProvider {
-    fn current_time(&self, _thread_id: ThreadId) -> TimeFuture<'_> {
-        Box::pin(async { Ok(Utc::now()) })
+    fn current_time(&self, _thread_id: ThreadId) -> anyhow::Result<chrono::DateTime<Utc>> {
+        Ok(Utc::now())
     }
 
     fn sleep(&self, _thread_id: ThreadId, _duration: Duration) -> SleepFuture<'_> {

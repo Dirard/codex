@@ -24,6 +24,7 @@ fn request(instructions: &str) -> ResponsesApiRequest {
         text: None,
         client_metadata: None,
         access_programs: None,
+        request_country: Default::default(),
     }
 }
 

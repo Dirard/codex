@@ -28,7 +28,7 @@ fn recorded_mcp_output(output: McpToolOutput) -> FunctionCallOutputPayload {
         result: Box::new(output),
         post_tool_use_payload: None,
     }
-    .into_response();
+    .into_response(/*file_backed_tool_audio*/ false);
     let mut response = response;
     let mut history = ContextManager::default();
     history.record_annotated_items(std::slice::from_mut(&mut response), truncation);

@@ -331,14 +331,17 @@ impl InputQueue {
         &self,
         take_background_notifications: bool,
     ) -> (Vec<TurnInput>, TurnStartOptions) {
-        let mut pending_mails = self.mailbox_pending_mails.lock().await;
-        self.read_mailbox(&mut pending_mails);
-        let start_options = Self::trigger_turn_options(&pending_mails).unwrap_or_default();
-        let mut items = pending_mails
-            .drain(..)
-            .map(|mail| TurnInput::InterAgentCommunication(mail.communication))
-            .collect();
-        drop(pending_mails); // Fork: release the mailbox before the notification queue lock
+        // Fork: the mailbox is released before the notification queue lock is taken.
+        let (mut items, start_options) = {
+            let mut pending_mails = self.mailbox_pending_mails.lock().await;
+            self.read_mailbox(&mut pending_mails);
+            let start_options = Self::trigger_turn_options(&pending_mails).unwrap_or_default();
+            let items = pending_mails
+                .drain(..)
+                .map(|mail| TurnInput::InterAgentCommunication(mail.communication))
+                .collect::<Vec<_>>();
+            (items, start_options)
+        };
         self.fork_take_background_notifications(take_background_notifications, &mut items)
             .await;
         (items, start_options)

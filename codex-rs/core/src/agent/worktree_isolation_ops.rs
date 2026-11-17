@@ -1544,6 +1544,7 @@ pub(crate) fn fork_annotate_guardian_action(
     };
     match &mut planned_action.kind {
         PlannedActionKind::Command { json }
+        | PlannedActionKind::Nested { json, .. }
         | PlannedActionKind::TerminalInput { json }
         | PlannedActionKind::Network { json, .. } => {
             *json = guardian_action_json(&binding, std::mem::take(json));

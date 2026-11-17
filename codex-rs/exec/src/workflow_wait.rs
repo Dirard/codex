@@ -12,7 +12,7 @@
 
 use std::time::Duration;
 
-use codex_app_server_client::InProcessAppServerClient;
+use codex_app_server_client::AppServerClient;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ThreadWorkflowCancelParams;
 use codex_app_server_protocol::ThreadWorkflowCancelResponse;
@@ -66,7 +66,7 @@ impl WorkflowWait {
     /// R7.5: the wait timed out; cancel the remaining runs and give their turn a grace period.
     pub(crate) async fn cancel_remaining(
         &mut self,
-        client: &InProcessAppServerClient,
+        client: &AppServerClient,
         request_ids: &mut RequestIdSequencer,
         thread_id: &str,
     ) {
@@ -107,10 +107,14 @@ pub(crate) struct ExecWorkflowWait {
 }
 
 impl ExecWorkflowWait {
-    pub(crate) fn new(config: &codex_core::config::Config, thread_id: &str) -> Self {
+    /// Without a local config (`codex exec --remote`) exec waits for nothing.
+    pub(crate) fn new(config: Option<&codex_core::config::Config>, thread_id: &str) -> Self {
         Self {
-            workflows_enabled: config.features.enabled(codex_features::Feature::Workflows),
-            timeout: Duration::from_millis(config.workflows.exec_wait_timeout_ms),
+            workflows_enabled: config
+                .is_some_and(|config| config.features.enabled(codex_features::Feature::Workflows)),
+            timeout: config.map_or(Duration::ZERO, |config| {
+                Duration::from_millis(config.workflows.exec_wait_timeout_ms)
+            }),
             thread_id: thread_id.to_string(),
             wait: None,
             terminals: TerminalWait::new(config, thread_id),
@@ -142,7 +146,7 @@ impl ExecWorkflowWait {
     /// timeout with a warning and an error exit (UC7, R7.2, R7.3). Returns whether exec stops.
     pub(crate) async fn fork_on_timeout(
         &mut self,
-        client: &InProcessAppServerClient,
+        client: &AppServerClient,
         request_ids: &mut RequestIdSequencer,
         event_processor: &mut dyn EventProcessor,
         error_seen: &mut bool,
@@ -180,7 +184,7 @@ impl ExecWorkflowWait {
     /// 2026-10-27 P3-5).
     pub(crate) async fn fork_stops_on_interrupt(
         &mut self,
-        client: &InProcessAppServerClient,
+        client: &AppServerClient,
         request_ids: &mut RequestIdSequencer,
         event_processor: &mut dyn EventProcessor,
         error_seen: &mut bool,
@@ -239,7 +243,7 @@ impl ExecWorkflowWait {
     /// notifications UC7, R7.1). Returns whether exec waits.
     pub(crate) async fn fork_keep_waiting(
         &mut self,
-        client: &InProcessAppServerClient,
+        client: &AppServerClient,
         request_ids: &mut RequestIdSequencer,
         event_processor: &mut dyn EventProcessor,
     ) -> bool {
@@ -255,7 +259,7 @@ impl ExecWorkflowWait {
 
     async fn keep_waiting_for_workflows(
         &mut self,
-        client: &InProcessAppServerClient,
+        client: &AppServerClient,
         request_ids: &mut RequestIdSequencer,
     ) -> bool {
         if !(self.workflows_enabled
@@ -286,7 +290,7 @@ pub(crate) fn is_backfill_deprecation_notice(
 
 /// Ids of the thread's runs that have not finished.
 pub(crate) async fn active_workflow_runs(
-    client: &InProcessAppServerClient,
+    client: &AppServerClient,
     request_ids: &mut RequestIdSequencer,
     thread_id: &str,
 ) -> Vec<String> {

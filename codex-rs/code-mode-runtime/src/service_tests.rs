@@ -1906,12 +1906,12 @@ text("done");
 async fn catalog_globals_preserve_mutations_within_each_cell() {
     let service = InProcessCodeModeSession::new();
     let source = r#"
-const entry = ALL_TOOLS[0];
+const entry = EXEC_TOOLS[0];
 const name = entry.name;
 entry.name = "local";
 const callback = tools[name];
 tools[name] = null;
-text(JSON.stringify([name, typeof callback, ALL_TOOLS[0].name, tools[name]]));
+text(JSON.stringify([name, typeof callback, EXEC_TOOLS[0].name, tools[name]]));
 "#;
     for _ in 0..2 {
         let response = execute(
@@ -1947,7 +1947,7 @@ async fn catalog_globals_ignore_inherited_setters() {
 let setterCalls = 0;
 Object.defineProperty(Object.prototype, "name", {
   configurable: true,
-  set(value) { setterCalls++; globalThis.ALL_TOOLS = []; }
+  set(value) { setterCalls++; globalThis.EXEC_TOOLS = []; }
 });
 for (const key of ["description", "echo"]) {
   Object.defineProperty(Object.prototype, key, {
@@ -1959,7 +1959,7 @@ Object.defineProperty(Array.prototype, "0", {
   configurable: true,
   set(value) { setterCalls++; }
 });
-const entry = ALL_TOOLS[0];
+const entry = EXEC_TOOLS[0];
 const callback = tools.echo;
 delete Object.prototype.name;
 delete Object.prototype.description;

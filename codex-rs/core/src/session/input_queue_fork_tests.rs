@@ -26,7 +26,7 @@ fn make_mail(
 /// Fork: the one rule for which input keeps a batch with a blocked prompt going.
 #[test]
 fn needs_model_step_covers_prompts_tool_output_and_turn_mail() {
-    let prompt = |content: Vec<UserInput>| TurnInput::UserInput {
+    let prompt = |content: Vec<ResolvedUserInput>| TurnInput::UserInput {
         content,
         client_id: None,
         metadata: UserInputMetadata::default(),
@@ -42,10 +42,7 @@ fn needs_model_step_covers_prompts_tool_output_and_turn_mail() {
     let cases = [
         (
             "prompt",
-            prompt(vec![UserInput::Text {
-                text: "hello".to_string(),
-                text_elements: Vec::new(),
-            }]),
+            prompt(vec![ResolvedUserInput::text("hello".to_string())]),
             true,
         ),
         ("empty prompt", prompt(Vec::new()), false),
@@ -312,10 +309,7 @@ async fn clear_pending_returns_background_notifications_to_the_thread_queue() {
                     "taken by the aborted turn",
                 ))),
                 TurnInput::UserInput {
-                    content: vec![UserInput::Text {
-                        text: "dropped".to_string(),
-                        text_elements: Vec::new(),
-                    }],
+                    content: vec![ResolvedUserInput::text("dropped".to_string())],
                     client_id: None,
                     metadata: UserInputMetadata::default(),
                 },
@@ -599,10 +593,7 @@ async fn lost_wake_input_returns_to_the_front_of_the_thread_queues() {
                 ))),
                 TurnInput::InterAgentCommunication(lost_queued_mail.clone().into()),
                 TurnInput::UserInput {
-                    content: vec![UserInput::Text {
-                        text: "dropped".to_string(),
-                        text_elements: Vec::new(),
-                    }],
+                    content: vec![ResolvedUserInput::text("dropped".to_string())],
                     client_id: None,
                     metadata: UserInputMetadata::default(),
                 },

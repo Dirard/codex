@@ -15,6 +15,12 @@ impl LocalAgentControl {
     /// recipient is retained in the runtime mailbox, as `submit_inter_agent_communication` does.
     /// Results are queue-only; turn-triggering mail belongs to `send_inter_agent_communication`,
     /// which also carries turn start options.
+    ///
+    /// A terminal result follows upstream's rules for agent-tree suspension: it counts as an
+    /// unconfirmed write from the moment it is handed over until its recipient records it, it
+    /// does not wait for an eviction that owns the recipient's residency gate (the evicting
+    /// runtime puts the mail it received ahead of it in the mailbox), and its sender, which
+    /// holds tree membership until it publishes the result, is not admitted again.
     pub(crate) async fn enqueue_inter_agent_communication(
         &self,
         agent_id: ThreadId,
@@ -22,58 +28,87 @@ impl LocalAgentControl {
         context: AgentCommunicationContext,
     ) -> CodexResult<String> {
         let state = self.runtime.upgrade()?;
-        let observers = state.extensions.message_lifecycle_contributors();
-        let delivery = (!observers.is_empty())
-            .then(|| MessageDelivery::publish(context.sender_thread_id, observers));
+        let terminal_result = context.kind == AgentCommunicationKind::Result;
+        // Publish only at the handover: a published result stays an unconfirmed write until
+        // it is recorded, and a dropped delivery never releases it.
+        let publish = || {
+            MessageDelivery::publish(
+                context.sender_thread_id,
+                state.extensions.message_lifecycle_contributors(),
+                terminal_result.then_some(&self.runtime.unconfirmed_results),
+            )
+        };
         let log_content = crate::agent_communication::send_log_content(&communication);
         // A second attempt observes the registry after an eviction that raced the pin.
         let mut attempts_left = 2;
         let communication_id = loop {
             attempts_left -= 1;
-            let thread = {
+            let (thread, guard) = {
+                // Choose the loaded recipient or the eviction mailbox while reload is fenced.
                 let threads = state.threads.read().await;
-                match threads.get(&agent_id) {
-                    Some(thread) if !thread.session_source.is_internal() => Arc::clone(thread),
-                    None if !communication.trigger_turn => {
-                        let _membership = self.runtime.admit_start()?;
-                        self.runtime.ensure_agent_known(agent_id)?;
-                        let submission_id = uuid::Uuid::now_v7().to_string();
-                        self.runtime.mailboxes.enqueue(
-                            agent_id,
-                            Some(submission_id.clone()),
-                            vec![crate::PendingAgentMessage::new(communication, delivery)],
-                        )?;
-                        break submission_id;
+                let thread = match threads.get(&agent_id) {
+                    Some(thread) if thread.session_source.is_internal() => {
+                        return Err(CodexErr::ThreadNotFound(agent_id));
                     }
-                    Some(_) | None => return Err(CodexErr::ThreadNotFound(agent_id)),
+                    thread => thread,
+                };
+                let guard = thread
+                    .filter(|_| terminal_result)
+                    .and_then(|thread| Arc::clone(&thread.residency_gate).try_read_owned().ok());
+                if !communication.trigger_turn
+                    && (thread.is_none() || (terminal_result && guard.is_none()))
+                {
+                    let _membership = (!terminal_result)
+                        .then(|| self.runtime.admit_start())
+                        .transpose()?;
+                    if thread.is_none() {
+                        self.runtime.ensure_agent_known(agent_id)?;
+                    }
+                    let submission_id = uuid::Uuid::now_v7().to_string();
+                    self.runtime.mailboxes.enqueue(
+                        agent_id,
+                        Some(submission_id.clone()),
+                        vec![crate::PendingAgentMessage::new(communication, publish())],
+                    )?;
+                    break submission_id;
                 }
+                (
+                    thread.cloned().ok_or(CodexErr::ThreadNotFound(agent_id))?,
+                    guard,
+                )
             };
             if communication.trigger_turn {
                 thread
                     .ensure_execution_capacity_for_turn_start(self)
                     .await?;
             }
-            let _residency_guard = match thread
-                .session
-                .services
-                .local_agent_runtime
-                .pin_v2_residency(&thread)
-                .await
-            {
-                Ok(guard) => guard,
-                Err(err)
-                    if attempts_left > 0
-                        && matches!(err.details(), CodexErrorDetails::ThreadNotFound(_)) =>
-                {
-                    continue;
+            let _residency_guard = match guard {
+                Some(guard) => {
+                    self.runtime.touch_v2_recipient(&thread);
+                    Some(guard)
                 }
-                Err(err) => return Err(err),
+                None => match thread
+                    .session
+                    .services
+                    .local_agent_runtime
+                    .pin_v2_residency(&thread)
+                    .await
+                {
+                    Ok(guard) => guard,
+                    Err(err)
+                        if attempts_left > 0
+                            && matches!(err.details(), CodexErrorDetails::ThreadNotFound(_)) =>
+                    {
+                        continue;
+                    }
+                    Err(err) => return Err(err),
+                },
             };
             break thread
                 .session
                 .enqueue_inter_agent_communication(crate::PendingAgentMessage::new(
                     communication,
-                    delivery,
+                    publish(),
                 ))
                 .await;
         };

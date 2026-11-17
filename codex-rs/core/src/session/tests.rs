@@ -13186,7 +13186,7 @@ async fn interrupted_turn_does_not_restart_trigger_turn_mailbox_mail() {
         )
         .await;
 
-    sess.interrupt_task().await;
+    sess.interrupt_task(sess.active_turn.lock().await).await;
 
     assert!(sess.active_turn.lock().await.is_none());
     assert!(sess.input_queue.has_trigger_turn_mailbox_items().await);

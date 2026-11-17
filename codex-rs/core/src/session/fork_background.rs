@@ -3,9 +3,6 @@
 //! (specs/dynamic-workflow-2026-10-25.md) and agent worktrees
 //! (specs/agent-worktree-isolation-2026-10-25.md).
 
-use codex_protocol::models::ResponseItem;
-use codex_protocol::turn_input::TurnStartOptions;
-
 use super::TurnInput;
 use super::session::Session;
 use crate::state::TaskKind;
@@ -73,21 +70,5 @@ impl Session {
                 runtime.shutdown.is_cancelled(),
             )
             .await;
-    }
-}
-
-/// Fork: names a queue-only wake by a finished workflow run (dynamic workflow, UC7) or by a
-/// background terminal exit (UC3, R3.1).
-pub(crate) fn name_wake_trigger(input: &[TurnInput], start_options: &mut TurnStartOptions) {
-    let notified = |matches: fn(&ResponseItem) -> bool| {
-        input.iter().any(
-            |item| matches!(item, TurnInput::ResponseItem(envelope) if matches(&envelope.item)),
-        )
-    };
-    if notified(crate::context::WorkflowNotification::is_notification_item) {
-        start_options.turn_trigger = Some(crate::workflow::WORKFLOW_TURN_TRIGGER.to_string());
-    } else if notified(crate::context::BackgroundTerminalNotification::is_notification_item) {
-        start_options.turn_trigger =
-            Some(crate::session::BACKGROUND_TERMINAL_TURN_TRIGGER.to_string());
     }
 }

@@ -2,6 +2,7 @@
 //! Validation, suffix retention, and window advancement stay atomic with installation.
 
 use super::CompactionPrefix;
+use super::session::Session;
 use super::turn_context::TurnContext;
 use crate::compact;
 use crate::compact::CompactedHistoryMetadata;
@@ -10,6 +11,7 @@ use crate::state::SessionState;
 use codex_history::ResponseItemEnvelope;
 use codex_login::AuthOwner;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 
@@ -23,6 +25,9 @@ pub(crate) struct PrefixCompactionInstallation<'a> {
     pub(crate) reviewer_compaction_hash: Option<String>,
     pub(crate) turn_context: &'a TurnContext,
     pub(crate) started_item: Option<&'a TurnItem>,
+    /// Fork headroom: tool declarations the next request sends outside history
+    /// (docs/fork/02-compaction-context.md F3, R3).
+    pub(crate) tool_declaration_tokens: i64,
 }
 
 pub(super) struct CompactedHistoryReplacement<'a> {
@@ -40,6 +45,7 @@ impl<'a> PrefixCompactionInstallation<'a> {
         mut items: Vec<ResponseItemEnvelope>,
         mut world_state_baseline: WorldStateSnapshot,
         auth_owner: Option<AuthOwner>,
+        base_instructions: &BaseInstructions, // Fork: headroom check
     ) -> Option<CompactedHistoryReplacement<'a>> {
         // Validate immediately before slicing and replacing the captured prefix.
         if state.history.history_version() != self.prefix.generation
@@ -74,6 +80,18 @@ impl<'a> PrefixCompactionInstallation<'a> {
                 .map(ResponseItemEnvelope::new),
         );
         items.extend_from_slice(suffix);
+        // Fork: validate the complete prepared replacement, including the live suffix and the
+        // restored additional context, before advancing the compaction window or mutating
+        // history (docs/fork/02-compaction-context.md F3).
+        if super::fork_compaction::prepared_candidate_overflows(
+            &items,
+            base_instructions,
+            self.model_info,
+            self.tool_declaration_tokens,
+            self.turn_context,
+        ) {
+            return None;
+        }
         // The unchanged suffix already contains updates through this baseline.
         if let Some(checkpoint) = state.history.world_state_checkpoint() {
             world_state_baseline = WorldStateSnapshot::from(&checkpoint.state);
@@ -100,5 +118,45 @@ impl<'a> PrefixCompactionInstallation<'a> {
             },
             started_item: self.started_item.map(|item| (self.turn_context, item)),
         })
+    }
+}
+
+impl Session {
+    /// Fork: the complete replacement as `replace_compacted_history` installs it, with the
+    /// active additional context it restores (#61390), so the headroom loop (F1) estimates the
+    /// installed history rather than the candidate alone. The installer restores the context
+    /// again under its own lock; context recorded in between is the accepted residual.
+    pub(crate) async fn fork_complete_replacement_preview(
+        &self,
+        mut items: Vec<ResponseItemEnvelope>,
+    ) -> Vec<ResponseItemEnvelope> {
+        let state = self.state.lock().await;
+        let context = state
+            .additional_context
+            .restore_compacted_items(state.history.annotated_items(), &mut items);
+        if context.is_empty() {
+            items
+        } else {
+            compact::insert_initial_context_before_last_real_user_or_summary(items, context)
+        }
+    }
+
+    /// Fork test helper: activates client additional context as a submitted turn does and
+    /// returns its history items for the caller to record.
+    #[cfg(test)]
+    pub(crate) async fn fork_merge_additional_context_for_test(
+        &self,
+        turn_context: &TurnContext,
+        values: std::collections::BTreeMap<
+            String,
+            codex_protocol::protocol::AdditionalContextEntry,
+        >,
+    ) -> Vec<ResponseItemEnvelope> {
+        self.state.lock().await.additional_context.merge(
+            values,
+            crate::state::AdditionalContextFormat::Messages,
+            &turn_context.session_telemetry,
+            &self.item_id_generator,
+        )
     }
 }

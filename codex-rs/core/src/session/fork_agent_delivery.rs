@@ -14,7 +14,6 @@ use codex_protocol::turn_input::TurnStartOptions;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 
-use super::TurnInput;
 use super::handlers;
 use super::new_submission_id;
 use super::session::Session;
@@ -67,15 +66,13 @@ impl Session {
 
     /// Fork: a V1 child's turn started by mail that asks for a turn reports its completion to
     /// the parent through the legacy follow-up completion watcher. The wake prepares it before
-    /// it checks that its turn reservation still holds (H3).
+    /// it checks that its turn reservation still holds (H3). `has_trigger_turn`: queued mail asks
+    /// for a turn; the mail itself stays queued until the task registers.
     pub(crate) async fn fork_followup_watcher(
         &self,
         turn_context: &TurnContext,
-        input: &[TurnInput],
+        has_trigger_turn: bool,
     ) -> Option<FollowupCompletionWatcher> {
-        let has_trigger_turn = input.iter().any(
-            |item| matches!(item, TurnInput::InterAgentCommunication(mail) if mail.trigger_turn),
-        );
         if !has_trigger_turn || turn_context.multi_agent_version == MultiAgentVersion::V2 {
             return None;
         }

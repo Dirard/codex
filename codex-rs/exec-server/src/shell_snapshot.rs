@@ -394,10 +394,12 @@ impl ShellSnapshotCache {
             )
         };
         if shell_type == ShellType::Bash {
-            // Seccomp can make Bash misdetect remote startup and re-read .bashrc.
-            prepared
-                .command
-                .insert(shell_start + 1, "--norc".to_string());
+            // Fork: seccomp can make Bash misdetect remote startup and re-read .bashrc. Bash
+            // takes `--norc` only before its single-character flags, so it goes before `-pc`.
+            let mut replay = params.argv.clone();
+            replay[1].clone_from(flag);
+            replay[2].clone_from(script);
+            prepared.insert_shell_option(&replay, "--norc".to_string());
         }
 
         telemetry.shell_snapshot_command(wait, availability, "used");

@@ -2830,8 +2830,13 @@ impl Session {
         .await;
         self.send_event_raw_with_persistence_and_status(event, /*persist*/ true, status)
             .await;
-        if let Some((reporting, outcome)) = self.outcome_reporting.as_ref().zip(host_outcome) {
-            reporting.reporter.report(outcome).await;
+        if let Some((reporter, outcome)) = self
+            .outcome_reporting
+            .as_ref()
+            .and_then(|reporting| reporting.reporter.as_ref())
+            .zip(host_outcome)
+        {
+            reporter.report(outcome).await;
         }
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
             .await;

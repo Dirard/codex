@@ -91,7 +91,7 @@ fn recorded(
     step_truncation: OutputTruncation,
     replay: bool,
 ) -> FunctionCallOutputPayload {
-    let mut response = result.into_response();
+    let mut response = result.into_response(/*file_backed_tool_audio*/ false);
     let mut history = ContextManager::default();
     history.record_annotated_items(std::slice::from_mut(&mut response), step_truncation);
     let items = history.raw_items().cloned().collect::<Vec<_>>();

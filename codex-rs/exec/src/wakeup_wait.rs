@@ -12,7 +12,7 @@ use std::time::Duration;
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
-use codex_app_server_client::InProcessAppServerClient;
+use codex_app_server_client::AppServerClient;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadBackgroundTerminalsPendingParams;
@@ -58,12 +58,17 @@ pub(crate) struct WakeupWait {
 }
 
 impl WakeupWait {
-    pub(crate) fn new(config: &codex_core::config::Config, thread_id: &str) -> Self {
+    /// Without a local config (`codex exec --remote`) exec does not wait.
+    pub(crate) fn new(config: Option<&codex_core::config::Config>, thread_id: &str) -> Self {
         Self {
-            enabled: config
-                .features
-                .enabled(codex_features::Feature::ScheduledWakeups),
-            timeout: Duration::from_millis(config.scheduled_wakeups.exec_wait_timeout_ms),
+            enabled: config.is_some_and(|config| {
+                config
+                    .features
+                    .enabled(codex_features::Feature::ScheduledWakeups)
+            }),
+            timeout: config.map_or(Duration::ZERO, |config| {
+                Duration::from_millis(config.scheduled_wakeups.exec_wait_timeout_ms)
+            }),
             thread_id: thread_id.to_string(),
             waiting: None,
             expired: false,
@@ -122,7 +127,7 @@ impl WakeupWait {
     /// thread has a pending wakeup or an active loop. Returns whether exec waits.
     pub(crate) async fn keep_waiting(
         &mut self,
-        client: &InProcessAppServerClient,
+        client: &AppServerClient,
         request_ids: &mut RequestIdSequencer,
     ) -> bool {
         self.turn_in_progress = false;
@@ -164,7 +169,7 @@ impl WakeupWait {
     /// A timer of the wait fired (R7.3).
     pub(crate) async fn on_tick(
         &mut self,
-        client: &InProcessAppServerClient,
+        client: &AppServerClient,
         request_ids: &mut RequestIdSequencer,
         event_processor: &mut dyn EventProcessor,
         error_seen: &mut bool,
@@ -218,7 +223,7 @@ impl WakeupWait {
     /// R7.4: Ctrl-C between turns cancels the wakeup and exits with an error.
     pub(crate) async fn on_interrupt(
         &mut self,
-        client: &InProcessAppServerClient,
+        client: &AppServerClient,
         request_ids: &mut RequestIdSequencer,
         event_processor: &mut dyn EventProcessor,
         error_seen: &mut bool,
@@ -233,7 +238,7 @@ impl WakeupWait {
 
     async fn read(
         &self,
-        client: &InProcessAppServerClient,
+        client: &AppServerClient,
         request_ids: &mut RequestIdSequencer,
     ) -> Option<ThreadWakeupState> {
         match send_request_with_response::<ThreadWakeupReadResponse>(
@@ -256,11 +261,7 @@ impl WakeupWait {
         }
     }
 
-    async fn cancel(
-        &self,
-        client: &InProcessAppServerClient,
-        request_ids: &mut RequestIdSequencer,
-    ) {
+    async fn cancel(&self, client: &AppServerClient, request_ids: &mut RequestIdSequencer) {
         if let Err(err) = send_request_with_response::<ThreadWakeupCancelResponse>(
             client,
             ClientRequest::ThreadWakeupCancel {
@@ -280,7 +281,7 @@ impl WakeupWait {
     /// Whether a turn other than the last completed one runs or is about to start.
     async fn other_turn_active(
         &self,
-        client: &InProcessAppServerClient,
+        client: &AppServerClient,
         request_ids: &mut RequestIdSequencer,
     ) -> bool {
         match send_request_with_response::<ThreadBackgroundTerminalsPendingResponse>(

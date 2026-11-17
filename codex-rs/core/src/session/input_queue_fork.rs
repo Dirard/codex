@@ -482,6 +482,20 @@ impl InputQueue {
         }
     }
 
+    /// Fork: names a queue-only wake by a queued finished workflow run (dynamic workflow, UC7)
+    /// or background terminal exit (UC3, R3.1). It only looks at the queue: upstream keeps
+    /// queued input in the thread queue until the wake's task registers (#61198).
+    pub(crate) async fn fork_name_wake_trigger(&self, start_options: &mut TurnStartOptions) {
+        let trigger = match self.fork_background_activity().await {
+            Some(InputQueueActivity::Workflow) => crate::workflow::WORKFLOW_TURN_TRIGGER,
+            Some(InputQueueActivity::BackgroundTerminal) => {
+                crate::session::BACKGROUND_TERMINAL_TURN_TRIGGER
+            }
+            Some(InputQueueActivity::Mailbox | InputQueueActivity::Steer) | None => return,
+        };
+        start_options.turn_trigger = Some(trigger.to_string());
+    }
+
     /// Fork: the activity of queued background notifications; a queued workflow notification
     /// names its own activity.
     pub(super) async fn fork_background_activity(&self) -> Option<InputQueueActivity> {

@@ -253,7 +253,7 @@ async fn grandchild_result_is_retained_for_evicted_parent() {
 
     mark_thread_completed(tester.thread.as_ref()).await;
 
-    let retained = control.runtime.mailboxes.take(worker.thread_id);
+    let retained = control.runtime.mailboxes.take(worker.thread_id, |_| true);
     let [mail] = retained.as_slice() else {
         panic!("expected one retained result for the evicted worker, got {retained:?}");
     };

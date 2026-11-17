@@ -1865,6 +1865,7 @@ fn runtime_serialization_scopes_match_manifest_representatives() {
             request_id: request_id(),
             params: v2::McpServerOauthLoginParams {
                 name: "server-1".to_string(),
+                environment_id: None,
                 thread_id: None,
                 client_registration: None,
                 scopes: None,

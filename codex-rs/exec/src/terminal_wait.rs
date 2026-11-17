@@ -12,7 +12,7 @@
 
 use std::time::Duration;
 
-use codex_app_server_client::InProcessAppServerClient;
+use codex_app_server_client::AppServerClient;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadBackgroundTerminal;
@@ -72,12 +72,17 @@ pub(crate) struct TerminalWait {
 }
 
 impl TerminalWait {
-    pub(crate) fn new(config: &codex_core::config::Config, thread_id: &str) -> Self {
+    /// Without a local config (`codex exec --remote`) exec does not wait.
+    pub(crate) fn new(config: Option<&codex_core::config::Config>, thread_id: &str) -> Self {
         Self {
-            enabled: config
-                .features
-                .enabled(codex_features::Feature::ExecExitNotifications),
-            timeout: Duration::from_millis(config.exec_exit_notifications.exec_wait_timeout_ms),
+            enabled: config.is_some_and(|config| {
+                config
+                    .features
+                    .enabled(codex_features::Feature::ExecExitNotifications)
+            }),
+            timeout: config.map_or(Duration::ZERO, |config| {
+                Duration::from_millis(config.exec_exit_notifications.exec_wait_timeout_ms)
+            }),
             thread_id: thread_id.to_string(),
             waiting: None,
             waited: false,
@@ -135,7 +140,7 @@ impl TerminalWait {
     /// (P2-3; fork-features-default-on R4.1).
     pub(crate) async fn keep_waiting(
         &mut self,
-        client: &InProcessAppServerClient,
+        client: &AppServerClient,
         request_ids: &mut RequestIdSequencer,
         event_processor: &mut dyn EventProcessor,
     ) -> bool {
@@ -193,7 +198,7 @@ impl TerminalWait {
     /// A timer of the wait fired (R7.2, R7.3).
     pub(crate) async fn on_tick(
         &mut self,
-        client: &InProcessAppServerClient,
+        client: &AppServerClient,
         request_ids: &mut RequestIdSequencer,
         event_processor: &mut dyn EventProcessor,
         error_seen: &mut bool,
@@ -275,7 +280,7 @@ impl TerminalWait {
     /// and exec exits with an error, as after the timeout (P3-5).
     pub(crate) async fn on_interrupt(
         &mut self,
-        client: &InProcessAppServerClient,
+        client: &AppServerClient,
         request_ids: &mut RequestIdSequencer,
         event_processor: &mut dyn EventProcessor,
         error_seen: &mut bool,
@@ -292,7 +297,7 @@ impl TerminalWait {
     /// output watch went quiet; the shutdown terminates them (P2-3).
     async fn name_running_terminals(
         &self,
-        client: &InProcessAppServerClient,
+        client: &AppServerClient,
         request_ids: &mut RequestIdSequencer,
         event_processor: &mut dyn EventProcessor,
     ) {
@@ -321,7 +326,7 @@ impl TerminalWait {
 
     async fn pending(
         &self,
-        client: &InProcessAppServerClient,
+        client: &AppServerClient,
         request_ids: &mut RequestIdSequencer,
     ) -> Option<ThreadBackgroundTerminalsPendingResponse> {
         match send_request_with_response::<ThreadBackgroundTerminalsPendingResponse>(

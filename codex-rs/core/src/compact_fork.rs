@@ -16,10 +16,10 @@ use crate::stream_events_utils::last_assistant_message_from_item;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::MessagePhase;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::user_input::UserInput;
 use codex_tools::ToolSpec;
+use codex_user_input::LocalImagePreparation;
+use codex_user_input::ResolvedUserInput;
 
 /// Sent only on the single retry after a local compaction response called a tool. The bundled
 /// compaction prompt (`prompts/templates/compact/prompt.md`) already forbids tool calls, because
@@ -85,10 +85,12 @@ pub(super) fn remind_once(
         ));
     }
     *summary_reminder_sent = true;
-    let reminder = ResponseInputItem::from(vec![UserInput::Text {
-        text: LOCAL_COMPACTION_SUMMARY_REMINDER.to_string(),
-        text_elements: Vec::new(),
-    }]);
+    let (reminder, _) = ResolvedUserInput::into_message(
+        &[ResolvedUserInput::text(
+            LOCAL_COMPACTION_SUMMARY_REMINDER.to_string(),
+        )],
+        LocalImagePreparation::Process,
+    );
     history.record_items(&[reminder.into()], step_context.output_truncation());
     Ok(())
 }

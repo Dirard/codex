@@ -209,6 +209,8 @@ impl HousekeeperSampler {
         ResponsesApiRequest {
             request_country: Default::default(),
             model: self.model.slug.clone(),
+            // Fork: the instructions travel in `input`, as upstream sends them.
+            instructions: String::new(),
             input,
             tools: None,
             tool_choice: "none".to_owned(),

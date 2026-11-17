@@ -282,8 +282,13 @@ async fn build_and_install_compaction(
                 window_prefix.clone(),
                 context.clone(),
             );
+            // The installer also restores active additional context the candidate does not
+            // retain (#61390); count the history as it installs.
+            let installed_history = sess
+                .fork_complete_replacement_preview(new_history.clone())
+                .await;
             let candidate_tokens = estimate_candidate_request_tokens(
-                &new_history,
+                &installed_history,
                 &base_instructions,
                 replacement_model_info.as_ref(),
                 tool_tokens,

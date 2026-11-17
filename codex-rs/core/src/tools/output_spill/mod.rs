@@ -412,12 +412,20 @@ impl ToolOutput for SpilledToolOutput {
         self.original.success_for_logging()
     }
 
+    fn was_aborted(&self) -> bool {
+        self.original.was_aborted()
+    }
+
     fn set_handler_duration_ms(&mut self, handler_duration_ms: u64) {
         self.original.set_handler_duration_ms(handler_duration_ms);
     }
 
     fn contains_external_context(&self) -> bool {
         self.original.contains_external_context()
+    }
+
+    fn output_budget_applied(&self) -> bool {
+        self.original.output_budget_applied()
     }
 
     fn history_truncation_override(&self) -> Option<OutputTruncation> {
@@ -504,12 +512,20 @@ impl ToolOutput for ItemTextSpill {
         self.0.success_for_logging()
     }
 
+    fn was_aborted(&self) -> bool {
+        self.0.was_aborted()
+    }
+
     fn set_handler_duration_ms(&mut self, handler_duration_ms: u64) {
         self.0.set_handler_duration_ms(handler_duration_ms);
     }
 
     fn contains_external_context(&self) -> bool {
         self.0.contains_external_context()
+    }
+
+    fn output_budget_applied(&self) -> bool {
+        self.0.output_budget_applied()
     }
 
     fn history_truncation_override(&self) -> Option<OutputTruncation> {

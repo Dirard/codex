@@ -232,6 +232,10 @@ impl WrappedSandboxCommand {
     }
 }
 
+// Fork: shell options inserted into a prepared command (exec-server shell snapshot replay).
+#[path = "launch_fork.rs"]
+mod fork;
+
 #[derive(Clone, Default)]
 pub(super) enum SandboxOperation {
     #[default]

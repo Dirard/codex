@@ -97,6 +97,7 @@ fork_clippy_packages=(
   codex-extension-items
   codex-features
   codex-guardian-v2
+  codex-guardian-v3
   codex-history
   codex-linux-sandbox
   codex-mcp
@@ -105,6 +106,7 @@ fork_clippy_packages=(
   codex-protocol
   codex-rollout
   codex-rollout-trace
+  codex-sandboxing
   codex-thread-manager-sample
   codex-thread-store
   codex-tools
@@ -143,6 +145,7 @@ default_test_packages=(
   codex-extension-items
   codex-features
   codex-guardian-v2
+  codex-guardian-v3
   codex-history
   codex-mcp
   codex-models-manager
@@ -150,6 +153,7 @@ default_test_packages=(
   codex-protocol
   codex-rollout
   codex-rollout-trace
+  codex-sandboxing
   codex-thread-manager-sample
   codex-thread-store
   codex-tools

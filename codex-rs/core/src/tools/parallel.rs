@@ -90,6 +90,7 @@ fn direct_path_supported(tool_name: &codex_tools::ToolName, source: &ToolCallSou
             | "followup_task" | "interrupt_agent" | "send_message"))
 }
 
+#[derive(Debug)]
 pub(crate) struct ToolCallResult {
     pub(crate) response: ResponseItemEnvelope,
     pub(crate) made_progress: bool,
