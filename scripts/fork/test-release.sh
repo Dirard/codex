@@ -1293,8 +1293,14 @@ expect workflow-pins-carry-full-versions test "${pins_ok}" -eq 1
 # one, and it passes the channel that rust-toolchain.sh reads from that file.
 toolchain_script="${repo_root}/scripts/fork/rust-toolchain.sh"
 expect workflow-toolchain-only-from-pin bash -c \
-  "! grep -l 'dtolnay/rust-toolchain' '${fork_ci}' '${fork_release}' '${setup_rust}' | grep -q ."
-expect workflow-toolchain-action-uses-pin grep -qE '^ +toolchain: \$\{\{ steps\.pin\.outputs\.channel \}\}$' "${rust_toolchain}"
+  "! grep -l 'dtolnay/rust-toolchain' '${fork_ci}' '${fork_release}' '${setup_rust}' '${rust_toolchain}' | grep -q ."
+expect workflow-toolchain-action-uses-pin grep -qE '^ +CHANNEL: \$\{\{ steps\.pin\.outputs\.channel \}\}$' "${rust_toolchain}"
+# shellcheck disable=SC2016 # ${CHANNEL} is expanded by the action's shell
+expect workflow-toolchain-action-installs-pin in_order "$(cat "${rust_toolchain}")" \
+  'rustup toolchain install "${CHANNEL}"' 'rustup default "${CHANNEL}"'
+# shellcheck disable=SC2016 # ${CHANNEL} is expanded by the action's shell
+expect workflow-toolchain-action-checks-default in_order "$(cat "${rust_toolchain}")" \
+  'rustup default "${CHANNEL}"' '"${CHANNEL}-"*) ;;'
 expect workflow-toolchain-action-runs-script grep -q 'bash scripts/fork/rust-toolchain.sh' "${rust_toolchain}"
 expect workflow-setup-rust-uses-toolchain-action grep -qE '^ +- uses: \./\.github/actions/fork-rust-toolchain$' "${setup_rust}"
 expect workflow-release-uses-toolchain-action grep -qE '^ +- uses: \./\.github/actions/fork-rust-toolchain$' "${fork_release}"

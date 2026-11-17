@@ -27,9 +27,33 @@ runs:
         echo "Rust toolchain from codex-rs/rust-toolchain.toml: ${channel}"
         echo "channel=${channel}" >>"${GITHUB_OUTPUT}"
 
-    # The ref pins the action's code; `toolchain` chooses what it installs.
-    - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
-      with:
-        toolchain: ${{ steps.pin.outputs.channel }}
-        components: ${{ inputs.components }}
-        targets: ${{ inputs.targets }}
+    # rustup comes with the GitHub-hosted Linux and Windows images. The pinned
+    # toolchain must also be the default: rust-cache keys its cache on the
+    # default rustc, while cargo in codex-rs builds with the pinned one, so a
+    # different default restores a cache built by another compiler. (The
+    # third-party action used before was pinned to its 1.95.0 version branch,
+    # which ignores `toolchain`: it kept installing 1.95.0 as the default after
+    # upstream moved the pin to 1.99.1.)
+    - name: Install the pinned toolchain
+      shell: bash
+      env:
+        CHANNEL: ${{ steps.pin.outputs.channel }}
+        COMPONENTS: ${{ inputs.components }}
+        TARGETS: ${{ inputs.targets }}
+        RUSTUP_MAX_RETRIES: "10"
+      run: |
+        set -euo pipefail
+        args=(--profile minimal --no-self-update)
+        for component in ${COMPONENTS//,/ }; do args+=(--component "${component}"); done
+        for target in ${TARGETS//,/ }; do args+=(--target "${target}"); done
+        rustup toolchain install "${CHANNEL}" "${args[@]}"
+        rustup default "${CHANNEL}"
+        default="$(rustup default)"
+        case "${default}" in
+          "${CHANNEL}-"*) ;;
+          *)
+            echo "::error::rustup default is '${default}'; codex-rs/rust-toolchain.toml pins ${CHANNEL}"
+            exit 1
+            ;;
+        esac
+        rustc --version --verbose
