@@ -281,6 +281,17 @@ rustc --crate-name codex_tui --crate-type lib
 rustc --crate-name codex_tui --test"
 unset FORK_HEAVY_TEST_CRATES FORK_HEAVY_TEST_LOCK
 
+# CI runs these scripts directly, and a checkout with core.fileMode=false does not
+# record chmod: rustc-heavy-lock.sh was first pushed as 100644 and every Rust test
+# job failed with "Permission denied".
+not_executable="$(git -C "${repo_root}" ls-files -s -- scripts/fork | while read -r mode _ _ path; do
+  if [[ "${mode}" != 100755 ]] && head -c 2 "${repo_root}/${path}" | grep -q '^#!'; then
+    printf '%s\n' "${path}"
+  fi
+done)"
+[[ -z "${not_executable}" ]] || printf '    not 100755 in git: %s\n' "${not_executable}" >&2
+expect fork-scripts-executable-in-git test -z "${not_executable}"
+
 STUB_STATE="$(new_state)"
 junit "${STUB_STATE}" suite::rmcp_client::streamable_http_with_oauth_round_trip \
   'test_streamable_http_server binary not available, skipping test: could not locate binary &quot;test_streamable_http_server&quot;' \
