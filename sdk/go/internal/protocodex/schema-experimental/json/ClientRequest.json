@@ -269,6 +269,17 @@
             "profile": {
               "type": "string"
             },
+            "providerId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BedrockProviderId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Defaults to Amazon Bedrock Mantle when omitted."
+            },
             "region": {
               "type": "string"
             },
@@ -290,6 +301,17 @@
         },
         {
           "properties": {
+            "providerId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BedrockProviderId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Defaults to Amazon Bedrock Mantle when omitted."
+            },
             "region": {
               "type": "string"
             },
@@ -2356,6 +2378,17 @@
             "apiKey": {
               "type": "string"
             },
+            "providerId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BedrockProviderId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Defaults to Amazon Bedrock Mantle when omitted."
+            },
             "region": {
               "type": "string"
             },
@@ -2380,6 +2413,17 @@
           "properties": {
             "accessKeyId": {
               "type": "string"
+            },
+            "providerId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BedrockProviderId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Defaults to Amazon Bedrock Mantle when omitted."
             },
             "region": {
               "type": "string"
@@ -7423,6 +7467,13 @@
             "null"
           ]
         },
+        "model": {
+          "description": "Override the model for this sample. Omit or pass `null` to inherit the source thread's model.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "prompt": {
           "type": "string"
         },
@@ -7460,6 +7511,18 @@
         "expectedTurnId",
         "prompt",
         "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadSearchCancelParams": {
+      "description": "Request cancellation on the same connection. `thread/search/cancel` targets only `thread/search`; `thread/search/stream/cancel` targets only `thread/search/stream`. Cancellation is idempotent: the cancel response acknowledges the request, and an interrupted search completes with an error after its subprocess is stopped and reaped. If completion races cancellation, the original search may still succeed. An already-completed search is unaffected.",
+      "properties": {
+        "requestId": {
+          "$ref": "#/definitions/RequestId"
+        }
+      },
+      "required": [
+        "requestId"
       ],
       "type": "object"
     },
@@ -7530,7 +7593,7 @@
           ]
         },
         "searchTerm": {
-          "description": "Required substring/full-text query for thread search.",
+          "description": "Required substring/full-text query. `thread/search/stream` limits this to 65,536 UTF-8 bytes after trimming surrounding whitespace.",
           "type": "string"
         },
         "sortDirection": {
@@ -8463,7 +8526,7 @@
           "additionalProperties": {
             "$ref": "#/definitions/AdditionalContextEntry"
           },
-          "description": "Optional client-provided context fragments keyed by an opaque source identifier.",
+          "description": "Client-provided context fragments keyed by an opaque source identifier. Omit this field or pass `null` to keep the current set. Pass a map to replace the set when the input is delivered, or `{}` to clear it. Clearing the set leaves previously recorded messages in the conversation history.",
           "type": [
             "object",
             "null"
@@ -8715,7 +8778,7 @@
           "additionalProperties": {
             "$ref": "#/definitions/AdditionalContextEntry"
           },
-          "description": "Optional client-provided context fragments keyed by an opaque source identifier.",
+          "description": "Client-provided context fragments keyed by an opaque source identifier. Omit this field or pass `null` to keep the current set. Pass a map to replace the set when the input is delivered, or `{}` to clear it. Clearing the set leaves previously recorded messages in the conversation history.",
           "type": [
             "object",
             "null"
@@ -10780,6 +10843,80 @@
         "params"
       ],
       "title": "Thread/searchRequest",
+      "type": "object"
+    },
+    {
+      "description": "Search with best-effort incremental `thread/search/partial` notifications. The final response is authoritative for results, ordering, and cursors.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/search/stream"
+          ],
+          "title": "Thread/search/streamRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadSearchParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/search/streamRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/search/cancel"
+          ],
+          "title": "Thread/search/cancelRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadSearchCancelParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/search/cancelRequest",
+      "type": "object"
+    },
+    {
+      "description": "Cancel a `thread/search/stream` request on this connection.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/search/stream/cancel"
+          ],
+          "title": "Thread/search/stream/cancelRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadSearchCancelParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/search/stream/cancelRequest",
       "type": "object"
     },
     {

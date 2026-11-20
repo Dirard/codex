@@ -424,6 +424,24 @@ func (c RawClient) ThreadSearch(ctx context.Context, params ThreadSearchParams) 
 	return result, err
 }
 
+func (c RawClient) ThreadSearchStream(ctx context.Context, params ThreadSearchParams) (ThreadSearchResponse, error) {
+	var result ThreadSearchResponse
+	err := c.sender.Call(ctx, "thread/search/stream", params, &result, MethodMetadataByMethod["thread/search/stream"])
+	return result, err
+}
+
+func (c RawClient) ThreadSearchCancel(ctx context.Context, params ThreadSearchCancelParams) (ThreadSearchCancelResponse, error) {
+	var result ThreadSearchCancelResponse
+	err := c.sender.Call(ctx, "thread/search/cancel", params, &result, MethodMetadataByMethod["thread/search/cancel"])
+	return result, err
+}
+
+func (c RawClient) ThreadSearchStreamCancel(ctx context.Context, params ThreadSearchCancelParams) (ThreadSearchCancelResponse, error) {
+	var result ThreadSearchCancelResponse
+	err := c.sender.Call(ctx, "thread/search/stream/cancel", params, &result, MethodMetadataByMethod["thread/search/stream/cancel"])
+	return result, err
+}
+
 func (c RawClient) ThreadSearchOccurrences(ctx context.Context, params ThreadSearchOccurrencesParams) (ThreadSearchOccurrencesResponse, error) {
 	var result ThreadSearchOccurrencesResponse
 	err := c.sender.Call(ctx, "thread/searchOccurrences", params, &result, MethodMetadataByMethod["thread/searchOccurrences"])

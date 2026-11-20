@@ -166,6 +166,8 @@ pub(crate) fn notification_routing_strategy(method: &'static str) -> Notificatio
             routed_notification(method, &[("importId", false)])
         }
         "fs/changed" => routed_notification(method, &[("watchId", false)]),
+        // Partial results of a streamed `thread/search`, addressed to its request (#62132).
+        "thread/search/partial" => routed_notification(method, &[("requestId", false)]),
         "item/reasoning/summaryTextDelta" | "item/reasoning/summaryPartAdded" => {
             routed_notification(
                 method,

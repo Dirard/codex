@@ -137,7 +137,6 @@ func TestRuntimeEnvScrubsAndRejectsReservedHookNames(t *testing.T) {
 		"CODEX_APP_SERVER_DEV_OPEN_APP_URL",
 		"CODEX_APP_SERVER_TEST_USER_CONFIG_FILE",
 		"CODEX_AUTHAPI_BASE_URL",
-		"CODEX_CODE_MODE_HOST_PATH",
 		"CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN",
 		"CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID",
 		"CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID",
@@ -203,10 +202,6 @@ func TestReservedRuntimeEnvTracksRustAuthAndDebugHooks(t *testing.T) {
 		{path: "codex-rs/app-server/src/request_processors/account_processor.rs", prefixes: []string{"CODEX_APP_SERVER_"}},
 		{path: "codex-rs/app-server/src/request_processors/account_processor/rate_limit_resets.rs", prefixes: []string{"CODEX_TEST_"}},
 		{path: "codex-rs/core-plugins/src/remote_bundle.rs", prefixes: []string{"CODEX_TEST_"}},
-		{
-			path:  "codex-rs/code-mode/src/remote_session.rs",
-			exact: map[string]struct{}{"CODEX_CODE_MODE_HOST_PATH": {}},
-		},
 		{path: "codex-rs/exec-server/src/environment.rs", prefixes: []string{"CODEX_EXEC_SERVER_"}},
 		{
 			path:  "codex-rs/login/src/auth/default_client.rs",

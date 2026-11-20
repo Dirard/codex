@@ -1623,6 +1623,60 @@
       ],
       "type": "string"
     },
+    "ThreadAgentWorktree": {
+      "description": "The managed git worktree of an isolated sub-agent thread.",
+      "properties": {
+        "branch": {
+          "description": "The agent branch that holds the agent's recorded changes; null until it exists.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Root of the worktree."
+        },
+        "status": {
+          "$ref": "#/definitions/ThreadAgentWorktreeStatus"
+        }
+      },
+      "required": [
+        "path",
+        "status"
+      ],
+      "type": "object"
+    },
+    "ThreadAgentWorktreeStatus": {
+      "description": "Whether an agent worktree holds work.",
+      "oneOf": [
+        {
+          "description": "The agent branch exists, or the worktree has uncommitted changes or new commits.",
+          "enum": [
+            "changed"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "No branch and no changes.",
+          "enum": [
+            "clean"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The worktree checkout no longer exists.",
+          "enum": [
+            "removed"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "ThreadEnvironment": {
       "description": "An environment selected by a loaded thread, independent of connection status.",
       "properties": {
@@ -1648,6 +1702,7 @@
     },
     "ThreadExtra": {
       "description": "Extra app-server data for a thread.",
+      "properties": {},
       "type": "object"
     },
     "ThreadHistoryMode": {
@@ -2523,6 +2578,47 @@
           "type": "object"
         },
         {
+          "description": "Start or completion of a dynamic workflow run.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "notification": {
+              "default": null,
+              "description": "Completion notification delivered to the model; set once the run is terminal.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "runId": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/WorkflowRunStatus"
+            },
+            "type": {
+              "enum": [
+                "workflow"
+              ],
+              "title": "WorkflowThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "runId",
+            "status",
+            "type"
+          ],
+          "title": "WorkflowThreadItem",
+          "type": "object"
+        },
+        {
           "properties": {
             "id": {
               "type": "string"
@@ -3236,6 +3332,17 @@
           "type": "object"
         }
       ]
+    },
+    "WorkflowRunStatus": {
+      "description": "Lifecycle status of a dynamic workflow run.",
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted"
+      ],
+      "type": "string"
     }
   },
   "description": "A best-effort incremental batch for `thread/search/stream`. Match `requestId` to the request on this connection. Only a small subset of verified matches may be emitted; rows are unique and arrive in discovery order, but may be dropped under load or fall outside the final sorted page. Thread fields use stored metadata and the current watched status; live thread settings are enriched in the final response. Replace provisional rows with the authoritative final response. No partials follow it or an error.",

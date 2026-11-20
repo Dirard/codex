@@ -35,7 +35,6 @@ var reservedRuntimeEnv = map[string]struct{}{
 	"CODEX_APP_SERVER_SDK_INTEGRATION_TEST_MODE":           {},
 	"CODEX_APP_SERVER_TEST_USER_CONFIG_FILE":               {},
 	"CODEX_AUTHAPI_BASE_URL":                               {},
-	"CODEX_CODE_MODE_HOST_PATH":                            {},
 	"CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN":                   {},
 	"CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID":           {},
 	"CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID":               {},

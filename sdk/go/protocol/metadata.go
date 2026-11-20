@@ -1,11 +1,11 @@
 package protocol
 
-const StableProtocolDigest = "223ef7641152dd4e64c51e82bdc77194ee2c23eb0b41d08b2bc9d337f3093aec"
-const StableSchemaDigest = "f03d779d69389d00d1a2fe3d98cf7247954018c677d06864e8f4a9690236353f"
-const StableManifestDigest = "5fd423ea5fe622bbc77ef9d6971e7f3f4de74725f367012b671ab8c9bbb4617d"
-const ExperimentalProtocolDigest = "432fa76be8f19974be09f721d773e275f9297b12ccc40ea24988dd65a6b471f9"
-const ExperimentalSchemaDigest = "ae3f32187391168e50ac834c8800593a91702e78ca9e25c0a246661e47b0eb2d"
-const ExperimentalManifestDigest = "304b643137354ec9a23ad7a920100157cf7d4aec8f59229db49bb688393f11eb"
+const StableProtocolDigest = "b671a7bf1927a194e30c2a6442f4b0b6f8ed505ccbc481bd41312a9dd7688d5c"
+const StableSchemaDigest = "71b7e7a376696490bc06817f1855328125e4f1b41ddf6b2becb67c043b87b481"
+const StableManifestDigest = "e8a1121ead0b6eb0fc8ecbca3826c92ee5583c8f4b4fedb992a3d9a2967e3b45"
+const ExperimentalProtocolDigest = "ce7c6286f35b7c6a5ae6d2ccf944d263a5c95fe83ea12a05a1c81886c26efa49"
+const ExperimentalSchemaDigest = "bfb58ced89a7d9773e2646a5afef180f99e39dd75afca8609771c6dd369781dd"
+const ExperimentalManifestDigest = "e5c32dc9d4689d4a5fe78a92ceea4903c8635a0df04b4731bbcd1952e8af7b70"
 
 const MaxAdditionalContextEntries = 8
 const MaxAdditionalContextKeyBytes = 128
@@ -113,6 +113,9 @@ var MethodMetadataByMethod = map[string]MethodMetadata{
 	"threadSection/update":                      {Method: "threadSection/update", Visibility: "public", ParamsType: "ThreadSectionUpdateParams", ResponseType: "ThreadSectionUpdateResponse", ParamsSchemaRef: "#/definitions/ThreadSectionUpdateParams", ResponseSchemaRef: "#/definitions/ThreadSectionUpdateResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"threadSection/delete":                      {Method: "threadSection/delete", Visibility: "public", ParamsType: "ThreadSectionDeleteParams", ResponseType: "ThreadSectionDeleteResponse", ParamsSchemaRef: "#/definitions/ThreadSectionDeleteParams", ResponseSchemaRef: "#/definitions/ThreadSectionDeleteResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"thread/search":                             {Method: "thread/search", Visibility: "public", ParamsType: "ThreadSearchParams", ResponseType: "ThreadSearchResponse", ParamsSchemaRef: "#/definitions/ThreadSearchParams", ResponseSchemaRef: "#/definitions/ThreadSearchResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: true, Retry: "neverRetryAfterWrite"},
+	"thread/search/stream":                      {Method: "thread/search/stream", Visibility: "public", ParamsType: "ThreadSearchParams", ResponseType: "ThreadSearchResponse", ParamsSchemaRef: "#/definitions/ThreadSearchParams", ResponseSchemaRef: "#/definitions/ThreadSearchResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "manual response payload conversion", Experimental: true, Retry: "neverRetryAfterWrite"},
+	"thread/search/cancel":                      {Method: "thread/search/cancel", Visibility: "public", ParamsType: "ThreadSearchCancelParams", ResponseType: "ThreadSearchCancelResponse", ParamsSchemaRef: "#/definitions/ThreadSearchCancelParams", ResponseSchemaRef: "#/definitions/ThreadSearchCancelResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: true, Retry: "neverRetryAfterWrite"},
+	"thread/search/stream/cancel":               {Method: "thread/search/stream/cancel", Visibility: "public", ParamsType: "ThreadSearchCancelParams", ResponseType: "ThreadSearchCancelResponse", ParamsSchemaRef: "#/definitions/ThreadSearchCancelParams", ResponseSchemaRef: "#/definitions/ThreadSearchCancelResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "manual response payload conversion", Experimental: true, Retry: "neverRetryAfterWrite"},
 	"thread/searchOccurrences":                  {Method: "thread/searchOccurrences", Visibility: "public", ParamsType: "ThreadSearchOccurrencesParams", ResponseType: "ThreadSearchOccurrencesResponse", ParamsSchemaRef: "#/definitions/ThreadSearchOccurrencesParams", ResponseSchemaRef: "#/definitions/ThreadSearchOccurrencesResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: true, Retry: "neverRetryAfterWrite"},
 	"thread/loaded/list":                        {Method: "thread/loaded/list", Visibility: "public", ParamsType: "ThreadLoadedListParams", ResponseType: "ThreadLoadedListResponse", ParamsSchemaRef: "#/definitions/ThreadLoadedListParams", ResponseSchemaRef: "#/definitions/ThreadLoadedListResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},
 	"thread/read":                               {Method: "thread/read", Visibility: "public", ParamsType: "ThreadReadParams", ResponseType: "ThreadReadResponse", ParamsSchemaRef: "#/definitions/ThreadReadParams", ResponseSchemaRef: "#/definitions/ThreadReadResponse", SchemaExcludedReason: "", InspectParams: false, ManualPayloadConversion: "", Experimental: false, Retry: "neverRetryAfterWrite"},

@@ -1155,6 +1155,48 @@ func (v ClientRequest) ThreadSearchParams() (ThreadSearchParams, bool, error) {
 	return params, true, nil
 }
 
+func (v ClientRequest) ThreadSearchStreamParams() (ThreadSearchParams, bool, error) {
+	if v.Method != "thread/search/stream" {
+		return ThreadSearchParams{}, false, nil
+	}
+	var params ThreadSearchParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) ThreadSearchCancelParams() (ThreadSearchCancelParams, bool, error) {
+	if v.Method != "thread/search/cancel" {
+		return ThreadSearchCancelParams{}, false, nil
+	}
+	var params ThreadSearchCancelParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
+func (v ClientRequest) ThreadSearchStreamCancelParams() (ThreadSearchCancelParams, bool, error) {
+	if v.Method != "thread/search/stream/cancel" {
+		return ThreadSearchCancelParams{}, false, nil
+	}
+	var params ThreadSearchCancelParams
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
 func (v ClientRequest) ThreadSearchOccurrencesParams() (ThreadSearchOccurrencesParams, bool, error) {
 	if v.Method != "thread/searchOccurrences" {
 		return ThreadSearchOccurrencesParams{}, false, nil
@@ -5882,6 +5924,20 @@ func (v ServerNotification) ProcessOutputDeltaParams() (ProcessOutputDeltaNotifi
 	return params, true, nil
 }
 
+func (v ServerNotification) ThreadSearchPartialParams() (ThreadSearchPartialNotification, bool, error) {
+	if v.Method != "thread/search/partial" {
+		return ThreadSearchPartialNotification{}, false, nil
+	}
+	var params ThreadSearchPartialNotification
+	if len(bytes.TrimSpace(v.Params)) == 0 {
+		return params, true, DecodeError{Field: "params", Reason: "missing required field"}
+	}
+	if err := json.Unmarshal(v.Params, &params); err != nil {
+		return params, true, err
+	}
+	return params, true, nil
+}
+
 func (v ServerNotification) ProcessExitedParams() (ProcessExitedNotification, bool, error) {
 	if v.Method != "process/exited" {
 		return ProcessExitedNotification{}, false, nil
@@ -7238,15 +7294,24 @@ func (v *AccountTokenUsageSummary) UnmarshalJSON(data []byte) error {
 	return decodeObject(data, &accountTokenUsageSummarySpec, (*wire)(v))
 }
 
+type AccountUpdateReason string
+
+const (
+	AccountUpdateReasonWorkspaceRoutingReady AccountUpdateReason = "workspaceRoutingReady"
+	AccountUpdateReasonUnknown               AccountUpdateReason = "unknown"
+)
+
 type AccountUpdatedNotification struct {
-	AuthMode Optional[AuthMode] `json:"authMode,omitzero"`
-	PlanType Optional[PlanType] `json:"planType,omitzero"`
+	AuthMode Optional[AuthMode]            `json:"authMode,omitzero"`
+	PlanType Optional[PlanType]            `json:"planType,omitzero"`
+	Reason   Optional[AccountUpdateReason] `json:"reason,omitzero"`
 }
 
 var accountUpdatedNotificationSpec = objectSpec{
 	fields: []objectField{
 		{name: "authMode"},
 		{name: "planType"},
+		{name: "reason"},
 	},
 }
 
@@ -8197,13 +8262,15 @@ const (
 )
 
 type AppToolConfig struct {
-	ApprovalMode Optional[AppToolApproval] `json:"approval_mode,omitzero"`
-	Enabled      Optional[bool]            `json:"enabled,omitzero"`
+	ApprovalMode      Optional[AppToolApproval]   `json:"approval_mode,omitzero"`
+	ApprovalsReviewer Optional[ApprovalsReviewer] `json:"approvals_reviewer,omitzero"`
+	Enabled           Optional[bool]              `json:"enabled,omitzero"`
 }
 
 var appToolConfigSpec = objectSpec{
 	fields: []objectField{
 		{name: "approval_mode"},
+		{name: "approvals_reviewer"},
 		{name: "enabled"},
 	},
 }
@@ -8930,19 +8997,21 @@ const (
 )
 
 type BedrockSetupParams struct {
-	Profile   OptionalNonNull[string] `json:"profile,omitzero"`
-	Region    OptionalNonNull[string] `json:"region,omitzero"`
-	TypeValue string                  `json:"type"`
-	RawJSON   json.RawMessage         `json:"-"`
+	Profile    OptionalNonNull[string]     `json:"profile,omitzero"`
+	ProviderID Optional[BedrockProviderID] `json:"providerId,omitzero"`
+	Region     OptionalNonNull[string]     `json:"region,omitzero"`
+	TypeValue  string                      `json:"type"`
+	RawJSON    json.RawMessage             `json:"-"`
 }
 
 var bedrockSetupParamsSpec = objectSpec{
 	fields: []objectField{
 		{name: "profile", flags: fieldNonNullOptional},
+		{name: "providerId"},
 		{name: "region", flags: fieldNonNullOptional},
 		{name: "type", flags: fieldRequired | fieldRejectNull},
 	},
-	tag:  2,
+	tag:  3,
 	tags: []string{"profile", "environment"},
 }
 
@@ -9413,24 +9482,28 @@ type CodexErrorInfo struct {
 }
 
 var (
-	CodexErrorInfoContextWindowExceeded       = CodexErrorInfo{StringValue: "contextWindowExceeded"}
-	CodexErrorInfoSessionBudgetExceeded       = CodexErrorInfo{StringValue: "sessionBudgetExceeded"}
-	CodexErrorInfoUsageLimitExceeded          = CodexErrorInfo{StringValue: "usageLimitExceeded"}
-	CodexErrorInfoRateLimitExceeded           = CodexErrorInfo{StringValue: "rateLimitExceeded"}
-	CodexErrorInfoFlexUnavailable             = CodexErrorInfo{StringValue: "flexUnavailable"}
-	CodexErrorInfoServerOverloaded            = CodexErrorInfo{StringValue: "serverOverloaded"}
-	CodexErrorInfoModelNotFound               = CodexErrorInfo{StringValue: "modelNotFound"}
-	CodexErrorInfoPolicyCapacityUnavailable   = CodexErrorInfo{StringValue: "policyCapacityUnavailable"}
-	CodexErrorInfoCyberPolicy                 = CodexErrorInfo{StringValue: "cyberPolicy"}
-	CodexErrorInfoMisalignmentPolicyViolation = CodexErrorInfo{StringValue: "misalignmentPolicyViolation"}
-	CodexErrorInfoTooManyDenials              = CodexErrorInfo{StringValue: "tooManyDenials"}
-	CodexErrorInfoInternalServerError         = CodexErrorInfo{StringValue: "internalServerError"}
-	CodexErrorInfoUnauthorized                = CodexErrorInfo{StringValue: "unauthorized"}
-	CodexErrorInfoBadRequest                  = CodexErrorInfo{StringValue: "badRequest"}
-	CodexErrorInfoThreadRollbackFailed        = CodexErrorInfo{StringValue: "threadRollbackFailed"}
-	CodexErrorInfoSandboxError                = CodexErrorInfo{StringValue: "sandboxError"}
-	CodexErrorInfoOther                       = CodexErrorInfo{StringValue: "other"}
-	CodexErrorInfoInferenceHookDenied         = CodexErrorInfo{StringValue: "inferenceHookDenied"}
+	CodexErrorInfoContextWindowExceeded          = CodexErrorInfo{StringValue: "contextWindowExceeded"}
+	CodexErrorInfoSessionBudgetExceeded          = CodexErrorInfo{StringValue: "sessionBudgetExceeded"}
+	CodexErrorInfoUsageLimitExceeded             = CodexErrorInfo{StringValue: "usageLimitExceeded"}
+	CodexErrorInfoApiKeySpendLimitExceeded       = CodexErrorInfo{StringValue: "apiKeySpendLimitExceeded"}
+	CodexErrorInfoProjectSpendLimitExceeded      = CodexErrorInfo{StringValue: "projectSpendLimitExceeded"}
+	CodexErrorInfoOrganizationSpendLimitExceeded = CodexErrorInfo{StringValue: "organizationSpendLimitExceeded"}
+	CodexErrorInfoRateLimitExceeded              = CodexErrorInfo{StringValue: "rateLimitExceeded"}
+	CodexErrorInfoFlexUnavailable                = CodexErrorInfo{StringValue: "flexUnavailable"}
+	CodexErrorInfoServerOverloaded               = CodexErrorInfo{StringValue: "serverOverloaded"}
+	CodexErrorInfoModelNotFound                  = CodexErrorInfo{StringValue: "modelNotFound"}
+	CodexErrorInfoPolicyCapacityUnavailable      = CodexErrorInfo{StringValue: "policyCapacityUnavailable"}
+	CodexErrorInfoCyberPolicy                    = CodexErrorInfo{StringValue: "cyberPolicy"}
+	CodexErrorInfoBioPolicy                      = CodexErrorInfo{StringValue: "bioPolicy"}
+	CodexErrorInfoMisalignmentPolicyViolation    = CodexErrorInfo{StringValue: "misalignmentPolicyViolation"}
+	CodexErrorInfoTooManyDenials                 = CodexErrorInfo{StringValue: "tooManyDenials"}
+	CodexErrorInfoInternalServerError            = CodexErrorInfo{StringValue: "internalServerError"}
+	CodexErrorInfoUnauthorized                   = CodexErrorInfo{StringValue: "unauthorized"}
+	CodexErrorInfoBadRequest                     = CodexErrorInfo{StringValue: "badRequest"}
+	CodexErrorInfoThreadRollbackFailed           = CodexErrorInfo{StringValue: "threadRollbackFailed"}
+	CodexErrorInfoSandboxError                   = CodexErrorInfo{StringValue: "sandboxError"}
+	CodexErrorInfoOther                          = CodexErrorInfo{StringValue: "other"}
+	CodexErrorInfoInferenceHookDenied            = CodexErrorInfo{StringValue: "inferenceHookDenied"}
 )
 
 func (v CodexErrorInfo) IsSet() bool {
@@ -9470,7 +9543,7 @@ func (v CodexErrorInfo) MarshalJSON() ([]byte, error) {
 			return nil, DecodeError{Field: "", Reason: "matches multiple oneOf variants"}
 		}
 		switch v.StringValue {
-		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "rateLimitExceeded", "flexUnavailable", "serverOverloaded", "modelNotFound", "policyCapacityUnavailable", "cyberPolicy", "misalignmentPolicyViolation", "tooManyDenials", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other", "inferenceHookDenied":
+		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "apiKeySpendLimitExceeded", "projectSpendLimitExceeded", "organizationSpendLimitExceeded", "rateLimitExceeded", "flexUnavailable", "serverOverloaded", "modelNotFound", "policyCapacityUnavailable", "cyberPolicy", "bioPolicy", "misalignmentPolicyViolation", "tooManyDenials", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other", "inferenceHookDenied":
 			return json.Marshal(v.StringValue)
 		default:
 			return nil, DecodeError{Field: "", Reason: fmt.Sprintf("unsupported CodexErrorInfo string value %q", v.StringValue)}
@@ -9536,7 +9609,7 @@ func (v *CodexErrorInfo) UnmarshalJSON(data []byte) error {
 	var stringValue string
 	if err := json.Unmarshal(trimmed, &stringValue); err == nil {
 		switch stringValue {
-		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "rateLimitExceeded", "flexUnavailable", "serverOverloaded", "modelNotFound", "policyCapacityUnavailable", "cyberPolicy", "misalignmentPolicyViolation", "tooManyDenials", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other", "inferenceHookDenied":
+		case "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "apiKeySpendLimitExceeded", "projectSpendLimitExceeded", "organizationSpendLimitExceeded", "rateLimitExceeded", "flexUnavailable", "serverOverloaded", "modelNotFound", "policyCapacityUnavailable", "cyberPolicy", "bioPolicy", "misalignmentPolicyViolation", "tooManyDenials", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other", "inferenceHookDenied":
 			*v = CodexErrorInfo{StringValue: stringValue}
 		default:
 			*v = CodexErrorInfo{RawJSON: append(json.RawMessage(nil), data...)}
@@ -11499,6 +11572,15 @@ const (
 	CyberAccessProgramDaybreakRed  CyberAccessProgram = "daybreakRed"
 )
 
+type DaybreakAvailability string
+
+const (
+	DaybreakAvailabilityAvailable           DaybreakAvailability = "available"
+	DaybreakAvailabilityEnrollmentRequired  DaybreakAvailability = "enrollmentRequired"
+	DaybreakAvailabilityUnavailableForModel DaybreakAvailability = "unavailableForModel"
+	DaybreakAvailabilityDefaultValue        DaybreakAvailability = "default"
+)
+
 type DeprecationNoticeNotification struct {
 	Details Optional[string] `json:"details,omitzero"`
 	Summary string           `json:"summary"`
@@ -13252,11 +13334,12 @@ func (v *FsGetMetadataParams) UnmarshalJSON(data []byte) error {
 }
 
 type FsGetMetadataResponse struct {
-	CreatedAtMs  int64 `json:"createdAtMs"`
-	IsDirectory  bool  `json:"isDirectory"`
-	IsFile       bool  `json:"isFile"`
-	IsSymlink    bool  `json:"isSymlink"`
-	ModifiedAtMs int64 `json:"modifiedAtMs"`
+	CreatedAtMs  int64            `json:"createdAtMs"`
+	IsDirectory  bool             `json:"isDirectory"`
+	IsFile       bool             `json:"isFile"`
+	IsSymlink    bool             `json:"isSymlink"`
+	ModifiedAtMs int64            `json:"modifiedAtMs"`
+	SizeBytes    Optional[uint64] `json:"sizeBytes,omitzero"`
 }
 
 var fsGetMetadataResponseSpec = objectSpec{
@@ -13266,6 +13349,7 @@ var fsGetMetadataResponseSpec = objectSpec{
 		{name: "isFile", flags: fieldRequired | fieldRejectNull},
 		{name: "isSymlink", flags: fieldRequired | fieldRejectNull},
 		{name: "modifiedAtMs", flags: fieldRequired | fieldRejectNull},
+		{name: "sizeBytes"},
 	},
 }
 
@@ -13276,7 +13360,19 @@ func (v FsGetMetadataResponse) MarshalJSON() ([]byte, error) {
 
 func (v *FsGetMetadataResponse) UnmarshalJSON(data []byte) error {
 	type wire FsGetMetadataResponse
-	return decodeObject(data, &fsGetMetadataResponseSpec, (*wire)(v))
+	var s objectScan
+	if _, err := s.begin(data, &fsGetMetadataResponseSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if valueSizeBytes, ok := v.SizeBytes.Value(); ok {
+		if valueSizeBytes < 0 {
+			return DecodeError{Field: "sizeBytes", Reason: "below minimum 0"}
+		}
+	}
+	return nil
 }
 
 type FsReadDirectoryEntry struct {
@@ -15658,19 +15754,20 @@ const (
 )
 
 type LoginAccountParams struct {
-	AccessKeyID               OptionalNonNull[string] `json:"accessKeyId,omitzero"`
-	AccessToken               OptionalNonNull[string] `json:"accessToken,omitzero"`
-	APIKey                    OptionalNonNull[string] `json:"apiKey,omitzero"`
-	AppBrand                  Optional[LoginAppBrand] `json:"appBrand,omitzero"`
-	ChatgptAccountID          OptionalNonNull[string] `json:"chatgptAccountId,omitzero"`
-	ChatgptPlanType           Optional[string]        `json:"chatgptPlanType,omitzero"`
-	CodexStreamlinedLogin     OptionalNonNull[bool]   `json:"codexStreamlinedLogin,omitzero"`
-	Region                    OptionalNonNull[string] `json:"region,omitzero"`
-	SecretAccessKey           OptionalNonNull[string] `json:"secretAccessKey,omitzero"`
-	SessionToken              Optional[string]        `json:"sessionToken,omitzero"`
-	TypeValue                 string                  `json:"type"`
-	UseHostedLoginSuccessPage OptionalNonNull[bool]   `json:"useHostedLoginSuccessPage,omitzero"`
-	RawJSON                   json.RawMessage         `json:"-"`
+	AccessKeyID               OptionalNonNull[string]     `json:"accessKeyId,omitzero"`
+	AccessToken               OptionalNonNull[string]     `json:"accessToken,omitzero"`
+	APIKey                    OptionalNonNull[string]     `json:"apiKey,omitzero"`
+	AppBrand                  Optional[LoginAppBrand]     `json:"appBrand,omitzero"`
+	ChatgptAccountID          OptionalNonNull[string]     `json:"chatgptAccountId,omitzero"`
+	ChatgptPlanType           Optional[string]            `json:"chatgptPlanType,omitzero"`
+	CodexStreamlinedLogin     OptionalNonNull[bool]       `json:"codexStreamlinedLogin,omitzero"`
+	ProviderID                Optional[BedrockProviderID] `json:"providerId,omitzero"`
+	Region                    OptionalNonNull[string]     `json:"region,omitzero"`
+	SecretAccessKey           OptionalNonNull[string]     `json:"secretAccessKey,omitzero"`
+	SessionToken              Optional[string]            `json:"sessionToken,omitzero"`
+	TypeValue                 string                      `json:"type"`
+	UseHostedLoginSuccessPage OptionalNonNull[bool]       `json:"useHostedLoginSuccessPage,omitzero"`
+	RawJSON                   json.RawMessage             `json:"-"`
 }
 
 var loginAccountParamsSpec = objectSpec{
@@ -15682,13 +15779,14 @@ var loginAccountParamsSpec = objectSpec{
 		{name: "chatgptAccountId", flags: fieldNonNullOptional},
 		{name: "chatgptPlanType"},
 		{name: "codexStreamlinedLogin", flags: fieldNonNullOptional, defaultJSON: "false", defaultTags: []string{"\"chatgpt\""}},
+		{name: "providerId"},
 		{name: "region", flags: fieldNonNullOptional},
 		{name: "secretAccessKey", flags: fieldNonNullOptional},
 		{name: "sessionToken"},
 		{name: "type", flags: fieldRequired | fieldRejectNull},
 		{name: "useHostedLoginSuccessPage", flags: fieldNonNullOptional},
 	},
-	tag:  10,
+	tag:  11,
 	tags: []string{"apiKey", "chatgpt", "chatgptDeviceCode", "chatgptAuthTokens", "amazonBedrock", "amazonBedrockAccessKeys"},
 }
 
@@ -17194,12 +17292,14 @@ func (v *Model) UnmarshalJSON(data []byte) error {
 }
 
 type ModelAccessPrograms struct {
-	Cyber []CyberAccessProgram `json:"cyber"`
+	Cyber                []CyberAccessProgram                  `json:"cyber"`
+	DaybreakAvailability OptionalNonNull[DaybreakAvailability] `json:"daybreakAvailability,omitzero"`
 }
 
 var modelAccessProgramsSpec = objectSpec{
 	fields: []objectField{
 		{name: "cyber", flags: fieldRequired | fieldRejectNull},
+		{name: "daybreakAvailability", flags: fieldNonNullOptional},
 	},
 }
 
@@ -18106,23 +18206,27 @@ const (
 )
 
 type OtelRequirements struct {
-	Environment            Optional[string]                       `json:"environment,omitzero"`
-	Exporter               Optional[OtelExporter]                 `json:"exporter,omitzero"`
-	LogAgentResponses      Optional[bool]                         `json:"log_agent_responses,omitzero"`
-	LogGuardianAssessments Optional[bool]                         `json:"log_guardian_assessments,omitzero"`
-	LogSseDeltas           Optional[bool]                         `json:"log_sse_deltas,omitzero"`
-	LogUserPrompt          Optional[bool]                         `json:"log_user_prompt,omitzero"`
-	MetricsExporter        Optional[OtelExporter]                 `json:"metrics_exporter,omitzero"`
-	SpanAttributes         Optional[map[string]string]            `json:"span_attributes,omitzero"`
-	ToolResult             Optional[OtelToolResultLogConfig]      `json:"tool_result,omitzero"`
-	TraceExporter          Optional[OtelExporter]                 `json:"trace_exporter,omitzero"`
-	Tracestate             Optional[map[string]map[string]string] `json:"tracestate,omitzero"`
+	Environment                    Optional[string]                       `json:"environment,omitzero"`
+	Exporter                       Optional[OtelExporter]                 `json:"exporter,omitzero"`
+	HeadersHelper                  Optional[string]                       `json:"headers_helper,omitzero"`
+	HeadersHelperRefreshIntervalMs Optional[uint64]                       `json:"headers_helper_refresh_interval_ms,omitzero"`
+	LogAgentResponses              Optional[bool]                         `json:"log_agent_responses,omitzero"`
+	LogGuardianAssessments         Optional[bool]                         `json:"log_guardian_assessments,omitzero"`
+	LogSseDeltas                   Optional[bool]                         `json:"log_sse_deltas,omitzero"`
+	LogUserPrompt                  Optional[bool]                         `json:"log_user_prompt,omitzero"`
+	MetricsExporter                Optional[OtelExporter]                 `json:"metrics_exporter,omitzero"`
+	SpanAttributes                 Optional[map[string]string]            `json:"span_attributes,omitzero"`
+	ToolResult                     Optional[OtelToolResultLogConfig]      `json:"tool_result,omitzero"`
+	TraceExporter                  Optional[OtelExporter]                 `json:"trace_exporter,omitzero"`
+	Tracestate                     Optional[map[string]map[string]string] `json:"tracestate,omitzero"`
 }
 
 var otelRequirementsSpec = objectSpec{
 	fields: []objectField{
 		{name: "environment"},
 		{name: "exporter"},
+		{name: "headers_helper"},
+		{name: "headers_helper_refresh_interval_ms"},
 		{name: "log_agent_responses"},
 		{name: "log_guardian_assessments"},
 		{name: "log_sse_deltas"},
@@ -18142,7 +18246,19 @@ func (v OtelRequirements) MarshalJSON() ([]byte, error) {
 
 func (v *OtelRequirements) UnmarshalJSON(data []byte) error {
 	type wire OtelRequirements
-	return decodeObject(data, &otelRequirementsSpec, (*wire)(v))
+	var s objectScan
+	if _, err := s.begin(data, &otelRequirementsSpec); err != nil {
+		return err
+	}
+	if err := s.finish((*wire)(v)); err != nil {
+		return err
+	}
+	if valueHeadersHelperRefreshIntervalMs, ok := v.HeadersHelperRefreshIntervalMs.Value(); ok {
+		if valueHeadersHelperRefreshIntervalMs < 1 {
+			return DecodeError{Field: "headers_helper_refresh_interval_ms", Reason: "below minimum 1"}
+		}
+	}
+	return nil
 }
 
 type OtelTlsConfig struct {
@@ -27700,6 +27816,7 @@ type ThreadRealtimeItem struct {
 	Outcome           OptionalNonNull[ThreadRealtimeSessionOutcome]      `json:"outcome,omitzero"`
 	Presentation      OptionalNonNull[ThreadRealtimeBemItemPresentation] `json:"presentation,omitzero"`
 	RealtimeSessionID string                                             `json:"realtimeSessionId"`
+	Reason            OptionalNonNull[ThreadRealtimeSessionInputReason]  `json:"reason,omitzero"`
 	Role              OptionalNonNull[ThreadRealtimeTranscriptRole]      `json:"role,omitzero"`
 	SourceEventIDs    OptionalNonNull[[]string]                          `json:"source_event_ids,omitzero"`
 	Text              OptionalNonNull[string]                            `json:"text,omitzero"`
@@ -27721,14 +27838,15 @@ var threadRealtimeItemSpec = objectSpec{
 		{name: "outcome", flags: fieldNonNullOptional},
 		{name: "presentation", flags: fieldNonNullOptional},
 		{name: "realtimeSessionId", flags: fieldRequired | fieldRejectNull},
+		{name: "reason", flags: fieldNonNullOptional},
 		{name: "role", flags: fieldNonNullOptional},
 		{name: "source_event_ids", flags: fieldNonNullOptional},
 		{name: "text", flags: fieldNonNullOptional},
 		{name: "turn_id", flags: fieldNonNullOptional},
 		{name: "type", flags: fieldRequired | fieldRejectNull},
 	},
-	tag:  15,
-	tags: []string{"realtimeSessionStarted", "frame", "transcriptSegment", "bemItemPromoted", "realtimeSessionClosed", "turnInputAccepted", "sessionEndInputSaved"},
+	tag:  16,
+	tags: []string{"realtimeSessionStarted", "frame", "transcriptSegment", "bemItemPromoted", "realtimeSessionClosed", "turnInputAccepted", "sessionInputSaved"},
 }
 
 func (v ThreadRealtimeItem) MarshalJSON() ([]byte, error) {
@@ -27778,15 +27896,18 @@ func (v ThreadRealtimeItem) MarshalJSON() ([]byte, error) {
 		if !v.TurnID.IsSet() {
 			return nil, DecodeError{Field: "turn_id", Reason: "missing required field for type turnInputAccepted"}
 		}
-	case "sessionEndInputSaved":
+	case "sessionInputSaved":
 		if !v.Input.IsSet() {
-			return nil, DecodeError{Field: "input", Reason: "missing required field for type sessionEndInputSaved"}
+			return nil, DecodeError{Field: "input", Reason: "missing required field for type sessionInputSaved"}
 		}
 		if !v.InputItemID.IsSet() {
-			return nil, DecodeError{Field: "input_item_id", Reason: "missing required field for type sessionEndInputSaved"}
+			return nil, DecodeError{Field: "input_item_id", Reason: "missing required field for type sessionInputSaved"}
+		}
+		if !v.Reason.IsSet() {
+			return nil, DecodeError{Field: "reason", Reason: "missing required field for type sessionInputSaved"}
 		}
 		if !v.SourceEventIDs.IsSet() {
-			return nil, DecodeError{Field: "source_event_ids", Reason: "missing required field for type sessionEndInputSaved"}
+			return nil, DecodeError{Field: "source_event_ids", Reason: "missing required field for type sessionInputSaved"}
 		}
 	default:
 		if len(v.RawJSON) > 0 {
@@ -27899,21 +28020,27 @@ func (v *ThreadRealtimeItem) UnmarshalJSON(data []byte) error {
 		if s.isNull("turn_id") {
 			return DecodeError{Field: "turn_id", Reason: "cannot be null"}
 		}
-	case "sessionEndInputSaved":
+	case "sessionInputSaved":
 		if !s.has("input") {
-			return DecodeError{Field: "input", Reason: "missing required field for type sessionEndInputSaved"}
+			return DecodeError{Field: "input", Reason: "missing required field for type sessionInputSaved"}
 		}
 		if s.isNull("input") {
 			return DecodeError{Field: "input", Reason: "cannot be null"}
 		}
 		if !s.has("input_item_id") {
-			return DecodeError{Field: "input_item_id", Reason: "missing required field for type sessionEndInputSaved"}
+			return DecodeError{Field: "input_item_id", Reason: "missing required field for type sessionInputSaved"}
 		}
 		if s.isNull("input_item_id") {
 			return DecodeError{Field: "input_item_id", Reason: "cannot be null"}
 		}
+		if !s.has("reason") {
+			return DecodeError{Field: "reason", Reason: "missing required field for type sessionInputSaved"}
+		}
+		if s.isNull("reason") {
+			return DecodeError{Field: "reason", Reason: "cannot be null"}
+		}
 		if !s.has("source_event_ids") {
-			return DecodeError{Field: "source_event_ids", Reason: "missing required field for type sessionEndInputSaved"}
+			return DecodeError{Field: "source_event_ids", Reason: "missing required field for type sessionInputSaved"}
 		}
 		if s.isNull("source_event_ids") {
 			return DecodeError{Field: "source_event_ids", Reason: "cannot be null"}
@@ -28213,6 +28340,13 @@ func (v *ThreadRealtimeSdpNotification) UnmarshalJSON(data []byte) error {
 	type wire ThreadRealtimeSdpNotification
 	return decodeObject(data, &threadRealtimeSdpNotificationSpec, (*wire)(v))
 }
+
+type ThreadRealtimeSessionInputReason string
+
+const (
+	ThreadRealtimeSessionInputReasonChunk      ThreadRealtimeSessionInputReason = "chunk"
+	ThreadRealtimeSessionInputReasonSessionEnd ThreadRealtimeSessionInputReason = "sessionEnd"
+)
 
 type ThreadRealtimeSessionOutcome string
 
@@ -28801,6 +28935,7 @@ type ThreadSampleParams struct {
 	Effort                     Optional[ReasoningEffort]   `json:"effort,omitzero"`
 	ExpectedTurnID             string                      `json:"expectedTurnId"`
 	InterruptOnCancel          Optional[bool]              `json:"interruptOnCancel,omitzero"`
+	Model                      Optional[string]            `json:"model,omitzero"`
 	Prompt                     string                      `json:"prompt"`
 	ResponsesapiClientMetadata Optional[map[string]string] `json:"responsesapiClientMetadata,omitzero"`
 	ThreadID                   string                      `json:"threadId"`
@@ -28815,6 +28950,7 @@ var threadSampleParamsSpec = objectSpec{
 		{name: "effort"},
 		{name: "expectedTurnId", flags: fieldRequired | fieldRejectNull},
 		{name: "interruptOnCancel"},
+		{name: "model"},
 		{name: "prompt", flags: fieldRequired | fieldRejectNull},
 		{name: "responsesapiClientMetadata"},
 		{name: "threadId", flags: fieldRequired | fieldRejectNull},
@@ -28861,6 +28997,47 @@ func (v ThreadSampleResponse) MarshalJSON() ([]byte, error) {
 func (v *ThreadSampleResponse) UnmarshalJSON(data []byte) error {
 	type wire ThreadSampleResponse
 	return decodeObject(data, &threadSampleResponseSpec, (*wire)(v))
+}
+
+type ThreadSearchCancelParams struct {
+	RequestID RequestID `json:"requestId"`
+}
+
+var threadSearchCancelParamsSpec = objectSpec{
+	fields: []objectField{
+		{name: "requestId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadSearchCancelParams) MarshalJSON() ([]byte, error) {
+	type wire ThreadSearchCancelParams
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadSearchCancelParams) UnmarshalJSON(data []byte) error {
+	type wire ThreadSearchCancelParams
+	return decodeObject(data, &threadSearchCancelParamsSpec, (*wire)(v))
+}
+
+type ThreadSearchCancelResponse map[string]json.RawMessage
+
+func (v ThreadSearchCancelResponse) MarshalJSON() ([]byte, error) {
+	if v == nil {
+		return []byte("{}"), nil
+	}
+	return json.Marshal(map[string]json.RawMessage(v))
+}
+
+func (v *ThreadSearchCancelResponse) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return DecodeError{Field: "", Reason: "cannot be null"}
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*v = ThreadSearchCancelResponse(raw)
+	return nil
 }
 
 type ThreadSearchOccurrence struct {
@@ -28997,6 +29174,28 @@ func (v *ThreadSearchParams) UnmarshalJSON(data []byte) error {
 		}
 	}
 	return nil
+}
+
+type ThreadSearchPartialNotification struct {
+	Data      []ThreadSearchResult `json:"data"`
+	RequestID RequestID            `json:"requestId"`
+}
+
+var threadSearchPartialNotificationSpec = objectSpec{
+	fields: []objectField{
+		{name: "data", flags: fieldRequired | fieldRejectNull},
+		{name: "requestId", flags: fieldRequired | fieldRejectNull},
+	},
+}
+
+func (v ThreadSearchPartialNotification) MarshalJSON() ([]byte, error) {
+	type wire ThreadSearchPartialNotification
+	return json.Marshal(wire(v))
+}
+
+func (v *ThreadSearchPartialNotification) UnmarshalJSON(data []byte) error {
+	type wire ThreadSearchPartialNotification
+	return decodeObject(data, &threadSearchPartialNotificationSpec, (*wire)(v))
 }
 
 type ThreadSearchResponse struct {

@@ -447,6 +447,13 @@
       },
       "type": "object"
     },
+    "AccountUpdateReason": {
+      "enum": [
+        "workspaceRoutingReady",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "AccountUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -469,6 +476,17 @@
               "type": "null"
             }
           ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AccountUpdateReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set when initial routing discovery completes for the same authenticated owner."
         }
       },
       "title": "AccountUpdatedNotification",
@@ -1363,6 +1381,16 @@
             }
           ]
         },
+        "approvals_reviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "enabled": {
           "type": [
             "boolean",
@@ -2005,6 +2033,17 @@
             "profile": {
               "type": "string"
             },
+            "providerId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BedrockProviderId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Defaults to Amazon Bedrock Mantle when omitted."
+            },
             "region": {
               "type": "string"
             },
@@ -2026,6 +2065,17 @@
         },
         {
           "properties": {
+            "providerId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BedrockProviderId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Defaults to Amazon Bedrock Mantle when omitted."
+            },
             "region": {
               "type": "string"
             },
@@ -4119,6 +4169,80 @@
             "params"
           ],
           "title": "Thread/searchRequest",
+          "type": "object"
+        },
+        {
+          "description": "Search with best-effort incremental `thread/search/partial` notifications. The final response is authoritative for results, ordering, and cursors.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/search/stream"
+              ],
+              "title": "Thread/search/streamRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadSearchParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/search/streamRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/search/cancel"
+              ],
+              "title": "Thread/search/cancelRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadSearchCancelParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/search/cancelRequest",
+          "type": "object"
+        },
+        {
+          "description": "Cancel a `thread/search/stream` request on this connection.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/search/stream/cancel"
+              ],
+              "title": "Thread/search/stream/cancelRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadSearchCancelParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/search/stream/cancelRequest",
           "type": "object"
         },
         {
@@ -7173,12 +7297,16 @@
             "contextWindowExceeded",
             "sessionBudgetExceeded",
             "usageLimitExceeded",
+            "apiKeySpendLimitExceeded",
+            "projectSpendLimitExceeded",
+            "organizationSpendLimitExceeded",
             "rateLimitExceeded",
             "flexUnavailable",
             "serverOverloaded",
             "modelNotFound",
             "policyCapacityUnavailable",
             "cyberPolicy",
+            "bioPolicy",
             "misalignmentPolicyViolation",
             "tooManyDenials",
             "internalServerError",
@@ -9643,6 +9771,16 @@
       ],
       "type": "string"
     },
+    "DaybreakAvailability": {
+      "description": "Server-resolved Daybreak availability for this caller and model.",
+      "enum": [
+        "available",
+        "enrollmentRequired",
+        "unavailableForModel",
+        "default"
+      ],
+      "type": "string"
+    },
     "DeprecationNoticeNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -11379,6 +11517,15 @@
           "description": "File modification time in Unix milliseconds when available, otherwise `0`.",
           "format": "int64",
           "type": "integer"
+        },
+        "sizeBytes": {
+          "description": "Size in bytes if the path resolves to a regular file, otherwise null. Older servers omit this field.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [
@@ -13882,6 +14029,17 @@
             "apiKey": {
               "type": "string"
             },
+            "providerId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BedrockProviderId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Defaults to Amazon Bedrock Mantle when omitted."
+            },
             "region": {
               "type": "string"
             },
@@ -13906,6 +14064,17 @@
           "properties": {
             "accessKeyId": {
               "type": "string"
+            },
+            "providerId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BedrockProviderId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Defaults to Amazon Bedrock Mantle when omitted."
             },
             "region": {
               "type": "string"
@@ -15456,7 +15625,7 @@
       "type": "object"
     },
     "ModelAccessPrograms": {
-      "description": "Caller-specific explicit access programs advertised by model discovery.",
+      "description": "Caller-specific access programs and Daybreak availability from model discovery.",
       "properties": {
         "cyber": {
           "description": "Accepted explicit selections.",
@@ -15464,6 +15633,15 @@
             "$ref": "#/definitions/CyberAccessProgram"
           },
           "type": "array"
+        },
+        "daybreakAvailability": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/DaybreakAvailability"
+            }
+          ],
+          "default": "default",
+          "description": "Server-resolved Daybreak availability for this caller and model."
         }
       },
       "required": [
@@ -16325,6 +16503,20 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "headers_helper": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "headers_helper_refresh_interval_ms": {
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": [
+            "integer",
+            "null"
           ]
         },
         "log_agent_responses": {
@@ -22516,6 +22708,26 @@
           "type": "object"
         },
         {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/search/partial"
+              ],
+              "title": "Thread/search/partialNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadSearchPartialNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/search/partialNotification",
+          "type": "object"
+        },
+        {
           "description": "Final exit notification for a `process/spawn` session.",
           "properties": {
             "method": {
@@ -28425,7 +28637,7 @@
       "type": "object"
     },
     "ThreadRealtimeFrameChannels": {
-      "description": "A frame holds one or more payloads, at most one per channel. They share one ID, observation time, and seal. V1 requires its only channel, `voice_transcript`.",
+      "description": "A frame holds one or more payloads, at most one per channel. They share one ID, observation time, and seal. Currently, `voice_transcript` is required.",
       "properties": {
         "voice_transcript": {
           "$ref": "#/definitions/ThreadRealtimeVoiceTranscript"
@@ -28621,6 +28833,9 @@
             "input_item_id": {
               "type": "string"
             },
+            "reason": {
+              "$ref": "#/definitions/ThreadRealtimeSessionInputReason"
+            },
             "source_event_ids": {
               "items": {
                 "type": "string"
@@ -28629,19 +28844,20 @@
             },
             "type": {
               "enum": [
-                "sessionEndInputSaved"
+                "sessionInputSaved"
               ],
-              "title": "SessionEndInputSavedThreadRealtimeItemType",
+              "title": "SessionInputSavedThreadRealtimeItemType",
               "type": "string"
             }
           },
           "required": [
             "input",
             "input_item_id",
+            "reason",
             "source_event_ids",
             "type"
           ],
-          "title": "SessionEndInputSavedThreadRealtimeItem",
+          "title": "SessionInputSavedThreadRealtimeItem",
           "type": "object"
         }
       ],
@@ -28946,6 +29162,13 @@
       ],
       "title": "ThreadRealtimeSdpNotification",
       "type": "object"
+    },
+    "ThreadRealtimeSessionInputReason": {
+      "enum": [
+        "chunk",
+        "sessionEnd"
+      ],
+      "type": "string"
     },
     "ThreadRealtimeSessionOutcome": {
       "enum": [
@@ -29769,6 +29992,13 @@
             "null"
           ]
         },
+        "model": {
+          "description": "Override the model for this sample. Omit or pass `null` to inherit the source thread's model.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "prompt": {
           "type": "string"
         },
@@ -29853,6 +30083,25 @@
         "sourceTurnId"
       ],
       "title": "ThreadSampleResponse",
+      "type": "object"
+    },
+    "ThreadSearchCancelParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Request cancellation on the same connection. `thread/search/cancel` targets only `thread/search`; `thread/search/stream/cancel` targets only `thread/search/stream`. Cancellation is idempotent: the cancel response acknowledges the request, and an interrupted search completes with an error after its subprocess is stopped and reaped. If completion races cancellation, the original search may still succeed. An already-completed search is unaffected.",
+      "properties": {
+        "requestId": {
+          "$ref": "#/definitions/RequestId"
+        }
+      },
+      "required": [
+        "requestId"
+      ],
+      "title": "ThreadSearchCancelParams",
+      "type": "object"
+    },
+    "ThreadSearchCancelResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadSearchCancelResponse",
       "type": "object"
     },
     "ThreadSearchOccurrence": {
@@ -29983,7 +30232,7 @@
           ]
         },
         "searchTerm": {
-          "description": "Required substring/full-text query for thread search.",
+          "description": "Required substring/full-text query. `thread/search/stream` limits this to 65,536 UTF-8 bytes after trimming surrounding whitespace.",
           "type": "string"
         },
         "sortDirection": {
@@ -30023,6 +30272,27 @@
         "searchTerm"
       ],
       "title": "ThreadSearchParams",
+      "type": "object"
+    },
+    "ThreadSearchPartialNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "A best-effort incremental batch for `thread/search/stream`. Match `requestId` to the request on this connection. Only a small subset of verified matches may be emitted; rows are unique and arrive in discovery order, but may be dropped under load or fall outside the final sorted page. Thread fields use stored metadata and the current watched status; live thread settings are enriched in the final response. Replace provisional rows with the authoritative final response. No partials follow it or an error.",
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/definitions/ThreadSearchResult"
+          },
+          "type": "array"
+        },
+        "requestId": {
+          "$ref": "#/definitions/RequestId"
+        }
+      },
+      "required": [
+        "data",
+        "requestId"
+      ],
+      "title": "ThreadSearchPartialNotification",
       "type": "object"
     },
     "ThreadSearchResponse": {
@@ -32638,7 +32908,7 @@
           "additionalProperties": {
             "$ref": "#/definitions/AdditionalContextEntry"
           },
-          "description": "Optional client-provided context fragments keyed by an opaque source identifier.",
+          "description": "Client-provided context fragments keyed by an opaque source identifier. Omit this field or pass `null` to keep the current set. Pass a map to replace the set when the input is delivered, or `{}` to clear it. Clearing the set leaves previously recorded messages in the conversation history.",
           "type": [
             "object",
             "null"
@@ -32931,7 +33201,7 @@
           "additionalProperties": {
             "$ref": "#/definitions/AdditionalContextEntry"
           },
-          "description": "Optional client-provided context fragments keyed by an opaque source identifier.",
+          "description": "Client-provided context fragments keyed by an opaque source identifier. Omit this field or pass `null` to keep the current set. Pass a map to replace the set when the input is delivered, or `{}` to clear it. Clearing the set leaves previously recorded messages in the conversation history.",
           "type": [
             "object",
             "null"
