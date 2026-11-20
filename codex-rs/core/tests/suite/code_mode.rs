@@ -2431,7 +2431,7 @@ async fn websocket_custom_provider_omits_private_exec_and_late_wait_results_on_r
     .with_priority(/*p*/ 1)
     .mount(&apps)
     .await;
-    let code = "const t = ALL_TOOLS.find(t => t.name.endsWith('create_event')); \
+    let code = "const t = EXEC_TOOLS.find(t => t.name.endsWith('create_event')); \
                 for (const title of ['first', 'second']) await tools[t.name]({title, starts_at: 'noon'}); \
                 const pending = tools[t.name]({title:'late', starts_at:'noon'}); \
                 yield_control(); await pending; text('done')";
@@ -9166,8 +9166,8 @@ const out = await tools[tool.name]({ city: "Paris" });
 text(
   JSON.stringify({
     name: tool?.name ?? null,
-    builtinLabel: ALL_TOOLS.find(t => t.name === "view_image").description.startsWith("Builtin.\n\n"),
-    dynamicLabel: ALL_TOOLS.find(t => t.name === tool.name).description.includes("Builtin."),
+    builtinLabel: EXEC_TOOLS.find(t => t.name === "view_image").description.startsWith("Builtin.\n\n"),
+    dynamicLabel: EXEC_TOOLS.find(t => t.name === tool.name).description.includes("Builtin."),
     searchLabel: tool.description.includes("Builtin."),
     description: tool?.description ?? null,
     out,

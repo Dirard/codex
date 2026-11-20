@@ -1392,7 +1392,7 @@ fn captured_mcp_output(
         result_metadata_capture_allowed: true,
         wall_time: std::time::Duration::ZERO,
         original_image_detail_supported: false,
-        truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(1024),
+        truncation: codex_utils_output_truncation::TruncationPolicy::Bytes(1024).into(),
     }
 }
 

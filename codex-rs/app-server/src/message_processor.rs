@@ -1222,6 +1222,7 @@ impl MessageProcessor {
         }))
     }
 
+    #[allow(clippy::too_many_arguments)] // Fork: `gateway_oauth_login` is the eighth.
     async fn handle_initialized_client_request(
         self: Arc<Self>,
         connection_request_id: ConnectionRequestId,

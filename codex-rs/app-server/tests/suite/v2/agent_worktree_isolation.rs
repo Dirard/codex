@@ -195,7 +195,7 @@ async fn thread_read_reports_the_isolated_child_worktree() -> Result<()> {
     assert!(
         child.cwd.as_path().starts_with(&managed_root),
         "child cwd {} is outside {}",
-        child.cwd.display(),
+        child.cwd.as_path().display(),
         managed_root.display()
     );
     assert_ne!(child.cwd.as_path(), repository_path.as_path());
@@ -486,7 +486,7 @@ async fn thread_resume_restores_a_removed_child_worktree() -> Result<()> {
     assert!(
         resumed.thread.cwd.as_path().starts_with(worktree.as_path()),
         "{}",
-        resumed.thread.cwd.display()
+        resumed.thread.cwd.as_path().display()
     );
     assert!(worktree.as_path().join(".git").exists());
     assert_eq!(

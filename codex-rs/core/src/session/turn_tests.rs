@@ -62,6 +62,7 @@ async fn failed_realtime_receipt_preserves_sibling_input_before_sampling() {
         &mut McpStartupRequirements::default(),
         /*prewarmed_client_session*/ None,
         CancellationToken::new(),
+        /*previous_agent_message*/ None,
     )
     .await
     .expect_err("a turn with an unconfirmed handoff must fail before sampling");

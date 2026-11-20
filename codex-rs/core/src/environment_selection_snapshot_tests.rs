@@ -391,6 +391,7 @@ async fn rebase_onto_worktree_moves_cwd_and_roots_inside_the_repository() {
         ShellSnapshot::disabled(),
         TurnEnvironmentSnapshot::default(),
         /*non_blocking_snapshots*/ false,
+        /*executor_discovery*/ None,
     );
     environments.update_selections(std::slice::from_ref(&selection));
     let snapshot = environments.snapshot().await;

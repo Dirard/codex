@@ -5047,10 +5047,6 @@ async fn multi_agent_v2_terminal_error_is_published_after_parent_mailbox() {
 }
 
 #[tokio::test]
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "test holds the thread registry to block parent delivery while the status is observed"
-)]
 async fn multi_agent_v2_terminal_error_status_waits_for_blocked_parent_delivery() {
     let harness = AgentControlHarness::new().await;
     let (worker_thread_id, worker_thread) = harness.start_thread().await;

@@ -142,6 +142,7 @@ async fn explorer_plan_with(
                 exposure: ToolExposure::Direct,
                 model_spec: None,
                 native_review: crate::tools::registry::NativeReview::Disabled,
+                is_trusted: false,
             }
         })
         .collect();

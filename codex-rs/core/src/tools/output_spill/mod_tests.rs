@@ -69,6 +69,7 @@ fn mcp_output(text: &str, truncation: OutputTruncation) -> McpToolOutput {
         },
         tool_input: serde_json::json!({ "query": "all" }),
         result_metadata_capture_allowed: true,
+        result_capture: None,
         wall_time: std::time::Duration::from_millis(250),
         original_image_detail_supported: false,
         truncation,

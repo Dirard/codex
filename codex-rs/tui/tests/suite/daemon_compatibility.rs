@@ -40,6 +40,14 @@ async fn incompatible_daemon_can_run_embedded_for_explicit_features() -> Result<
             codex_home: home.path().try_into()?,
             platform_family: std::env::consts::FAMILY.into(),
             platform_os: std::env::consts::OS.into(),
+            // Fork: the handshake digests; the TUI does not check them.
+            stable_protocol_digest: "0".repeat(64),
+            experimental_protocol_digest: "0".repeat(64),
+            stable_schema_digest: "0".repeat(64),
+            experimental_schema_digest: "0".repeat(64),
+            stable_manifest_digest: "0".repeat(64),
+            experimental_manifest_digest: "0".repeat(64),
+            active_protocol_mode: codex_app_server_protocol::ActiveProtocolMode::Stable,
         };
         let server = tokio::spawn(async move {
             let mut socket = loop {

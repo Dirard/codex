@@ -135,6 +135,7 @@ async fn connector_results_reach_websocket_without_payload_logs() -> Result<()> 
     let input = [item];
     let request = ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest {
         model: "gpt-test",
+        instructions: "",
         stream: true,
         service_tier: None,
         previous_response_id: None,

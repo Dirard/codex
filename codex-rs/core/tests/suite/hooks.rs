@@ -8088,3 +8088,20 @@ async fn memory_consolidation_skips_user_model_request_hooks() -> Result<()> {
     }
     Ok(())
 }
+
+/// Fork: texts of `role` messages in a request body, for the fork's blocked-batch tests
+/// (upstream removed its copy with its last caller, #62602).
+fn request_message_input_texts(body: &[u8], role: &str) -> Vec<String> {
+    let body: Value = serde_json::from_slice(body).expect("parse request body");
+    body.get("input")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
+        .filter(|item| item.get("role").and_then(Value::as_str) == Some(role))
+        .filter_map(|item| item.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
+        .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
+        .collect()
+}
