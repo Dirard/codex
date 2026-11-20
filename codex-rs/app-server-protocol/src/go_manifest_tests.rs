@@ -2512,7 +2512,10 @@ fn expected_server_notification_routes() -> Vec<(&'static str, ExpectedRouting)>
             ExpectedRouting::Routed(&["importId"]),
         ),
         ("fs/changed", ExpectedRouting::Routed(&["watchId"])),
-        ("thread/search/partial", ExpectedRouting::Routed(&["requestId"])),
+        (
+            "thread/search/partial",
+            ExpectedRouting::Routed(&["requestId"]),
+        ),
         (
             "item/reasoning/summaryTextDelta",
             ExpectedRouting::Routed(&["threadId", "turnId", "itemId", "summaryIndex"]),
