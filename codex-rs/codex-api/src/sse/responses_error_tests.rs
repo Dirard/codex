@@ -430,7 +430,16 @@ async fn overload_advice_survives_keep_open_sse_in_both_event_forms() {
             for event in error_forms(detail) {
                 let error = map_api_error(keep_open_error(event).await);
                 assert_eq!(error.to_codex_protocol_error(), expected);
-                assert_eq!(error.retry_delay(/*retry_count*/ 1), delay, "{code}");
+                // Fork: an overload without valid Retry-After backs off
+                // (docs/fork/02-compaction-context.md F6).
+                let fork_backoff = expected == CodexErrorInfo::ServerOverloaded && delay.is_none();
+                let retry_delay = error.retry_delay(/*retry_count*/ 1);
+                assert_eq!(
+                    retry_delay.is_some(),
+                    fork_backoff || delay.is_some(),
+                    "{code}"
+                );
+                assert_eq!(retry_delay.filter(|_| !fork_backoff), delay, "{code}");
             }
         }
         let event = json!({"type": "error", "headers": {"Retry-After": "9"}, "error": {"code": code, "headers": {"Retry-After": "3"}}});

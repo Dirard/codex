@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios_frozen_cloud_skills.rs
+assertion_line: 149
 expression: "context_snapshot::format_context_snapshot(\"A cloud parent lists and reads a frozen skill alongside a named executor after the snapshot file has been removed.\",\n&bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: A cloud parent lists and reads a frozen skill alongside a named executor after the snapshot file has been removed.
@@ -16,15 +17,15 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (request) --
-00:additional_tools/developer (3; hash=8f90f1c7f4fce935):
-        - namespace/functions; hash=3eb85b1b397a4861
+00:additional_tools/developer (3; hash=121be4a57637fa41):
+        - namespace/functions; hash=d994f89866d03158
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=a097b9364047b8bb
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=6068127f432bad00
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents

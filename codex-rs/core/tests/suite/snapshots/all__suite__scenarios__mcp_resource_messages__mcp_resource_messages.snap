@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios_mcp_resource_messages.rs
+assertion_line: 203
 expression: "context_snapshot::format_request_history_snapshot(\"Broad discovery names the dormant server. Calling it by name returns its resources and templates through Code Mode.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Broad discovery names the dormant server. Calling it by name returns its resources and templates through Code Mode.
@@ -15,13 +16,13 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (6; hash=d843621dc36edf6d):
-    - custom/exec: Run JavaScript code to orchestrate/compose tool calls - Evaluates the provided JavaScript code in...; hash=c00e260794631906
+  tools (6; hash=25d552de4b92d16b):
+    - custom/exec: Run JavaScript code to orchestrate/compose tool calls - Evaluates the provided JavaScript code in...; hash=6627a2cff2b288d3
     - function/wait: Waits on a yielded `exec` cell and returns new output or completion. - Use `wait` only after `exe...; args=[cell_id, max_tokens, terminate, yield_time_ms]; hash=6692d8f6c55be489
     - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
     - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
       - function/sleep
-    - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=a097b9364047b8bb
+    - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=6068127f432bad00
       - function/followup_task
       - function/interrupt_agent
       - function/list_agents

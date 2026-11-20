@@ -2799,13 +2799,11 @@ async fn responses_websocket_v2_surfaces_terminal_error_without_close_handshake(
     .await
     .expect("timed out waiting for terminal websocket error");
 
-    assert_eq!(
-        (
-            error.to_codex_protocol_error(),
-            error.retry_delay(/*retry_count*/ 1),
-        ),
-        (expected_error, None),
-    );
+    // Fork: an overload without Retry-After backs off (docs/fork/02-compaction-context.md F6).
+    let fork_backoff = expected_error == CodexErrorInfo::ServerOverloaded;
+    let retry_delay = error.retry_delay(/*retry_count*/ 1);
+    assert_eq!(retry_delay.is_some(), fork_backoff);
+    assert_eq!(error.to_codex_protocol_error(), expected_error);
 
     server.shutdown().await;
 }

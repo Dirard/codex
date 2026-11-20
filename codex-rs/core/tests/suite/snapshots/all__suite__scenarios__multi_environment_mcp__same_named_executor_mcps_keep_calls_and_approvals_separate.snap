@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios_multi_environment_mcp.rs
+assertion_line: 446
 expression: "format!(\"Approval prompts\\n{}\\n\\n{history}\", approval_messages.join(\"\\n\"))"
 ---
 Approval prompts
@@ -73,8 +74,8 @@ Settings: relative to window 1
   text: {"format":{"name":"codex_output_schema","schema":{"additionalProperties":false,"properties":{"outcome":{"enum":["allow","deny"],"type":"string"},"rationale":{"type":"string"},"risk_level":{"enum":["low","medium","high","critical"],"type":"string"},"user_authorization":{"enum":["unknown","low","medium","high"],"type":"string"}},"required":["outcome"],"type":"object"},"strict":false,"type":"json_schema"},"verbosity":"low"}
   tools: <removed>
 -- request 4 (turn) --
-00:additional_tools/developer (1; hash=9f62235e861a5510):
-        - namespace/functions; hash=f711ae279f056368
+00:additional_tools/developer (1; hash=970e85329c373863):
+        - namespace/functions; hash=c0b159f7fda805d5
           - custom/exec
           - function/wait
 01:message/developer:

@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
+assertion_line: 3075
 expression: "context_snapshot::format_request_history_snapshot(\"Astra checks for Notes, refreshes its installed plugin without restarting, and uses the new skill and Code Mode MCP tool across turns.\",\n&mock.requests(),\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Astra checks for Notes, refreshes its installed plugin without restarting, and uses the new skill and Code Mode MCP tool across turns.
@@ -16,15 +17,15 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=a7c46a0959d54866):
-        - namespace/functions; hash=81846de5bc4e7474
+00:additional_tools/developer (3; hash=cb40dd24c3d19128):
+        - namespace/functions; hash=f1daf6a631e1fdfb
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=a097b9364047b8bb
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=6068127f432bad00
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
@@ -102,7 +103,7 @@ Settings:
     Check whether the Notes plugin echo tool is available.
 07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-08:custom_tool_call/exec:text(ALL_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
+08:custom_tool_call/exec:text(EXEC_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
 09:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
@@ -143,7 +144,7 @@ Settings:
     - MCP servers from this plugin available in this session: `notes`.
     Use these plugin-associated capabilities to help solve the task.
 -- request 4 (turn) --
-15:custom_tool_call/exec:text(ALL_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
+15:custom_tool_call/exec:text(EXEC_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
 16:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:

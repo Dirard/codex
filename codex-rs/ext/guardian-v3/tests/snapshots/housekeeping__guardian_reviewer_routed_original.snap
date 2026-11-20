@@ -1,13 +1,14 @@
 ---
 source: ext/guardian-v3/tests/housekeeping.rs
+assertion_line: 1066
 expression: "context_snapshot::format_request_history_snapshot(\"The retained reviewer receives the subscribed original before assessing the action.\",\nstd::slice::from_ref(request),\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
 Scenario: The retained reviewer receives the subscribed original before assessing the action.
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (1; hash=06541b7d5af3dc9e):
-        - namespace/functions; hash=de44d355be93b260
+00:additional_tools/developer (1; hash=dc2b5d639557f733):
+        - namespace/functions; hash=eb6b8573f5d7d4df
           - custom/exec
           - function/wait
 01:message/developer:

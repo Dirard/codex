@@ -1,12 +1,13 @@
 ---
 source: core/tests/suite/scenarios_agent_message_board_remote.rs
+assertion_line: 376
 expression: "context_snapshot::format_context_snapshot(\"Permission discovery preserves legacy output, exposes reply-only access, and returns a denied post before an allowed reply.\",\n&bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
 Scenario: Permission discovery preserves legacy output, exposes reply-only access, and returns a denied post before an allowed reply.
 
 ## Window 1
 -- request 1 (request) --
-00:additional_tools/developer (3; hash=c7c5759e6d0f0042):
+00:additional_tools/developer (3; hash=01d922b661d984f7):
         - namespace/functions; hash=c39a9fd756ad9f5b
           - function/exec_command
           - function/write_stdin
@@ -17,7 +18,7 @@ Scenario: Permission discovery preserves legacy output, exposes reply-only acces
         - namespace/clock: Tools for reading and waiting on time.; hash=a80435c7a3a3943f
           - function/curr_time
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=1e271dc249fbf952
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=c57e9e427d6750e5
           - function/create_channel
           - function/followup_task
           - function/get_channels
