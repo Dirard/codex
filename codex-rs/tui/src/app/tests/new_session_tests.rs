@@ -74,6 +74,7 @@ async fn new_session_refreshes_account_for_the_started_provider() -> Result<()> 
                 codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
                     ServerNotification::AccountUpdated(
                         codex_app_server_protocol::AccountUpdatedNotification {
+                            reason: None,
                             auth_mode: Some(codex_app_server_protocol::AuthMode::Chatgpt),
                             plan_type: Some(codex_protocol::account::PlanType::Pro),
                         },
@@ -558,7 +559,7 @@ async fn widget_replacement_preserves_mention_usage_with_history_disabled() -> R
         /*initial_user_message*/ None,
     );
     app.replace_chat_widget(ChatWidget::new_with_app_event(init));
-    app.chat_widget.set_skills_from_response(&skills);
+    app.chat_widget.set_skills_from_response(skills.clone());
     app.chat_widget.insert_str("$status");
     app.chat_widget.handle_key_event(KeyCode::Enter.into());
 
@@ -568,7 +569,7 @@ async fn widget_replacement_preserves_mention_usage_with_history_disabled() -> R
         /*initial_user_message*/ None,
     );
     app.replace_chat_widget(ChatWidget::new_with_app_event(init));
-    app.chat_widget.set_skills_from_response(&skills);
+    app.chat_widget.set_skills_from_response(skills);
     app.chat_widget.insert_str("$stat");
     insta::assert_snapshot!(normalize_snapshot_paths(render_bottom_popup(
         &app.chat_widget,
@@ -892,6 +893,76 @@ async fn plan_implementation_handles_unavailable_attachment() -> Result<()> {
             oversized,
         ))
         .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn plan_implementation_cancels_only_its_cloud_inventory_refresh() -> Result<()> {
+    for (owned, queued) in [(true, false), (false, false), (false, true)] {
+        let (mut app, _events, _ops) = make_test_app_with_channels().await;
+        let (client, mut commands, _server_events) =
+            codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
+        let backend_id = crate::backend_id::BackendId::new();
+        let mut server = AppServerSession::new(
+            backend_id,
+            codex_app_server_client::AppServerClient::Cloud(client),
+            crate::app_server_session::ThreadParamsMode::Embedded,
+        );
+        let refresh_owner = if owned {
+            backend_id
+        } else {
+            crate::backend_id::BackendId::new()
+        };
+        app.backend_registry.connect(&server);
+        if queued {
+            app.agents_overview
+                .pending_refresh_backends
+                .push_back(backend_id);
+        }
+        let request_id = uuid::Uuid::new_v4();
+        app.agents_overview.active_refresh = Some((request_id, refresh_owner));
+        let (guard, mut dropped) = tokio::sync::oneshot::channel::<()>();
+        app.agents_overview.refresh_task = Some(tokio::spawn(async move {
+            let _guard = guard;
+            std::future::pending::<()>().await;
+        }));
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        let (result, ()) = tokio::join!(
+            app.implement_plan_in_fresh_session(&mut tui, &mut server, "# Plan".into()),
+            async {
+                let request = commands.recv().await.expect("fresh session config request");
+                assert!(matches!(
+                    request.operation,
+                    codex_app_server_client::CloudOperation::Request(request)
+                        if matches!(*request, codex_app_server_protocol::ClientRequest::ConfigRead { .. })
+                ));
+                if owned {
+                    assert!(matches!(
+                        dropped.try_recv(),
+                        Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+                    ));
+                } else {
+                    assert!(matches!(
+                        dropped.try_recv(),
+                        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+                    ));
+                }
+                request
+                    .response
+                    .send(Err(std::io::Error::other("config unavailable")))
+                    .unwrap();
+            }
+        );
+        result?;
+        assert_eq!(
+            app.agents_overview.active_refresh,
+            (!owned).then_some((request_id, refresh_owner))
+        );
+        assert!(app.agents_overview.pending_refresh_backends.is_empty());
+        if let Some(task) = app.agents_overview.refresh_task.take() {
+            task.abort();
+        }
     }
     Ok(())
 }
@@ -1783,11 +1854,6 @@ async fn fresh_session_saves_input_restored_by_a_late_interrupt() -> Result<()> 
 #[tokio::test]
 async fn create_statusline_keeps_the_draft_editable() -> Result<()> {
     let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
-    app.config
-        .features
-        .enable(Feature::TuiExtensionsStatusLine)?;
-    app.chat_widget
-        .set_feature_enabled(Feature::TuiExtensionsStatusLine, /*enabled*/ true);
     let cwd = app.config.codex_home.to_path_buf();
     let user_skill = cwd.join("skills/create-statusline");
     std::fs::create_dir_all(&user_skill)?;
@@ -1798,6 +1864,7 @@ async fn create_statusline_keeps_the_draft_editable() -> Result<()> {
     let source = ThreadId::new();
     app.enqueue_primary_thread_session(test_thread_session(source, cwd), Vec::new())
         .await?;
+    app.chat_widget.statusline_feature_enabled = true;
     app.chat_widget.handle_server_notification(
         turn_started_notification(source, "running"),
         /*replay_kind*/ None,

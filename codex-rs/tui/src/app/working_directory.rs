@@ -263,6 +263,7 @@ impl App {
             if let Some(message) = check_background_terminals(
                 app_server,
                 &self.app_server_target,
+                &self.config.features,
                 tracked_ids.iter().copied(),
             )
             .await
@@ -442,8 +443,13 @@ impl App {
                 }
             }
         }
-        if let Some(message) =
-            check_background_terminals(app_server, &self.app_server_target, tracked_ids).await
+        if let Some(message) = check_background_terminals(
+            app_server,
+            &self.app_server_target,
+            &self.config.features,
+            tracked_ids,
+        )
+        .await
         {
             return self.working_directory_error(message);
         }
@@ -493,8 +499,13 @@ impl App {
                     == config.permissions.active_permission_profile()
         };
         if session.thread_id == thread_id
-            || crate::session_resume::cwds_differ(session.cwd.as_path(), cwd.as_path())
-            || session.runtime_workspace_roots != config.workspace_roots
+            || crate::session_resume::cwds_differ(&session.cwd.to_path_buf(), cwd.as_path())
+            || session.runtime_workspace_roots
+                != config
+                    .workspace_roots
+                    .iter()
+                    .map(codex_utils_path_uri::PathUri::from_abs_path)
+                    .collect::<Vec<_>>()
             || !permissions_match
         {
             if session.thread_id != thread_id {

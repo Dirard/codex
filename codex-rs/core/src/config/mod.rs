@@ -80,6 +80,7 @@ use codex_features::FeatureOverrides;
 use codex_features::FeatureToml;
 use codex_features::Features;
 use codex_features::FeaturesToml;
+use codex_features::GuardianV3ConfigToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_features::NetworkProxyConfigToml;
 use codex_features::RuntimeAuthMode;
@@ -245,7 +246,7 @@ pub use windows_sandbox_config::windows_mxc_allowed_by_config;
 
 const DEFAULT_IGNORE_LARGE_UNTRACKED_DIRS: i64 = 200;
 const DEFAULT_IGNORE_LARGE_UNTRACKED_FILES: i64 = 10 * 1024 * 1024;
-const DEFAULT_ASYNC_COMPACTION_THRESHOLD_PERCENT: u8 = 65;
+pub(crate) const DEFAULT_ASYNC_COMPACTION_THRESHOLD_PERCENT: u8 = 65;
 
 /// Signals that a public config selected the retired `untrusted` approval policy.
 #[derive(Debug, thiserror::Error)]
@@ -637,6 +638,13 @@ pub enum ThreadStoreConfig {
     InMemory { id: String },
 }
 
+/// Provider resolved by the host for Guardian inference on this thread.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GuardianInferenceProvider {
+    pub id: String,
+    pub info: ModelProviderInfo,
+}
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -689,6 +697,11 @@ pub struct Config {
 
     /// Info needed to make an API request to the model.
     pub model_provider: ModelProviderInfo,
+
+    /// Host-selected inference provider for Guardian. When set, Guardian keeps review
+    /// history independent of actor compaction and never reuses actor checkpoints.
+    /// When unset, Guardian inherits the actor's provider and existing history policy.
+    pub guardian_model_provider: Option<Arc<GuardianInferenceProvider>>,
 
     /// Deprecated: `friendly` and `pragmatic` no longer select a style.
     pub personality: Option<Personality>,
@@ -752,6 +765,8 @@ pub struct Config {
     pub guardian_policy_template: Option<String>,
     /// Transcript encoding shared by Guardian review and scoring.
     pub guardian_transcript_mode: codex_protocol::TranscriptFormat,
+    /// GV3 settings captured when the app-server installs the extension.
+    pub guardian_v3: Option<Arc<GuardianV3ConfigToml>>,
     /// Frozen section policy for sync Guardian; absence keeps fixed budgeting.
     pub guardian_sync_elastic_budget: Option<codex_guardian_context::ElasticBudgetConfig>,
     /// Frozen section policy for async Guardian; absence keeps fixed budgeting.
@@ -1698,12 +1713,7 @@ async fn config_toml_from_layers(layers: &ConfigLayerStack) -> std::io::Result<C
     match ConfigToml::try_from(layers.effective_config()) {
         Ok(config_toml) => Ok(config_toml),
         Err(err) => {
-            if let Some(config_error) = codex_config::first_layer_config_error::<ConfigToml>(
-                layers,
-                codex_config::CONFIG_TOML_FILE,
-            )
-            .await
-            {
+            if let Some(config_error) = codex_config::first_layer_config_error(layers).await {
                 return Err(codex_config::io_error_from_config_error(
                     std::io::ErrorKind::InvalidData,
                     config_error,
@@ -1729,6 +1739,14 @@ impl Config {
                 ThreadMemoryMode::Disabled
             },
         }
+    }
+
+    /// A host-selected Guardian provider cannot reuse the actor's opaque checkpoints.
+    pub(crate) fn guardian_reuses_parent_compaction(&self) -> bool {
+        self.guardian_model_provider.is_none()
+            && self
+                .features
+                .enabled(Feature::GuardianReuseParentCompaction)
     }
 
     /// Capture storage and sync preparation use one session-static rollout choice.
@@ -1764,9 +1782,21 @@ impl Config {
         &'a self,
         model_messages: ResolvedModelMessages<'a>,
     ) -> &'a str {
-        self.guardian_policy_config
+        let configured_policy = if self.guardian_model_provider.is_some() {
+            self.managed_guardian_policy()
+        } else {
+            self.guardian_policy_config.as_deref()
+        };
+        configured_policy.unwrap_or(model_messages.auto_review().policy)
+    }
+
+    pub(crate) fn managed_guardian_policy(&self) -> Option<&str> {
+        self.config_layer_stack
+            .requirements_toml()
+            .guardian_policy_config
             .as_deref()
-            .unwrap_or(model_messages.auto_review().policy)
+            .map(str::trim)
+            .filter(|policy| !policy.is_empty())
     }
 
     /// Native Guardian agent history requires the reviewed thread's OpenAI provider.
@@ -1880,6 +1910,14 @@ impl Config {
 
     /// Creates the HTTP client factory resolved from the effective feature configuration.
     pub fn http_client_factory(&self) -> HttpClientFactory {
+        self.http_client_factory_for_provider(&self.model_provider)
+    }
+
+    /// Applies the thread's network settings and the selected provider's header policy.
+    pub(crate) fn http_client_factory_for_provider(
+        &self,
+        provider: &ModelProviderInfo,
+    ) -> HttpClientFactory {
         let outbound_proxy_policy = if self.respect_system_proxy {
             OutboundProxyPolicy::RespectSystemProxy
         } else {
@@ -1887,8 +1925,7 @@ impl Config {
         };
         let mut factory = HttpClientFactory::new(outbound_proxy_policy)
             .with_network_policy(self.application_network_policy.clone());
-        if self
-            .model_provider
+        if provider
             .gateway_oauth
             .as_ref()
             .is_some_and(GatewayOAuthConfig::uses_credential_export)
@@ -2042,6 +2079,7 @@ impl Config {
         }
 
         McpConfig {
+            executor_discovery_v2: None,
             client: McpClientConfig {
                 chatgpt_base_url: self.chatgpt_base_url.clone(),
                 requires_read_only_mcp_tools: false,
@@ -2798,11 +2836,12 @@ pub struct ConfigOverrides {
     pub permission_profile: Option<PermissionProfile>,
     pub default_permissions: Option<String>,
     /// Permission profile ID recovered from persisted thread state. Explicit
-    /// permission overrides take precedence, and stale profile IDs fall back
-    /// to the configured default.
+    /// permission overrides take precedence. An unavailable saved profile
+    /// requires an explicit selection.
     pub persisted_permission_profile_id: Option<String>,
-    /// Unnamed permissions from a thread-owned rollout snapshot. These are
-    /// fallback state: explicit overrides and current requirements take priority.
+    /// Unnamed permissions from a thread-owned rollout snapshot, or canonical
+    /// read-only permissions recovered from older history. Explicit overrides
+    /// and current requirements take priority.
     pub persisted_permission_profile: Option<PermissionProfile>,
     pub model_provider: Option<String>,
     pub service_tier: Option<Option<String>>,
@@ -3183,6 +3222,44 @@ fn resolve_current_time_reminder_config(
             .and_then(|config| config.sleep_tool)
             .unwrap_or(default.sleep_tool),
     }))
+}
+
+fn resolve_guardian_v3_config(
+    feature: Option<FeatureToml<GuardianV3ConfigToml>>,
+) -> std::io::Result<Option<Arc<GuardianV3ConfigToml>>> {
+    let Some(FeatureToml::Config(settings)) = feature else {
+        return Ok(None);
+    };
+    if let Some(limit) = settings.max_instruction_tokens {
+        for (key, prompt) in [
+            (
+                "housekeeper.routing_instructions",
+                settings
+                    .housekeeper
+                    .as_ref()
+                    .and_then(|housekeeper| housekeeper.routing_instructions.as_deref()),
+            ),
+            (
+                "reviewer.retrieval_instructions",
+                settings
+                    .reviewer
+                    .as_ref()
+                    .and_then(|reviewer| reviewer.retrieval_instructions.as_deref()),
+            ),
+        ] {
+            let Some(prompt) = prompt else { continue };
+            let tokens = codex_utils_string::approx_token_count(prompt.trim());
+            if tokens > limit {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "features.guardianv3.{key} is {tokens} estimated tokens, exceeding max_instruction_tokens = {limit}"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(Some(Arc::new(settings)))
 }
 
 fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalResizeReflowConfig {
@@ -3739,12 +3816,29 @@ impl Config {
             sandbox_mode,
         );
         let requirements_toml = config_layer_stack.requirements_toml();
+        let restore_persisted_profile = sandbox_mode.is_none()
+            && permission_profile.is_none()
+            && default_permissions_override.is_none()
+            && persisted_permission_profile_id.is_none();
+        let persisted_read_only = restore_persisted_profile
+            && persisted_permission_profile
+                .as_ref()
+                .is_some_and(|profile| *profile == PermissionProfile::read_only());
+        if persisted_read_only
+            && !permission_profile_is_allowed(
+                &config_layer_stack,
+                BUILT_IN_READ_ONLY_PROFILE,
+                &PermissionProfile::read_only(),
+            )
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "The saved read-only permission profile is disallowed by requirements. Select a permission profile explicitly to continue.",
+            ));
+        }
         let persisted_permission_profile = persisted_permission_profile.filter(|profile| {
-            sandbox_mode.is_none()
-                && permission_profile.is_none()
-                && default_permissions_override.is_none()
-                && persisted_permission_profile_id.is_none()
-                && requirements_toml.allowed_permission_profiles.is_none()
+            restore_persisted_profile
+                && (persisted_read_only || requirements_toml.allowed_permission_profiles.is_none())
                 // Executor-owned enforcement and materialized grants are not portable
                 // thread defaults. Reject the original mode before preserving denials.
                 && !matches!(profile, PermissionProfile::External { .. })
@@ -3881,7 +3975,7 @@ impl Config {
         };
         dedupe_absolute_paths(&mut workspace_roots);
         let (
-            configured_network_proxy_config,
+            mut configured_network_proxy_config,
             mut permission_profile,
             mut file_system_sandbox_policy,
             mut active_permission_profile,
@@ -4022,6 +4116,21 @@ impl Config {
             )
         };
         if let Some(saved) = persisted_permission_profile {
+            // Canonical read-only recovery can remove writes without replacing a
+            // narrower read allowlist from the current configuration.
+            let saved = if persisted_read_only
+                && (!file_system_sandbox_policy.has_full_disk_read_access()
+                    || matches!(permission_profile, PermissionProfile::External { .. }))
+            {
+                permission_profile.intersect_with_read_only().ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Could not restore the saved read-only permission profile under external enforcement. Select a permission profile explicitly to continue.",
+                    )
+                })?
+            } else {
+                saved
+            };
             let (mut saved_file_system, saved_network) = saved.to_runtime_permissions();
             saved_file_system.preserve_deny_read_restrictions_from(&file_system_sandbox_policy);
             let restored = PermissionProfile::from_runtime_permissions_with_enforcement(
@@ -4035,6 +4144,9 @@ impl Config {
             ) {
                 permission_profile = restored;
                 file_system_sandbox_policy = saved_file_system;
+                if persisted_read_only {
+                    configured_network_proxy_config = NetworkProxyConfig::default();
+                }
                 active_permission_profile = None;
                 profile_workspace_roots.clear();
             }
@@ -4673,6 +4785,7 @@ impl Config {
             async_compaction_threshold_percent,
             model_provider_id,
             model_provider,
+            guardian_model_provider: None,
             cwd: resolved_cwd,
             workspace_roots: workspace_roots.clone(),
             workspace_roots_explicit,
@@ -4800,6 +4913,7 @@ impl Config {
             guardian_extra_policy,
             guardian_policy_template: None,
             guardian_transcript_mode,
+            guardian_v3: resolve_guardian_v3_config(cfg.features.and_then(|features| features.guardianv3))?,
             guardian_sync_elastic_budget,
             guardian_async_elastic_budget,
             guardian_conversation_history_prompt,
@@ -5231,7 +5345,7 @@ fn resolve_effective_permission_selection<'a>(
     let profiles = merge_managed_permission_profiles(configured_profiles, requirements_toml)?;
     validate_user_permission_profile_names(profiles.as_ref())?;
     validate_required_permission_profile_catalog(requirements_toml, profiles.as_ref())?;
-    let valid_persisted_profile_id = persisted_profile_id.and_then(|(profile_id, context)| {
+    if let Some((profile_id, context)) = persisted_profile_id {
         compile_permission_profile(
             profiles.as_ref(),
             profile_id,
@@ -5239,11 +5353,17 @@ fn resolve_effective_permission_selection<'a>(
             /*workspace_write*/ None,
             &mut Vec::new(),
         )
-        .is_ok()
-        .then_some(profile_id)
-    });
+        .map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "Could not load saved permission profile `{profile_id}`: {err}. Select a permission profile explicitly to continue."
+                ),
+            )
+        })?;
+    }
     let selected_profile_id = resolve_default_permissions(
-        default_permissions_override.or(valid_persisted_profile_id),
+        default_permissions_override.or(persisted_profile_id.map(|(profile_id, _)| profile_id)),
         configured_default_profile_id,
         requirements_toml,
         startup_warnings,
@@ -5253,7 +5373,7 @@ fn resolve_effective_permission_selection<'a>(
         profiles,
         selected_profile_id,
         persisted_profile_id_was_provided: default_permissions_override.is_none()
-            && valid_persisted_profile_id.is_some(),
+            && persisted_profile_id.is_some(),
         requirements_force_profile_selection: requirements_toml
             .allowed_permission_profiles
             .is_some(),

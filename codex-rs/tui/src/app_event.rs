@@ -322,7 +322,7 @@ pub(crate) struct CapturedSideDisplay {
     pub(crate) status_line: Option<crate::bottom_pane::StatusLine>,
     pub(crate) work: Option<CapturedSideWork>,
     pub(crate) last_completed_agent_message: Option<(String, String)>,
-    pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) cwd: PathBuf,
     pub(crate) visualizations: Option<crate::inline_visualization::InlineVisualizationContext>,
 }
 
@@ -367,6 +367,15 @@ pub(crate) enum AppEvent {
         notice: crate::security_setup::Notice,
     },
     OpenDaemonMenu,
+    RemoteControl(crate::app::remote_control::Action),
+    RemoteControlForBackend {
+        backend_id: crate::backend_id::BackendId,
+        action: crate::app::remote_control::Action,
+    },
+    RemoteControlFinished {
+        backend_id: crate::backend_id::BackendId,
+        result: crate::app::remote_control::Outcome,
+    },
     ConfirmDaemonRestart,
     RunDaemonRestart,
     ConfirmDaemonUpdate(crate::update_action::DaemonUpdateSource),
@@ -393,7 +402,7 @@ pub(crate) enum AppEvent {
     /// Create an empty thread from the command center.
     NewAgentsOverviewSession {
         backend_id: Option<crate::backend_id::BackendId>,
-        cwd: Option<AbsolutePathBuf>,
+        cwd: Option<PathBuf>,
     },
     /// Update the agents overview after a background thread listing finishes.
     AgentsOverviewThreadsLoaded {
@@ -401,6 +410,10 @@ pub(crate) enum AppEvent {
         result: Result<AgentsOverviewThreadRefresh, String>,
     },
     /// Switch to a root session selected from the shared dashboard.
+    /// Open a linked conversation in its owning session tree.
+    OpenThreadLink {
+        thread_id: ThreadId,
+    },
     SelectAgentsOverviewThread {
         thread_id: ThreadId,
     },
@@ -480,6 +493,8 @@ pub(crate) enum AppEvent {
     },
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
+    /// Discover saved subagents on the owning backend after attaching a primary thread.
+    DiscoverSidebarAgents(ThreadId),
     /// Merge a completed root-scoped agent-picker refresh without blocking terminal input.
     AgentPickerThreadsLoaded {
         primary_thread_id: ThreadId,
@@ -525,6 +540,11 @@ pub(crate) enum AppEvent {
         request: uuid::Uuid,
     },
     StartQueuedSavedChat,
+    OpenSidebarAgent {
+        backend: crate::backend_id::BackendId,
+        source: ThreadId,
+        agent: ThreadId,
+    },
     OpenSidebarDocument {
         backend_id: crate::backend_id::BackendId,
         source: ThreadId,
@@ -542,8 +562,9 @@ pub(crate) enum AppEvent {
     SidebarDocumentLoaded {
         backend_id: crate::backend_id::BackendId,
         parent: ThreadId,
+        tab: uuid::Uuid,
         request: uuid::Uuid,
-        result: Result<crate::sidebar_image::DocumentContent, String>,
+        result: color_eyre::Result<crate::sidebar_image::DocumentContent>,
     },
     SidebarFilesLoaded {
         backend_id: crate::backend_id::BackendId,
@@ -1066,7 +1087,7 @@ pub(crate) enum AppEvent {
     },
 
     /// Result of computing a `/diff` command.
-    DiffResult(PathBuf, String),
+    DiffResult(PathUri, String),
 
     /// Open the app link view in the bottom pane.
     OpenAppLink {
@@ -1359,7 +1380,7 @@ pub(crate) enum AppEvent {
     /// command path because those callers expect the visible skill state to be current when their command
     /// completes.
     SkillsListLoaded {
-        cwd: PathBuf,
+        cwd: PathUri,
         result: Result<SkillsListResponse, String>,
     },
 
@@ -1367,7 +1388,7 @@ pub(crate) enum AppEvent {
     SideReplaySkillsLoaded {
         request_id: Uuid,
         thread_id: ThreadId,
-        cwd: PathBuf,
+        cwd: PathUri,
         result: Result<SkillsListResponse, String>,
     },
 
