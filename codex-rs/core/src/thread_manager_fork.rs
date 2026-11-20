@@ -8,6 +8,7 @@
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::error::Result as CodexResult;
+use futures::future::BoxFuture;
 
 use super::NewThread;
 use super::StartThreadOptions;
@@ -52,12 +53,23 @@ impl ThreadManagerState {
     pub(super) fn spawn_thread(
         &self,
         request: ThreadSpawnRequest,
-    ) -> impl std::future::Future<Output = CodexResult<NewThread>> + Send + '_ {
+    ) -> BoxFuture<'_, CodexResult<NewThread>> {
         // The boxed spawn keeps `Map`'s frame small: in debug builds it otherwise copies the whole
-        // spawn future onto the stack, which overflowed the 8 MiB stacks of the TUI tests.
-        futures::FutureExt::map(Box::pin(self.spawn_thread_outcome(request)), |outcome| {
-            outcome.map(ThreadSpawnOutcome::into_new_thread)
-        })
+        // spawn future onto the stack, which overflowed the 8 MiB stacks of the TUI tests. The
+        // outer box erases the type, as upstream's `spawn_thread` does (#62477).
+        Box::pin(futures::FutureExt::map(
+            self.spawn_thread_outcome(request),
+            |outcome| outcome.map(ThreadSpawnOutcome::into_new_thread),
+        ))
+    }
+
+    /// Upstream's boxed `spawn_thread`, keeping the outcome: callers await it directly, so
+    /// each one does not compile its own copy of the startup future (#62477).
+    pub(super) fn spawn_thread_outcome(
+        &self,
+        request: ThreadSpawnRequest,
+    ) -> BoxFuture<'_, CodexResult<ThreadSpawnOutcome>> {
+        Box::pin(self.spawn_thread_inner(request))
     }
 
     /// A child without its own dynamic tools inherits its parent's

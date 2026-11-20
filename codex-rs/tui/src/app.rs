@@ -248,6 +248,7 @@ mod misalignment_policy;
 mod model_defaults;
 mod new_session;
 mod quick_dials;
+pub(crate) mod remote_control;
 mod turn_tips;
 pub(crate) use new_session::has_launch_setting;
 mod archived_thread;
@@ -290,6 +291,7 @@ mod sidebar_close;
 mod sidebar_document;
 mod sidebar_files;
 pub(crate) mod sidebar_loading;
+mod sidebar_subagents;
 mod startup;
 pub(crate) mod startup_bootstrap;
 mod startup_prompts;
@@ -298,6 +300,7 @@ pub(crate) mod thread_attachment;
 mod thread_event_buffer;
 mod thread_events;
 mod thread_goal_actions;
+mod thread_links;
 mod thread_routing;
 mod thread_session_state;
 mod thread_settings;
@@ -551,15 +554,6 @@ fn rollout_path_is_resumable(rollout_path: &Path) -> bool {
     std::fs::metadata(rollout_path).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
 }
 
-fn errors_for_cwd(cwd: &Path, response: &SkillsListResponse) -> Vec<SkillErrorInfo> {
-    response
-        .data
-        .iter()
-        .find(|entry| entry.cwd.as_path() == cwd)
-        .map(|entry| entry.errors.clone())
-        .unwrap_or_default()
-}
-
 #[derive(Debug, Default)]
 struct InitialHistoryReplayBuffer {
     retained_lines: VecDeque<crate::terminal_hyperlinks::HyperlinkLine>,
@@ -657,6 +651,7 @@ pub(crate) struct App {
     pub(crate) pending_update_action: Option<UpdateAction>,
     /// Retained through all loop exits so shutdown cannot interrupt stop followed by start.
     daemon_restart: Option<JoinHandle<anyhow::Result<codex_app_server_daemon::LifecycleOutput>>>,
+    remote_control_pending: bool,
 
     /// Tracks the thread we intentionally shut down while exiting the app.
     ///
@@ -913,6 +908,9 @@ impl App {
             }
             _ => self.sidebar_press = None,
         }
+        self.transcript_view.agent_links = self
+            .side_retention_enabled(tui)
+            .then(|| app_server.backend_id());
         self.transcript_view.document_links = self.document_preview_available(tui, app_server);
         crate::markdown_render::preferences::set_document_links(
             self.transcript_view.document_links,
@@ -940,16 +938,7 @@ impl App {
             tui.frame_requester().schedule_frame();
             return Ok(AppRunControl::Continue);
         }
-        let previous = tui.link_hover.position();
-        tui.link_hover.observe(&event);
-        let current = tui.link_hover.position();
-        if previous != current
-            && (self.hovered_sidebar_target(previous) != self.hovered_sidebar_target(current)
-                || previous.is_some_and(|point| self.transcript_view.has_document_link_at(point))
-                || current.is_some_and(|point| self.transcript_view.has_document_link_at(point)))
-        {
-            tui.frame_requester().schedule_frame();
-        }
+        self.observe_pointer(tui, &event);
         if Box::pin(sidebar_close::handle(self, tui, app_server, &event)).await {
             return Ok(AppRunControl::Continue);
         }
@@ -1046,9 +1035,9 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
         let transcript_owns_input = match (&event, &self.overlay) {
-            (TuiEvent::Key(key), Some(Overlay::Transcript(overlay))) => {
-                overlay.owns_interaction_key(*key)
-            }
+            (TuiEvent::Key(key), Some(overlay)) => overlay
+                .input_transcript()
+                .is_some_and(|view| view.owns_interaction_key(*key)),
             (TuiEvent::Key(key), None) => {
                 tui.is_owned_screen()
                     && self.chat_widget.no_modal_or_popup_active()
@@ -1174,12 +1163,23 @@ impl App {
                 && painted.passive.union(painted.focused) == Rect::from(size)
             {
                 let painted_area = painted.passive;
-                if let Some(url) = self.transcript_link_at(*press) {
+                if let Some(link) = self.transcript_link_at(*press) {
+                    use crate::terminal_hyperlinks::ReaderLink;
                     if press.modifiers.is_empty() {
                         self.passive_link_drag = Some((current.passive_thread, painted.passive));
                         self.handle_passive_transcript_event(tui, current.passive_thread, &event);
                     } else {
-                        self.open_url_in_browser(url);
+                        match link {
+                            ReaderLink::Agent(agent) => {
+                                self.app_event_tx.send(AppEvent::OpenSidebarAgent {
+                                    backend: app_server.backend_id(),
+                                    source: current.passive_thread,
+                                    agent,
+                                });
+                            }
+                            ReaderLink::External(url) => self.open_url_in_browser(url),
+                            ReaderLink::Document(link) => self.open_url_in_browser(link.path),
+                        }
                     }
                     return Ok(AppRunControl::Continue);
                 }
@@ -1284,10 +1284,11 @@ impl App {
         {
             if self.overlay.is_none()
                 && self.chat_widget.no_modal_or_popup_active()
-                && self.chat_widget.is_read_only_view()
-                && (crate::key_hint::plain(KeyCode::Esc).is_press(*key)
-                    || (crate::key_hint::plain(KeyCode::Left).is_press(*key)
-                        && self.chat_widget.agents_navigation_key_available()))
+                && ((self.chat_widget.is_read_only_view()
+                    && crate::key_hint::plain(KeyCode::Esc).is_press(*key))
+                    || self
+                        .chat_widget
+                        .blocked_thread_command_center_key_pressed(*key))
             {
                 self.open_agents_overview(app_server);
             } else if self
@@ -1350,7 +1351,20 @@ impl App {
         } else {
             match event {
                 TuiEvent::Key(key_event) => {
+                    let overview_id = agents_overview::AGENTS_OVERVIEW_VIEW_ID;
+                    let overview_was_open = self
+                        .chat_widget
+                        .selected_index_for_present_view(overview_id)
+                        .is_some();
                     self.handle_key_event(tui, app_server, key_event).await;
+                    if overview_was_open
+                        && self
+                            .chat_widget
+                            .selected_index_for_present_view(overview_id)
+                            .is_none()
+                    {
+                        self.cancel_cloud_inventory_refresh(app_server).await;
+                    }
                 }
                 TuiEvent::Paste(pasted) => {
                     // Pasted text may contain CRLF pairs or bare CRs (e.g., from iTerm2),
@@ -1479,7 +1493,7 @@ impl App {
     pub(super) fn show_shutdown_feedback(&mut self, tui: &mut tui::Tui) -> Result<()> {
         self.disable_ambient_pet_before_shutdown(tui)?;
         self.chat_widget.show_shutdown_in_progress();
-        let screen_size = tui.terminal.last_known_screen_size;
+        let screen_size = tui.prepare_draw_size()?;
         self.handle_draw_pre_render(tui, screen_size)?;
         self.chat_widget.pre_draw_tick();
         self.render_chat_widget_frame(tui, screen_size)?;

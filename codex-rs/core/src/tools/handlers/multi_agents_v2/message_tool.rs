@@ -80,6 +80,11 @@ pub(super) async fn handle_message_string_tool(
                     turn.config.multi_agent_v2.message_delivery,
                 ),
                 mode,
+                source_tool_call_id: session
+                    .services
+                    .rollout_thread_trace
+                    .is_enabled()
+                    .then(|| call_id.clone()),
             },
             start_options: TurnStartOptions {
                 parent_turn_id: (mode == MessageDeliveryMode::TriggerTurn)

@@ -213,9 +213,9 @@ pub(crate) use status_line_setup::StatuslineProviderActions;
 pub(crate) use status_surface_preview::StatusSurfacePreviewData;
 pub(crate) use status_surface_preview::StatusSurfacePreviewItem;
 pub(crate) use title_setup::TerminalTitleItem;
-pub(crate) use title_setup::TerminalTitleSetupView;
 #[cfg(test)]
 pub(crate) use title_setup::preview_line_for_title_items;
+pub(crate) use title_setup::terminal_title_setup;
 mod paste_burst;
 mod pending_input_preview;
 mod pending_thread_approvals;
@@ -1177,6 +1177,10 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_composer_restricted_input_mode(&mut self, mode: Option<RestrictedInputMode>) {
+        self.composer.set_restricted_input_mode(mode);
+    }
+
     pub(crate) fn pre_draw_tick(&mut self) {
         self.pre_draw_tick_at(Instant::now());
     }
@@ -1446,6 +1450,10 @@ impl BottomPane {
     #[cfg(test)]
     pub(crate) fn status_indicator_visible(&self) -> bool {
         self.status_widget().is_some()
+    }
+
+    pub(crate) fn status_line_area(&self) -> ratatui::layout::Rect {
+        self.composer.status_line_area()
     }
 
     pub(crate) fn status_line_content(&self) -> Option<&StatusLine> {

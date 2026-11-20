@@ -51,7 +51,6 @@ use codex_history::RetainedContextEvent;
 use codex_history::RetainedInputSource;
 use codex_prompts::render_model_instructions;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
-use codex_protocol::ItemIdGenerator;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::AudioReference;
@@ -69,6 +68,7 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::WorldStateItem;
+use codex_thread_context_ids::ThreadContextIds;
 use codex_utils_audio::estimate_tool_audio_tokens;
 use codex_utils_cache::BlockingLruCache;
 use codex_utils_cache::sha1_digest;
@@ -103,7 +103,7 @@ fn next_guardian_review_context_revision() -> u64 {
 /// Transcript of thread history
 #[derive(Clone)]
 pub(crate) struct ContextManager {
-    item_id_generator: ItemIdGenerator,
+    context_ids: ThreadContextIds,
     sampling: super::sampling::SamplingProgress,
     /// Inclusive sequence cutoff for calls that may still be running in the fork source.
     pub(crate) restored_through_sequence: u64,
@@ -312,14 +312,18 @@ impl SharedConversationHistory {
 #[cfg(test)]
 impl Default for ContextManager {
     fn default() -> Self {
-        Self::new(codex_protocol_test_support::uuid_v7_item_id_generator_for_test())
+        Self::new(codex_thread_context_ids_test_support::thread_context_ids())
     }
 }
 
 impl ContextManager {
-    pub(crate) fn new(item_id_generator: ItemIdGenerator) -> Self {
+    pub(crate) fn context_ids(&self) -> &ThreadContextIds {
+        &self.context_ids
+    }
+
+    pub(crate) fn new(context_ids: ThreadContextIds) -> Self {
         Self {
-            item_id_generator,
+            context_ids,
             sampling: Default::default(),
             restored_through_sequence: 0,
             items: Arc::new(Vec::new()),
@@ -364,10 +368,11 @@ impl ContextManager {
     pub(crate) fn for_session(
         root_capabilities_restricted: bool,
         features: &ManagedFeatures,
+        reuse_parent_compaction: bool,
         budgeting: ContextBudgeting,
-        item_id_generator: ItemIdGenerator,
+        context_ids: ThreadContextIds,
     ) -> Self {
-        let independent = !features.enabled(Feature::GuardianReuseParentCompaction);
+        let independent = !reuse_parent_compaction;
         Self {
             retain_inherited_user_messages: !root_capabilities_restricted,
             guardian_include_additional_context: features
@@ -380,7 +385,7 @@ impl ContextManager {
             review_budgeting: budgeting,
             review_history: independent
                 .then(|| TranscriptHistory::new(/*generation*/ 0, budgeting)),
-            ..Self::new(item_id_generator)
+            ..Self::new(context_ids)
         }
     }
 
@@ -396,9 +401,7 @@ impl ContextManager {
         &mut self,
         event: &mut RetainedContextEvent,
     ) -> bool {
-        if !Arc::make_mut(&mut self.retained_context)
-            .record_and_capture(event, &self.item_id_generator)
-        {
+        if !Arc::make_mut(&mut self.retained_context).record_and_capture(event, &self.context_ids) {
             return false;
         }
         match event {
@@ -643,6 +646,51 @@ impl ContextManager {
                 envelope.metadata.get_or_insert_default().retained_source = Some(source);
             }
         }
+    }
+
+    /// Reserves the item's sampling sequence before a durable acceptance attempt.
+    pub(crate) fn prepare_item_sampling(&mut self, envelope: &mut ResponseItemEnvelope) {
+        self.sampling.record(envelope);
+    }
+
+    /// Capture a realtime input's retained provenance without copying or appending model history.
+    pub(crate) fn stage_realtime_input(
+        &mut self,
+        envelope: &mut ResponseItemEnvelope,
+    ) -> Arc<RetainedContext> {
+        let original_context = Arc::clone(&self.retained_context);
+        let original_revision = self.user_message_revision;
+        let captured = self.record_retained_message(
+            &envelope.item,
+            envelope.metadata.as_ref(),
+            user_authorization::RetainedMessageSource::Original,
+        );
+        if let Some(source) = envelope
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.retained_source.as_ref())
+        {
+            if captured.as_ref().is_some_and(|captured| {
+                captured.id == source.id && captured.complete == source.complete
+            }) {
+                Arc::make_mut(&mut self.retained_context).restore_source_revision(source);
+            }
+        } else if let Some(source) = captured {
+            envelope.metadata.get_or_insert_default().retained_source = Some(source);
+        }
+        self.user_message_revision = original_revision;
+        std::mem::replace(&mut self.retained_context, original_context)
+    }
+
+    /// Install staged provenance and append the accepted input only after its seal succeeds.
+    pub(crate) fn record_sealed_realtime_input(
+        &mut self,
+        envelope: &ResponseItemEnvelope,
+        retained_context: Arc<RetainedContext>,
+        policy: TruncationPolicy,
+    ) {
+        self.retained_context = retained_context;
+        self.replay_annotated_item(envelope, policy);
     }
 
     /// Replays persisted originals without assigning new identities to known versions.
@@ -1139,10 +1187,7 @@ impl ContextManager {
 
     fn get_non_last_reasoning_items_tokens(&self) -> i64 {
         // Get reasoning items excluding all the ones after the last instruction boundary.
-        let Some(last_user_index) = self
-            .items
-            .iter()
-            .rposition(|envelope| is_user_turn_boundary(&envelope.item))
+        let Some(last_user_index) = self.items.iter().rposition(is_instruction_turn_boundary)
         else {
             return 0;
         };
@@ -1250,7 +1295,15 @@ impl ContextManager {
         mut cut_idx: usize,
     ) -> usize {
         while cut_idx > first_instruction_turn_idx {
-            match &snapshot[cut_idx - 1].item {
+            let previous = &snapshot[cut_idx - 1];
+            if previous
+                .metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.realtime_session_end_input)
+            {
+                break;
+            }
+            match &previous.item {
                 ResponseItem::Message {
                     role,
                     content,
@@ -1668,6 +1721,15 @@ pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
         || (role == "assistant" && is_inter_agent_instruction_content(content))
 }
 
+/// Session-end realtime input is saved context, not an instruction that started or steered a turn.
+pub(crate) fn is_instruction_turn_boundary(envelope: &ResponseItemEnvelope) -> bool {
+    !envelope
+        .metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.realtime_session_end_input)
+        && is_user_turn_boundary(&envelope.item)
+}
+
 fn is_inter_agent_instruction_content(content: &[ContentItem]) -> bool {
     InterAgentCommunication::is_message_content(content)
 }
@@ -1675,7 +1737,7 @@ fn is_inter_agent_instruction_content(content: &[ContentItem]) -> bool {
 fn user_message_positions(items: &[ResponseItemEnvelope]) -> Vec<usize> {
     let mut positions = Vec::new();
     for (idx, envelope) in items.iter().enumerate() {
-        if is_user_turn_boundary(&envelope.item) {
+        if is_instruction_turn_boundary(envelope) {
             positions.push(idx);
         }
     }

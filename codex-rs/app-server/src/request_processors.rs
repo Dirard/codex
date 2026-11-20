@@ -615,6 +615,7 @@ pub(crate) use thread_goal_processor::ThreadGoalRequestProcessor;
 pub(crate) use thread_output_style_processor::ThreadOutputStyleRequestProcessor; // Fork
 pub(crate) use thread_processor::ThreadRequestProcessor;
 pub(crate) use thread_processor::ThreadResumeTarget;
+pub(crate) use thread_processor::ThreadSearchDelivery;
 pub(crate) use thread_queue_processor::ThreadQueueRequestProcessor;
 pub(crate) use thread_wakeup_fork::wakeup_updated_notification; // Fork: scheduled wakeups
 pub(crate) use thread_workflow_processor::ThreadWorkflowRequestProcessor;

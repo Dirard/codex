@@ -54,6 +54,7 @@ fn experimental_features_display_metadata() {
         Feature::AnalyticsPlanHistory,
         Feature::LoginShellPackagePath,
         Feature::RespectSystemProxy,
+        Feature::TuiExtensionsStatusLine,
         // Fork: Experimental stages of the fork's features (fork-features-experimental R2.1).
         Feature::ExecExitNotifications,
         Feature::Workflows,

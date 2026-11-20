@@ -165,6 +165,11 @@ async fn spawn_with(
         input: AgentInput::Message {
             message,
             mode: MessageDeliveryMode::TriggerTurn,
+            source_tool_call_id: session
+                .services
+                .rollout_thread_trace
+                .is_enabled()
+                .then(|| call_id.to_owned()),
         },
         source: settings.source,
         options: settings.options,
@@ -179,6 +184,14 @@ async fn spawn_with(
             return Err(err.into());
         }
     };
+    step_context
+        .turn
+        .session_telemetry
+        .record_multi_agent_spawned(
+            session.session_id(),
+            &step_context.turn.sub_id,
+            agent.thread_id,
+        );
     Ok(ThreadSpawnResult {
         agent,
         config,

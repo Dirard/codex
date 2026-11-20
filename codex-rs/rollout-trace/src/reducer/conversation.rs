@@ -23,6 +23,7 @@ use crate::model::ConversationRole;
 use crate::model::InferenceCallId;
 use crate::model::ProducerRef;
 use crate::payload::RawPayloadRef;
+use crate::shard::ObservedJson;
 
 mod normalize;
 
@@ -40,8 +41,8 @@ impl TraceReducer {
         if self.receivable_ids.contains_key(&key) {
             return Ok(());
         }
-        let item =
-            normalize::normalize_model_item(&self.payload_reader.observed_json(payload)?, payload)?;
+        let ObservedJson { mut value, missing } = self.payload_reader.observed_json(payload)?;
+        let item = normalize::normalize_model_item(&mut value, payload, &missing)?;
         if !item.is_delivery_or_tool_output() || item.responses_item_id.as_deref() != Some(wire_id)
         {
             bail!("accepted item payload does not match {wire_id}");
@@ -61,7 +62,13 @@ impl TraceReducer {
         if is_delivery {
             self.resolve_pending_agent_edges_for_item(&id)?;
         }
-        self.receivable_ids.insert(key, Some(id));
+        self.receivable_ids.insert(
+            key,
+            super::ReceivableItem {
+                item_id: id,
+                awaiting_snapshot: true,
+            },
+        );
         Ok(())
     }
 
@@ -81,7 +88,10 @@ impl TraceReducer {
         if !request_payload.capture.is_complete() {
             return Ok(Vec::new());
         }
-        let mut payload = self.payload_reader.observed_json(request_payload)?;
+        let ObservedJson {
+            value: mut payload,
+            missing,
+        } = self.payload_reader.observed_json(request_payload)?;
         let Some(input) = payload.get_mut("input") else {
             bail!(
                 "inference request payload {} did not contain input",
@@ -101,6 +111,9 @@ impl TraceReducer {
             let item = request_items
                 .get_mut(index)
                 .context("stripped tool output index outside request")?;
+            if missing["input"][index].is_string() {
+                continue; // The captured request has no item to attach the history ID to.
+            }
             if item.get("id").is_some()
                 || !matches!(
                     item["type"].as_str(),
@@ -113,7 +126,8 @@ impl TraceReducer {
             }
             item["id"] = Value::String(history_id);
         }
-        let items = normalize::normalize_model_items(request_items, request_payload)?;
+        let items =
+            normalize::normalize_model_items(request_items, request_payload, &missing["input"])?;
 
         let previous_response_id = payload.get("previous_response_id").and_then(Value::as_str);
         // After compaction, the next full request is compared against the installed replacement
@@ -203,7 +217,10 @@ impl TraceReducer {
         if !response_payload.capture.is_complete() {
             return Ok(Vec::new());
         }
-        let payload = self.payload_reader.observed_json(response_payload)?;
+        let ObservedJson {
+            value: payload,
+            missing,
+        } = self.payload_reader.observed_json(response_payload)?;
         let Some(output_items) = payload.get("output_items").and_then(Value::as_array) else {
             bail!(
                 "inference response payload {} did not contain output_items",
@@ -220,7 +237,11 @@ impl TraceReducer {
             bail!("inference response referenced unknown call {inference_call_id}");
         };
 
-        let items = normalize::normalize_model_items(output_items, response_payload)?;
+        let items = normalize::normalize_model_items(
+            output_items,
+            response_payload,
+            &missing["output_items"],
+        )?;
         // A later request or compaction can be recorded before this response.
         // Only match items with source IDs, so retries with identical text stay distinct.
         let candidates = self.rollout.threads[&thread_id]
@@ -380,12 +401,23 @@ impl TraceReducer {
         checkpoint_payload: &RawPayloadRef,
     ) -> Result<ReducedCompactionCheckpoint> {
         let (input_items, replacement_items) = if checkpoint_payload.capture.is_complete() {
-            let payload = self.payload_reader.observed_json(checkpoint_payload)?;
+            let ObservedJson {
+                value: payload,
+                missing,
+            } = self.payload_reader.observed_json(checkpoint_payload)?;
             let input = required_array(&payload, "input_history", checkpoint_payload)?;
             let replacement = required_array(&payload, "replacement_history", checkpoint_payload)?;
             (
-                normalize::normalize_model_items(input, checkpoint_payload)?,
-                normalize::normalize_model_items(replacement, checkpoint_payload)?,
+                normalize::normalize_model_items(
+                    input,
+                    checkpoint_payload,
+                    &missing["input_history"],
+                )?,
+                normalize::normalize_model_items(
+                    replacement,
+                    checkpoint_payload,
+                    &missing["replacement_history"],
+                )?,
             )
         } else {
             // The install event still establishes a compaction boundary.
@@ -414,6 +446,7 @@ impl TraceReducer {
             Some(codex_turn_id.to_string()),
             wall_time_unix_ms,
             NormalizedConversationItem {
+                structured_output_hash: None,
                 responses_item_id: None,
                 role: ConversationRole::Assistant,
                 channel: None,
@@ -512,11 +545,16 @@ impl TraceReducer {
             && let Some(wire_id) = &item.responses_item_id
         {
             let key = (thread_id.to_owned(), wire_id.clone());
-            if let Some(Some(id)) = self.receivable_ids.get(&key) {
-                return id.clone();
+            if let Some(receipt) = self.receivable_ids.get(&key)
+                && receipt.awaiting_snapshot
+            {
+                return receipt.item_id.clone();
             }
         }
         let item_id = self.next_conversation_item_id();
+        if let Some(hash) = item.structured_output_hash {
+            self.structured_output_hashes.insert(item_id.clone(), hash);
+        }
         self.rollout.conversation_items.insert(
             item_id.clone(),
             ConversationItem {
@@ -562,10 +600,22 @@ impl TraceReducer {
             && let Some(wire_id) = &normalized.responses_item_id
         {
             let key = (item.thread_id.clone(), wire_id.clone());
-            let accepted_id = self.receivable_ids.entry(key).or_default();
-            if accepted_id.as_deref() == Some(item_id) {
-                *accepted_id = None;
+            let receipt = self
+                .receivable_ids
+                .entry(key)
+                .or_insert_with(|| super::ReceivableItem {
+                    item_id: item_id.to_owned(),
+                    awaiting_snapshot: false,
+                });
+            if receipt.awaiting_snapshot && receipt.item_id == item_id {
+                receipt.awaiting_snapshot = false;
                 item.body.clone_from(&normalized.body);
+                if let Some(hash) = normalized.structured_output_hash {
+                    self.structured_output_hashes
+                        .insert(item_id.to_owned(), hash);
+                } else {
+                    self.structured_output_hashes.remove(item_id);
+                }
                 if normalized.agent_message.is_none() {
                     self.snapshot_output_anchors.insert(item_id.to_owned());
                 }
@@ -663,6 +713,10 @@ impl TraceReducer {
             && existing != incoming
         {
             return false;
+        }
+        let existing_hash = self.structured_output_hashes.get(item_id);
+        if existing_hash.is_some() || normalized.structured_output_hash.is_some() {
+            return existing_hash == normalized.structured_output_hash.as_ref();
         }
         conversation_item_matches(item, normalized)
     }

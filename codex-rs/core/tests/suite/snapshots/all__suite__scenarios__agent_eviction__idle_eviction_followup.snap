@@ -6,12 +6,12 @@ Scenario: A parent with no configured environment delegates an API migration, qu
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=282ad5080f7f05ec):
-        - namespace/functions; hash=93565b4ec2636eff
+00:additional_tools/developer (2; hash=1efa2dc9d797cace):
+        - namespace/functions; hash=f33f647fee88e25e
           - custom/exec
           - function/wait
           - function/request_user_input
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=79e97aeb909dfec8
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=a097b9364047b8bb
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
@@ -65,12 +65,12 @@ Scenario: A parent with no configured environment delegates an API migration, qu
 
 ## Window 2 (after request 6: input diverged at item 03)
 -- request 7 (turn) --
-00:additional_tools/developer (2; hash=282ad5080f7f05ec):
-        - namespace/functions; hash=93565b4ec2636eff
+00:additional_tools/developer (2; hash=1efa2dc9d797cace):
+        - namespace/functions; hash=f33f647fee88e25e
           - custom/exec
           - function/wait
           - function/request_user_input
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=79e97aeb909dfec8
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=a097b9364047b8bb
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents

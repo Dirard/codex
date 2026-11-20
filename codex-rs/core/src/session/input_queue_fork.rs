@@ -11,6 +11,7 @@ use codex_protocol::turn_input::TurnStartOptions;
 
 use super::InputQueue;
 use super::InputQueueActivity;
+use super::InputQueueEntry;
 use super::PendingMailboxCommunication;
 use super::TurnInput;
 use super::TurnInputQueue;
@@ -377,13 +378,14 @@ impl InputQueue {
     /// returns them. Other input of the reservation is dropped, as `clear_pending` drops it.
     pub(crate) async fn requeue_lost_wake_input(
         &self,
-        input: Vec<TurnInput>,
+        input: Vec<impl Into<InputQueueEntry>>,
         start_options: TurnStartOptions,
     ) {
+        let input: Vec<InputQueueEntry> = input.into_iter().map(Into::into).collect();
         let (notifications, rest) = take_background_notification_items(input);
         let mails: Vec<_> = rest
             .into_iter()
-            .filter_map(|item| match item {
+            .filter_map(|entry| match entry.input {
                 TurnInput::InterAgentCommunication(communication) => Some(communication),
                 // Dropped before any queue lock is taken.
                 _ => None,
@@ -531,21 +533,45 @@ impl InputQueue {
     }
 }
 
+/// Fork: the item of a task's initial input that carries the client context submitted with it
+/// (upstream gives it to the first item, #62602). A regular task puts the background
+/// notifications it took in front of its submitted input (`fork_drain_task_input`), so the
+/// context goes with the first submitted item, and is applied only if that item is delivered;
+/// a submission of context alone gives it to the first notification.
+pub(crate) fn fork_initial_context_index(input: &[TurnInput]) -> usize {
+    let notifications = input
+        .iter()
+        .take_while(|item| {
+            matches!(item, TurnInput::ResponseItem(envelope)
+                if is_background_notification_item(&envelope.item))
+        })
+        .count();
+    if notifications == input.len() {
+        0
+    } else {
+        notifications
+    }
+}
+
 /// Fork: split background notifications (terminal exits and finished workflow runs) from
-/// other turn input, keeping order (R3.7, dynamic workflow R7.7).
+/// other turn input, keeping order (R3.7, dynamic workflow R7.7). The rest keeps the client
+/// context submitted with it.
 fn take_background_notification_items(
-    items: Vec<TurnInput>,
-) -> (Vec<ResponseItem>, Vec<TurnInput>) {
+    items: Vec<InputQueueEntry>,
+) -> (Vec<ResponseItem>, Vec<InputQueueEntry>) {
     let mut notifications = Vec::new();
     let mut rest = Vec::with_capacity(items.len());
-    for item in items {
-        match item {
+    for entry in items {
+        match entry.input {
             TurnInput::ResponseItem(envelope)
                 if is_background_notification_item(&envelope.item) =>
             {
                 notifications.push(envelope.item);
             }
-            item => rest.push(item),
+            input => rest.push(InputQueueEntry {
+                input,
+                additional_context: entry.additional_context,
+            }),
         }
     }
     (notifications, rest)
@@ -555,17 +581,17 @@ impl TurnInputQueue {
     /// Fork: the activity of background notifications in turn-local input; a workflow
     /// notification names its own.
     pub(super) fn fork_notification_activity(&self) -> Option<InputQueueActivity> {
-        if self.items.iter().any(|input| {
+        if self.items.iter().any(|entry| {
             matches!(
-                input,
+                &entry.input,
                 TurnInput::ResponseItem(envelope)
                     if WorkflowNotification::is_notification_item(&envelope.item)
             )
         }) {
             Some(InputQueueActivity::Workflow)
-        } else if self.items.iter().any(|input| {
+        } else if self.items.iter().any(|entry| {
             matches!(
-                input,
+                &entry.input,
                 TurnInput::ResponseItem(envelope)
                     if is_background_notification_item(&envelope.item)
             )

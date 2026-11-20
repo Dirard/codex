@@ -713,3 +713,43 @@ async fn requeued_notifications_keep_their_keys_and_limit_class() {
         .await;
     assert_eq!(outcome, BackgroundNotificationEnqueue::Queued);
 }
+
+/// Fork (sync 2026-11-20): the client context submitted with a regular task's input goes with
+/// its first submitted item, after the background notifications the task put in front of it;
+/// context submitted alone goes with the first notification.
+#[test]
+fn initial_context_skips_the_notifications_in_front_of_the_submitted_input() {
+    let notification =
+        |item: ResponseItem| TurnInput::ResponseItem(ResponseItemEnvelope::new(item));
+    let prompt = TurnInput::UserInput {
+        content: vec![ResolvedUserInput::text("submitted".to_string())],
+        client_id: None,
+        metadata: UserInputMetadata::default(),
+    };
+    let cases = [
+        ("no input", Vec::new(), 0),
+        ("submitted input only", vec![prompt.clone()], 0),
+        (
+            "notifications before the submitted input",
+            vec![
+                notification(background_notification("exited")),
+                notification(workflow_notification("Workflow \"x\" (wf-1) completed.")),
+                prompt.clone(),
+            ],
+            2,
+        ),
+        (
+            "context submitted alone",
+            vec![notification(background_notification("exited"))],
+            0,
+        ),
+        (
+            "a notification after the submitted input",
+            vec![prompt, notification(background_notification("exited"))],
+            0,
+        ),
+    ];
+    for (name, input, expected) in cases {
+        assert_eq!(fork_initial_context_index(&input), expected, "{name}");
+    }
+}

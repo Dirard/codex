@@ -2,6 +2,7 @@ use super::*;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::context::ContextualUserFragment;
 use crate::context_manager::ContextManager;
+use crate::guardian_review::ReviewRetrieval;
 use crate::session::Submission;
 use crate::session::submission::SubmissionOp;
 use codex_guardian_reviewer::GuardianReviewResponse;
@@ -42,9 +43,10 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
         /*live_network_config*/ None,
         &params.review_model.model,
         params.review_model.reasoning_effort.clone(),
-        params.reasoning_summary,
-        params.personality,
+        params.parent_context.reasoning_summary,
+        params.parent_context.personality,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .unwrap();
     params.parent_session = Arc::clone(&parent);
@@ -272,6 +274,7 @@ async fn test_review_params() -> GuardianReviewSessionParams {
         reasoning_summary,
         personality,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("guardian config");
 
@@ -304,8 +307,6 @@ async fn test_review_params() -> GuardianReviewSessionParams {
             model_overridden: false,
             model_override: None,
         },
-        reasoning_summary,
-        personality,
         external_cancel: None,
         deadline: codex_guardian_reviewer::ReviewDeadline::At(
             tokio::time::Instant::now() + Duration::from_secs(30),
@@ -389,6 +390,7 @@ async fn guardian_review_session_config_change_invalidates_cached_session() {
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("cached guardian config");
     let cached_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
@@ -410,6 +412,7 @@ async fn guardian_review_session_config_change_invalidates_cached_session() {
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("next guardian config");
     let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
@@ -563,6 +566,7 @@ async fn guardian_review_session_compact_scope_change_invalidates_cached_session
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("cached guardian config");
     let cached_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
@@ -584,6 +588,7 @@ async fn guardian_review_session_compact_scope_change_invalidates_cached_session
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("next guardian config");
     let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
@@ -664,6 +669,7 @@ async fn guardian_review_session_config_resolves_policy_and_template(
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
         ResolvedModelMessages::from_model(&model),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("guardian config");
 
@@ -901,6 +907,49 @@ async fn wait_for_guardian_review_preserves_structured_session_error() {
     assert!(turn_completed);
 }
 
+#[test_case::test_case(CodexErrorInfo::ContextWindowExceeded, Some(ExhaustedReviewBudget::Detected), true; "local exhaustion asks the user")]
+#[test_case::test_case(CodexErrorInfo::ContextWindowExceeded, None, false; "backend context limit denies")]
+#[test_case::test_case(CodexErrorInfo::ContextWindowExceeded, Some(ExhaustedReviewBudget::Compacting), false; "compaction failure denies")]
+#[test_case::test_case(CodexErrorInfo::ServerOverloaded, Some(ExhaustedReviewBudget::Detected), false; "unrelated server failure denies")]
+fn optional_sync_verdict_falls_back_only_for_local_input_exhaustion(
+    error_info: CodexErrorInfo,
+    budget: Option<ExhaustedReviewBudget>,
+    expect_user_approval: bool,
+) {
+    let turn = ReviewTurnResult {
+        outcome: GuardianReviewSessionOutcome::SessionFailed {
+            error: anyhow::anyhow!("review failed"),
+            error_info: Some(error_info),
+            retry_at: None,
+        },
+        disposition: SessionDisposition::Reusable,
+        turn_completed: true,
+    };
+    let turn = finish_budgeted_verdict(turn, budget.as_ref());
+    let completion = codex_guardian_reviewer::complete_review(
+        turn.outcome.into(),
+        &model_info_from_slug("active-model"),
+        /*require_guardian*/ false,
+        /*event*/ None,
+        GuardianReviewAnalyticsResult::without_session(),
+    );
+    match completion.decision {
+        None => assert!(expect_user_approval),
+        Some(codex_protocol::protocol::ReviewDecision::Denied { .. }) => {
+            assert!(!expect_user_approval)
+        }
+        other => panic!("unexpected review decision: {other:?}"),
+    }
+    assert_eq!(
+        turn.disposition,
+        if budget.is_some() {
+            SessionDisposition::Discard
+        } else {
+            SessionDisposition::Reusable
+        }
+    );
+}
+
 #[tokio::test]
 async fn wait_for_guardian_review_ignores_prior_turn_aborts() {
     let (review_session, tx_event, _rx_sub) = test_review_session().await;
@@ -1074,6 +1123,7 @@ async fn prewarm_test_session(
     let context = setup::prepare_prewarm(
         Arc::clone(&params.parent_session),
         Arc::clone(params.parent_context.turn()),
+        ReviewRetrieval::ConversationHistory,
     )
     .await
     .unwrap();
