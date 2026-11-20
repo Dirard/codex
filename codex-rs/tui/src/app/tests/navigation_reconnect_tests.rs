@@ -12,8 +12,25 @@ use codex_app_server_client::AppServerEvent;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
-#[tokio::test]
-async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conversation()
+#[test]
+fn reconnect_daemon_command_center_after_socket_replacement_without_a_conversation() -> Result<()> {
+    // Fork: like upstream's other real-server TUI scenarios, this one needs more than the
+    // 8 MiB test stack in debug builds (upstream's Bazel gives TUI unit tests 24 MiB); the
+    // scenario's `handle_event` future alone is about 3.5 MiB.
+    std::thread::Builder::new()
+        .name("daemon-command-center-reconnect".into())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(Box::pin(reconnect_daemon_command_center_after_socket_replacement_without_a_conversation_scenario()))
+        })?
+        .join()
+        .expect("daemon-command-center-reconnect test thread panicked")
+}
+
+async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conversation_scenario()
 -> Result<()> {
     use super::super::agents_overview::AGENTS_OVERVIEW_VIEW_ID;
     use codex_app_server_protocol::Thread;

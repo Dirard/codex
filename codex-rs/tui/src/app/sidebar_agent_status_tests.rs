@@ -297,8 +297,28 @@ async fn active_discovery_supersedes_restored_completion() -> color_eyre::Result
     Ok(())
 }
 
-#[tokio::test]
-async fn opens_agent_transcript_beside_parent_and_returns_to_chooser() -> color_eyre::Result<()> {
+#[test]
+fn opens_agent_transcript_beside_parent_and_returns_to_chooser() -> color_eyre::Result<()> {
+    // Fork: like upstream's other real-server TUI scenarios, this one needs more than the
+    // 8 MiB test stack in debug builds (upstream's Bazel gives TUI unit tests 24 MiB); the
+    // scenario's `handle_event` future alone is about 3.5 MiB.
+    std::thread::Builder::new()
+        .name("sidebar-agent-transcript".into())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(Box::pin(
+                    opens_agent_transcript_beside_parent_and_returns_to_chooser_scenario(),
+                ))
+        })?
+        .join()
+        .expect("sidebar-agent-transcript test thread panicked")
+}
+
+async fn opens_agent_transcript_beside_parent_and_returns_to_chooser_scenario()
+-> color_eyre::Result<()> {
     use crate::app::side_focus::SidebarTarget;
     use crate::app::test_support::enable_side_retention;
     use crate::app::test_support::side_frame;
