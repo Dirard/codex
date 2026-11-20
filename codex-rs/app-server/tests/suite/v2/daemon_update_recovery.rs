@@ -481,12 +481,12 @@ async fn managed_restart_preserves_child_result_received_during_drain() -> Resul
     create_config_toml(home.path(), mock.uri(), "never")?;
     let config_path = home.path().join("config.toml");
     let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        config_path,
-        format!(
-            "{config}\n[features]\nwake_on_agent_messages = true\ncode_mode = false\ncode_mode_only = false\n[features.multi_agent_v2]\nenabled = true\n"
-        ),
-    )?;
+    let config = format!(
+        "{config}\n[features]\nwake_on_agent_messages = true\ncode_mode = false\ncode_mode_only = false\n[features.multi_agent_v2]\nenabled = true\n"
+    );
+    // Fork: upstream tests keep upstream feature defaults (fork-features-default-on UC6).
+    let config = codex_config::pin_default_on_fork_features_off(&config)?;
+    std::fs::write(config_path, config)?;
     let socket = home.path().join("control/server.sock");
     let mut server = spawn_server(home.path(), &socket)?;
     let mut client = connect_default_daemon_client(&socket).await?;
