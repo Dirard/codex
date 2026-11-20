@@ -156,7 +156,7 @@ impl Session {
             values,
             crate::state::AdditionalContextFormat::Messages,
             &turn_context.session_telemetry,
-            &self.item_id_generator,
+            &self.context_ids,
         )
     }
 }

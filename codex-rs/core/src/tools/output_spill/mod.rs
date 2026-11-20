@@ -24,6 +24,7 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ToolResultMetadata;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_audio::estimate_tool_audio_tokens;
@@ -488,7 +489,7 @@ impl ToolOutput for SpilledToolOutput {
         value
     }
 
-    fn tool_result_metadata(&self) -> Option<&JsonValue> {
+    fn tool_result_metadata(&self) -> ToolResultMetadata {
         self.original.tool_result_metadata()
     }
 }
@@ -556,7 +557,7 @@ impl ToolOutput for ItemTextSpill {
         self.0.code_mode_result(payload)
     }
 
-    fn tool_result_metadata(&self) -> Option<&JsonValue> {
+    fn tool_result_metadata(&self) -> ToolResultMetadata {
         self.0.tool_result_metadata()
     }
 

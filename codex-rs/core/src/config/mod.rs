@@ -4273,6 +4273,7 @@ impl Config {
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let (explorer_profile, agent_worktree_isolation) = fork::resolve_agent_profiles(&cfg)?;
+        let fork_features = fork::resolve_feature_settings(&cfg)?;
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
         let rollout_budget = resolve_rollout_budget_config(&cfg, &features)?;
         let current_time_reminder = resolve_current_time_reminder_config(&cfg, &features)?;
@@ -5053,15 +5054,9 @@ impl Config {
             workflows: Box::new(WorkflowsConfig::from_toml(cfg.workflows.as_deref())?),
             explorer_profile: Box::new(explorer_profile),
             agent_worktree_isolation: Box::new(agent_worktree_isolation),
-            exec_exit_notifications: Box::new(ExecExitNotificationsConfig::from_features_toml(
-                cfg.features.as_ref(),
-            )),
-            tool_output_spill: Box::new(ToolOutputSpillConfig::from_features_toml(
-                cfg.features.as_ref(),
-            )?),
-            scheduled_wakeups: Box::new(ScheduledWakeupsConfig::from_features_toml(
-                cfg.features.as_ref(),
-            )?),
+            exec_exit_notifications: Box::new(fork_features.exec_exit_notifications),
+            tool_output_spill: Box::new(fork_features.tool_output_spill),
+            scheduled_wakeups: Box::new(fork_features.scheduled_wakeups),
             model_auto_compact_turn_token_limit: cfg.model_auto_compact_turn_token_limit,
             model_instructions_placement: cfg.model_instructions_placement.unwrap_or_default(),
             output_style,

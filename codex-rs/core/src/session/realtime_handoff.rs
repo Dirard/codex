@@ -482,7 +482,7 @@ impl Session {
                 .map_err(std::io::Error::other)?;
             state.history.record_annotated_items(
                 std::slice::from_mut(&mut input),
-                context.model_info().truncation_policy.into(),
+                context.output_truncation(), // Fork: configured output truncation.
             );
         }
         history

@@ -525,6 +525,24 @@ pub(super) fn resolve_agent_profiles(
     Ok((explorer_profile, agent_worktree_isolation))
 }
 
+/// Settings of the fork's features that read `[features]`, resolved before `Config` is built:
+/// upstream's `Config` literal moves `cfg.features` into `guardian_v3`.
+pub(super) struct ForkFeatureSettings {
+    pub(super) exec_exit_notifications: ExecExitNotificationsConfig,
+    pub(super) tool_output_spill: ToolOutputSpillConfig,
+    pub(super) scheduled_wakeups: ScheduledWakeupsConfig,
+}
+
+/// Resolves `ForkFeatureSettings` from `cfg`.
+pub(super) fn resolve_feature_settings(cfg: &ConfigToml) -> std::io::Result<ForkFeatureSettings> {
+    let features = cfg.features.as_ref();
+    Ok(ForkFeatureSettings {
+        exec_exit_notifications: ExecExitNotificationsConfig::from_features_toml(features),
+        tool_output_spill: ToolOutputSpillConfig::from_features_toml(features)?,
+        scheduled_wakeups: ScheduledWakeupsConfig::from_features_toml(features)?,
+    })
+}
+
 /// `agents.max_spawned_threads_per_turn` limited the children of one root input until the
 /// fork removed its cumulative spawn budget (2026-10-26, docs/fork/01-multi-agent-runtime.md
 /// F1). A config that still sets it loads; the key is ignored with a startup warning.

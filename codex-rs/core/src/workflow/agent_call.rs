@@ -870,6 +870,7 @@ impl AgentCall<'_> {
                 input: AgentInput::Message {
                     message: AgentMessage::Plaintext(message),
                     mode: MessageDeliveryMode::TriggerTurn,
+                    source_tool_call_id: None,
                 },
                 start_options: TurnStartOptions {
                     final_output_json_schema,

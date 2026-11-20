@@ -59,7 +59,7 @@ impl Session {
     /// Fork: upstream's `deliver_event_raw`, publishing the status of the event itself; the
     /// body is `deliver_event_raw_with_status` (B4). Returns the body's future, like
     /// `send_event_raw_with_persistence`.
-    pub(super) fn deliver_event_raw(&self, event: Event) -> impl Future<Output = ()> + Send + '_ {
+    pub(crate) fn deliver_event_raw(&self, event: Event) -> impl Future<Output = ()> + Send + '_ {
         let status = agent_status_from_event(&event.msg);
         self.deliver_event_raw_with_status(event, status)
     }

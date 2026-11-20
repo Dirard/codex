@@ -11,11 +11,11 @@ use codex_protocol::error::Result as CodexResult;
 use codex_thread_store::PersistContext;
 use tokio_util::sync::CancellationToken;
 
-use super::TurnInput;
 use super::context_window::ContextWindowTokenStatus;
+use super::input_queue::InputQueueEntry;
 use super::session::Session;
 use super::step_context::StepContext;
-use super::turn::run_hooks_and_record_inputs;
+use super::turn::run_hooks_and_record_input_entries;
 use super::turn_context::TurnContext;
 use crate::config::Config;
 use crate::context::world_state::WorldState;
@@ -124,7 +124,7 @@ pub(super) struct TurnLoop {
     pub(super) model_follow_up_pending: bool,
     /// Steered input that the hooks already accepted and recorded behind a finished answer.
     /// The next step samples it; the drain and hooks at the loop top skip it.
-    pub(super) accepted_pending_input: Option<Vec<TurnInput>>,
+    pub(super) accepted_pending_input: Option<Vec<InputQueueEntry>>,
     answered: bool,
     made_progress: bool,
     consecutive_compactions_without_progress: usize,
@@ -265,10 +265,11 @@ impl TurnLoop {
             .0;
         // An empty drain, such as a stale mailbox signal, leaves nothing to sample.
         let blocked = pending_input.is_empty()
-            || run_hooks_and_record_inputs(
+            || run_hooks_and_record_input_entries(
                 sess,
                 turn_context,
                 &turn_context.capture_current_model_info(),
+                /*initial_input*/ None,
                 &pending_input,
                 PersistContext::SteeredUserInput,
             )
